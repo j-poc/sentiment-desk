@@ -280,6 +280,45 @@ export function validateSignal(
   });
 }
 
+/**
+ * Spearman rank correlation with average ranks for ties. The standard first
+ * question a quant asks about a signal: does a stronger score predict a
+ * larger move? Computed on (event strength, |forward reaction|) pairs.
+ */
+export function rankIC(pairs: Array<[number, number]>): number | null {
+  if (pairs.length < 3) return null;
+  const rank = (vals: number[]): number[] => {
+    const idx = vals.map((v, i) => [v, i] as const).sort((a, b) => a[0] - b[0]);
+    const r = new Array<number>(vals.length).fill(0);
+    let i = 0;
+    while (i < idx.length) {
+      let j = i;
+      while (j + 1 < idx.length && idx[j + 1]![0] === idx[i]![0]) j += 1;
+      const avg = (i + j) / 2 + 1;
+      for (let k = i; k <= j; k++) r[idx[k]![1]] = avg;
+      i = j + 1;
+    }
+    return r;
+  };
+  const rx = rank(pairs.map((p) => p[0]));
+  const ry = rank(pairs.map((p) => p[1]));
+  const n = pairs.length;
+  const mx = rx.reduce((a, b) => a + b, 0) / n;
+  const my = ry.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let dx = 0;
+  let dy = 0;
+  for (let i = 0; i < n; i++) {
+    const a = (rx[i] ?? 0) - mx;
+    const b = (ry[i] ?? 0) - my;
+    num += a * b;
+    dx += a * a;
+    dy += b * b;
+  }
+  if (dx === 0 || dy === 0) return null;
+  return Math.round((num / Math.sqrt(dx * dy)) * 1000) / 1000;
+}
+
 export interface ReactionSummary {
   n: number;
   median30m: number | null;

@@ -8,7 +8,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { bucketMsFor, clusterConfirmations, forwardReturn, summarizeReactions, validateSignal } from "./scoring.js";
+import { bucketMsFor, clusterConfirmations, forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
 
 /**
  * HTTP surface: read-only JSON APIs plus the SSE stream. No client can write
@@ -168,10 +168,14 @@ export function createApp(deps: AppDeps): Hono {
       sentiment: e.sentiment,
       r30: forwardReturn(seriesByTicker.get(e.ticker) ?? [], e.publishedAt, 30 * 60_000),
     }));
+    const measured = rows
+      .filter((r) => r.r30 != null)
+      .map((r) => [r.eventScore, Math.abs(r.r30 ?? 0)] as [number, number]);
     return c.json({
       hours,
       totalEvents: events.length,
-      withReaction: rows.filter((r) => r.r30 != null).length,
+      withReaction: measured.length,
+      rankIC: rankIC(measured),
       buckets: validateSignal(rows),
       generatedAt: Date.now(),
     });

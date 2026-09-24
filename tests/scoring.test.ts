@@ -6,6 +6,7 @@ import {
   isFinanceRelevant,
   mentionDigest,
   parseJudgment,
+  rankIC,
   hasNearDuplicateTitle,
   hasStrongIdentity,
   shouldAlert,
@@ -326,6 +327,22 @@ describe("applyPostRules strict identity floor", () => {
     expect(applyPostRules(borderline, 1, { strictAbout: true }).exclude).toBe(true);
     const clear = judgment({ about: 0.9, investorRelevant: 0.6 });
     expect(applyPostRules(clear, 1, { strictAbout: true }).exclude).toBe(false);
+  });
+});
+
+describe("rankIC (Spearman)", () => {
+  it("returns 1 for perfectly monotonic pairs", () => {
+    expect(rankIC([[1, 10], [2, 20], [3, 30], [4, 5]])).toBe(1);
+  });
+  it("returns -1 for inverted pairs", () => {
+    expect(rankIC([[1, 40], [2, 30], [3, 20], [4, 10]])).toBe(-1);
+  });
+  it("handles ties with average ranks", () => {
+    // [1,1,3] vs [10,10,20]: ranks (1.5,1.5,3) both sides -> positive
+    expect(rankIC([[1, 10], [1, 10], [3, 20]])).toBe(1);
+  });
+  it("returns null with too few pairs", () => {
+    expect(rankIC([[1, 1]])).toBeNull();
   });
 });
 

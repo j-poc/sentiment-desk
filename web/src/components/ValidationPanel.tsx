@@ -11,6 +11,7 @@ export function ValidationPanel() {
   const [data, setData] = useState<{
     totalEvents: number;
     withReaction: number;
+    rankIC: number | null;
     buckets: ValidationBucket[];
   } | null>(null);
 
@@ -21,6 +22,7 @@ export function ValidationPanel() {
         const d = await getJSON<{
           totalEvents: number;
           withReaction: number;
+          rankIC: number | null;
           buckets: ValidationBucket[];
         }>("/api/validation?hours=120");
         if (alive) setData(d);
@@ -46,6 +48,16 @@ export function ValidationPanel() {
           {data.withReaction}/{data.totalEvents} events with measured reaction
         </span>
       </div>
+      {data.rankIC != null && (
+        <div className="flex items-baseline gap-2 border-b border-white/[0.05] px-3 py-2">
+          <span className="tabnum text-[15px] font-semibold" style={{ color: data.rankIC > 0.15 ? "#34d399" : data.rankIC < -0.15 ? "#f87171" : "rgba(232,235,242,0.6)" }}>
+            {data.rankIC > 0 ? "+" : ""}{data.rankIC.toFixed(3)}
+          </span>
+          <span className="text-[10px] text-white/40">
+            rank IC · event strength vs |30m move| · positive = stronger events move more
+          </span>
+        </div>
+      )}
       <div className="px-3 py-2">
         <table className="w-full text-[10.5px]">
           <thead>

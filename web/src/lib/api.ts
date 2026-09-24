@@ -105,6 +105,7 @@ export interface ValidationDTO {
   hours: number;
   totalEvents: number;
   withReaction: number;
+  rankIC: number | null;
   buckets: ValidationBucket[];
   generatedAt: number;
 }
