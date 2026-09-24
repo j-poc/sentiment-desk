@@ -1,0 +1,84 @@
+{
+  "companies": [
+    {
+      "id": "nvidia",
+      "name": "NVIDIA",
+      "ticker": "NVDA",
+      "sector": "Semiconductors",
+      "aliases": ["Nvidia", "Jensen Huang"],
+      "color": "#76b900"
+    },
+    {
+      "id": "apple",
+      "name": "Apple",
+      "ticker": "AAPL",
+      "sector": "Consumer Electronics",
+      "aliases": ["Apple", "iPhone", "Tim Cook"],
+      "color": "#cbd5e1"
+    },
+    {
+      "id": "microsoft",
+      "name": "Microsoft",
+      "ticker": "MSFT",
+      "sector": "Software",
+      "aliases": ["Microsoft", "Satya Nadella"],
+      "color": "#38bdf8"
+    },
+    {
+      "id": "alphabet",
+      "name": "Alphabet",
+      "ticker": "GOOGL",
+      "sector": "Internet",
+      "aliases": ["Alphabet", "Google", "Sundar Pichai"],
+      "color": "#818cf8"
+    },
+    {
+      "id": "amazon",
+      "name": "Amazon",
+      "ticker": "AMZN",
+      "sector": "E-commerce / Cloud",
+      "aliases": ["Amazon", "AWS", "Andy Jassy"],
+      "color": "#fbbf24"
+    },
+    {
+      "id": "meta",
+      "name": "Meta Platforms",
+      "ticker": "META",
+      "sector": "Social",
+      "aliases": ["Meta Platforms", "Facebook", "Instagram", "Mark Zuckerberg"],
+      "color": "#22d3ee"
+    },
+    {
+      "id": "tesla",
+      "name": "Tesla",
+      "ticker": "TSLA",
+      "sector": "Automotive",
+      "aliases": ["Tesla", "Elon Musk"],
+      "color": "#ef4444"
+    },
+    {
+      "id": "netflix",
+      "name": "Netflix",
+      "ticker": "NFLX",
+      "sector": "Streaming",
+      "aliases": ["Netflix", "Ted Sarandos"],
+      "color": "#fb7185"
+    },
+    {
+      "id": "amd",
+      "name": "AMD",
+      "ticker": "AMD",
+      "sector": "Semiconductors",
+      "aliases": ["AMD", "Advanced Micro Devices", "Lisa Su"],
+      "color": "#fb923c"
+    },
+    {
+      "id": "jpmorgan",
+      "name": "JPMorgan Chase",
+      "ticker": "JPM",
+      "sector": "Banking",
+      "aliases": ["JPMorgan", "Jamie Dimon"],
+      "color": "#a78bfa"
+    }
+  ]
+}

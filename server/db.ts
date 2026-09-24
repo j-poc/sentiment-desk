@@ -1,0 +1,359 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type {
+  Company,
+  MentionDTO,
+  MentionScore,
+  MentionStatus,
+  RawMention,
+  SourceKind,
+  SourceTier,
+} from "./types.js";
+
+/**
+ * SQLite via node:sqlite (built into Node 22+). WAL mode, single writer, one
+ * process. Every scored mention keeps full provenance columns so the dashboard
+ * can always answer: which source, when published vs when fetched, which
+ * rubric hash, what the model said, what it cost.
+ */
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS companies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  sector TEXT NOT NULL,
+  aliases TEXT NOT NULL,
+  color TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mentions (
+  id TEXT PRIMARY KEY,
+  company_id TEXT NOT NULL REFERENCES companies(id),
+  source_name TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  source_tier TEXT NOT NULL,
+  title TEXT NOT NULL,
+  snippet TEXT NOT NULL,
+  published_at INTEGER NOT NULL,
+  retrieved_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  sentiment TEXT,
+  confidence REAL,
+  p_pos REAL,
+  p_neu REAL,
+  p_neg REAL,
+  about REAL,
+  material REAL,
+  novel REAL,
+  credible REAL,
+  impact REAL,
+  weight REAL,
+  exclude INTEGER NOT NULL DEFAULT 0,
+  engine TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cost_usd REAL,
+  latency_ms INTEGER,
+  rubric_sha TEXT,
+  score_error TEXT,
+  scored_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS mentions_company_published ON mentions(company_id, published_at);
+CREATE INDEX IF NOT EXISTS mentions_status ON mentions(status);
+CREATE TABLE IF NOT EXISTS kv (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  level TEXT NOT NULL,
+  source TEXT NOT NULL,
+  message TEXT NOT NULL
+);
+`;
+
+interface MentionRow {
+  id: string;
+  company_id: string;
+  source_name: string;
+  source_url: string;
+  source_kind: string;
+  source_tier: string;
+  title: string;
+  snippet: string;
+  published_at: number;
+  retrieved_at: number;
+  status: string;
+  sentiment: string | null;
+  confidence: number | null;
+  p_pos: number | null;
+  p_neu: number | null;
+  p_neg: number | null;
+  about: number | null;
+  material: number | null;
+  novel: number | null;
+  credible: number | null;
+  impact: number | null;
+  weight: number | null;
+  exclude: number;
+  engine: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  latency_ms: number | null;
+  rubric_sha: string | null;
+  score_error: string | null;
+  scored_at: number | null;
+}
+
+export class Desk {
+  private readonly db: DatabaseSync;
+
+  constructor(dbPath: string) {
+    mkdirSync(dirname(dbPath), { recursive: true });
+    this.db = new DatabaseSync(dbPath);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA foreign_keys = ON");
+    this.db.exec(SCHEMA);
+  }
+
+  seedCompanies(companies: Company[]): void {
+    const upsert = this.db.prepare(
+      `INSERT INTO companies (id, name, ticker, sector, aliases, color)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET name=excluded.name, ticker=excluded.ticker,
+         sector=excluded.sector, aliases=excluded.aliases, color=excluded.color`,
+    );
+    for (const c of companies) {
+      upsert.run(c.id, c.name, c.ticker, c.sector, JSON.stringify(c.aliases), c.color);
+    }
+  }
+
+  companies(): Company[] {
+    const rows = this.db.prepare("SELECT * FROM companies ORDER BY ticker").all() as Array<{
+      id: string; name: string; ticker: string; sector: string; aliases: string; color: string;
+    }>;
+    return rows.map((r) => ({ ...r, aliases: JSON.parse(r.aliases) as string[] }));
+  }
+
+  /** Returns false when the digest already exists; inserts are otherwise idempotent. */
+  insertMention(m: RawMentionInput): boolean {
+    const res = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO mentions
+         (id, company_id, source_name, source_url, source_kind, source_tier,
+          title, snippet, published_at, retrieved_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      )
+      .run(
+        m.companyId + ":" + m.digest,
+        m.companyId,
+        m.sourceName,
+        m.sourceUrl,
+        m.kind,
+        m.tier,
+        m.title,
+        m.snippet,
+        m.publishedAt,
+        m.retrievedAt,
+      );
+    return Number(res.changes) > 0;
+  }
+
+  mentionRow(id: string): MentionRow | undefined {
+    return this.db.prepare("SELECT * FROM mentions WHERE id = ?").get(id) as MentionRow | undefined;
+  }
+
+  markScored(id: string, s: MentionScore, exclude: boolean): void {
+    this.db
+      .prepare(
+        `UPDATE mentions SET
+           status = ?, sentiment = ?, confidence = ?, p_pos = ?, p_neu = ?, p_neg = ?,
+           about = ?, material = ?, novel = ?, credible = ?, impact = ?, weight = ?,
+           exclude = ?, engine = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?,
+           latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        exclude ? "off_target" : "scored",
+        s.sentiment,
+        s.confidence,
+        s.pPos,
+        s.pNeu,
+        s.pNeg,
+        s.about,
+        s.material,
+        s.novel,
+        s.credible,
+        s.impact,
+        s.weight,
+        exclude ? 1 : 0,
+        s.engine,
+        s.inputTokens,
+        s.outputTokens,
+        s.costUsd,
+        s.latencyMs,
+        s.rubricSha,
+        s.scoredAt,
+        id,
+      );
+  }
+
+  markFailed(id: string, error: string): void {
+    this.db
+      .prepare("UPDATE mentions SET status = 'failed', score_error = ? WHERE id = ?")
+      .run(error.slice(0, 500), id);
+  }
+
+  mentionsForCompany(companyId: string, sinceMs: number, limit: number): MentionDTO[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM mentions WHERE company_id = ? AND published_at >= ?
+         ORDER BY published_at DESC LIMIT ?`,
+      )
+      .all(companyId, sinceMs, limit) as unknown as MentionRow[];
+    return rows.map(rowToDTO);
+  }
+
+  recentScored(limit: number): MentionDTO[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM mentions WHERE status IN ('scored', 'off_target')
+         ORDER BY published_at DESC LIMIT ?`,
+      )
+      .all(limit) as unknown as MentionRow[];
+    return rows.map(rowToDTO);
+  }
+
+  /** Scored, non-excluded mentions for index math over a window. */
+  scoredMentions(sinceMs: number): Array<{
+    companyId: string; publishedAt: number; impact: number; weight: number;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT company_id, published_at, impact, weight FROM mentions
+         WHERE status = 'scored' AND published_at >= ? AND impact IS NOT NULL`,
+      )
+      .all(sinceMs) as Array<{ company_id: string; published_at: number; impact: number; weight: number }>;
+    return rows.map((r) => ({
+      companyId: r.company_id,
+      publishedAt: r.published_at,
+      impact: r.impact,
+      weight: r.weight,
+    }));
+  }
+
+  counts24h(sinceMs: number): Map<string, { count: number; lastAt: number | null }> {
+    const rows = this.db
+      .prepare(
+        `SELECT company_id, COUNT(*) AS n, MAX(published_at) AS last_at
+         FROM mentions WHERE published_at >= ? GROUP BY company_id`,
+      )
+      .all(sinceMs) as Array<{ company_id: string; n: number; last_at: number | null }>;
+    return new Map(rows.map((r) => [r.company_id, { count: r.n, lastAt: r.last_at }]));
+  }
+
+  getKv(key: string): string | undefined {
+    const row = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value;
+  }
+
+  setKv(key: string, value: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      )
+      .run(key, value);
+  }
+
+  logEvent(level: "info" | "warn" | "error", source: string, message: string): void {
+    this.db.prepare("INSERT INTO events (at, level, source, message) VALUES (?, ?, ?, ?)").run(
+      Date.now(),
+      level,
+      source,
+      message.slice(0, 500),
+    );
+  }
+
+  recentEvents(limit: number): Array<{ at: number; level: string; source: string; message: string }> {
+    return this.db
+      .prepare("SELECT at, level, source, message FROM events ORDER BY id DESC LIMIT ?")
+      .all(limit) as Array<{ at: number; level: string; source: string; message: string }>;
+  }
+
+  usageSince(sinceMs: number): { calls: number; inputTokens: number; outputTokens: number; costUsd: number } {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS calls,
+                COALESCE(SUM(input_tokens), 0) AS in_tok,
+                COALESCE(SUM(output_tokens), 0) AS out_tok,
+                COALESCE(SUM(cost_usd), 0) AS cost
+         FROM mentions WHERE scored_at >= ? AND status IN ('scored', 'off_target')`,
+      )
+      .get(sinceMs) as { calls: number; in_tok: number; out_tok: number; cost: number };
+    return {
+      calls: row.calls,
+      inputTokens: row.in_tok,
+      outputTokens: row.out_tok,
+      costUsd: row.cost,
+    };
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+export function rowToDTO(r: MentionRow): MentionDTO {
+  const status: MentionStatus =
+    r.status === "off_target" ? "off_target" : (r.status as MentionStatus);
+  const score: MentionScore | null =
+    r.status === "scored" || r.status === "off_target"
+      ? {
+          sentiment: (r.sentiment ?? "neutral") as MentionScore["sentiment"],
+          pPos: r.p_pos ?? 0,
+          pNeu: r.p_neu ?? 0,
+          pNeg: r.p_neg ?? 0,
+          confidence: r.confidence ?? 0,
+          about: r.about ?? 0,
+          material: r.material ?? 0,
+          novel: r.novel ?? 0,
+          credible: r.credible ?? 0,
+          impact: r.impact ?? 0,
+          weight: r.weight ?? 0,
+          engine: r.engine ?? "",
+          inputTokens: r.input_tokens ?? 0,
+          outputTokens: r.output_tokens ?? 0,
+          costUsd: r.cost_usd ?? 0,
+          latencyMs: r.latency_ms ?? 0,
+          rubricSha: r.rubric_sha ?? "",
+          scoredAt: r.scored_at ?? 0,
+        }
+      : null;
+  return {
+    id: r.id,
+    companyId: r.company_id,
+    source: {
+      name: r.source_name,
+      url: r.source_url,
+      kind: r.source_kind as SourceKind,
+      tier: r.source_tier as SourceTier,
+    },
+    title: r.title,
+    snippet: r.snippet,
+    publishedAt: r.published_at,
+    retrievedAt: r.retrieved_at,
+    status,
+    score,
+    error: r.score_error,
+  };
+}
+
+export interface RawMentionInput extends RawMention {
+  digest: string;
+}

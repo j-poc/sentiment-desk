@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+@theme {
+  --color-desk-bg: #08090d;
+  --color-desk-panel: #0e1016;
+  --color-desk-panel2: #12151d;
+  --color-desk-line: rgba(255, 255, 255, 0.07);
+  --color-desk-dim: #8b93a7;
+  --color-desk-bright: #e8ebf2;
+  --color-pos: #34d399;
+  --color-neg: #f87171;
+  --color-neutral-sent: #94a3b8;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-desk-bg);
+  background-image:
+    radial-gradient(1200px 600px at 15% -10%, rgba(56, 189, 248, 0.05), transparent 60%),
+    radial-gradient(1000px 500px at 85% 110%, rgba(52, 211, 153, 0.04), transparent 60%);
+  background-attachment: fixed;
+  color: var(--color-desk-bright);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabnum {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+/* Panels */
+.panel {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.008));
+  border: 1px solid var(--color-desk-line);
+  border-radius: 14px;
+}
+
+/* Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Animations */
+@keyframes flash-in {
+  0% {
+    background-color: rgba(94, 234, 212, 0.09);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.flash-in {
+  animation: flash-in 1.8s ease-out;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+.live-dot {
+  animation: pulse-dot 2.2s ease-in-out infinite;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise-in {
+  animation: rise-in 0.35s ease-out;
+}
+
+.clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

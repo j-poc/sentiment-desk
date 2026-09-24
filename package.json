@@ -1,0 +1,42 @@
+{
+  "name": "sentiment-desk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real-time company sentiment desk. Mentions are scored per-item by Jev (TypeSafe AI System One) with a fixed typed rubric; a live dashboard shows the meter, deltas, and the evidence behind every point.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "demo": "DEMO=1 tsx server/index.ts",
+    "dev:web": "vite",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist/server/index.js --packages=external",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "fast-xml-parser": "^5.2.0",
+    "hono": "^4.7.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.3.0",
+    "vitest": "^3.1.0"
+  }
+}
