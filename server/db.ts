@@ -303,19 +303,33 @@ export class Desk {
 
   /** Scored, non-excluded mentions for index math over a window. */
   scoredMentions(sinceMs: number): Array<{
-    companyId: string; publishedAt: number; impact: number; weight: number;
+    companyId: string;
+    publishedAt: number;
+    impact: number;
+    weight: number;
+    eventType: string;
+    takeaway: string;
   }> {
     const rows = this.db
       .prepare(
-        `SELECT company_id, published_at, impact, weight FROM mentions
+        `SELECT company_id, published_at, impact, weight, event_type, takeaway FROM mentions
          WHERE status = 'scored' AND published_at >= ? AND impact IS NOT NULL`,
       )
-      .all(sinceMs) as Array<{ company_id: string; published_at: number; impact: number; weight: number }>;
+      .all(sinceMs) as unknown as Array<{
+        company_id: string;
+        published_at: number;
+        impact: number;
+        weight: number;
+        event_type: string;
+        takeaway: string;
+      }>;
     return rows.map((r) => ({
       companyId: r.company_id,
       publishedAt: r.published_at,
       impact: r.impact,
       weight: r.weight,
+      eventType: r.event_type,
+      takeaway: r.takeaway,
     }));
   }
 

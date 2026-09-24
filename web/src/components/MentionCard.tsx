@@ -132,7 +132,7 @@ export function MentionCard({
           {s.surprise >= 0.7 && s.novel >= 0.6 && <Pill color="#5eead4">FRESH</Pill>}
           {s.material >= 0.6 && <Pill color="#a5b4fc">MATERIAL</Pill>}
           {s.novel >= 0.6 && s.surprise < 0.7 && <Pill color="#5eead4">NEW INFO</Pill>}
-          {(m.confirmations ?? 1) >= 3 && <Pill color="#67e8f9">×{m.confirmations} SOURCES</Pill>}
+          {(m.confirmations ?? 1) >= 2 && <Pill color="#67e8f9">×{m.confirmations} SOURCES</Pill>}
           {s.confidence < 0.55 && <Pill color="#fbbf24">LOW CONF</Pill>}
           {offTarget && <Pill dim>OFF TARGET</Pill>}
           <span className="ml-auto flex items-center gap-1.5 text-[10px] text-white/35">

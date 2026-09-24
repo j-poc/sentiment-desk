@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPostRules,
-  clusterConfirmations,
+  clusterEvents,
   forwardReturn,
   isFinanceRelevant,
   mentionDigest,
@@ -207,20 +207,39 @@ describe("summarizeReactions", () => {
   });
 });
 
-describe("clusterConfirmations", () => {
-  it("groups near-duplicate titles within the window across sources", () => {
-    const t0 = 1_000_000;
+describe("clusterEvents (paraphrase-safe event grouping)", () => {
+  const base = { companyId: "qcom", weight: 0.9 };
+  it("merges framings of the same event that share no meaningful words", () => {
+    const t0 = 1_000_000_000;
     const ms = [
-      { id: "a", title: "Nvidia beats quarterly estimates on data center demand", publishedAt: t0, companyId: "nvidia" },
-      { id: "b", title: "Nvidia beats quarterly estimates on data center demand", publishedAt: t0 + 120_000, companyId: "nvidia" },
-      { id: "c", title: "Apple unveils new M5 macbook pro lineup", publishedAt: t0 + 60_000, companyId: "apple" },
-      { id: "d", title: "Nvidia CFO says supply constraints ease into next year", publishedAt: t0 + 300_000, companyId: "nvidia" },
+      { ...base, publishedAt: t0 + 14 * 60_000, impact: 57, eventType: "corporate_action", takeaway: "legal_relief" },
+      { ...base, publishedAt: t0 + 44 * 60_000, impact: 83, eventType: "corporate_action", takeaway: "product_win" },
+      { ...base, publishedAt: t0 + 52 * 60_000, impact: 56, eventType: "corporate_action", takeaway: "legal_relief" },
     ];
-    const sizes = clusterConfirmations(ms);
-    expect(sizes.get("a")).toBe(2);
-    expect(sizes.get("b")).toBe(2);
-    expect(sizes.get("c")).toBe(1);
-    expect(sizes.get("d")).toBe(1);
+    const events = clusterEvents(ms);
+    expect(events.length).toBe(1);
+    expect(events[0]?.size).toBe(3);
+    // impact is the weighted mean of framings, weight the strongest framing's.
+    expect(events[0]?.impact).toBeCloseTo(65.33, 1);
+    expect(events[0]?.weight).toBe(0.9);
+  });
+
+  it("keeps genuinely different events separate", () => {
+    const t0 = 1_000_000_000;
+    const ms = [
+      { ...base, publishedAt: t0, impact: 60, eventType: "results", takeaway: "results_beat" },
+      { ...base, publishedAt: t0 + 10 * 60_000, impact: -50, eventType: "legal_regulatory", takeaway: "legal_hit" },
+    ];
+    expect(clusterEvents(ms).length).toBe(2);
+  });
+
+  it("starts a new event after the window passes, even for the same class", () => {
+    const t0 = 1_000_000_000;
+    const ms = [
+      { ...base, publishedAt: t0, impact: 40, eventType: "results", takeaway: "results_beat" },
+      { ...base, publishedAt: t0 + 50 * 60_000, impact: 60, eventType: "results", takeaway: "results_beat" },
+    ];
+    expect(clusterEvents(ms).length).toBe(2);
   });
 });
 

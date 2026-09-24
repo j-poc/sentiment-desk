@@ -358,6 +358,101 @@ export function summarizeReactions(
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Event clustering. Same company + same coarse event class (or takeaway)  */
+/* within a time window = one event, no matter how many outlets frame it.  */
+/* This stops triple-counting from inflating the index and gives the UI    */
+/* its coverage badge. Token-overlap dedupe stays for exact syndication;   */
+/* this layer handles paraphrase, which word matching cannot.              */
+/* ------------------------------------------------------------------ */
+
+export interface EventLike {
+  companyId: string;
+  publishedAt: number;
+  impact: number;
+  weight: number;
+  eventType: string;
+  takeaway: string;
+  /** Optional mention id, used to map members back to their cluster. */
+  id?: string;
+}
+
+export interface EventCluster extends EventLike {
+  /** How many framings of this event were merged. */
+  size: number;
+  memberIds: string[];
+}
+
+/**
+ * Greedy time-anchored clustering. An event is anchored at its first mention;
+ * later mentions of the same company join while inside the window and sharing
+ * the event class or the takeaway. Impact is the weight-weighted mean across
+ * framings; weight is the strongest framing's weight — one event, counted
+ * once, at its best-evidenced strength.
+ */
+export function clusterEvents(items: EventLike[], windowMs = 45 * 60_000): EventCluster[] {
+  const sorted = [...items].sort((a, b) => a.publishedAt - b.publishedAt);
+  const out: EventCluster[] = [];
+  let cur: {
+    companyId: string;
+    anchor: number;
+    wImpact: number;
+    wSum: number;
+    maxW: number;
+    size: number;
+    eventType: string;
+    takeaway: string;
+  } | null = null;
+
+  const memberIds: string[] = [];
+  const flush = () => {
+    if (cur && cur.size > 0) {
+      out.push({
+        companyId: cur.companyId,
+        publishedAt: cur.anchor,
+        impact: cur.wSum > 0 ? Math.round((cur.wImpact / cur.wSum) * 100) / 100 : 0,
+        weight: Math.round(cur.maxW * 10_000) / 10_000,
+        eventType: cur.eventType,
+        takeaway: cur.takeaway,
+        size: cur.size,
+        memberIds: [...memberIds],
+      });
+    }
+    memberIds.length = 0;
+    cur = null;
+  };
+
+  for (const m of sorted) {
+    const joins =
+      cur != null &&
+      m.companyId === cur.companyId &&
+      m.publishedAt - cur.anchor <= windowMs &&
+      (m.eventType === cur.eventType || m.takeaway === cur.takeaway);
+    if (joins && cur) {
+      cur.wImpact += m.weight * m.impact;
+      cur.wSum += m.weight;
+      cur.maxW = Math.max(cur.maxW, m.weight);
+      cur.size += 1;
+      if (m.id) memberIds.push(m.id);
+    } else {
+      flush();
+      if (m.id) memberIds.push(m.id);
+      cur = {
+        companyId: m.companyId,
+        anchor: m.publishedAt,
+        wImpact: m.weight * m.impact,
+        wSum: m.weight,
+        maxW: m.weight,
+        size: 1,
+        eventType: m.eventType,
+        takeaway: m.takeaway,
+      };
+    }
+  }
+  flush();
+  return out;
+}
+
 const STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have", "in", "is", "it",
   "its", "of", "on", "or", "says", "s", "that", "the", "to", "was", "were", "will", "with", "after",
@@ -377,49 +472,6 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   let inter = 0;
   for (const t of a) if (b.has(t)) inter += 1;
   return inter / (a.size + b.size - inter);
-}
-
-/**
- * Cross-source confirmation: group mentions of the same company whose titles
- * are near-duplicates within a 20-minute window. The count tells you how many
- * distinct items cover the same event, which is a rough proxy for how many
- * outlets moved at once.
- */
-export function clusterConfirmations(
-  ms: Array<{ id: string; title: string; publishedAt: number; companyId: string }>,
-  windowMs = 20 * 60_000,
-): Map<string, number> {
-  const sizes = new Map<string, number>();
-  const byCompany = new Map<string, Array<{ id: string; title: string; publishedAt: number }>>();
-  for (const m of ms) {
-    const list = byCompany.get(m.companyId) ?? [];
-    list.push(m);
-    byCompany.set(m.companyId, list);
-  }
-  for (const list of byCompany.values()) {
-    list.sort((a, b) => a.publishedAt - b.publishedAt);
-    const clusters: Array<{ rep: Set<string>; t: number; ids: string[] }> = [];
-    for (const m of list) {
-      const tk = tokens(m.title);
-      let home: (typeof clusters)[number] | undefined;
-      for (const c of clusters) {
-        if (m.publishedAt - c.t <= windowMs && jaccard(tk, c.rep) >= 0.4) {
-          home = c;
-          break;
-        }
-      }
-      if (home) {
-        home.ids.push(m.id);
-        for (const t of tk) home.rep.add(t);
-      } else {
-        clusters.push({ rep: new Set(tk), t: m.publishedAt, ids: [m.id] });
-      }
-    }
-    for (const c of clusters) {
-      for (const id of c.ids) sizes.set(id, c.ids.length);
-    }
-  }
-  return sizes;
 }
 
 /* ------------------------------------------------------------------ */

@@ -6,6 +6,7 @@ import { RUBRIC_SHA } from "./rubric.js";
 import {
   applyPostRules,
   bucketMsFor,
+  clusterEvents,
   hasNearDuplicateTitle,
   hasStrongIdentity,
   parseJudgment,
@@ -263,20 +264,20 @@ export class Pipeline {
   snapshot(companyId: string): CompanySnapshot {
     const now = Date.now();
     const companies = new Map(this.deps.db.companies().map((c) => [c.id, c] as const));
-    const items = this.deps.db.scoredMentions(now - DAY_MS);
+    const events = clusterEvents(this.deps.db.scoredMentions(now - DAY_MS));
     const counts = this.deps.db.counts24h(now - DAY_MS);
     const extras = this.earningsExtras();
-    return this.computeSnapshot(companies, counts, items, companyId, now, extras);
+    return this.computeSnapshot(companies, counts, events, companyId, now, extras);
   }
 
   snapshots(): CompanySnapshot[] {
     const now = Date.now();
     const companies = this.deps.db.companies();
     const byId = new Map(companies.map((c) => [c.id, c] as const));
-    const items = this.deps.db.scoredMentions(now - DAY_MS);
+    const events = clusterEvents(this.deps.db.scoredMentions(now - DAY_MS));
     const counts = this.deps.db.counts24h(now - DAY_MS);
     const extras = this.earningsExtras();
-    return companies.map((c) => this.computeSnapshot(byId, counts, items, c.id, now, extras));
+    return companies.map((c) => this.computeSnapshot(byId, counts, events, c.id, now, extras));
   }
 
   /** Measured earnings facts (Finnhub) cached in kv, surfaced on snapshots. */
@@ -303,13 +304,13 @@ export class Pipeline {
   private computeSnapshot(
     companies: Map<string, { id: string; name: string; ticker: string; sector: string; color: string }>,
     counts: Map<string, { count: number; lastAt: number | null }>,
-    items: Array<{ companyId: string; publishedAt: number; impact: number; weight: number }>,
+    events: Array<{ companyId: string; publishedAt: number; impact: number; weight: number }>,
     companyId: string,
     now: number,
     extras: Map<string, { earningsAt: number | null; lastSurprise: EarningsSurprise | null }> = new Map(),
   ): CompanySnapshot {
     const meta = companies.get(companyId);
-    const own = items.filter((m) => m.companyId === companyId);
+    const own = events.filter((m) => m.companyId === companyId);
     const current = weightedIndex(own.filter((m) => m.publishedAt >= now - CURRENT_WINDOW_MS));
     const baseline = weightedIndex(own);
     const count = counts.get(companyId);
@@ -331,7 +332,9 @@ export class Pipeline {
   series(companyId: string, windowHours: number): SeriesPoint[] {
     const now = Date.now();
     const windowMs = windowHours * 60 * 60 * 1000;
-    const items = this.deps.db.scoredMentions(now - windowMs).filter((m) => m.companyId === companyId);
+    const items = clusterEvents(
+      this.deps.db.scoredMentions(now - windowMs).filter((m) => m.companyId === companyId),
+    );
     return smoothedSeries(items, windowMs, bucketMsFor(windowHours), now);
   }
 }

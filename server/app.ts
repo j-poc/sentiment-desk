@@ -8,7 +8,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { bucketMsFor, clusterConfirmations, forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
+import { bucketMsFor, clusterEvents, forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
 
 /**
  * HTTP surface: read-only JSON APIs plus the SSE stream. No client can write
@@ -70,10 +70,25 @@ export function createApp(deps: AppDeps): Hono {
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
     const limit = clampNumber(c.req.query("limit"), 1, 200, 100);
     const ms = deps.db.mentionsForCompany(id, Date.now() - hours * 60 * 60 * 1000, limit);
-    const confirmations = clusterConfirmations(
-      ms.map((m) => ({ id: m.id, title: m.title, publishedAt: m.publishedAt, companyId: m.companyId })),
+    // Coverage badge: judgment-aware event clustering (same event class or
+    // takeaway within the window) replaces token-overlap counting, which could
+    // not see through paraphrase ("patent deal" vs "licensing agreement").
+    const sizeById = new Map(
+      clusterEvents(
+        ms
+          .filter((m) => m.score)
+          .map((m) => ({
+            id: m.id,
+            companyId: m.companyId,
+            publishedAt: m.publishedAt,
+            impact: m.score!.impact,
+            weight: m.score!.weight,
+            eventType: m.score!.eventType,
+            takeaway: m.score!.takeaway,
+          })),
+      ).flatMap((e) => e.memberIds.map((id) => [id, e.size] as const)),
     );
-    return c.json(ms.map((m) => ({ ...m, confirmations: confirmations.get(m.id) ?? 1 })));
+    return c.json(ms.map((m) => ({ ...m, confirmations: sizeById.get(m.id) ?? 1 })));
   });
 
   /**
