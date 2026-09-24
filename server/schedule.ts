@@ -3,6 +3,8 @@ import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Pipeline } from "./pipeline.js";
 import { fetchGdeltArticles } from "./sources/gdelt.js";
+import { fetchEarningsHistory, fetchFinnhubNews, fetchUpcomingEarnings, latestSurprise } from "./sources/finnhub.js";
+import { getRedditToken, searchReddit, type RedditClient } from "./sources/reddit.js";
 import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent } from "./sources/x.js";
@@ -249,6 +251,153 @@ export function startGdeltPoller(deps: {
           deps.db.logEvent("warn", "gdelt", `${company.ticker}: ${message}`);
         }
         await sleep(2_000);
+      }
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
+  void tick();
+  return { stop: () => clearInterval(timer) };
+}
+
+/**
+ * Finnhub poller: per-symbol company news on the fast clock, and a slow
+ * earnings refresh (latest EPS surprise + upcoming calendar) stored in kv so
+ * snapshots can carry measured surprise instead of model guesses.
+ */
+export function startFinnhubPoller(deps: {
+  companies: Company[];
+  token: string;
+  pipeline: Pipeline;
+  db: Desk;
+  health: HealthTracker;
+  intervalSeconds: number;
+}): SchedulerControl {
+  let running = false;
+  let lastEarningsRefresh = 0;
+  const refreshEarnings = async (): Promise<void> => {
+    const symbols = new Set(deps.companies.map((c) => c.ticker));
+    try {
+      const upcoming = await fetchUpcomingEarnings(deps.token, symbols);
+      for (const company of deps.companies) {
+        const at = upcoming.get(company.ticker);
+        if (at) deps.db.setKv(`finnhub:earnings:${company.id}`, String(at));
+      }
+      deps.health.recordFinnhub(true);
+    } catch (err) {
+      deps.health.recordFinnhub(false, `calendar: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    for (const company of deps.companies) {
+      try {
+        const entries = await fetchEarningsHistory(company.ticker, deps.token);
+        const surprise = latestSurprise(entries);
+        if (surprise) deps.db.setKv(`finnhub:surprise:${company.id}`, JSON.stringify(surprise));
+        deps.health.recordFinnhub(true);
+      } catch (err) {
+        deps.health.recordFinnhub(false, `${company.ticker}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await sleep(300);
+    }
+    lastEarningsRefresh = Date.now();
+  };
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      if (Date.now() - lastEarningsRefresh > 6 * 60 * 60 * 1000) {
+        await refreshEarnings();
+      }
+      for (const company of deps.companies) {
+        try {
+          const news = await fetchFinnhubNews(company.ticker, deps.token);
+          let added = 0;
+          for (const n of news) {
+            if (!matchesCompany(company, n.headline, n.summary)) continue;
+            const inserted = deps.pipeline.ingest({
+              companyId: company.id,
+              kind: "finnhub",
+              sourceName: n.source,
+              sourceUrl: n.url,
+              tier: tierForHost(n.url),
+              title: n.headline,
+              snippet: n.summary,
+              publishedAt: n.datetime || Date.now(),
+              retrievedAt: Date.now(),
+              digest: mentionDigest("finnhub", n.url, n.headline),
+            });
+            if (inserted) added += 1;
+          }
+          deps.health.recordFinnhub(true);
+          if (added > 0) deps.db.logEvent("info", "finnhub", `${company.ticker}: ${added} new`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.health.recordFinnhub(false, `${company.ticker}: ${message}`);
+          deps.db.logEvent("warn", "finnhub", `${company.ticker}: ${message}`);
+        }
+        await sleep(250);
+      }
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
+  void tick();
+  return { stop: () => clearInterval(timer) };
+}
+
+/** Reddit poller: social search per company with cached OAuth tokens. */
+export function startRedditPoller(deps: {
+  companies: Company[];
+  creds: { clientId: string; clientSecret: string };
+  pipeline: Pipeline;
+  db: Desk;
+  health: HealthTracker;
+  intervalSeconds: number;
+}): SchedulerControl {
+  let running = false;
+  let client: RedditClient | null = null;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      try {
+        client = await getRedditToken(deps.creds, client ?? undefined);
+      } catch (err) {
+        deps.health.recordReddit(false, err instanceof Error ? err.message : String(err));
+        return;
+      }
+      for (const company of deps.companies) {
+        const active = client;
+        if (!active) break;
+        try {
+          const posts = await searchReddit(active, `"${company.name}" OR "$${company.ticker}"`);
+          let added = 0;
+          for (const p of posts) {
+            if (!matchesCompany(company, p.title, p.selftext)) continue;
+            const inserted = deps.pipeline.ingest({
+              companyId: company.id,
+              kind: "reddit",
+              sourceName: `r/${p.subreddit}`,
+              sourceUrl: p.permalink,
+              tier: "social",
+              title: p.title,
+              snippet: p.selftext,
+              publishedAt: p.createdAt || Date.now(),
+              retrievedAt: Date.now(),
+              digest: mentionDigest("reddit", p.permalink, p.title),
+            });
+            if (inserted) added += 1;
+          }
+          deps.health.recordReddit(true);
+          if (added > 0) deps.db.logEvent("info", "reddit", `${company.ticker}: ${added} new`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.health.recordReddit(false, `${company.ticker}: ${message}`);
+          client = null; // force token refresh next cycle
+          deps.db.logEvent("warn", "reddit", `${company.ticker}: ${message}`);
+        }
+        await sleep(1_500);
       }
     } finally {
       running = false;

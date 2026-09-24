@@ -1,4 +1,4 @@
-export type SourceKind = "rss" | "x" | "sec";
+export type SourceKind = "rss" | "x" | "sec" | "finnhub" | "reddit";
 
 /**
  * Source tiers rank publishing venues by expected reliability for business
@@ -96,6 +96,11 @@ export interface MentionDTO {
   confirmations?: number;
 }
 
+export interface EarningsSurprise {
+  percent: number; // (actual - estimate) / |estimate| * 100
+  period: string;
+}
+
 export interface CompanySnapshot {
   id: string;
   name: string;
@@ -108,6 +113,10 @@ export interface CompanySnapshot {
   delta: number | null;
   mentions24h: number;
   lastMentionAt: number | null;
+  /** Next scheduled earnings date (ms), from the Finnhub calendar when configured. */
+  earningsAt: number | null;
+  /** Latest reported EPS surprise vs consensus, from Finnhub when configured. */
+  lastSurprise: EarningsSurprise | null;
 }
 
 export interface SeriesPoint {

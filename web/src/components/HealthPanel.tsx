@@ -39,6 +39,14 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
           label="sec edgar"
           value={health.health.sec.enabled ? `${health.health.sec.ok} ok / ${health.health.sec.fail} fail · ${timeAgo(health.health.sec.lastOkAt)}` : "off (no UA)"}
         />
+        <Row
+          label="finnhub"
+          value={health.health.finnhub.enabled ? `${health.health.finnhub.ok} ok / ${health.health.finnhub.fail} fail · ${timeAgo(health.health.finnhub.lastOkAt)}` : "off (no key)"}
+        />
+        <Row
+          label="reddit"
+          value={health.health.reddit.enabled ? `${health.health.reddit.ok} ok / ${health.health.reddit.fail} fail · ${timeAgo(health.health.reddit.lastOkAt)}` : "off (no app)"}
+        />
         <Row label="sse clients" value={String(health.sseClients)} />
         <Row label="uptime" value={`${Math.max(1, Math.floor(health.uptimeSec / 60))}m`} />
       </div>

@@ -4,6 +4,11 @@
  * credentials; everything here is read-only.
  */
 
+export interface EarningsSurprise {
+  percent: number;
+  period: string;
+}
+
 export interface CompanySnapshot {
   id: string;
   name: string;
@@ -14,6 +19,8 @@ export interface CompanySnapshot {
   delta: number | null;
   mentions24h: number;
   lastMentionAt: number | null;
+  earningsAt: number | null;
+  lastSurprise: EarningsSurprise | null;
 }
 
 export type Sentiment = "negative" | "neutral" | "positive";
@@ -130,6 +137,8 @@ export interface HealthDTO {
     x: SourceHealth;
     quotes: SourceHealth;
     sec: SourceHealth;
+    finnhub: SourceHealth;
+    reddit: SourceHealth;
     jev: SourceHealth & { model: string };
   };
   usage: { calls: number; inputTokens: number; outputTokens: number; costUsd: number };

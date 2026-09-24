@@ -58,6 +58,13 @@ export const config = {
     inputPricePerMTok: 0.042,
   },
   xBearer: process.env.X_BEARER_TOKEN?.trim() || "",
+  /** Finnhub free tier: per-symbol news + EPS surprises + earnings calendar. */
+  finnhubKey: process.env.FINNHUB_API_KEY?.trim() || "",
+  pollFinnhubSeconds: int(process.env.POLL_FINNHUB_SECONDS, 120),
+  /** Reddit free OAuth app (script type): social tier source. */
+  redditClientId: process.env.REDDIT_CLIENT_ID?.trim() || "",
+  redditClientSecret: process.env.REDDIT_CLIENT_SECRET?.trim() || "",
+  pollRedditSeconds: int(process.env.POLL_REDDIT_SECONDS, 180),
   /**
    * SEC fair-access policy wants a User-Agent that identifies the requester.
    * A generic research-desk default is used when none is set; personalize it

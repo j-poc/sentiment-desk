@@ -7,6 +7,7 @@ import { applyPostRules, bucketSeries, parseJudgment, weightedIndex } from "./sc
 import { TIER_WEIGHT } from "./sources/tiers.js";
 import type {
   CompanySnapshot,
+  EarningsSurprise,
   JevState,
   MentionScore,
   SeriesPoint,
@@ -179,7 +180,8 @@ export class Pipeline {
     const companies = new Map(this.deps.db.companies().map((c) => [c.id, c] as const));
     const items = this.deps.db.scoredMentions(now - DAY_MS);
     const counts = this.deps.db.counts24h(now - DAY_MS);
-    return this.computeSnapshot(companies, counts, items, companyId, now);
+    const extras = this.earningsExtras();
+    return this.computeSnapshot(companies, counts, items, companyId, now, extras);
   }
 
   snapshots(): CompanySnapshot[] {
@@ -188,7 +190,29 @@ export class Pipeline {
     const byId = new Map(companies.map((c) => [c.id, c] as const));
     const items = this.deps.db.scoredMentions(now - DAY_MS);
     const counts = this.deps.db.counts24h(now - DAY_MS);
-    return companies.map((c) => this.computeSnapshot(byId, counts, items, c.id, now));
+    const extras = this.earningsExtras();
+    return companies.map((c) => this.computeSnapshot(byId, counts, items, c.id, now, extras));
+  }
+
+  /** Measured earnings facts (Finnhub) cached in kv, surfaced on snapshots. */
+  private earningsExtras(): Map<string, { earningsAt: number | null; lastSurprise: EarningsSurprise | null }> {
+    const out = new Map<string, { earningsAt: number | null; lastSurprise: EarningsSurprise | null }>();
+    for (const c of this.deps.db.companies()) {
+      const earningsRaw = this.deps.db.getKv(`finnhub:earnings:${c.id}`);
+      const surpriseRaw = this.deps.db.getKv(`finnhub:surprise:${c.id}`);
+      const earningsAt = earningsRaw ? Number(earningsRaw) : NaN;
+      let lastSurprise: EarningsSurprise | null = null;
+      try {
+        lastSurprise = surpriseRaw ? (JSON.parse(surpriseRaw) as EarningsSurprise) : null;
+      } catch {
+        lastSurprise = null;
+      }
+      out.set(c.id, {
+        earningsAt: Number.isFinite(earningsAt) ? earningsAt : null,
+        lastSurprise,
+      });
+    }
+    return out;
   }
 
   private computeSnapshot(
@@ -197,6 +221,7 @@ export class Pipeline {
     items: Array<{ companyId: string; publishedAt: number; impact: number; weight: number }>,
     companyId: string,
     now: number,
+    extras: Map<string, { earningsAt: number | null; lastSurprise: EarningsSurprise | null }> = new Map(),
   ): CompanySnapshot {
     const meta = companies.get(companyId);
     const own = items.filter((m) => m.companyId === companyId);
@@ -213,6 +238,8 @@ export class Pipeline {
       delta: current != null && baseline != null ? Math.round((current - baseline) * 100) / 100 : null,
       mentions24h: count?.count ?? 0,
       lastMentionAt: count?.lastAt ?? null,
+      earningsAt: extras.get(companyId)?.earningsAt ?? null,
+      lastSurprise: extras.get(companyId)?.lastSurprise ?? null,
     };
   }
 

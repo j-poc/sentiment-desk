@@ -374,8 +374,32 @@ export default function App() {
                       );
                     })()}
                   </div>
-                  <div className="mt-0.5 text-[11.5px] text-white/40">
-                    {selected.sector} · {selected.mentions24h} mentions in 24h · last {timeAgo(selected.lastMentionAt)}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-white/40">
+                    <span>
+                      {selected.sector} · {selected.mentions24h} mentions in 24h · last {timeAgo(selected.lastMentionAt)}
+                    </span>
+                    {selected.earningsAt != null && (
+                      <span
+                        className="rounded border border-amber-400/25 bg-amber-400/[0.07] px-1.5 py-[1px] text-[10px] font-medium text-amber-300"
+                        title="upcoming earnings date (finnhub calendar)"
+                      >
+                        earnings {Math.ceil((selected.earningsAt - Date.now()) / 86_400_000)}d
+                      </span>
+                    )}
+                    {selected.lastSurprise && (
+                      <span
+                        className="tabnum rounded border px-1.5 py-[1px] text-[10px] font-medium"
+                        style={{
+                          color: selected.lastSurprise.percent >= 0 ? "#34d399" : "#f87171",
+                          borderColor: selected.lastSurprise.percent >= 0 ? "rgba(52,211,153,0.25)" : "rgba(248,113,113,0.25)",
+                          background: "rgba(255,255,255,0.03)",
+                        }}
+                        title={`EPS vs consensus, ${selected.lastSurprise.period} (finnhub)`}
+                      >
+                        EPS surprise {selected.lastSurprise.percent > 0 ? "+" : ""}
+                        {selected.lastSurprise.percent.toFixed(1)}%
+                      </span>
+                    )}
                   </div>
                   <div className="mt-2 flex items-center gap-2 text-[11.5px]">
                     <DeltaChip delta={selected.delta} />

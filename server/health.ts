@@ -18,6 +18,8 @@ export interface HealthSnapshot {
   x: SourceCounters;
   quotes: SourceCounters;
   sec: SourceCounters;
+  finnhub: SourceCounters;
+  reddit: SourceCounters;
   jev: SourceCounters & { model: string };
 }
 
@@ -28,12 +30,23 @@ export class HealthTracker {
 
   private readonly quotes: SourceCounters;
   private readonly sec: SourceCounters;
+  private readonly finnhub: SourceCounters;
+  private readonly reddit: SourceCounters;
 
-  constructor(xEnabled: boolean, jevEnabled: boolean, jevModel: string, secEnabled = false) {
+  constructor(
+    xEnabled: boolean,
+    jevEnabled: boolean,
+    jevModel: string,
+    secEnabled = false,
+    finnhubEnabled = false,
+    redditEnabled = false,
+  ) {
     this.rss = fresh(true);
     this.x = fresh(xEnabled);
     this.quotes = fresh(true);
     this.sec = fresh(secEnabled);
+    this.finnhub = fresh(finnhubEnabled);
+    this.reddit = fresh(redditEnabled);
     this.jev = { ...fresh(jevEnabled), model: jevModel };
   }
 
@@ -53,6 +66,14 @@ export class HealthTracker {
     this.record(this.sec, ok, error);
   }
 
+  recordFinnhub(ok: boolean, error?: string): void {
+    this.record(this.finnhub, ok, error);
+  }
+
+  recordReddit(ok: boolean, error?: string): void {
+    this.record(this.reddit, ok, error);
+  }
+
   recordJev(ok: boolean, error?: string): void {
     this.record(this.jev, ok, error);
   }
@@ -63,6 +84,8 @@ export class HealthTracker {
       x: { ...this.x },
       quotes: { ...this.quotes },
       sec: { ...this.sec },
+      finnhub: { ...this.finnhub },
+      reddit: { ...this.reddit },
       jev: { ...this.jev },
     };
   }

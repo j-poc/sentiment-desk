@@ -10,7 +10,9 @@ import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import {
   startDemoLoop,
+  startFinnhubPoller,
   startGdeltPoller,
+  startRedditPoller,
   startRssPoller,
   startSecPoller,
   startXPoller,
@@ -37,6 +39,8 @@ async function main(): Promise<void> {
     config.jev.apiKey !== "" || config.demo,
     config.jev.model,
     !config.demo && config.secUserAgent !== "",
+    config.finnhubKey !== "" && !config.demo,
+    config.redditClientId !== "" && config.redditClientSecret !== "" && !config.demo,
   );
 
   // Resolve CIKs once at boot; SEC source degrades gracefully if this fails.
@@ -123,6 +127,30 @@ async function main(): Promise<void> {
       startGdeltPoller({ companies, pipeline, db, health, intervalSeconds: config.pollGdeltSeconds }),
     );
   }
+  if (!config.demo && config.finnhubKey) {
+    schedulers.push(
+      startFinnhubPoller({
+        companies,
+        token: config.finnhubKey,
+        pipeline,
+        db,
+        health,
+        intervalSeconds: config.pollFinnhubSeconds,
+      }),
+    );
+  }
+  if (!config.demo && config.redditClientId && config.redditClientSecret) {
+    schedulers.push(
+      startRedditPoller({
+        companies,
+        creds: { clientId: config.redditClientId, clientSecret: config.redditClientSecret },
+        pipeline,
+        db,
+        health,
+        intervalSeconds: config.pollRedditSeconds,
+      }),
+    );
+  }
   if (!config.demo && config.xBearer) {
     schedulers.push(
       startXPoller({
@@ -151,6 +179,10 @@ async function main(): Promise<void> {
         ? `[desk] jev key resolved from ${apiKeySource}`
         : "[desk] TYPESAFE_API_KEY not found (env or ~/.newsjack/.env). Add it to .env to start scoring.",
     );
+    if (!config.finnhubKey)
+      console.log("[desk] finnhub: no key — free tier adds news, EPS surprises, earnings dates");
+    if (!(config.redditClientId && config.redditClientSecret))
+      console.log("[desk] reddit: no app credentials — free tier adds the social tier");
   }
 
   let stopping = false;
