@@ -1,61 +1,33 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import {
+  AreaSeries,
+  ColorType,
+  createChart,
+  CrosshairMode,
+  LineStyle,
+  LineSeries,
+  type IChartApi,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
 import type { PricePoint, SeriesPoint } from "../lib/api.js";
-import { dayTime, shortTime } from "../lib/format.js";
 
 /**
- * Sentiment index chart with an optional price overlay.
+ * Sentiment index chart with an optional price overlay, built on TradingView
+ * lightweight-charts (Apache-2.0; attribution satisfied via attributionLogo).
  *
  * Both series share one uniform time grid: the server resamples prices onto
- * the exact bucket grid the sentiment index uses (carrying the last known
- * price forward through closed periods), so a single linear x axis aligns
- * them point-for-point with no density artifacts and no session-gap
- * diagonals.
- *
- * The sentiment series is a smoothed leaky-integrator index, rendered as
- * Catmull-Rom curves split into green above the zero line and red below. The
- * price overlay is normalized to its own min/max on a right axis and drawn
- * as a straight polyline through bucket samples.
+ * the exact bucket grid the sentiment index uses (carry-forward through closed
+ * periods). The sentiment series is a smoothed leaky-integrator index drawn as
+ * a green area around the zero baseline; the price overlay lives on its own
+ * right price scale. Crosshair, tooltips, session handling, and resize are the
+ * library's job — that is why it was adopted over the hand-rolled SVG chart.
  */
 
-const W = 800;
-const H = 280;
-const PAD_X = 10;
-const TOP = 14;
-const BOTTOM = 14;
-
-const POS = "#34d399";
-const NEG = "#f87171";
-
-interface Pt {
-  x: number;
-  y: number;
-  t: number;
-  v: number;
-  n: number;
-}
-
-/** Catmull-Rom through the points, as cubic beziers. */
-function smoothPath(pts: Pt[]): string {
-  if (pts.length === 0) return "";
-  if (pts.length === 1) return `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
-  let d = `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[Math.max(0, i - 1)]!;
-    const p1 = pts[i]!;
-    const p2 = pts[i + 1]!;
-    const p3 = pts[Math.min(pts.length - 1, i + 2)]!;
-    const c1x = p1.x + (p2.x - p0.x) / 6;
-    const c1y = p1.y + (p2.y - p0.y) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6;
-    const c2y = p2.y - (p3.y - p1.y) / 6;
-    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
-  }
-  return d;
-}
+const toSec = (ms: number): UTCTimestamp => Math.floor(ms / 1000) as UTCTimestamp;
 
 export function SeriesChart({
   points,
-  hours,
   loading,
   mode,
   price,
@@ -66,266 +38,139 @@ export function SeriesChart({
   mode: "sentiment" | "overlay";
   price?: PricePoint[];
 }) {
-  const [hover, setHover] = useState<{ i: number; x: number } | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const sentimentRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const priceRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
 
-  const geom = useMemo(() => {
-    const n = points.length;
-    const zeroY = TOP + (H - TOP - BOTTOM) / 2;
-    const t0 = points[0]?.t ?? 0;
-    const t1 = points[Math.max(0, n - 1)]?.t ?? 1;
-    const yOf = (v: number) => zeroY - (Math.max(-100, Math.min(100, v)) / 100) * ((H - TOP - BOTTOM) / 2);
-    const xOfT = (t: number) => PAD_X + ((t - t0) / Math.max(1, t1 - t0)) * (W - 2 * PAD_X);
+  // Create the chart once.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-    const pts: Pt[] = [];
-    points.forEach((p) => {
-      if (p.v != null) pts.push({ x: xOfT(p.t), y: yOf(p.v), t: p.t, v: p.v, n: p.n });
+    const chart = createChart(container, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "rgba(232,235,242,0.45)",
+        fontSize: 10,
+        attributionLogo: true,
+      },
+      grid: {
+        vertLines: { color: "rgba(255,255,255,0.03)" },
+        horzLines: { color: "rgba(255,255,255,0.04)" },
+      },
+      leftPriceScale: { visible: true, borderVisible: false },
+      rightPriceScale: { visible: true, borderVisible: false },
+      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 0 },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: "rgba(255,255,255,0.25)", labelBackgroundColor: "#1a1f2b" },
+        horzLine: { color: "rgba(255,255,255,0.25)", labelBackgroundColor: "#1a1f2b" },
+      },
     });
 
-    // Same-sign segments with interpolated zero crossings.
-    const segments: Array<{ sign: 1 | -1; pts: Pt[] }> = [];
-    let cur: Pt[] = [];
-    let curSign: 1 | -1 = 1;
-    const flush = () => {
-      if (cur.length >= 1) segments.push({ sign: curSign, pts: cur });
-      cur = [];
-    };
-    for (const p of pts) {
-      const s: 1 | -1 = p.v >= 0 ? 1 : -1;
-      if (cur.length > 0 && s !== curSign) {
-        const prev = cur[cur.length - 1]!;
-        const frac = Math.abs(prev.v) / (Math.abs(prev.v) + Math.abs(p.v) || 1);
-        const cross: Pt = {
-          x: prev.x + (p.x - prev.x) * frac,
-          y: zeroY,
-          t: prev.t + (p.t - prev.t) * frac,
-          v: 0,
-          n: 0,
-        };
-        cur.push(cross);
-        flush();
-        curSign = s;
-        cur = [cross, p];
-      } else {
-        if (cur.length === 0) curSign = s;
-        cur.push(p);
+    const sentiment = chart.addSeries(AreaSeries, {
+      priceScaleId: "left",
+      lineColor: "#34d399",
+      topColor: "rgba(52,211,153,0.28)",
+      bottomColor: "rgba(52,211,153,0.02)",
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerRadius: 4,
+    });
+    sentiment.priceScale().applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
+    sentiment.createPriceLine({
+      price: 0,
+      color: "rgba(255,255,255,0.25)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: false,
+      title: "",
+    });
+
+    const priceSeries = chart.addSeries(LineSeries, {
+      color: "rgba(226,232,240,0.6)",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    priceSeries.applyOptions({ visible: false });
+
+    chart.subscribeCrosshairMove((param) => {
+      const tip = tooltipRef.current;
+      if (!tip) return;
+      if (param.point == null || param.time == null) {
+        tip.style.opacity = "0";
+        return;
       }
-    }
-    flush();
+      const s = param.seriesData.get(sentiment) as { value?: number } | undefined;
+      const p = param.seriesData.get(priceSeries) as { value?: number } | undefined;
+      const parts: string[] = [];
+      if (s?.value != null) {
+        parts.push(`sent ${s.value > 0 ? "+" : ""}${s.value.toFixed(1)}`);
+      }
+      if (p?.value != null) {
+        parts.push(`$${p.value.toFixed(2)}`);
+      }
+      tip.textContent = parts.length > 0 ? parts.join("  ·  ") : "";
+      tip.style.opacity = parts.length > 0 ? "1" : "0";
+    });
 
-    const linePath = (seg: Pt[]) => smoothPath(seg);
-    const areaPath = (seg: Pt[]) => {
-      const last = seg[seg.length - 1];
-      const first = seg[0];
-      if (!last || !first) return "";
-      return `${smoothPath(seg)} L${last.x.toFixed(1)},${zeroY.toFixed(1)} L${first.x.toFixed(1)},${zeroY.toFixed(1)} Z`;
+    chartRef.current = chart;
+    sentimentRef.current = sentiment;
+    priceRef.current = priceSeries;
+
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+      sentimentRef.current = null;
+      priceRef.current = null;
     };
+  }, []);
 
-    // Price overlay on the same uniform grid.
-    let priceLine: {
-      path: string;
-      min: number;
-      max: number;
-      last?: { xFrac: number; yFrac: number; price: number };
-      at: (t: number) => number | null;
-    } | null = null;
+  // Push data on every change.
+  useEffect(() => {
+    const sentiment = sentimentRef.current;
+    const priceSeries = priceRef.current;
+    const chart = chartRef.current;
+    if (!sentiment || !priceSeries || !chart) return;
+
+    sentiment.setData(
+      points.map((p) => (p.v == null ? { time: toSec(p.t) } : { time: toSec(p.t), value: p.v })),
+    );
+
     if (mode === "overlay" && price && price.length >= 2) {
-      const inDomain = price
-        .filter((p) => Number.isFinite(p.price) && p.t >= t0 - 60_000 && p.t <= t1 + 60_000)
-        .sort((a, b) => a.t - b.t);
-      const source = inDomain.length >= 2 ? inDomain : [...(price ?? [])].sort((a, b) => a.t - b.t);
-      if (source.length >= 2) {
-        let min = Infinity;
-        let max = -Infinity;
-        for (const p of source) {
-          min = Math.min(min, p.price);
-          max = Math.max(max, p.price);
-        }
-        if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
-          const pad = (max - min) * 0.08;
-          min -= pad;
-          max += pad;
-          const yP = (p: number) => TOP + (1 - (p - min) / (max - min)) * (H - TOP - BOTTOM);
-          const pp: Pt[] = source.map((p) => ({ x: xOfT(p.t), y: yP(p.price), t: p.t, v: p.price, n: 0 }));
-          const lastPt = pp[pp.length - 1];
-          const path = pp.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-          priceLine = {
-            path,
-            min,
-            max,
-            last: lastPt ? { xFrac: lastPt.x / W, yFrac: lastPt.y / H, price: lastPt.v } : undefined,
-            at: (t: number) => {
-              let best: number | null = null;
-              let bestDist = Infinity;
-              for (const p of pp) {
-                const d = Math.abs(p.t - t);
-                if (d < bestDist) {
-                  bestDist = d;
-                  best = p.v;
-                }
-              }
-              return best;
-            },
-          };
-        }
-      }
+      priceSeries.setData(
+        price.map((p) => ({ time: toSec(p.t), value: p.price })),
+      );
+      priceSeries.applyOptions({ visible: true });
+    } else {
+      priceSeries.setData([]);
+      priceSeries.applyOptions({ visible: false });
     }
 
-    return { zeroY, yOf, xOfT, segments, linePath, areaPath, n, t0, t1, priceLine };
-  }, [points, mode, price]);
-
-  const onMove = (e: React.MouseEvent) => {
-    const box = boxRef.current?.getBoundingClientRect();
-    if (!box) return;
-    const svgX = ((e.clientX - box.left) / box.width) * W;
-    let bestI = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < geom.n; i++) {
-      const p = points[i];
-      if (!p || p.v == null) continue;
-      const d = Math.abs(geom.xOfT(p.t) - svgX);
-      if (d < bestDist) {
-        bestDist = d;
-        bestI = i;
-      }
+    const from = points[0]?.t;
+    const to = points[points.length - 1]?.t;
+    if (from != null && to != null) {
+      chart.timeScale().setVisibleRange({ from: toSec(from), to: toSec(to) });
     }
-    if (bestI >= 0) setHover({ i: bestI, x: (svgX / W) * box.width });
-  };
-
-  const hoverPoint = hover ? points[hover.i] : null;
-  const hoverPrice = hover && hoverPoint && geom.priceLine ? geom.priceLine.at(hoverPoint.t) : null;
+  }, [points, price, mode]);
 
   return (
-    <div ref={boxRef} className="relative select-none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} className="block h-[280px] w-full" preserveAspectRatio="none">
-        {[-100, -50, 50, 100].map((v) => (
-          <line
-            key={v}
-            x1={PAD_X}
-            x2={W - PAD_X}
-            y1={geom.yOf(v)}
-            y2={geom.yOf(v)}
-            stroke="rgba(255,255,255,0.045)"
-            strokeWidth="1"
-            vectorEffect="non-scaling-stroke"
-          />
-        ))}
-        <line
-          x1={PAD_X}
-          x2={W - PAD_X}
-          y1={geom.zeroY}
-          y2={geom.zeroY}
-          stroke="rgba(255,255,255,0.2)"
-          strokeDasharray="4 5"
-          strokeWidth="1"
-          vectorEffect="non-scaling-stroke"
-        />
-
-        {geom.segments.map((seg, i) => (
-          <path
-            key={`a${i}`}
-            d={geom.areaPath(seg.pts)}
-            fill={seg.sign === 1 ? "rgba(52,211,153,0.13)" : "rgba(248,113,113,0.12)"}
-          />
-        ))}
-
-        {geom.priceLine && (
-          <path
-            d={geom.priceLine.path}
-            fill="none"
-            stroke="rgba(226,232,240,0.55)"
-            strokeWidth="1.1"
-            vectorEffect="non-scaling-stroke"
-            strokeLinejoin="round"
-          />
-        )}
-
-        {geom.segments.map((seg, i) => (
-          <path
-            key={`l${i}`}
-            d={geom.linePath(seg.pts)}
-            fill="none"
-            stroke={seg.sign === 1 ? POS : NEG}
-            strokeWidth="1.9"
-            vectorEffect="non-scaling-stroke"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        ))}
-
-        {hover && hoverPoint?.v != null && (
-          <circle
-            cx={geom.xOfT(hoverPoint.t)}
-            cy={geom.yOf(hoverPoint.v)}
-            r="3.5"
-            fill={hoverPoint.v >= 0 ? POS : NEG}
-            stroke="#08090d"
-            strokeWidth="1.5"
-          />
-        )}
-      </svg>
-
-      {/* Sentiment axis */}
-      <div className="pointer-events-none absolute inset-y-0 left-0 flex flex-col justify-between py-1 text-[9px] text-white/30 tabnum">
-        <span>+100</span>
-        <span>+50</span>
-        <span>0</span>
-        <span>-50</span>
-        <span>-100</span>
-      </div>
-
-      {/* Price axis */}
-      {geom.priceLine && (
-        <div className="pointer-events-none absolute inset-y-0 right-1 text-[9px] text-white/45 tabnum">
-          <span className="absolute" style={{ top: `${(TOP / H) * 100}%` }}>
-            {geom.priceLine.max.toFixed(0)}
-          </span>
-          <span
-            className="absolute"
-            style={{ top: "50%", transform: "translateY(-50%)", color: "rgba(232,235,242,0.6)" }}
-          >
-            {((geom.priceLine.min + geom.priceLine.max) / 2).toFixed(0)}
-          </span>
-          <span
-            className="absolute"
-            style={{ top: `${((H - BOTTOM) / H) * 100}%`, transform: "translateY(-100%)" }}
-          >
-            {geom.priceLine.min.toFixed(0)}
-          </span>
-        </div>
-      )}
-
-      {/* Last price chip riding the overlay */}
-      {geom.priceLine?.last && (
-        <div
-          className="pointer-events-none absolute z-10 -translate-y-1/2 rounded border border-white/15 bg-[#0c0e14] px-1.5 py-[1px] text-[9.5px] text-white/85 tabnum"
-          style={{ left: `${geom.priceLine.last.xFrac * 100}%`, top: `${geom.priceLine.last.yFrac * 100}%` }}
-        >
-          {geom.priceLine.last.price.toFixed(2)}
-        </div>
-      )}
-
-      {hover && hoverPoint && hoverPoint.v != null && (
-        <div
-          className="pointer-events-none absolute top-2 z-10 rounded-lg border border-desk-line bg-[#0c0e14]/95 px-3 py-2 text-[11px] shadow-xl"
-          style={{
-            left: Math.min(Math.max(hover.x - 70, 8), (boxRef.current?.clientWidth ?? 400) - 170),
-          }}
-        >
-          <div className="tabnum text-[13px] font-semibold" style={{ color: hoverPoint.v >= 0 ? POS : NEG }}>
-            {hoverPoint.v > 0 ? "+" : ""}
-            {hoverPoint.v.toFixed(1)}
-          </div>
-          <div className="mt-0.5 text-white/50">
-            {hours <= 24 ? shortTime(hoverPoint.t) : dayTime(hoverPoint.t)} · {hoverPoint.n} mention
-            {hoverPoint.n === 1 ? "" : "s"}
-            {hoverPrice != null && <span className="tabnum"> · ${hoverPrice.toFixed(2)}</span>}
-          </div>
-        </div>
-      )}
-
+    <div className="relative">
+      <div ref={containerRef} className="h-[280px] w-full" />
+      <div
+        ref={tooltipRef}
+        className="pointer-events-none absolute left-3 top-2 z-10 rounded-md border border-desk-line bg-[#0c0e14]/90 px-2.5 py-1 text-[10.5px] text-white/80 tabnum opacity-0 transition-opacity"
+      />
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-white/40">loading series…</div>
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-white/40">
+          loading series…
+        </div>
       )}
     </div>
   );

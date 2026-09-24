@@ -461,7 +461,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="px-3 py-2 pl-9">
+                <div className="px-3 py-2">
                   <SeriesChart
                     points={series}
                     hours={windowHours}
