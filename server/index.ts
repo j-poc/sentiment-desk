@@ -92,8 +92,11 @@ async function main(): Promise<void> {
   const requeued = db.resetOutdatedRubric(RUBRIC_SHA);
   if (requeued > 0) {
     console.log(`[desk] rubric changed: re-queueing ${requeued} mentions for re-judgment`);
-    pipeline.drainPending(2_000);
   }
+  // Pending work always drains on boot, whether it came from the migration,
+  // an earlier crash, or scoring that was interrupted by a missing key.
+  const drained = pipeline.drainPending(5_000);
+  if (drained > 0) console.log(`[desk] re-queued ${drained} pending mentions`);
 
   const app = createApp({
     db,
