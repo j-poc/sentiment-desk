@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { config, loadCompanies } from "./config.js";
+import { VERSION, config, apiKeySource, loadCompanies } from "./config.js";
 import { Desk } from "./db.js";
 import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
@@ -7,6 +7,7 @@ import { JevClient } from "./jev.js";
 import { Pipeline, type JudgeFn } from "./pipeline.js";
 import { RUBRIC } from "./rubric.js";
 import { createApp } from "./app.js";
+import { MarketData, startQuotesPoller } from "./market.js";
 import { startDemoLoop, startRssPoller, startXPoller, type SchedulerControl } from "./schedule.js";
 import { demoJudge } from "./demo.js";
 
@@ -55,21 +56,29 @@ async function main(): Promise<void> {
     concurrency: config.scoreConcurrency,
   });
 
-  const app = createApp({ db, pipeline, hub, health, demo: config.demo });
+  const market = new MarketData({ companies, indices: config.indices, hub, health });
+
+  const app = createApp({
+    db,
+    dbPath: config.dbPath,
+    pipeline,
+    market,
+    hub,
+    health,
+    demo: config.demo,
+    version: VERSION,
+  });
 
   const server = serve({ fetch: app.fetch, port: config.port });
 
-  // Demo mode is fully synthetic: no real sources, no mixed data.
-  const schedulers: SchedulerControl[] = [];
+  // Quotes run in every mode: they are read-only market context.
+  const schedulers: SchedulerControl[] = [
+    startQuotesPoller({ market, db, intervalSeconds: config.pollQuotesSeconds }),
+  ];
+  // Demo mode is fully synthetic on the sentiment side: no real sources mixed in.
   if (!config.demo) {
     schedulers.push(
-      startRssPoller({
-        companies,
-        pipeline,
-        db,
-        health,
-        intervalSeconds: config.pollRssSeconds,
-      }),
+      startRssPoller({ companies, pipeline, db, health, intervalSeconds: config.pollRssSeconds }),
     );
   }
   if (!config.demo && config.xBearer) {
@@ -88,11 +97,15 @@ async function main(): Promise<void> {
     schedulers.push(startDemoLoop({ companies, pipeline }));
   }
 
-  const mode = config.demo ? "DEMO" : judge ? "LIVE" : "LIVE (no key: mentions stay pending)";
-  console.log(`[desk] sentiment desk ${mode} on http://localhost:${config.port}`);
+  const mode = config.demo ? "DEMO" : judge ? "LIVE" : "AWAITING KEY (mentions stay pending)";
+  console.log(`[desk] sentiment desk v${VERSION} ${mode} on http://localhost:${config.port}`);
   console.log(`[desk] watchlist: ${companies.length} companies | db: ${config.dbPath}`);
-  if (!config.demo && !jevClient.configured) {
-    console.warn("[desk] TYPESAFE_API_KEY not set; mentions will stay pending. Set it or run with DEMO=1.");
+  if (!config.demo) {
+    console.log(
+      jevClient.configured
+        ? `[desk] jev key resolved from ${apiKeySource}`
+        : "[desk] TYPESAFE_API_KEY not found (env or ~/.newsjack/.env). Add it to .env to start scoring.",
+    );
   }
 
   let stopping = false;

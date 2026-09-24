@@ -60,6 +60,24 @@ export interface SeriesPoint {
   n: number;
 }
 
+export interface Quote {
+  ticker: string;
+  price: number;
+  changePct: number;
+  currency: string;
+  at: number;
+}
+
+export interface MarketSnapshot {
+  quotes: Record<string, Quote>;
+  updatedAt: number;
+}
+
+export interface PricePoint {
+  t: number;
+  price: number;
+}
+
 export interface SourceHealth {
   enabled: boolean;
   ok: number;
@@ -71,12 +89,15 @@ export interface SourceHealth {
 
 export interface HealthDTO {
   ok: boolean;
+  version: string;
   demo: boolean;
   uptimeSec: number;
   sseClients: number;
+  dbSizeBytes: number | null;
   health: {
     rss: SourceHealth;
     x: SourceHealth;
+    quotes: SourceHealth;
     jev: SourceHealth & { model: string };
   };
   usage: { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
@@ -93,6 +114,7 @@ export interface StreamHandlers {
   onHello?: (data: { demo: boolean; now: number }) => void;
   onMention?: (m: Mention) => void;
   onCompany?: (s: CompanySnapshot) => void;
+  onQuotes?: (s: MarketSnapshot) => void;
   onState?: (connected: boolean) => void;
 }
 
@@ -102,6 +124,7 @@ export function openStream(handlers: StreamHandlers): () => void {
   es.addEventListener("hello", (e) => handlers.onHello?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("mention", (e) => handlers.onMention?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("company", (e) => handlers.onCompany?.(JSON.parse((e as MessageEvent).data)));
+  es.addEventListener("quotes", (e) => handlers.onQuotes?.(JSON.parse((e as MessageEvent).data)));
   es.onopen = () => handlers.onState?.(true);
   es.onerror = () => handlers.onState?.(false);
   return () => es.close();

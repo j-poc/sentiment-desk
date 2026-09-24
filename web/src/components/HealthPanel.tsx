@@ -31,6 +31,10 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
           label="x api"
           value={x.enabled ? `${x.ok} ok / ${x.fail} fail · ${timeAgo(x.lastOkAt)}` : "disabled (no token)"}
         />
+        <Row
+          label="quotes"
+          value={`${health.health.quotes.ok} ok / ${health.health.quotes.fail} fail · ${timeAgo(health.health.quotes.lastOkAt)}`}
+        />
         <Row label="sse clients" value={String(health.sseClients)} />
         <Row label="uptime" value={`${Math.max(1, Math.floor(health.uptimeSec / 60))}m`} />
       </div>

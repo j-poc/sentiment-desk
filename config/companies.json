@@ -1,84 +1,28 @@
 {
   "companies": [
-    {
-      "id": "nvidia",
-      "name": "NVIDIA",
-      "ticker": "NVDA",
-      "sector": "Semiconductors",
-      "aliases": ["Nvidia", "Jensen Huang"],
-      "color": "#76b900"
-    },
-    {
-      "id": "apple",
-      "name": "Apple",
-      "ticker": "AAPL",
-      "sector": "Consumer Electronics",
-      "aliases": ["Apple", "iPhone", "Tim Cook"],
-      "color": "#cbd5e1"
-    },
-    {
-      "id": "microsoft",
-      "name": "Microsoft",
-      "ticker": "MSFT",
-      "sector": "Software",
-      "aliases": ["Microsoft", "Satya Nadella"],
-      "color": "#38bdf8"
-    },
-    {
-      "id": "alphabet",
-      "name": "Alphabet",
-      "ticker": "GOOGL",
-      "sector": "Internet",
-      "aliases": ["Alphabet", "Google", "Sundar Pichai"],
-      "color": "#818cf8"
-    },
-    {
-      "id": "amazon",
-      "name": "Amazon",
-      "ticker": "AMZN",
-      "sector": "E-commerce / Cloud",
-      "aliases": ["Amazon", "AWS", "Andy Jassy"],
-      "color": "#fbbf24"
-    },
-    {
-      "id": "meta",
-      "name": "Meta Platforms",
-      "ticker": "META",
-      "sector": "Social",
-      "aliases": ["Meta Platforms", "Facebook", "Instagram", "Mark Zuckerberg"],
-      "color": "#22d3ee"
-    },
-    {
-      "id": "tesla",
-      "name": "Tesla",
-      "ticker": "TSLA",
-      "sector": "Automotive",
-      "aliases": ["Tesla", "Elon Musk"],
-      "color": "#ef4444"
-    },
-    {
-      "id": "netflix",
-      "name": "Netflix",
-      "ticker": "NFLX",
-      "sector": "Streaming",
-      "aliases": ["Netflix", "Ted Sarandos"],
-      "color": "#fb7185"
-    },
-    {
-      "id": "amd",
-      "name": "AMD",
-      "ticker": "AMD",
-      "sector": "Semiconductors",
-      "aliases": ["AMD", "Advanced Micro Devices", "Lisa Su"],
-      "color": "#fb923c"
-    },
-    {
-      "id": "jpmorgan",
-      "name": "JPMorgan Chase",
-      "ticker": "JPM",
-      "sector": "Banking",
-      "aliases": ["JPMorgan", "Jamie Dimon"],
-      "color": "#a78bfa"
-    }
+    { "id": "nvidia", "name": "NVIDIA", "ticker": "NVDA", "sector": "Semiconductors", "aliases": ["Nvidia", "Jensen Huang", "GeForce", "Blackwell"], "color": "#76b900" },
+    { "id": "apple", "name": "Apple", "ticker": "AAPL", "sector": "Consumer Electronics", "aliases": ["Apple", "iPhone", "Tim Cook", "Macbook", "App Store"], "color": "#cbd5e1" },
+    { "id": "microsoft", "name": "Microsoft", "ticker": "MSFT", "sector": "Software", "aliases": ["Microsoft", "Satya Nadella", "Azure", "Windows", "Copilot"], "color": "#38bdf8" },
+    { "id": "alphabet", "name": "Alphabet", "ticker": "GOOGL", "sector": "Internet", "aliases": ["Alphabet", "Google", "Sundar Pichai", "YouTube", "Gemini"], "color": "#818cf8" },
+    { "id": "amazon", "name": "Amazon", "ticker": "AMZN", "sector": "E-commerce / Cloud", "aliases": ["Amazon", "AWS", "Andy Jassy", "Prime"], "color": "#fbbf24" },
+    { "id": "meta", "name": "Meta Platforms", "ticker": "META", "sector": "Social", "aliases": ["Meta Platforms", "Facebook", "Instagram", "WhatsApp", "Mark Zuckerberg", "Llama"], "color": "#22d3ee" },
+    { "id": "tesla", "name": "Tesla", "ticker": "TSLA", "sector": "Automotive", "aliases": ["Tesla", "Elon Musk", "Cybertruck", "Model Y"], "color": "#ef4444" },
+    { "id": "netflix", "name": "Netflix", "ticker": "NFLX", "sector": "Streaming", "aliases": ["Netflix", "Ted Sarandos"], "color": "#fb7185" },
+    { "id": "amd", "name": "AMD", "ticker": "AMD", "sector": "Semiconductors", "aliases": ["AMD", "Advanced Micro Devices", "Lisa Su", "Ryzen", "Instinct"], "color": "#fb923c" },
+    { "id": "broadcom", "name": "Broadcom", "ticker": "AVGO", "sector": "Semiconductors", "aliases": ["Broadcom", "Hock Tan", "VMware"], "color": "#c084fc" },
+    { "id": "intel", "name": "Intel", "ticker": "INTC", "sector": "Semiconductors", "aliases": ["Intel", "Pat Gelsinger", "Lip-Bu Tan", "Core Ultra"], "color": "#60a5fa" },
+    { "id": "tsmc", "name": "Taiwan Semiconductor", "ticker": "TSM", "sector": "Semiconductors", "aliases": ["Taiwan Semiconductor", "TSMC", "Foundry"], "color": "#2dd4bf" },
+    { "id": "oracle", "name": "Oracle", "ticker": "ORCL", "sector": "Software", "aliases": ["Oracle", "Larry Ellison", "OCI"], "color": "#e879f9" },
+    { "id": "salesforce", "name": "Salesforce", "ticker": "CRM", "sector": "Software", "aliases": ["Salesforce", "Marc Benioff", "Agentforce"], "color": "#86efac" },
+    { "id": "adobe", "name": "Adobe", "ticker": "ADBE", "sector": "Software", "aliases": ["Adobe", "Firefly", "Creative Cloud"], "color": "#fca5a5" },
+    { "id": "palantir", "name": "Palantir", "ticker": "PLTR", "sector": "Data Analytics", "aliases": ["Palantir", "Alex Karp", "AIP"], "color": "#a5b4fc" },
+    { "id": "coinbase", "name": "Coinbase", "ticker": "COIN", "sector": "Crypto / Fintech", "aliases": ["Coinbase", "Brian Armstrong"], "color": "#38bdf8" },
+    { "id": "jpmorgan", "name": "JPMorgan Chase", "ticker": "JPM", "sector": "Banking", "aliases": ["JPMorgan", "Jamie Dimon", "Chase"], "color": "#a78bfa" },
+    { "id": "goldman", "name": "Goldman Sachs", "ticker": "GS", "sector": "Banking", "aliases": ["Goldman Sachs", "David Solomon"], "color": "#f0abfc" },
+    { "id": "exxon", "name": "Exxon Mobil", "ticker": "XOM", "sector": "Energy", "aliases": ["Exxon", "ExxonMobil"], "color": "#d4d4d8" },
+    { "id": "chevron", "name": "Chevron", "ticker": "CVX", "sector": "Energy", "aliases": ["Chevron"], "color": "#94a3b8" },
+    { "id": "unh", "name": "UnitedHealth", "ticker": "UNH", "sector": "Healthcare", "aliases": ["UnitedHealth", "UnitedHealth Group"], "color": "#4ade80" },
+    { "id": "lilly", "name": "Eli Lilly", "ticker": "LLY", "sector": "Pharma", "aliases": ["Eli Lilly", "Zepbound", "Mounjaro"], "color": "#fda4af" },
+    { "id": "walmart", "name": "Walmart", "ticker": "WMT", "sector": "Retail", "aliases": ["Walmart"], "color": "#5eead4" }
   ]
 }

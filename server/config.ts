@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { Company } from "./types.js";
@@ -16,12 +17,40 @@ const int = (v: string | undefined, fallback: number) => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 };
 
+/**
+ * Credential resolution, mirroring the newsjack chain: process env (which the
+ * project .env feeds), then ~/.newsjack/.env as a shared-machine fallback. The
+ * value never leaves the server process.
+ */
+function readEnvFile(filePath: string): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const text = fs.readFileSync(filePath, "utf8");
+    for (const line of text.split("\n")) {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      const key = m?.[1];
+      const value = m?.[2];
+      if (key && value != null) out.set(key, value.replace(/^["']|["']$/g, ""));
+    }
+  } catch {
+    /* file absent */
+  }
+  return out;
+}
+
+const newsjackEnv = readEnvFile(path.join(os.homedir(), ".newsjack", ".env"));
+const envKey = process.env.TYPESAFE_API_KEY?.trim() || "";
+const apiKey = envKey || newsjackEnv.get("TYPESAFE_API_KEY")?.trim() || "";
+export const apiKeySource = envKey ? "env" : apiKey ? "~/.newsjack/.env" : "missing";
+
+export const VERSION = "0.2.0";
+
 export const config = {
   port: int(process.env.PORT, 8787),
   dbPath: process.env.DB_PATH?.trim() || path.resolve("data/desk.db"),
   companiesPath: process.env.COMPANIES_PATH?.trim() || path.resolve("config/companies.json"),
   jev: {
-    apiKey: process.env.TYPESAFE_API_KEY?.trim() || "",
+    apiKey,
     baseUrl: (process.env.TYPESAFE_BASE_URL?.trim() || "https://api.typesafe.ai").replace(/\/+$/, ""),
     model: process.env.TYPESAFE_MODEL?.trim() || "jev-latest",
     timeoutMs: 30_000,
@@ -29,10 +58,15 @@ export const config = {
     inputPricePerMTok: 0.042,
   },
   xBearer: process.env.X_BEARER_TOKEN?.trim() || "",
-  pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 60),
+  pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 45),
   pollXSeconds: int(process.env.POLL_X_SECONDS, 180),
+  pollQuotesSeconds: int(process.env.POLL_QUOTES_SECONDS, 45),
   scoreConcurrency: int(process.env.SCORE_CONCURRENCY, 6),
   demo: bool(process.env.DEMO),
+  /** Market context rows shown on the tape; never scored, never in the watchlist. */
+  indices: (process.env.INDICES?.split(",") ?? ["SPY", "QQQ", "^VIX"])
+    .map((s) => s.trim())
+    .filter(Boolean),
 };
 
 const companySchema = z.object({

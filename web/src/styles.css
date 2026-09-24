@@ -1,15 +1,17 @@
 @import "tailwindcss";
 
 @theme {
-  --color-desk-bg: #08090d;
-  --color-desk-panel: #0e1016;
-  --color-desk-panel2: #12151d;
-  --color-desk-line: rgba(255, 255, 255, 0.07);
+  --color-desk-bg: #060709;
+  --color-desk-panel: #0d0f15;
+  --color-desk-panel2: #11141c;
+  --color-desk-line: rgba(255, 255, 255, 0.065);
   --color-desk-dim: #8b93a7;
   --color-desk-bright: #e8ebf2;
   --color-pos: #34d399;
   --color-neg: #f87171;
   --color-neutral-sent: #94a3b8;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 html,
@@ -22,37 +24,65 @@ body {
   margin: 0;
   background-color: var(--color-desk-bg);
   background-image:
-    radial-gradient(1200px 600px at 15% -10%, rgba(56, 189, 248, 0.05), transparent 60%),
-    radial-gradient(1000px 500px at 85% 110%, rgba(52, 211, 153, 0.04), transparent 60%);
+    radial-gradient(1100px 500px at 12% -8%, rgba(56, 189, 248, 0.045), transparent 60%),
+    radial-gradient(900px 420px at 88% 108%, rgba(52, 211, 153, 0.035), transparent 60%);
   background-attachment: fixed;
   color: var(--color-desk-bright);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
+  font-size: 13px;
 }
 
-.tabnum {
+/* Numerals: mono + tabular, the terminal convention. */
+.tabnum,
+.num {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  letter-spacing: -0.01em;
 }
 
-/* Panels */
+/* Uppercase micro label used on every panel header. */
+.micro {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(232, 235, 242, 0.38);
+}
+
 .panel {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.008));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0.006));
   border: 1px solid var(--color-desk-line);
-  border-radius: 14px;
+  border-radius: 10px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-desk-line);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 /* Scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.13) transparent;
 }
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.13);
   border-radius: 4px;
 }
 *::-webkit-scrollbar-track {
@@ -88,7 +118,7 @@ body {
 @keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(3px);
   }
   to {
     opacity: 1;
@@ -96,7 +126,7 @@ body {
   }
 }
 .rise-in {
-  animation: rise-in 0.35s ease-out;
+  animation: rise-in 0.3s ease-out;
 }
 
 .clamp-1 {
@@ -110,4 +140,16 @@ body {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* Keyboard hint chip */
+kbd {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: rgba(232, 235, 242, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 14px;
 }

@@ -1,13 +1,14 @@
 import { useMemo, useRef, useState } from "react";
-import type { SeriesPoint } from "../lib/api.js";
+import type { PricePoint, SeriesPoint } from "../lib/api.js";
 import { dayTime, shortTime } from "../lib/format.js";
 
 /**
- * Sentiment area chart over a window. The fill is one user-space gradient that
- * goes green above the zero line and red below, so area intensity tracks
- * distance from neutral. Hover gives the exact bucket: time, index, mention
- * count. Null buckets (no scored mentions) break the curve rather than lying
- * with interpolation.
+ * Sentiment area chart with an optional normalized price overlay. The fill is
+ * one user-space gradient: green above the zero line, red below, intensity
+ * tracking distance from neutral. Hover gives the exact bucket. Null buckets
+ * (no scored mentions) break the curve rather than lying with interpolation.
+ * The price overlay is normalized to its own min/max on a right axis; it shares
+ * the time domain with sentiment buckets, so divergences are readable directly.
  */
 
 const W = 800;
@@ -20,10 +21,14 @@ export function SeriesChart({
   points,
   hours,
   loading,
+  mode,
+  price,
 }: {
   points: SeriesPoint[];
   hours: number;
   loading: boolean;
+  mode: "sentiment" | "overlay";
+  price?: PricePoint[];
 }) {
   const [hover, setHover] = useState<{ i: number; x: number } | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -31,10 +36,13 @@ export function SeriesChart({
   const geom = useMemo(() => {
     const n = points.length;
     const zeroY = TOP + (H - TOP - BOTTOM) / 2;
-    const yOf = (v: number) => zeroY - (Math.max(-100, Math.min(100, v)) / 100) * (H - TOP - BOTTOM) / 2;
-    const xOf = (i: number) => PAD_X + (i / Math.max(1, n - 1)) * (W - 2 * PAD_X);
+    const t0 = points[0]?.t ?? 0;
+    const t1 = points[Math.max(0, n - 1)]?.t ?? 1;
+    const span = Math.max(1, t1 - t0);
+    const yOf = (v: number) => zeroY - (Math.max(-100, Math.min(100, v)) / 100) * ((H - TOP - BOTTOM) / 2);
+    const xOfT = (t: number) => PAD_X + ((t - t0) / span) * (W - 2 * PAD_X);
+    const xOf = (i: number) => xOfT(points[i]?.t ?? t0);
 
-    // Runs of consecutive non-null buckets.
     const runs: Array<Array<{ x: number; y: number; v: number; t: number; n: number }>> = [];
     let cur: Array<{ x: number; y: number; v: number; t: number; n: number }> = [];
     points.forEach((p, i) => {
@@ -56,8 +64,38 @@ export function SeriesChart({
       return `${linePath(run)} L${last.x.toFixed(1)},${zeroY.toFixed(1)} L${first.x.toFixed(1)},${zeroY.toFixed(1)} Z`;
     };
 
-    return { zeroY, yOf, xOf, runs, linePath, areaPath, n };
-  }, [points]);
+    // Price overlay, clamped to the sentiment time domain.
+    let priceLine: { path: string; min: number; max: number; last?: { xFrac: number; yFrac: number; price: number } } | null = null;
+    if (mode === "overlay" && price && price.length >= 2) {
+      const inDomain = price.filter((p) => p.t >= t0 && p.t <= t1 && Number.isFinite(p.price));
+      const source = inDomain.length >= 2 ? inDomain : price;
+      let min = Infinity;
+      let max = -Infinity;
+      for (const p of source) {
+        min = Math.min(min, p.price);
+        max = Math.max(max, p.price);
+      }
+      if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
+        const pad = (max - min) * 0.06;
+        min -= pad;
+        max += pad;
+        const yP = (p: number) => TOP + (1 - (p - min) / (max - min)) * (H - TOP - BOTTOM);
+        const pts = source.map((p) => ({ x: xOfT(Math.max(t0, Math.min(t1, p.t))), y: yP(p.price), t: p.t, price: p.price }));
+        priceLine = {
+          path: pts.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" "),
+          min,
+          max,
+          last: (() => {
+            const lastPt = pts[pts.length - 1];
+            if (!lastPt) return undefined;
+            return { xFrac: lastPt.x / W, yFrac: lastPt.y / H, price: lastPt.price };
+          })(),
+        };
+      }
+    }
+
+    return { zeroY, yOf, xOf, xOfT, runs, linePath, areaPath, n, t0, t1, priceLine };
+  }, [points, mode, price]);
 
   const onMove = (e: React.MouseEvent) => {
     const box = boxRef.current?.getBoundingClientRect();
@@ -70,12 +108,7 @@ export function SeriesChart({
   const hoverPoint = hover ? points[hover.i] : null;
 
   return (
-    <div
-      ref={boxRef}
-      className="relative select-none"
-      onMouseMove={onMove}
-      onMouseLeave={() => setHover(null)}
-    >
+    <div ref={boxRef} className="relative select-none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} className="block h-[260px] w-full" preserveAspectRatio="none">
         <defs>
           <linearGradient id="series-fill" gradientUnits="userSpaceOnUse" x1="0" y1={TOP} x2="0" y2={H - BOTTOM}>
@@ -115,13 +148,24 @@ export function SeriesChart({
             <path
               d={geom.linePath(run)}
               fill="none"
-              stroke={run[run.length - 1] && (run[run.length - 1]?.v ?? 0) >= 0 ? "#34d399" : "#f87171"}
+              stroke={(run[run.length - 1]?.v ?? 0) >= 0 ? "#34d399" : "#f87171"}
               strokeWidth="1.8"
               vectorEffect="non-scaling-stroke"
               strokeLinejoin="round"
             />
           </g>
         ))}
+
+        {geom.priceLine && (
+          <path
+            d={geom.priceLine.path}
+            fill="none"
+            stroke="rgba(232,235,242,0.85)"
+            strokeWidth="1.2"
+            vectorEffect="non-scaling-stroke"
+            strokeLinejoin="round"
+          />
+        )}
 
         {hover && (
           <line
@@ -147,7 +191,7 @@ export function SeriesChart({
       </svg>
 
       {/* Axis labels */}
-      <div className="pointer-events-none absolute inset-y-0 left-0 flex flex-col justify-between py-1 text-[10px] text-white/35 tabnum">
+      <div className="pointer-events-none absolute inset-y-0 left-0 flex flex-col justify-between py-1 text-[9px] text-white/30 tabnum">
         <span>+100</span>
         <span>+50</span>
         <span>0</span>
@@ -155,11 +199,33 @@ export function SeriesChart({
         <span>-100</span>
       </div>
 
+      {/* Price right axis */}
+      {geom.priceLine && (
+        <div className="pointer-events-none absolute inset-y-0 right-0 text-[9px] text-white/45 tabnum">
+          <span className="absolute right-1" style={{ top: `${(TOP / H) * 100}%` }}>
+            {geom.priceLine.max.toFixed(0)}
+          </span>
+          <span className="absolute right-1" style={{ top: `${((H - BOTTOM) / H) * 100}%`, transform: "translateY(-100%)" }}>
+            {geom.priceLine.min.toFixed(0)}
+          </span>
+        </div>
+      )}
+
+      {/* Last price chip riding the overlay line */}
+      {geom.priceLine?.last && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-y-1/2 rounded border border-white/15 bg-[#0c0e14] px-1.5 py-[1px] text-[9.5px] text-white/85 tabnum"
+          style={{ left: `${geom.priceLine.last.xFrac * 100}%`, top: `${geom.priceLine.last.yFrac * 100}%` }}
+        >
+          {geom.priceLine.last.price.toFixed(2)}
+        </div>
+      )}
+
       {hover && hoverPoint && (
         <div
           className="pointer-events-none absolute top-2 z-10 rounded-lg border border-desk-line bg-[#0c0e14]/95 px-3 py-2 text-[11px] shadow-xl"
           style={{
-            left: Math.min(Math.max(hover.x - 60, 8), (boxRef.current?.clientWidth ?? 400) - 140),
+            left: Math.min(Math.max(hover.x - 60, 8), (boxRef.current?.clientWidth ?? 400) - 150),
           }}
         >
           <div className="tabnum text-[13px] font-semibold">
@@ -173,9 +239,7 @@ export function SeriesChart({
       )}
 
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-white/40">
-          loading series…
-        </div>
+        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-white/40">loading series…</div>
       )}
     </div>
   );

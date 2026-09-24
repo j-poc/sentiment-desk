@@ -36,7 +36,7 @@ export function Pill({
   );
 }
 
-export function MentionCard({ m, compact }: { m: Mention; compact?: boolean }) {
+export function MentionCard({ m, compact, dense }: { m: Mention; compact?: boolean; dense?: boolean }) {
   const s = m.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
   const offTarget = m.status === "off_target";
@@ -46,7 +46,7 @@ export function MentionCard({ m, compact }: { m: Mention; compact?: boolean }) {
       href={m.source.url}
       target="_blank"
       rel="noreferrer"
-      className={`panel block px-3.5 py-3 transition-colors hover:border-white/15 ${offTarget ? "opacity-55" : ""}`}
+      className={`panel block transition-colors hover:border-white/15 ${dense ? "px-3 py-2" : "px-3.5 py-3"} ${offTarget ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 text-[11px] text-desk-dim">
         <span
@@ -64,7 +64,7 @@ export function MentionCard({ m, compact }: { m: Mention; compact?: boolean }) {
         )}
       </div>
 
-      <div className={`mt-1.5 leading-snug text-desk-bright ${compact ? "clamp-1 text-[12.5px]" : "clamp-2 text-[13.5px]"}`}>
+      <div className={`mt-1.5 leading-snug text-desk-bright ${compact || dense ? "clamp-1 text-[12px]" : "clamp-2 text-[13px]"}`}>
         {m.title}
       </div>
 
@@ -78,7 +78,7 @@ export function MentionCard({ m, compact }: { m: Mention; compact?: boolean }) {
       )}
 
       {s && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        <div className={`flex flex-wrap items-center gap-1.5 ${dense ? "mt-1" : "mt-2.5"}`}>
           <Pill color={dir}>{s.sentiment.toUpperCase()}</Pill>
           {s.material >= 0.6 && <Pill color="#a5b4fc">MATERIAL</Pill>}
           {s.novel >= 0.6 && <Pill color="#5eead4">NEW INFO</Pill>}

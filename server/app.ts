@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -6,6 +6,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
+import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
 
 /**
@@ -17,10 +18,13 @@ import type { Pipeline } from "./pipeline.js";
 
 export interface AppDeps {
   db: Desk;
+  dbPath: string;
   pipeline: Pipeline;
+  market: MarketData;
   hub: Hub;
   health: HealthTracker;
   demo: boolean;
+  version: string;
   webRoot?: string;
 }
 
@@ -37,16 +41,26 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/health", (c) => {
     const startOfDayUtc = new Date();
     startOfDayUtc.setUTCHours(0, 0, 0, 0);
+    let dbSizeBytes: number | null = null;
+    try {
+      dbSizeBytes = statSync(deps.dbPath).size;
+    } catch {
+      /* db file not yet created */
+    }
     return c.json({
       ok: true,
+      version: deps.version,
       demo: deps.demo,
       uptimeSec: Math.floor(process.uptime()),
       sseClients: deps.hub.size,
+      dbSizeBytes,
       health: deps.health.snapshot(),
       usage: deps.db.usageSince(startOfDayUtc.getTime()),
       events: deps.db.recentEvents(20),
     });
   });
+
+  app.get("/api/quotes", (c) => c.json(deps.market.current()));
 
   app.get("/api/companies", (c) => c.json(deps.pipeline.snapshots()));
 
@@ -61,6 +75,18 @@ export function createApp(deps: AppDeps): Hono {
     const id = c.req.param("id");
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
     return c.json(deps.pipeline.series(id, hours));
+  });
+
+  app.get("/api/companies/:id/price", async (c) => {
+    const ticker = (c.req.query("ticker") ?? "").toUpperCase();
+    if (!/^[A-Z^.\-=]{1,12}$/.test(ticker)) return c.json({ error: "bad ticker" }, 400);
+    const hours = clampNumber(c.req.query("hours"), 1, 720, 24);
+    try {
+      return c.json(await deps.market.priceSeries(ticker, hours));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 502);
+    }
   });
 
   app.get("/api/tape", (c) => {
