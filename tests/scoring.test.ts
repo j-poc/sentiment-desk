@@ -27,6 +27,7 @@ function judgment(over: Partial<ParsedJudgment> = {}): ParsedJudgment {
     credible: 0.8,
     investorRelevant: 0.9,
     eventType: "legal_regulatory",
+    takeaway: "legal_hit",
     magnitude: 0.7,
     surprise: 0.8,
     ...over,
@@ -42,6 +43,7 @@ function answers(over: Record<string, unknown> = {}) {
     credible: { noul: 0.9 },
     investor_relevant: { noul: 0.85 },
     event_type: { choice: "legal_regulatory", probabilities: { legal_regulatory: 0.8, other: 0.2 } },
+    takeaway: { choice: "legal_hit" },
     magnitude: { noul: 0.7 },
     surprise: { noul: 0.8 },
     ...over,
@@ -56,6 +58,7 @@ describe("parseJudgment", () => {
     expect(j.confidence).toBe(0.9);
     expect(j.about).toBe(0.95);
     expect(j.eventType).toBe("legal_regulatory");
+    expect(j.takeaway).toBe("legal_hit");
     expect(j.magnitude).toBe(0.7);
     expect(j.surprise).toBe(0.8);
   });

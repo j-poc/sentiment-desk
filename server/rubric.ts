@@ -86,6 +86,63 @@ export const RUBRIC: Rubric = {
     instructions:
       "This item carries genuinely new information relative to prior public knowledge and market expectations: not previously reported, not an anticipated confirmation, not a rehash of a known story.",
   },
+  takeaway: {
+    type: "choice",
+    instructions:
+      "Write the three-word investor headline for this item: pick the single option that best answers why an investor should care. Judge what the item reports, not speculation about outcomes.",
+    criteria: {
+      results_beat: "Reported results or metrics came in better than expectations or prior period.",
+      results_miss: "Reported results or metrics came in worse than expectations or prior period.",
+      guidance_raise: "Management raised or tightened-up forward guidance or forecasts.",
+      guidance_cut: "Management cut, withdrew, or softened forward guidance or forecasts.",
+      accounting_redo: "Financial statements are being restated, delayed, or flagged as unreliable.",
+      listing_risk: "Exchange listing, delisting, or compliance status is threatened or changed.",
+      mna_capital: "M&A, buyback, dividend, capital raise, debt move, or other capital-structure event.",
+      leadership: "C-suite, board, or control changes at the company.",
+      legal_hit: "Legal or regulatory action goes against the company: probe, suit, ruling, fine, sanctions.",
+      legal_relief: "Legal or regulatory pressure eases: case dropped, won, settled favorably, approval granted.",
+      product_win: "Product, operations, supply, or delivery news is a clear positive for the business.",
+      product_setback: "Product, operations, supply, delivery, or safety news is a clear negative for the business.",
+      analyst_shift: "Sell-side or rating view on the company shifted meaningfully.",
+      routine: "Routine disclosure, context, or commentary with no standalone investor takeaway.",
+    },
+  },
+};
+
+export const TAKEAWAY_KEYS = [
+  "results_beat",
+  "results_miss",
+  "guidance_raise",
+  "guidance_cut",
+  "accounting_redo",
+  "listing_risk",
+  "mna_capital",
+  "leadership",
+  "legal_hit",
+  "legal_relief",
+  "product_win",
+  "product_setback",
+  "analyst_shift",
+  "routine",
+] as const;
+
+export type TakeawayKey = (typeof TAKEAWAY_KEYS)[number];
+
+export const TAKEAWAY_LABEL: Record<TakeawayKey, string> = {
+  results_beat: "Results beat",
+  results_miss: "Results miss",
+  guidance_raise: "Guidance raised",
+  guidance_cut: "Guidance cut",
+  accounting_redo: "Accounting redo",
+  listing_risk: "Delisting risk",
+  mna_capital: "M&A / capital move",
+  leadership: "Leadership change",
+  legal_hit: "Legal / regulatory hit",
+  legal_relief: "Legal / regulatory relief",
+  product_win: "Product / ops win",
+  product_setback: "Product / ops setback",
+  analyst_shift: "Analyst view shift",
+  routine: "Routine / context",
 };
 
 export const EVENT_TYPES = [

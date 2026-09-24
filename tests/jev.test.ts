@@ -113,6 +113,7 @@ describe("rubric", () => {
       "novel",
       "sentiment",
       "surprise",
+      "takeaway",
     ]);
     const sentimentQ = RUBRIC["sentiment"];
     expect(sentimentQ?.type).toBe("choice");

@@ -38,6 +38,7 @@ export interface MentionScore {
   novel: number;
   credible: number;
   eventType: string;
+  takeaway: string;
   magnitude: number;
   surprise: number;
   eventScore: number;

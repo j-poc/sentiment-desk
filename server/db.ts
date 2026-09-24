@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS mentions (
   credible REAL,
   investor_relevant REAL,
   event_type TEXT,
+  takeaway TEXT,
   magnitude REAL,
   surprise REAL,
   event_score REAL,
@@ -110,6 +111,7 @@ interface MentionRow {
   credible: number | null;
   investor_relevant: number | null;
   event_type: string | null;
+  takeaway: string | null;
   magnitude: number | null;
   surprise: number | null;
   event_score: number | null;
@@ -151,6 +153,7 @@ export class Desk {
       ["surprise", "REAL"],
       ["event_score", "REAL"],
       ["investor_relevant", "REAL"],
+      ["takeaway", "TEXT"],
     ];
     for (const [name, ddl] of additions) {
       if (!cols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
@@ -209,7 +212,7 @@ export class Desk {
       .prepare(
         `UPDATE mentions SET
            status = ?, sentiment = ?, confidence = ?, p_pos = ?, p_neu = ?, p_neg = ?,
-           about = ?, material = ?, novel = ?, credible = ?, investor_relevant = ?, event_type = ?, magnitude = ?,
+           about = ?, material = ?, novel = ?, credible = ?, investor_relevant = ?, event_type = ?, takeaway = ?, magnitude = ?,
            surprise = ?, event_score = ?, impact = ?, weight = ?,
            exclude = ?, engine = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?,
            latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?
@@ -228,6 +231,7 @@ export class Desk {
         s.credible,
         s.investorRelevant,
         s.eventType,
+        s.takeaway,
         s.magnitude,
         s.surprise,
         s.eventScore,
@@ -496,6 +500,7 @@ export function rowToDTO(r: MentionRow): MentionDTO {
           // Legacy rows judged before this question existed pass through.
           investorRelevant: r.investor_relevant ?? 1,
           eventType: r.event_type ?? "other",
+          takeaway: r.takeaway ?? "routine",
           magnitude: r.magnitude ?? 0,
           surprise: r.surprise ?? 0,
           eventScore: r.event_score ?? 0,

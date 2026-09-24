@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { SourceTier } from "./types.js";
 import { validateChoiceAnswer, validateNoulAnswer } from "./jev.js";
-import type { EventType } from "./rubric.js";
-import { EVENT_TYPES } from "./rubric.js";
+import type { EventType, TakeawayKey } from "./rubric.js";
+import { EVENT_TYPES, TAKEAWAY_KEYS } from "./rubric.js";
 
 /**
  * Pure scoring functions. Everything here is deterministic so any stored score
@@ -24,6 +24,7 @@ export interface ParsedJudgment {
   eventType: EventType;
   magnitude: number;
   surprise: number;
+  takeaway: TakeawayKey;
 }
 
 const SENTIMENTS = ["negative", "neutral", "positive"] as const;
@@ -81,6 +82,15 @@ export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment 
       ? (eventAnswer.choice as EventType)
       : (topChoice(new Map(EVENT_TYPES.map((t) => [t, clamp01(eventProbs[t] ?? 0)]))) as EventType);
 
+  const rawTakeaway = answers["takeaway"];
+  if (rawTakeaway == null) throw new JudgmentError("missing takeaway answer");
+  const takeawayAnswer = validateChoiceAnswer(rawTakeaway);
+  const takeawayProbs = takeawayAnswer.probabilities ?? {};
+  const takeaway: TakeawayKey =
+    takeawayAnswer.choice != null && (TAKEAWAY_KEYS as readonly string[]).includes(takeawayAnswer.choice)
+      ? (takeawayAnswer.choice as TakeawayKey)
+      : (topChoice(new Map(TAKEAWAY_KEYS.map((t) => [t, clamp01(takeawayProbs[t] ?? 0)]))) as TakeawayKey);
+
   return {
     sentiment,
     pPos: allowed.get("positive") ?? 0,
@@ -95,6 +105,7 @@ export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment 
     eventType,
     magnitude,
     surprise,
+    takeaway,
   };
 }
 
@@ -125,6 +136,7 @@ export interface FinalScore {
   eventType: EventType;
   magnitude: number;
   surprise: number;
+  takeaway: TakeawayKey;
   /** 0-100 event-strength composite: materiality, surprise, magnitude. */
   eventScore: number;
   impact: number;
@@ -146,7 +158,7 @@ export function applyPostRules(j: ParsedJudgment, sourceWeight: number): FinalSc
       (0.5 + 0.5 * j.credible),
   );
   const eventScore = round2(100 * (0.34 * j.material + 0.33 * j.surprise + 0.33 * j.magnitude));
-  return { ...j, eventScore, impact, weight, exclude };
+  return { ...j, takeaway: j.takeaway, eventScore, impact, weight, exclude };
 }
 
 /* ------------------------------------------------------------------ */

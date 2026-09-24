@@ -10,6 +10,23 @@ const TIER_DOT: Record<string, string> = {
   filing: "#fbbf24", // filings outrank everything: gold
 };
 
+export const TAKEAWAY_LABEL: Record<string, string> = {
+  results_beat: "Results beat",
+  results_miss: "Results miss",
+  guidance_raise: "Guidance raised",
+  guidance_cut: "Guidance cut",
+  accounting_redo: "Accounting redo",
+  listing_risk: "Delisting risk",
+  mna_capital: "M&A / capital move",
+  leadership: "Leadership change",
+  legal_hit: "Legal / regulatory hit",
+  legal_relief: "Legal / regulatory relief",
+  product_win: "Product / ops win",
+  product_setback: "Product / ops setback",
+  analyst_shift: "Analyst view shift",
+  routine: "Routine / context",
+};
+
 const TYPE_LABEL: Record<string, string> = {
   results: "RESULTS",
   corporate_action: "CORP ACT",
@@ -81,7 +98,21 @@ export function MentionCard({
         )}
       </div>
 
-      <div className={`mt-1.5 leading-snug text-desk-bright ${compact || dense ? "clamp-1 text-[12px]" : "clamp-2 text-[13px]"}`}>
+      {/* The takeaway IS the headline; the raw wire title is supporting detail. */}
+      {s && s.takeaway !== "routine" && (
+        <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: dir }}>
+          {TAKEAWAY_LABEL[s.takeaway] ?? s.takeaway}
+        </div>
+      )}
+      <div
+        className={`leading-snug ${
+          s && s.takeaway !== "routine"
+            ? "mt-0.5 clamp-1 text-[11.5px] text-white/50"
+            : compact || dense
+              ? "mt-1.5 clamp-1 text-[12px] text-desk-bright"
+              : "mt-1.5 clamp-2 text-[13px] text-desk-bright"
+        }`}
+      >
         {m.title}
       </div>
 

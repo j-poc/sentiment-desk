@@ -117,6 +117,7 @@ export const demoJudge: JudgeFn = async (state: JevState) => {
       credible: { noul: round4(tierCred[state.mention.source.tier] ?? 0.6) },
       investor_relevant: { noul: round4(clamp(0.45 + material * 0.5 + (nextRand(seed + 17) - 0.5) * 0.2)) },
       event_type: { choice: eventType, probabilities: eventProbs },
+      takeaway: { choice: demoTakeaway(state.mention.title, bias) },
       magnitude: { noul: round4(clamp(Math.max(0.1, templateMaterial(state.mention.snippet)) + (nextRand(seed + 15) - 0.5) * 0.25)) },
       surprise: { noul: round4(clamp(0.2 + nextRand(seed + 16) * 0.75)) },
     },
@@ -167,6 +168,22 @@ const EVENT_KEYS = [
   "macro_sector",
   "other",
 ] as const;
+
+/** Deterministic takeaway for demo mentions, mapped from template keywords. */
+function demoTakeaway(title: string, bias: number): string {
+  const t = title.toLowerCase();
+  if (t.includes("guidance") && bias >= 0) return "guidance_raise";
+  if (t.includes("guidance")) return "guidance_cut";
+  if (t.includes("estimates") && bias > 0) return "results_beat";
+  if (t.includes("estimates")) return "results_miss";
+  if (t.includes("buyback")) return "mna_capital";
+  if (t.includes("probe") || t.includes("antitrust")) return "legal_hit";
+  if (t.includes("upgrade")) return "analyst_shift";
+  if (t.includes("unveils")) return "product_win";
+  if (t.includes("recalls")) return "product_setback";
+  if (t.includes("names")) return "leadership";
+  return "routine";
+}
 
 /** Map demo template keywords to an event type so demo data stays coherent. */
 function pickEvent(title: string): (typeof EVENT_KEYS)[number] {

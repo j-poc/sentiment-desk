@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { Mention } from "../lib/api.js";
+import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { NEU, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
 
 function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
@@ -77,7 +78,14 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
             <span>{timeAgo(mention.publishedAt)}</span>
           </div>
 
-          <h2 className="mt-2 text-[15px] font-semibold leading-snug text-desk-bright">{mention.title}</h2>
+          {s && s.takeaway !== "routine" && (
+            <div className="mt-2 text-[12px] font-semibold uppercase tracking-wide" style={{ color: dir }}>
+              {TAKEAWAY_LABEL[s.takeaway] ?? s.takeaway}
+            </div>
+          )}
+          <h2 className={`font-semibold leading-snug text-desk-bright ${s && s.takeaway !== "routine" ? "mt-1 text-[13px] text-white/60" : "mt-2 text-[15px]"}`}>
+            {mention.title}
+          </h2>
           {mention.snippet && mention.snippet !== mention.title && (
             <p className="mt-2 text-[12px] leading-relaxed text-white/55">{mention.snippet}</p>
           )}

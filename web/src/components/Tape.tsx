@@ -1,4 +1,5 @@
 import type { Mention } from "../lib/api.js";
+import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { fmtIndex, sentimentColor, shortTime } from "../lib/format.js";
 
 const ARROW: Record<string, string> = { positive: "▲", negative: "▼", neutral: "·" };
@@ -45,7 +46,16 @@ export function Tape({
             <span className="shrink-0 text-[9px]" style={{ color: dir }}>
               {s ? ARROW[s.sentiment] : "…"}
             </span>
-            <span className="clamp-1 min-w-0 flex-1 text-[12px] text-white/80">{m.title}</span>
+            {s && s.takeaway !== "routine" ? (
+              <span className="clamp-1 min-w-0 flex-1 text-[11.5px]">
+                <span className="font-semibold uppercase tracking-wide" style={{ color: dir }}>
+                  {TAKEAWAY_LABEL[s.takeaway] ?? s.takeaway}
+                </span>
+                <span className="text-white/45"> — {m.title}</span>
+              </span>
+            ) : (
+              <span className="clamp-1 min-w-0 flex-1 text-[12px] text-white/80">{m.title}</span>
+            )}
             {s && (
               <span className="tabnum w-10 shrink-0 text-right text-[11px]" style={{ color: dir }}>
                 {fmtIndex(s.impact)}

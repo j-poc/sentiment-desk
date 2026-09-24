@@ -65,6 +65,7 @@ export interface MentionScore {
   credible: number;
   investorRelevant: number;
   eventType: string;
+  takeaway: string;
   magnitude: number;
   surprise: number;
   /** 0-100 event-strength composite: materiality, surprise, magnitude. */

@@ -143,6 +143,7 @@ export class Pipeline {
         credible: parsed.credible,
         investorRelevant: parsed.investorRelevant,
         eventType: parsed.eventType,
+        takeaway: parsed.takeaway,
         magnitude: parsed.magnitude,
         surprise: parsed.surprise,
         eventScore: final.eventScore,
