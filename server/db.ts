@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isNearDuplicateTitle, mentionDigest, normalizeTitle } from "./scoring.js";
 import type {
   Company,
   MentionDTO,
@@ -325,6 +326,71 @@ export class Desk {
       this.db.prepare("SELECT id FROM mentions WHERE status = 'pending' ORDER BY published_at DESC LIMIT ?")
         .all(limit) as unknown as Array<{ id: string }>
     ).map((r) => r.id);
+  }
+
+  recentTitles(companyId: string, sinceMs: number, limit = 40): Array<{ title: string }> {
+    return this.db
+      .prepare(
+        "SELECT title FROM mentions WHERE company_id = ? AND retrieved_at >= ? ORDER BY retrieved_at DESC LIMIT ?",
+      )
+      .all(companyId, sinceMs, limit) as unknown as Array<{ title: string }>;
+  }
+
+  /**
+   * One-time cleanup of syndication duplicates already in the database: per
+   * company, later near-duplicates of a kept story (same title family within
+   * the window) are removed, keeping the earliest copy. Returns delete count.
+   */
+  dedupeNearDuplicates(windowMs = 45 * 60_000, threshold = 0.55): number {
+    const rows = this.db
+      .prepare("SELECT id, company_id, title, published_at FROM mentions ORDER BY company_id, published_at")
+      .all() as unknown as Array<{ id: string; company_id: string; title: string; published_at: number }>;
+    const del = this.db.prepare("DELETE FROM mentions WHERE id = ?");
+    let deleted = 0;
+    let companyId: string | null = null;
+    let kept: Array<{ title: string; published_at: number; norm: string }> = [];
+    const seenNormByCompany = new Map<string, Set<string>>();
+    for (const r of rows) {
+      if (r.company_id !== companyId) {
+        companyId = r.company_id;
+        kept = [];
+      }
+      const norm = normalizeTitle(r.title);
+      const seen = seenNormByCompany.get(r.company_id) ?? new Set<string>();
+      // Exact normalized-title repeats are the same story at any distance in
+      // time (re-syndication, updates); near-duplicates only within the window.
+      const exactDup = seen.has(norm);
+      const nearDup = kept.some(
+        (k) => r.published_at - k.published_at <= windowMs && isNearDuplicateTitle(r.title, k.title, threshold),
+      );
+      if (exactDup || nearDup) {
+        del.run(r.id);
+        deleted += 1;
+      } else {
+        kept.push({ title: r.title, published_at: r.published_at, norm });
+      }
+      seen.add(norm);
+      seenNormByCompany.set(r.company_id, seen);
+    }
+
+    // Complete the digest migration: re-key surviving rows to content digests
+    // so INSERT OR IGNORE blocks re-syndication from any feed, forever.
+    const survivors = this.db
+      .prepare("SELECT id, company_id, title FROM mentions")
+      .all() as unknown as Array<{ id: string; company_id: string; title: string }>;
+    const exists = this.db.prepare("SELECT 1 FROM mentions WHERE id = ?");
+    const rekey = this.db.prepare("UPDATE mentions SET id = ? WHERE id = ?");
+    let rekeyed = 0;
+    for (const r of survivors) {
+      const target = `${r.company_id}:${mentionDigest("", "", r.title)}`;
+      if (target === r.id) continue;
+      if (!exists.get(target)) {
+        rekey.run(target, r.id);
+        rekeyed += 1;
+      }
+    }
+    if (rekeyed > 0) this.logEvent("info", "dedupe", `re-keyed ${rekeyed} mentions to content digests`);
+    return deleted;
   }
 
   counts24h(sinceMs: number): Map<string, { count: number; lastAt: number | null }> {

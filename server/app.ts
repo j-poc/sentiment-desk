@@ -117,6 +117,10 @@ export function createApp(deps: AppDeps): Hono {
     const ticker = (c.req.query("ticker") ?? "").toUpperCase();
     if (!/^[A-Z^.\-=]{1,12}$/.test(ticker)) return c.json({ error: "bad ticker" }, 400);
     const hours = clampNumber(c.req.query("hours"), 1, 720, 24);
+    // Our own accumulated price history first (poller points + Yahoo backfill);
+    // it spans the full window once the desk has run. Yahoo is the fallback.
+    const local = deps.db.priceWindow(ticker, Date.now() - hours * 60 * 60 * 1000);
+    if (local.length >= 8) return c.json(local);
     try {
       return c.json(await deps.market.priceSeries(ticker, hours));
     } catch (err) {

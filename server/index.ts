@@ -86,6 +86,10 @@ async function main(): Promise<void> {
 
   const market = new MarketData({ companies, indices: config.indices, hub, health, db });
 
+  // Syndication cleanup: remove near-duplicate rows already stored.
+  const dupes = db.dedupeNearDuplicates();
+  if (dupes > 0) console.log(`[desk] removed ${dupes} syndication duplicates`);
+
   // Rubric migration: re-judge anything scored under an older rubric so the
   // whole history answers to the current questions (including investor
   // relevance). One-time cost per rubric change; fail-closed preserved.

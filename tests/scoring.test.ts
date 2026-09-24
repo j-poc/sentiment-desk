@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPostRules,
-  bucketSeries,
   clusterConfirmations,
   forwardReturn,
   isFinanceRelevant,
   mentionDigest,
   parseJudgment,
+  hasNearDuplicateTitle,
+  smoothedSeries,
   summarizeReactions,
   weightedIndex,
 } from "../server/scoring.js";
@@ -125,20 +126,36 @@ describe("weightedIndex", () => {
   });
 });
 
-describe("bucketSeries", () => {
-  it("buckets by time and leaves gaps null", () => {
-    const fiveMin = 5 * 60_000;
-    const now = 4 * fiveMin; // 20-minute window ending now
+describe("smoothedSeries", () => {
+  const fiveMin = 5 * 60_000;
+
+  it("jumps toward the event impact, then decays toward neutral", () => {
+    const now = 4 * fiveMin;
+    const items = [{ publishedAt: 2.5 * fiveMin, impact: 80, weight: 1 }];
+    const s = smoothedSeries(items, 4 * fiveMin, fiveMin, now);
+    expect(s[0]?.v).toBeNull();
+    expect(s[1]?.v).toBeNull();
+    const at = s[2]?.v ?? 0; // alpha = (0.2 + 0.8) * 0.85 -> 85% of the way to 80
+    expect(at).toBeCloseTo(68, 0);
+    expect(s[3]?.v ?? 0).toBeLessThan(at);
+    expect(s[4]?.v ?? 0).toBeLessThan(s[3]?.v ?? 0);
+  });
+
+  it("is continuous after the first event: no null gaps for the chart", () => {
+    const now = 8 * fiveMin;
     const items = [
-      { publishedAt: 3.5 * fiveMin, impact: 50, weight: 1 },
-      { publishedAt: 0.5 * fiveMin, impact: -50, weight: 1 },
+      { publishedAt: 1 * fiveMin, impact: -60, weight: 0.8 },
+      { publishedAt: 6 * fiveMin, impact: 70, weight: 0.9 },
     ];
-    const s = bucketSeries(items, 4 * fiveMin, fiveMin, now);
-    expect(s.length).toBe(5);
-    expect(s[0]).toMatchObject({ v: -50, n: 1 });
-    expect(s[1]).toMatchObject({ v: null, n: 0 });
-    expect(s[3]).toMatchObject({ v: 50, n: 1 });
-    expect(s[4]).toMatchObject({ v: null, n: 0 });
+    const s = smoothedSeries(items, 8 * fiveMin, fiveMin, now);
+    for (const p of s.slice(1)) expect(p.v).not.toBeNull();
+  });
+
+  it("weights how hard an event pulls the index", () => {
+    const now = 2 * fiveMin;
+    const strong = smoothedSeries([{ publishedAt: fiveMin, impact: 80, weight: 1 }], 2 * fiveMin, fiveMin, now);
+    const weak = smoothedSeries([{ publishedAt: fiveMin, impact: 80, weight: 0.05 }], 2 * fiveMin, fiveMin, now);
+    expect(strong[1]?.v ?? 0).toBeGreaterThan(weak[1]?.v ?? 0);
   });
 });
 
@@ -262,13 +279,36 @@ describe("applyPostRules investor relevance", () => {
   });
 });
 
-describe("mentionDigest", () => {
-  it("is stable and ignores utm parameters", () => {
-    expect(mentionDigest("rss", "https://x.com/a?utm_source=f", "T")).toBe(
-      mentionDigest("rss", "https://x.com/a", "T"),
+describe("mentionDigest (content-keyed)", () => {
+  it("collapses the same headline across sources and URLs", () => {
+    const t = "Apple (AAPL) Stock Could Be 32% Overpriced After Fresh AI Cost Concerns";
+    expect(mentionDigest("rss", "https://news.google.com/rss/articles/abc", t)).toBe(
+      mentionDigest("finnhub", "https://www.benzinga.com/x", t),
     );
-    expect(mentionDigest("rss", "https://x.com/a", "T")).not.toBe(
-      mentionDigest("rss", "https://x.com/b", "T"),
+  });
+
+  it("still separates different headlines", () => {
+    expect(mentionDigest("rss", "https://a", "Apple beats quarterly estimates")).not.toBe(
+      mentionDigest("rss", "https://b", "Apple cuts quarterly guidance"),
     );
+  });
+});
+
+describe("hasNearDuplicateTitle (syndication suppression)", () => {
+  const syndicated = "Apple (AAPL) Stock Could Be 32% Overpriced After Fresh AI Cost Concerns";
+  it("flags the same story from another feed", () => {
+    expect(hasNearDuplicateTitle(syndicated, [{ title: syndicated }])).toBe(true);
+    expect(
+      hasNearDuplicateTitle(syndicated, [
+        { title: "Apple AAPL Stock Could Be 32% Overpriced After Fresh AI Cost Worries" },
+      ]),
+    ).toBe(true);
+  });
+  it("keeps genuinely different stories", () => {
+    expect(
+      hasNearDuplicateTitle("Bank of America Flags Mixed iPhone 18 Demand Signal", [
+        { title: "Apple suppliers rally on stronger demand outlook" },
+      ]),
+    ).toBe(false);
   });
 });

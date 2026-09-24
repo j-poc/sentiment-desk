@@ -346,41 +346,85 @@ export interface SeriesBucket {
   n: number;
 }
 
-/** Bucket mentions into fixed time slots; null value where a slot has no scored mentions. */
-export function bucketSeries(
+/**
+ * Smoothed sentiment index over a window: a leaky integrator over events.
+ * Each mention pulls the index toward its impact with strength proportional
+ * to its weight; between events the index decays toward neutral with a
+ * half-life proportional to the window. This is how professional event-driven
+ * sentiment indices behave: they move on news and fade without it, and the
+ * curve is continuous, so the chart reads like an index instead of a
+ * seismograph of isolated buckets.
+ */
+export function smoothedSeries(
   mentions: WeightedMention[],
   windowMs: number,
   bucketMs: number,
   nowMs: number,
+  halfLifeMs = windowMs / 3,
 ): SeriesBucket[] {
   const start = nowMs - windowMs;
-  const buckets = new Map<number, { w: number; wi: number; n: number }>();
-  for (const m of mentions) {
-    if (m.publishedAt < start || m.publishedAt > nowMs) continue;
-    const t = Math.floor(m.publishedAt / bucketMs) * bucketMs;
-    const b = buckets.get(t) ?? { w: 0, wi: 0, n: 0 };
-    b.w += m.weight;
-    b.wi += m.weight * m.impact;
-    b.n += 1;
-    buckets.set(t, b);
-  }
-  const out: SeriesBucket[] = [];
+  const decay = Math.exp(-bucketMs / Math.max(bucketMs, halfLifeMs));
+  const sorted = mentions
+    .filter((m) => m.publishedAt >= start && m.publishedAt <= nowMs)
+    .sort((a, b) => a.publishedAt - b.publishedAt);
+
   const first = Math.floor(start / bucketMs) * bucketMs;
-  for (let t = first; t <= nowMs; t += bucketMs) {
-    const b = buckets.get(t);
-    out.push({
-      t,
-      v: b && b.w > 0 ? round2(b.wi / b.w) : null,
-      n: b?.n ?? 0,
-    });
+  const last = Math.floor(nowMs / bucketMs) * bucketMs;
+  const out: SeriesBucket[] = [];
+  let v = 0;
+  let started = false;
+  let mi = 0;
+
+  for (let t = first; t <= last; t += bucketMs) {
+    const bucketEnd = t + bucketMs;
+    if (started) v *= decay;
+    let n = 0;
+    while (mi < sorted.length && (sorted[mi]?.publishedAt ?? Infinity) < bucketEnd) {
+      const m = sorted[mi++]!;
+      started = true;
+      const w = Math.min(1, Math.max(0.05, m.weight));
+      const alpha = Math.min(1, 0.2 + 0.8 * w) * 0.85;
+      v = v + alpha * (m.impact - v);
+      n += 1;
+    }
+    if (started) out.push({ t, v: round2(v), n });
+    else out.push({ t, v: null, n: 0 });
   }
   return out;
 }
 
-/** Content digest binding mention identity to source, URL, and title. */
+/**
+ * Normalize a headline for identity: the same story syndicated across feeds
+ * with different URLs is one event, not three.
+ */
+export function normalizeTitle(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9$%]+/g, " ").trim();
+}
+
+/**
+ * Content digest keyed on the normalized headline. kind and url are accepted
+ * for call-site stability but deliberately excluded: the same story arriving
+ * from Google News, Yahoo, and Finnhub under three URLs is one row.
+ */
 export function mentionDigest(kind: string, url: string, title: string): string {
-  const normalizedUrl = url.trim().replace(/#.*$/, "").replace(/\?utm_\w+=[^&]*/g, "");
-  return createHash("sha256").update(`${kind}|${normalizedUrl}|${title.trim()}`).digest("hex").slice(0, 40);
+  return createHash("sha256").update(normalizeTitle(title)).digest("hex").slice(0, 40);
+}
+
+/** Near-duplicate test for syndication suppression (token Jaccard). */
+export function isNearDuplicateTitle(a: string, b: string, threshold = 0.55): boolean {
+  return jaccard(tokens(a), tokens(b)) >= threshold;
+}
+
+/** True when any existing title is a near-duplicate of the candidate. */
+export function hasNearDuplicateTitle(
+  title: string,
+  existing: Array<{ title: string }>,
+  threshold = 0.55,
+): boolean {
+  for (const e of existing) {
+    if (isNearDuplicateTitle(title, e.title, threshold)) return true;
+  }
+  return false;
 }
 
 function noul(answers: Record<string, unknown>, key: string): number {

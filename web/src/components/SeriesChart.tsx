@@ -3,12 +3,12 @@ import type { PricePoint, SeriesPoint } from "../lib/api.js";
 import { dayTime, shortTime } from "../lib/format.js";
 
 /**
- * Sentiment area chart with an optional normalized price overlay. The fill is
- * one user-space gradient: green above the zero line, red below, intensity
- * tracking distance from neutral. Hover gives the exact bucket. Null buckets
- * (no scored mentions) break the curve rather than lying with interpolation.
- * The price overlay is normalized to its own min/max on a right axis; it shares
- * the time domain with sentiment buckets, so divergences are readable directly.
+ * Sentiment index chart with an optional price overlay. The series is a
+ * smoothed leaky-integrator index (continuous by construction), rendered as
+ * Catmull-Rom curves split into green segments above the zero line and red
+ * segments below it, each with its own area fill. The price overlay is
+ * normalized to its own min/max on a right axis and shares the time domain.
+ * Hover shows both series at the hovered instant.
  */
 
 const W = 800;
@@ -16,6 +16,36 @@ const H = 280;
 const PAD_X = 10;
 const TOP = 14;
 const BOTTOM = 14;
+
+const POS = "#34d399";
+const NEG = "#f87171";
+
+interface Pt {
+  x: number;
+  y: number;
+  t: number;
+  v: number;
+  n: number;
+}
+
+/** Catmull-Rom through the points, as cubic beziers. */
+function smoothPath(pts: Pt[]): string {
+  if (pts.length === 0) return "";
+  if (pts.length === 1) return `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
+  let d = `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)]!;
+    const p1 = pts[i]!;
+    const p2 = pts[i + 1]!;
+    const p3 = pts[Math.min(pts.length - 1, i + 2)]!;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
 
 export function SeriesChart({
   points,
@@ -41,31 +71,61 @@ export function SeriesChart({
     const span = Math.max(1, t1 - t0);
     const yOf = (v: number) => zeroY - (Math.max(-100, Math.min(100, v)) / 100) * ((H - TOP - BOTTOM) / 2);
     const xOfT = (t: number) => PAD_X + ((t - t0) / span) * (W - 2 * PAD_X);
-    const xOf = (i: number) => xOfT(points[i]?.t ?? t0);
 
-    const runs: Array<Array<{ x: number; y: number; v: number; t: number; n: number }>> = [];
-    let cur: Array<{ x: number; y: number; v: number; t: number; n: number }> = [];
+    const pts: Pt[] = [];
     points.forEach((p, i) => {
-      if (p.v == null) {
-        if (cur.length > 0) runs.push(cur);
-        cur = [];
-      } else {
-        cur.push({ x: xOf(i), y: yOf(p.v), v: p.v, t: p.t, n: p.n });
-      }
+      if (p.v != null) pts.push({ x: xOfT(p.t), y: yOf(p.v), t: p.t, v: p.v, n: p.n });
     });
-    if (cur.length > 0) runs.push(cur);
 
-    const linePath = (run: typeof runs[number]) =>
-      run.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
-    const areaPath = (run: typeof runs[number]) => {
-      const last = run[run.length - 1];
-      const first = run[0];
+    // Split into same-sign segments, inserting interpolated zero crossings so
+    // areas and colors meet exactly at the baseline.
+    const segments: Array<{ sign: 1 | -1; pts: Pt[] }> = [];
+    let cur: Pt[] = [];
+    let curSign: 1 | -1 = 1;
+    const flush = () => {
+      if (cur.length >= 1) segments.push({ sign: curSign, pts: cur });
+      cur = [];
+    };
+    for (const p of pts) {
+      const s: 1 | -1 = p.v >= 0 ? 1 : -1;
+      if (cur.length > 0 && s !== curSign) {
+        // Interpolate the crossing between last point of cur and p.
+        const prev = cur[cur.length - 1]!;
+        const frac = Math.abs(prev.v) / (Math.abs(prev.v) + Math.abs(p.v) || 1);
+        const cross: Pt = {
+          x: prev.x + (p.x - prev.x) * frac,
+          y: zeroY,
+          t: prev.t + (p.t - prev.t) * frac,
+          v: 0,
+          n: 0,
+        };
+        cur.push(cross);
+        flush();
+        curSign = s;
+        cur = [cross, p];
+      } else {
+        if (cur.length === 0) curSign = s;
+        cur.push(p);
+      }
+    }
+    flush();
+
+    const linePath = (seg: Pt[]) => smoothPath(seg);
+    const areaPath = (seg: Pt[]) => {
+      const last = seg[seg.length - 1];
+      const first = seg[0];
       if (!last || !first) return "";
-      return `${linePath(run)} L${last.x.toFixed(1)},${zeroY.toFixed(1)} L${first.x.toFixed(1)},${zeroY.toFixed(1)} Z`;
+      return `${smoothPath(seg)} L${last.x.toFixed(1)},${zeroY.toFixed(1)} L${first.x.toFixed(1)},${zeroY.toFixed(1)} Z`;
     };
 
     // Price overlay, clamped to the sentiment time domain.
-    let priceLine: { path: string; min: number; max: number; last?: { xFrac: number; yFrac: number; price: number } } | null = null;
+    let priceLine: {
+      path: string;
+      min: number;
+      max: number;
+      last?: { xFrac: number; yFrac: number; price: number };
+      at: (t: number) => number | null;
+    } | null = null;
     if (mode === "overlay" && price && price.length >= 2) {
       const inDomain = price.filter((p) => p.t >= t0 && p.t <= t1 && Number.isFinite(p.price));
       const source = inDomain.length >= 2 ? inDomain : price;
@@ -76,25 +136,36 @@ export function SeriesChart({
         max = Math.max(max, p.price);
       }
       if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
-        const pad = (max - min) * 0.06;
+        const pad = (max - min) * 0.08;
         min -= pad;
         max += pad;
         const yP = (p: number) => TOP + (1 - (p - min) / (max - min)) * (H - TOP - BOTTOM);
-        const pts = source.map((p) => ({ x: xOfT(Math.max(t0, Math.min(t1, p.t))), y: yP(p.price), t: p.t, price: p.price }));
+        const pp = source
+          .map((p) => ({ x: xOfT(Math.max(t0, Math.min(t1, p.t))), y: yP(p.price), t: p.t, v: p.price, n: 0 }))
+          .sort((a, b) => a.t - b.t);
+        const lastPt = pp[pp.length - 1];
         priceLine = {
-          path: pts.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" "),
+          path: smoothPath(pp),
           min,
           max,
-          last: (() => {
-            const lastPt = pts[pts.length - 1];
-            if (!lastPt) return undefined;
-            return { xFrac: lastPt.x / W, yFrac: lastPt.y / H, price: lastPt.price };
-          })(),
+          last: lastPt ? { xFrac: lastPt.x / W, yFrac: lastPt.y / H, price: lastPt.v } : undefined,
+          at: (t: number) => {
+            let best: number | null = null;
+            let bestDist = Infinity;
+            for (const p of pp) {
+              const d = Math.abs(p.t - t);
+              if (d < bestDist) {
+                bestDist = d;
+                best = p.v;
+              }
+            }
+            return best;
+          },
         };
       }
     }
 
-    return { zeroY, yOf, xOf, xOfT, runs, linePath, areaPath, n, t0, t1, priceLine };
+    return { zeroY, yOf, xOfT, segments, linePath, areaPath, n, t0, t1, priceLine };
   }, [points, mode, price]);
 
   const onMove = (e: React.MouseEvent) => {
@@ -106,19 +177,11 @@ export function SeriesChart({
   };
 
   const hoverPoint = hover ? points[hover.i] : null;
+  const hoverPrice = hover && hoverPoint && geom.priceLine ? geom.priceLine.at(hoverPoint.t) : null;
 
   return (
     <div ref={boxRef} className="relative select-none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} className="block h-[260px] w-full" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="series-fill" gradientUnits="userSpaceOnUse" x1="0" y1={TOP} x2="0" y2={H - BOTTOM}>
-            <stop offset="0%" stopColor="#34d399" stopOpacity="0.34" />
-            <stop offset="49.9%" stopColor="#34d399" stopOpacity="0.07" />
-            <stop offset="50.1%" stopColor="#f87171" stopOpacity="0.07" />
-            <stop offset="100%" stopColor="#f87171" stopOpacity="0.34" />
-          </linearGradient>
-        </defs>
-
+      <svg viewBox={`0 0 ${W} ${H}`} className="block h-[280px] w-full" preserveAspectRatio="none">
         {[-100, -50, 50, 100].map((v) => (
           <line
             key={v}
@@ -126,7 +189,7 @@ export function SeriesChart({
             x2={W - PAD_X}
             y1={geom.yOf(v)}
             y2={geom.yOf(v)}
-            stroke="rgba(255,255,255,0.05)"
+            stroke="rgba(255,255,255,0.045)"
             strokeWidth="1"
             vectorEffect="non-scaling-stroke"
           />
@@ -136,23 +199,15 @@ export function SeriesChart({
           x2={W - PAD_X}
           y1={geom.zeroY}
           y2={geom.zeroY}
-          stroke="rgba(255,255,255,0.22)"
+          stroke="rgba(255,255,255,0.2)"
           strokeDasharray="4 5"
           strokeWidth="1"
           vectorEffect="non-scaling-stroke"
         />
 
-        {geom.runs.map((run, ri) => (
-          <g key={ri}>
-            <path d={geom.areaPath(run)} fill="url(#series-fill)" />
-            <path
-              d={geom.linePath(run)}
-              fill="none"
-              stroke={(run[run.length - 1]?.v ?? 0) >= 0 ? "#34d399" : "#f87171"}
-              strokeWidth="1.8"
-              vectorEffect="non-scaling-stroke"
-              strokeLinejoin="round"
-            />
+        {geom.segments.map((seg, i) => (
+          <g key={i}>
+            <path d={geom.areaPath(seg.pts)} fill={seg.sign === 1 ? "rgba(52,211,153,0.13)" : "rgba(248,113,113,0.12)"} />
           </g>
         ))}
 
@@ -160,37 +215,51 @@ export function SeriesChart({
           <path
             d={geom.priceLine.path}
             fill="none"
-            stroke="rgba(232,235,242,0.85)"
-            strokeWidth="1.2"
+            stroke="rgba(226,232,240,0.55)"
+            strokeWidth="1.1"
             vectorEffect="non-scaling-stroke"
             strokeLinejoin="round"
           />
         )}
 
+        {geom.segments.map((seg, i) => (
+          <path
+            key={`l${i}`}
+            d={geom.linePath(seg.pts)}
+            fill="none"
+            stroke={seg.sign === 1 ? POS : NEG}
+            strokeWidth="1.9"
+            vectorEffect="non-scaling-stroke"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ))}
+
         {hover && (
           <line
-            x1={geom.xOf(hover.i)}
-            x2={geom.xOf(hover.i)}
+            x1={geom.xOfT(hoverPoint?.t ?? geom.t0)}
+            x2={geom.xOfT(hoverPoint?.t ?? geom.t0)}
             y1={TOP - 6}
             y2={H - BOTTOM + 6}
-            stroke="rgba(255,255,255,0.3)"
+            stroke="rgba(255,255,255,0.28)"
             strokeWidth="1"
             vectorEffect="non-scaling-stroke"
           />
         )}
         {hover && hoverPoint?.v != null && (
           <circle
-            cx={geom.xOf(hover.i)}
+            cx={geom.xOfT(hoverPoint.t)}
             cy={geom.yOf(hoverPoint.v)}
             r="3.5"
-            fill={hoverPoint.v >= 0 ? "#34d399" : "#f87171"}
+            fill={hoverPoint.v >= 0 ? POS : NEG}
             stroke="#08090d"
             strokeWidth="1.5"
           />
         )}
+
       </svg>
 
-      {/* Axis labels */}
+      {/* Sentiment axis */}
       <div className="pointer-events-none absolute inset-y-0 left-0 flex flex-col justify-between py-1 text-[9px] text-white/30 tabnum">
         <span>+100</span>
         <span>+50</span>
@@ -199,19 +268,28 @@ export function SeriesChart({
         <span>-100</span>
       </div>
 
-      {/* Price right axis */}
+      {/* Price axis */}
       {geom.priceLine && (
-        <div className="pointer-events-none absolute inset-y-0 right-0 text-[9px] text-white/45 tabnum">
-          <span className="absolute right-1" style={{ top: `${(TOP / H) * 100}%` }}>
+        <div className="pointer-events-none absolute inset-y-0 right-1 text-[9px] text-white/45 tabnum">
+          <span className="absolute" style={{ top: `${(TOP / H) * 100}%` }}>
             {geom.priceLine.max.toFixed(0)}
           </span>
-          <span className="absolute right-1" style={{ top: `${((H - BOTTOM) / H) * 100}%`, transform: "translateY(-100%)" }}>
+          <span
+            className="absolute"
+            style={{ top: "50%", transform: "translateY(-50%)", color: "rgba(232,235,242,0.6)" }}
+          >
+            {((geom.priceLine.min + geom.priceLine.max) / 2).toFixed(0)}
+          </span>
+          <span
+            className="absolute"
+            style={{ top: `${((H - BOTTOM) / H) * 100}%`, transform: "translateY(-100%)" }}
+          >
             {geom.priceLine.min.toFixed(0)}
           </span>
         </div>
       )}
 
-      {/* Last price chip riding the overlay line */}
+      {/* Last price chip riding the overlay */}
       {geom.priceLine?.last && (
         <div
           className="pointer-events-none absolute z-10 -translate-y-1/2 rounded border border-white/15 bg-[#0c0e14] px-1.5 py-[1px] text-[9.5px] text-white/85 tabnum"
@@ -221,19 +299,21 @@ export function SeriesChart({
         </div>
       )}
 
-      {hover && hoverPoint && (
+      {hover && hoverPoint && hoverPoint.v != null && (
         <div
           className="pointer-events-none absolute top-2 z-10 rounded-lg border border-desk-line bg-[#0c0e14]/95 px-3 py-2 text-[11px] shadow-xl"
           style={{
-            left: Math.min(Math.max(hover.x - 60, 8), (boxRef.current?.clientWidth ?? 400) - 150),
+            left: Math.min(Math.max(hover.x - 70, 8), (boxRef.current?.clientWidth ?? 400) - 170),
           }}
         >
-          <div className="tabnum text-[13px] font-semibold">
-            {hoverPoint.v == null ? "no scored mentions" : `${hoverPoint.v > 0 ? "+" : ""}${hoverPoint.v.toFixed(1)}`}
+          <div className="tabnum text-[13px] font-semibold" style={{ color: hoverPoint.v >= 0 ? POS : NEG }}>
+            {hoverPoint.v > 0 ? "+" : ""}
+            {hoverPoint.v.toFixed(1)}
           </div>
           <div className="mt-0.5 text-white/50">
             {hours <= 24 ? shortTime(hoverPoint.t) : dayTime(hoverPoint.t)} · {hoverPoint.n} mention
             {hoverPoint.n === 1 ? "" : "s"}
+            {hoverPrice != null && <span className="tabnum"> · ${hoverPrice.toFixed(2)}</span>}
           </div>
         </div>
       )}

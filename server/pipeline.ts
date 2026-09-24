@@ -3,7 +3,7 @@ import { rowToDTO } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { RUBRIC_SHA } from "./rubric.js";
-import { applyPostRules, bucketSeries, parseJudgment, weightedIndex } from "./scoring.js";
+import { applyPostRules, hasNearDuplicateTitle, parseJudgment, smoothedSeries, weightedIndex } from "./scoring.js";
 import { TIER_WEIGHT } from "./sources/tiers.js";
 import type {
   CompanySnapshot,
@@ -55,6 +55,10 @@ export class Pipeline {
 
   /** Insert a normalized mention; on first sight, schedule it for judgment. */
   ingest(m: RawMentionInput): boolean {
+    // Syndication suppression: the same story re-arriving from another feed
+    // within the window is the same event; drop it before it costs anything.
+    const recent = this.deps.db.recentTitles(m.companyId, Date.now() - 45 * 60_000, 40);
+    if (hasNearDuplicateTitle(m.title, recent)) return false;
     const id = `${m.companyId}:${m.digest}`;
     const inserted = this.deps.db.insertMention(m);
     if (inserted) this.enqueue(id);
@@ -256,6 +260,6 @@ export class Pipeline {
     const windowMs = windowHours * 60 * 60 * 1000;
     const bucketMs = windowHours <= 6 ? 5 * 60_000 : windowHours <= 48 ? 15 * 60_000 : 60 * 60_000;
     const items = this.deps.db.scoredMentions(now - windowMs).filter((m) => m.companyId === companyId);
-    return bucketSeries(items, windowMs, bucketMs, now);
+    return smoothedSeries(items, windowMs, bucketMs, now);
   }
 }
