@@ -315,9 +315,52 @@ export function startFinnhubPoller(deps: {
   db: Desk;
   health: HealthTracker;
   intervalSeconds: number;
+  backfillDays: number;
 }): SchedulerControl {
   let running = false;
   let lastEarningsRefresh = 0;
+  let backfilled = false;
+  const runBackfill = async (): Promise<void> => {
+    if (backfilled || deps.backfillDays <= 0) return;
+    backfilled = true;
+    for (const company of deps.companies) {
+      try {
+        const news = await fetchFinnhubNews(company.ticker, deps.token, deps.backfillDays);
+        let added = 0;
+        for (const n of news) {
+          if (!matchesCompany(company, n.headline, n.summary)) continue;
+          if (
+            !isFinanceRelevant({
+              title: n.headline,
+              snippet: n.summary,
+              tier: tierForHost(n.url),
+              kind: "finnhub",
+              ticker: company.ticker,
+            })
+          ) {
+            continue;
+          }
+          const inserted = deps.pipeline.ingest({
+            companyId: company.id,
+            kind: "finnhub",
+            sourceName: n.source,
+            sourceUrl: n.url,
+            tier: tierForHost(n.url),
+            title: n.headline,
+            snippet: n.summary,
+            publishedAt: n.datetime || Date.now(),
+            retrievedAt: Date.now(),
+            digest: mentionDigest("finnhub", n.url, n.headline),
+          });
+          if (inserted) added += 1;
+        }
+        deps.db.logEvent("info", "backfill", `${company.ticker}: ${added} historical mentions`);
+      } catch (err) {
+        deps.db.logEvent("warn", "backfill", `${company.ticker}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await sleep(300);
+    }
+  };
   const refreshEarnings = async (): Promise<void> => {
     const symbols = new Set(deps.companies.map((c) => c.ticker));
     try {
@@ -347,6 +390,7 @@ export function startFinnhubPoller(deps: {
     if (running) return;
     running = true;
     try {
+      await runBackfill();
       if (Date.now() - lastEarningsRefresh > 6 * 60 * 60 * 1000) {
         await refreshEarnings();
       }

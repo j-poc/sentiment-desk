@@ -152,6 +152,7 @@ async function main(): Promise<void> {
         db,
         health,
         intervalSeconds: config.pollFinnhubSeconds,
+        backfillDays: config.backfillDays,
       }),
     );
   }

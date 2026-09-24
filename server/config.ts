@@ -61,6 +61,8 @@ export const config = {
   /** Finnhub free tier: per-symbol news + EPS surprises + earnings calendar. */
   finnhubKey: process.env.FINNHUB_API_KEY?.trim() || "",
   pollFinnhubSeconds: int(process.env.POLL_FINNHUB_SECONDS, 120),
+  /** One-time news backfill per company (days). Gives the outcome check sample depth. */
+  backfillDays: int(process.env.BACKFILL_DAYS, 5),
   /** Reddit free OAuth app (script type): social tier source. */
   redditClientId: process.env.REDDIT_CLIENT_ID?.trim() || "",
   redditClientSecret: process.env.REDDIT_CLIENT_SECRET?.trim() || "",

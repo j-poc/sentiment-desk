@@ -393,6 +393,28 @@ export class Desk {
     return deleted;
   }
 
+  /** Scored, non-excluded events across the watchlist with ticker identity. */
+  scoredMentionEvents(
+    sinceMs: number,
+  ): Array<{ companyId: string; ticker: string; publishedAt: number; sentiment: string; eventScore: number; title: string }> {
+    return this.db
+      .prepare(
+        `SELECT m.company_id AS companyId, c.ticker AS ticker, m.published_at AS publishedAt,
+                m.sentiment AS sentiment, m.event_score AS eventScore, m.title AS title
+         FROM mentions m JOIN companies c ON c.id = m.company_id
+         WHERE m.status = 'scored' AND m.published_at >= ? AND m.impact IS NOT NULL
+         ORDER BY m.published_at`,
+      )
+      .all(sinceMs) as unknown as Array<{
+        companyId: string;
+        ticker: string;
+        publishedAt: number;
+        sentiment: string;
+        eventScore: number;
+        title: string;
+      }>;
+  }
+
   counts24h(sinceMs: number): Map<string, { count: number; lastAt: number | null }> {
     const rows = this.db
       .prepare(

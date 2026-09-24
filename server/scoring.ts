@@ -182,6 +182,56 @@ export function forwardReturn(points: PriceLike[], t: number, windowMs: number):
   return Math.round(((p1 - p0) / p0) * 10000) / 100;
 }
 
+export interface ValidationBucket {
+  range: string;
+  n: number;
+  medianAbs30: number | null;
+  median30: number | null;
+  hitRate: number | null;
+}
+
+const medianOf = (arr: number[]): number | null => {
+  if (arr.length === 0) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  const a = s[mid];
+  const b = s[mid - 1];
+  if (a == null) return null;
+  const value = s.length % 2 ? a : b != null ? (a + b) / 2 : a;
+  return Math.round(value * 100) / 100;
+};
+
+/**
+ * Signal validation: bucket judged events by event strength and measure the
+ * realized forward reaction in each bucket. A credible desk shows this table;
+ * the claim under test is monotonicity: stronger event scores should come with
+ * larger absolute reactions and higher directional hit rates.
+ */
+export function validateSignal(
+  events: Array<{ eventScore: number; sentiment: string; r30: number | null }>,
+): ValidationBucket[] {
+  const ranges: Array<[number, number]> = [
+    [0, 25],
+    [25, 50],
+    [50, 75],
+    [75, 100.01],
+  ];
+  return ranges.map(([lo, hi]) => {
+    const inBucket = events.filter((e) => e.eventScore >= lo && e.eventScore < hi);
+    const usable = inBucket.filter((e) => e.r30 != null) as Array<{ eventScore: number; sentiment: string; r30: number }>;
+    const confirms = usable.filter((e) =>
+      e.sentiment === "negative" ? e.r30 < 0 : e.sentiment === "positive" ? e.r30 > 0 : Math.abs(e.r30) < 0.25,
+    ).length;
+    return {
+      range: `${lo}-${Math.min(hi, 100)}`,
+      n: usable.length,
+      medianAbs30: medianOf(usable.map((e) => Math.abs(e.r30))),
+      median30: medianOf(usable.map((e) => e.r30)),
+      hitRate: usable.length > 0 ? Math.round((confirms / usable.length) * 100) : null,
+    };
+  });
+}
+
 export interface ReactionSummary {
   n: number;
   median30m: number | null;

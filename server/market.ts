@@ -76,19 +76,20 @@ export class MarketData {
   }
 
   /**
-   * One-time per-ticker backfill from Yahoo's 5-day/30-minute history so the
-   * reaction module has depth immediately instead of waiting for the poller
-   * to accumulate. Failures are silent here; live points accrue regardless.
+   * Per-ticker backfill from Yahoo's 5-day/30-minute history so the reaction
+   * module has depth immediately instead of waiting for the poller to
+   * accumulate. A ticker is only marked done after a successful fetch, so
+   * transient failures retry on the next quote cycle until they succeed.
    */
   private async backfillSeries(): Promise<void> {
     for (const company of this.deps.companies) {
       if (this.backfilled.has(company.ticker)) continue;
-      this.backfilled.add(company.ticker);
       try {
         const points = await fetchPriceSeries(company.ticker, 72);
         for (const p of points) this.deps.db.upsertPricePoint(company.ticker, p.t, p.price);
+        this.backfilled.add(company.ticker);
       } catch {
-        /* backfill is best-effort */
+        /* retried on the next quotes cycle; live points accrue regardless */
       }
       await sleep(600);
     }

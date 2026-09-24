@@ -8,7 +8,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { clusterConfirmations, forwardReturn, summarizeReactions } from "./scoring.js";
+import { clusterConfirmations, forwardReturn, summarizeReactions, validateSignal } from "./scoring.js";
 
 /**
  * HTTP surface: read-only JSON APIs plus the SSE stream. No client can write
@@ -127,6 +127,34 @@ export function createApp(deps: AppDeps): Hono {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 502);
     }
+  });
+
+  /**
+  * Signal validation across the whole watchlist: judged events bucketed by
+  * strength, measured against realized 30-minute price reactions.
+  */
+  app.get("/api/validation", (c) => {
+    const hours = clampNumber(c.req.query("hours"), 24, 168, 120);
+    const since = Date.now() - hours * 60 * 60 * 1000;
+    const events = deps.db.scoredMentionEvents(since);
+    const seriesByTicker = new Map<string, Array<{ t: number; price: number }>>();
+    for (const e of events) {
+      if (!seriesByTicker.has(e.ticker)) {
+        seriesByTicker.set(e.ticker, deps.db.priceWindow(e.ticker, since - 60 * 60 * 1000));
+      }
+    }
+    const rows = events.map((e) => ({
+      eventScore: e.eventScore,
+      sentiment: e.sentiment,
+      r30: forwardReturn(seriesByTicker.get(e.ticker) ?? [], e.publishedAt, 30 * 60_000),
+    }));
+    return c.json({
+      hours,
+      totalEvents: events.length,
+      withReaction: rows.filter((r) => r.r30 != null).length,
+      buckets: validateSignal(rows),
+      generatedAt: Date.now(),
+    });
   });
 
   app.get("/api/tape", (c) => {

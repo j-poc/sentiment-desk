@@ -92,6 +92,22 @@ export interface ReactionsDTO {
   all: ReactionSummary;
 }
 
+export interface ValidationBucket {
+  range: string;
+  n: number;
+  medianAbs30: number | null;
+  median30: number | null;
+  hitRate: number | null;
+}
+
+export interface ValidationDTO {
+  hours: number;
+  totalEvents: number;
+  withReaction: number;
+  buckets: ValidationBucket[];
+  generatedAt: number;
+}
+
 export interface SeriesPoint {
   t: number;
   v: number | null;
