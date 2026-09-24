@@ -99,6 +99,7 @@ const companySchema = z.object({
   sector: z.string().min(1),
   aliases: z.array(z.string().min(1)).min(1),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  ambiguous: z.boolean().optional(),
 });
 
 export function loadCompanies(filePath = config.companiesPath): Company[] {

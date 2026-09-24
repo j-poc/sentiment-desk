@@ -7,6 +7,7 @@ import {
   mentionDigest,
   parseJudgment,
   hasNearDuplicateTitle,
+  hasStrongIdentity,
   shouldAlert,
   smoothedSeries,
   summarizeReactions,
@@ -280,6 +281,51 @@ describe("applyPostRules investor relevance", () => {
     const f = applyPostRules(judgment({ investorRelevant: 0.2 }), 1);
     expect(f.exclude).toBe(true);
     expect(applyPostRules(judgment({ investorRelevant: 0.5 }), 1).exclude).toBe(false);
+  });
+});
+
+describe("hasStrongIdentity (namesake guard)", () => {
+  const apple = {
+    name: "Apple",
+    ticker: "AAPL",
+    aliases: ["iPhone", "Tim Cook", "Macbook"],
+    ambiguous: true,
+  };
+  it("rejects food and namesake items from text-matched sources", () => {
+    expect(
+      hasStrongIdentity({
+        company: apple,
+        title: "Apple Sauce Recall Issued After FDA Testing Findings",
+        snippet: "",
+        scoped: false,
+      }),
+    ).toBe(false);
+  });
+  it("accepts ticker, corporate suffix, alias, or scoped sources", () => {
+    expect(hasStrongIdentity({ company: apple, title: "Apple (AAPL) could be overpriced", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: apple, title: "Apple Inc suppliers rally", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: apple, title: "iPhone demand signals mixed", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: apple, title: "Apple sauce recall", snippet: "", scoped: true })).toBe(true);
+  });
+  it("passes unambiguous companies unconditionally", () => {
+    expect(
+      hasStrongIdentity({
+        company: { name: "NVIDIA", ticker: "NVDA", aliases: ["Nvidia"], ambiguous: false },
+        title: "Anything at all mentioning Nvidia",
+        snippet: "",
+        scoped: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("applyPostRules strict identity floor", () => {
+  it("demotes ambiguous weak-identity items unless about is very high", () => {
+    const borderline = judgment({ about: 0.6, investorRelevant: 0.6 });
+    expect(applyPostRules(borderline, 1).exclude).toBe(false);
+    expect(applyPostRules(borderline, 1, { strictAbout: true }).exclude).toBe(true);
+    const clear = judgment({ about: 0.9, investorRelevant: 0.6 });
+    expect(applyPostRules(clear, 1, { strictAbout: true }).exclude).toBe(false);
   });
 });
 

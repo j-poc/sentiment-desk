@@ -79,6 +79,7 @@ export function startRssPoller(deps: {
                 snippet: item.snippet,
                 publishedAt: item.publishedAt,
                 retrievedAt: Date.now(),
+                scoped: feed.fallbackName === "Yahoo Finance",
                 digest: mentionDigest("rss", item.url, item.title),
               });
               if (inserted) added += 1;
@@ -156,6 +157,7 @@ export function startXPoller(deps: {
               snippet: post.text.slice(0, 600),
               publishedAt: Number.isFinite(post.createdAt) ? post.createdAt : Date.now(),
               retrievedAt: Date.now(),
+              scoped: true,
               digest: mentionDigest("x", url, post.text),
             });
             if (inserted) added += 1;
@@ -216,6 +218,7 @@ export function startSecPoller(deps: {
             const inserted = deps.pipeline.ingest({
               companyId: company.id,
               kind: "sec",
+              scoped: true,
               sourceName: "SEC EDGAR",
               sourceUrl: url,
               tier: "filing",
@@ -290,6 +293,7 @@ export function startGdeltPoller(deps: {
               snippet: "",
               publishedAt: a.seenAt,
               retrievedAt: Date.now(),
+              scoped: false,
               digest: mentionDigest("gdelt", a.url, a.title),
             });
             if (inserted) added += 1;
@@ -433,6 +437,7 @@ export function startFinnhubPoller(deps: {
               snippet: n.summary,
               publishedAt: n.datetime || Date.now(),
               retrievedAt: Date.now(),
+              scoped: true,
               digest: mentionDigest("finnhub", n.url, n.headline),
             });
             if (inserted) added += 1;
@@ -508,6 +513,7 @@ export function startRedditPoller(deps: {
               snippet: p.selftext,
               publishedAt: p.createdAt || Date.now(),
               retrievedAt: Date.now(),
+              scoped: true,
               digest: mentionDigest("reddit", p.permalink, p.title),
             });
             if (inserted) added += 1;

@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS companies (
   ticker TEXT NOT NULL,
   sector TEXT NOT NULL,
   aliases TEXT NOT NULL,
-  color TEXT NOT NULL
+  color TEXT NOT NULL,
+  ambiguous INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS mentions (
   id TEXT PRIMARY KEY,
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS mentions (
   snippet TEXT NOT NULL,
   published_at INTEGER NOT NULL,
   retrieved_at INTEGER NOT NULL,
+  scoped INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'pending',
   sentiment TEXT,
   confidence REAL,
@@ -109,6 +111,7 @@ interface MentionRow {
   material: number | null;
   novel: number | null;
   credible: number | null;
+  scoped: number;
   investor_relevant: number | null;
   event_type: string | null;
   takeaway: string | null;
@@ -142,7 +145,7 @@ export class Desk {
 
   /** Additive migrations for databases created before the current schema. */
   private migrate(): void {
-    const cols = new Set(
+    const mentionCols = new Set(
       (this.db.prepare("PRAGMA table_info(mentions)").all() as Array<{ name: string }>).map(
         (r) => r.name,
       ),
@@ -154,29 +157,42 @@ export class Desk {
       ["event_score", "REAL"],
       ["investor_relevant", "REAL"],
       ["takeaway", "TEXT"],
+      ["scoped", "INTEGER NOT NULL DEFAULT 0"],
     ];
     for (const [name, ddl] of additions) {
-      if (!cols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
+      if (!mentionCols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
+    }
+    const companyCols = new Set(
+      (this.db.prepare("PRAGMA table_info(companies)").all() as Array<{ name: string }>).map(
+        (r) => r.name,
+      ),
+    );
+    if (!companyCols.has("ambiguous")) {
+      this.db.exec("ALTER TABLE companies ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0");
     }
   }
 
   seedCompanies(companies: Company[]): void {
     const upsert = this.db.prepare(
-      `INSERT INTO companies (id, name, ticker, sector, aliases, color)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO companies (id, name, ticker, sector, aliases, color, ambiguous)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name=excluded.name, ticker=excluded.ticker,
-         sector=excluded.sector, aliases=excluded.aliases, color=excluded.color`,
+         sector=excluded.sector, aliases=excluded.aliases, color=excluded.color, ambiguous=excluded.ambiguous`,
     );
     for (const c of companies) {
-      upsert.run(c.id, c.name, c.ticker, c.sector, JSON.stringify(c.aliases), c.color);
+      upsert.run(c.id, c.name, c.ticker, c.sector, JSON.stringify(c.aliases), c.color, c.ambiguous ? 1 : 0);
     }
   }
 
   companies(): Company[] {
     const rows = this.db.prepare("SELECT * FROM companies ORDER BY ticker").all() as Array<{
-      id: string; name: string; ticker: string; sector: string; aliases: string; color: string;
+      id: string; name: string; ticker: string; sector: string; aliases: string; color: string; ambiguous: number;
     }>;
-    return rows.map((r) => ({ ...r, aliases: JSON.parse(r.aliases) as string[] }));
+    return rows.map((r) => ({
+      ...r,
+      aliases: JSON.parse(r.aliases) as string[],
+      ambiguous: r.ambiguous === 1,
+    }));
   }
 
   /** Returns false when the digest already exists; inserts are otherwise idempotent. */
@@ -185,8 +201,8 @@ export class Desk {
       .prepare(
         `INSERT OR IGNORE INTO mentions
          (id, company_id, source_name, source_url, source_kind, source_tier,
-          title, snippet, published_at, retrieved_at, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+          title, snippet, published_at, retrieved_at, scoped, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       )
       .run(
         m.companyId + ":" + m.digest,
@@ -199,6 +215,7 @@ export class Desk {
         m.snippet,
         m.publishedAt,
         m.retrievedAt,
+        m.scoped ? 1 : 0,
       );
     return Number(res.changes) > 0;
   }

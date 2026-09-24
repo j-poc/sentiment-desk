@@ -3,9 +3,19 @@ import { rowToDTO } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { RUBRIC_SHA } from "./rubric.js";
-import { applyPostRules, bucketMsFor, hasNearDuplicateTitle, parseJudgment, shouldAlert, smoothedSeries, weightedIndex } from "./scoring.js";
+import {
+  applyPostRules,
+  bucketMsFor,
+  hasNearDuplicateTitle,
+  hasStrongIdentity,
+  parseJudgment,
+  shouldAlert,
+  smoothedSeries,
+  weightedIndex,
+} from "./scoring.js";
 import { TIER_WEIGHT } from "./sources/tiers.js";
 import type {
+  Company,
   CompanySnapshot,
   EarningsSurprise,
   JevState,
@@ -50,7 +60,10 @@ export class Pipeline {
   private readonly queue: string[] = [];
   private readonly queued = new Set<string>();
   private inFlight = 0;
-  private companyCache: Map<string, { name: string; ticker: string; sector: string; color: string }> | null = null;
+  private companyCache: Map<
+    string,
+    { name: string; ticker: string; sector: string; color: string; aliases: string[]; ambiguous?: boolean }
+  > | null = null;
 
   constructor(private readonly deps: PipelineDeps) {}
 
@@ -106,6 +119,15 @@ export class Pipeline {
     }
 
     const meta = this.companyMeta(row.company_id);
+    // Lexically ambiguous names matched by text alone (Google News, GDELT)
+    // must clear a much higher about bar: "apple sauce" is not Apple Inc.
+    const strongIdentity = hasStrongIdentity({
+      company: { name: meta.name, ticker: meta.ticker, aliases: meta.aliases, ambiguous: meta.ambiguous },
+      title: row.title,
+      snippet: row.snippet,
+      scoped: row.scoped === 1,
+    });
+    const strictAbout = meta.ambiguous === true && !strongIdentity;
     const state: JevState = {
       company: {
         id: row.company_id,
@@ -129,7 +151,7 @@ export class Pipeline {
       const out = await this.deps.judge(state);
       const parsed = parseJudgment(out.answers);
       const tier = row.source_tier as SourceTier;
-      const final = applyPostRules(parsed, TIER_WEIGHT[tier]);
+      const final = applyPostRules(parsed, TIER_WEIGHT[tier], { strictAbout: strictAbout });
       const inputTokens = out.inputTokens ?? 0;
       const score: MentionScore = {
         sentiment: parsed.sentiment,
@@ -213,7 +235,14 @@ export class Pipeline {
     });
   }
 
-  private companyMeta(companyId: string): { name: string; ticker: string; sector: string; color: string } {
+  private companyMeta(companyId: string): {
+    name: string;
+    ticker: string;
+    sector: string;
+    color: string;
+    aliases: string[];
+    ambiguous?: boolean;
+  } {
     if (!this.companyCache) {
       this.companyCache = new Map(
         this.deps.db.companies().map((c) => [c.id, c] as const),
@@ -225,6 +254,8 @@ export class Pipeline {
         ticker: companyId,
         sector: "",
         color: "#64748b",
+        aliases: [],
+        ambiguous: false,
       }
     );
   }

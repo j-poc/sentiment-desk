@@ -144,10 +144,46 @@ export interface FinalScore {
   exclude: boolean;
 }
 
-export function applyPostRules(j: ParsedJudgment, sourceWeight: number): FinalScore {
-  /** Off-target: not really about the company, or about it only as consumer
-   * entertainment / brand lifestyle rather than an investment. Both fail. */
-  const exclude = j.about < 0.5 || j.investorRelevant < 0.35;
+/**
+ * Identity bar for lexically ambiguous companies: ticker, corporate suffix,
+ * an unambiguous alias, or a symbol-scoped source. "Apple beats estimates"
+ * from a text match has none of these — the model's about score must then
+ * clear a much higher bar.
+ */
+export interface IdentityCheck {
+  company: { name: string; ticker: string; aliases: string[]; ambiguous?: boolean };
+  title: string;
+  snippet: string;
+  scoped: boolean;
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function hasStrongIdentity(p: IdentityCheck): boolean {
+  if (!p.company.ambiguous) return true;
+  if (p.scoped) return true;
+  const hay = `${p.title} ${p.snippet}`;
+  if (new RegExp(`\\$?${escapeRe(p.company.ticker)}\\b`, "i").test(hay)) return true;
+  if (new RegExp(`${escapeRe(p.company.name)}\\s*(inc|corp|corporation|plc|ltd)\\b`, "i").test(hay)) return true;
+  for (const alias of p.company.aliases) {
+    if (new RegExp(`\\b${escapeRe(alias)}\\b`, "i").test(hay)) return true;
+  }
+  return false;
+}
+
+export function applyPostRules(
+  j: ParsedJudgment,
+  sourceWeight: number,
+  opts?: { strictAbout?: boolean },
+): FinalScore {
+  /** Off-target: not really about the company, about it only as consumer
+   * entertainment / brand lifestyle, or — for lexically ambiguous companies
+   * matched by text alone — not identified strongly enough. */
+  const aboutFloor = opts?.strictAbout ? 0.8 : 0.5;
+  const relevanceFloor = opts?.strictAbout ? 0.5 : 0.35;
+  const exclude = j.about < aboutFloor || j.investorRelevant < relevanceFloor;
   const impact = round2((j.pPos - j.pNeg) * 100);
   const dampedConfidence = j.confidence < 0.55 ? j.confidence * 0.6 : j.confidence;
   const weight = round4(

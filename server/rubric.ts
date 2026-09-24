@@ -39,7 +39,7 @@ export const RUBRIC: Rubric = {
   about: {
     type: "noul",
     instructions:
-      "The item is genuinely about the company named in the state (including its named subsidiaries or flagship products), not a different entity with a similar name, not the word used in another sense, and not the sector as a whole with the company only mentioned in passing.",
+      "The item is genuinely about the company named in the state (including its named subsidiaries or flagship products). Watch for namesakes: the same word can name a food, a river, a place, a material, an unrelated company, or a generic concept — those are NOT the company. If the item could plausibly concern something other than the company itself (for example a food product called apple sauce when the company is Apple Inc), score about near 0. Also not the sector as a whole with the company only mentioned in passing.",
   },
   investor_relevant: {
     type: "noul",

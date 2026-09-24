@@ -15,6 +15,8 @@ export interface Company {
   sector: string;
   aliases: string[];
   color: string;
+  /** True when the name doubles as a common word (Apple, Meta, Intel, Amazon the river): text-matched mentions face a stricter identity bar. */
+  ambiguous?: boolean;
 }
 
 /**
@@ -33,6 +35,8 @@ export interface RawMention {
   snippet: string;
   publishedAt: number;
   retrievedAt: number;
+  /** True when the item arrived via a symbol-scoped query (Yahoo ticker feed, Finnhub, X, Reddit, SEC): the scoping itself is identity evidence. */
+  scoped?: boolean;
 }
 
 /** The state block sent to Jev: everything the model may judge on. */
