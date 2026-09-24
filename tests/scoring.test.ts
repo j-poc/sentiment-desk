@@ -136,8 +136,8 @@ describe("smoothedSeries", () => {
     const s = smoothedSeries(items, 4 * fiveMin, fiveMin, now);
     expect(s[0]?.v).toBeNull();
     expect(s[1]?.v).toBeNull();
-    const at = s[2]?.v ?? 0; // alpha = (0.2 + 0.8) * 0.85 -> 85% of the way to 80
-    expect(at).toBeCloseTo(68, 0);
+    const at = s[2]?.v ?? 0; // alpha = (0.2 + 0.8) * 0.8 -> 80% of the way to 80
+    expect(at).toBeCloseTo(64, 0);
     expect(s[3]?.v ?? 0).toBeLessThan(at);
     expect(s[4]?.v ?? 0).toBeLessThan(s[3]?.v ?? 0);
   });

@@ -453,7 +453,7 @@ export function smoothedSeries(
       const m = sorted[mi++]!;
       started = true;
       const w = Math.min(1, Math.max(0.05, m.weight));
-      const alpha = Math.min(1, 0.2 + 0.8 * w) * 0.85;
+      const alpha = Math.min(1, 0.2 + 0.8 * w) * 0.8;
       v = v + alpha * (m.impact - v);
       n += 1;
     }
