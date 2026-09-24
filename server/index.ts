@@ -8,7 +8,15 @@ import { Pipeline, type JudgeFn } from "./pipeline.js";
 import { RUBRIC } from "./rubric.js";
 import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
-import { startDemoLoop, startRssPoller, startXPoller, type SchedulerControl } from "./schedule.js";
+import {
+  startDemoLoop,
+  startGdeltPoller,
+  startRssPoller,
+  startSecPoller,
+  startXPoller,
+  type SchedulerControl,
+} from "./schedule.js";
+import { fetchTickerCikMap } from "./sources/sec.js";
 import { demoJudge } from "./demo.js";
 
 /**
@@ -24,7 +32,23 @@ async function main(): Promise<void> {
   db.seedCompanies(companies);
 
   const hub = new Hub();
-  const health = new HealthTracker(config.xBearer !== "", config.jev.apiKey !== "" || config.demo, config.jev.model);
+  const health = new HealthTracker(
+    config.xBearer !== "",
+    config.jev.apiKey !== "" || config.demo,
+    config.jev.model,
+    !config.demo && config.secUserAgent !== "",
+  );
+
+  // Resolve CIKs once at boot; SEC source degrades gracefully if this fails.
+  let cikByTicker = new Map<string, string>();
+  if (!config.demo && config.secUserAgent) {
+    try {
+      cikByTicker = await fetchTickerCikMap(config.secUserAgent);
+      console.log(`[desk] sec edgar: ${cikByTicker.size} tickers resolved`);
+    } catch (err) {
+      console.warn(`[desk] sec edgar disabled: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   const jevClient = new JevClient({
     apiKey: config.jev.apiKey,
@@ -81,6 +105,24 @@ async function main(): Promise<void> {
       startRssPoller({ companies, pipeline, db, health, intervalSeconds: config.pollRssSeconds }),
     );
   }
+  if (!config.demo && config.secUserAgent && cikByTicker.size > 0) {
+    schedulers.push(
+      startSecPoller({
+        companies,
+        cikByTicker,
+        userAgent: config.secUserAgent,
+        pipeline,
+        db,
+        health,
+        intervalSeconds: config.pollSecSeconds,
+      }),
+    );
+  }
+  if (!config.demo) {
+    schedulers.push(
+      startGdeltPoller({ companies, pipeline, db, health, intervalSeconds: config.pollGdeltSeconds }),
+    );
+  }
   if (!config.demo && config.xBearer) {
     schedulers.push(
       startXPoller({
@@ -99,6 +141,9 @@ async function main(): Promise<void> {
 
   const mode = config.demo ? "DEMO" : judge ? "LIVE" : "AWAITING KEY (mentions stay pending)";
   console.log(`[desk] sentiment desk v${VERSION} ${mode} on http://localhost:${config.port}`);
+  if (config.secUserAgent.includes("personal research desk")) {
+    console.warn("[desk] SEC_USER_AGENT is the generic default; personalize it in .env (name + email) for long unattended runs.");
+  }
   console.log(`[desk] watchlist: ${companies.length} companies | db: ${config.dbPath}`);
   if (!config.demo) {
     console.log(

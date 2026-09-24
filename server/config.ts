@@ -58,8 +58,16 @@ export const config = {
     inputPricePerMTok: 0.042,
   },
   xBearer: process.env.X_BEARER_TOKEN?.trim() || "",
+  /**
+   * SEC fair-access policy wants a User-Agent that identifies the requester.
+   * A generic research-desk default is used when none is set; personalize it
+   * in .env (name + email) if this desk runs unattended for long.
+   */
+  secUserAgent: process.env.SEC_USER_AGENT?.trim() || "sentiment-desk/0.3 (personal research desk)",
+  pollSecSeconds: int(process.env.POLL_SEC_SECONDS, 90),
   pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 45),
   pollXSeconds: int(process.env.POLL_X_SECONDS, 180),
+  pollGdeltSeconds: int(process.env.POLL_GDELT_SECONDS, 300),
   pollQuotesSeconds: int(process.env.POLL_QUOTES_SECONDS, 45),
   scoreConcurrency: int(process.env.SCORE_CONCURRENCY, 6),
   demo: bool(process.env.DEMO),

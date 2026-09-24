@@ -2,9 +2,12 @@ import type { Company } from "./types.js";
 import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Pipeline } from "./pipeline.js";
+import { fetchGdeltArticles } from "./sources/gdelt.js";
+import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent } from "./sources/x.js";
 import { mentionDigest } from "./scoring.js";
+import { fetchPrimaryDocText, fetchRecent8Ks, titleForItems } from "./sources/sec.js";
 import { generateDemoMention } from "./demo.js";
 
 /**
@@ -126,6 +129,126 @@ export function startXPoller(deps: {
           deps.db.logEvent("warn", "x", `${company.ticker}: ${message}`);
         }
         await sleep(300);
+      }
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
+  void tick();
+  return { stop: () => clearInterval(timer) };
+}
+
+/**
+ * SEC EDGAR poller: recent 8-Ks per watchlisted company, with the primary
+ * document fetched for state text. Filings are ground truth; acceptance
+ * timestamps are exchange-accepted instants, not estimates.
+ */
+export function startSecPoller(deps: {
+  companies: Company[];
+  cikByTicker: Map<string, string>;
+  userAgent: string;
+  pipeline: Pipeline;
+  db: Desk;
+  health: HealthTracker;
+  intervalSeconds: number;
+}): SchedulerControl {
+  let running = false;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      const since = Date.now() - 3 * 24 * 60 * 60 * 1000;
+      for (const company of deps.companies) {
+        const cik = deps.cikByTicker.get(company.ticker);
+        if (!cik) continue;
+        try {
+          const filings = await fetchRecent8Ks({ cik, ticker: company.ticker, sinceMs: since, userAgent: deps.userAgent });
+          let added = 0;
+          for (const f of filings) {
+            let snippet = "";
+            try {
+              snippet = await fetchPrimaryDocText(f.primaryDocUrl, deps.userAgent);
+            } catch {
+              /* scoring proceeds on the item-typed title if the doc fails */
+            }
+            const url = f.primaryDocUrl || `https://www.sec.gov/Archives/edgar/data/${Number(f.cik)}/${f.accessionNo.replace(/-/g, "")}/`;
+            const inserted = deps.pipeline.ingest({
+              companyId: company.id,
+              kind: "sec",
+              sourceName: "SEC EDGAR",
+              sourceUrl: url,
+              tier: "filing",
+              title: titleForItems(f.formType, f.items),
+              snippet: snippet || `Form ${f.formType}, items ${(f.items.join(", ") || "none")}. Accepted ${new Date(f.acceptanceAt).toISOString()}.`,
+              publishedAt: f.acceptanceAt,
+              retrievedAt: Date.now(),
+              digest: mentionDigest("sec", f.accessionNo, f.items.join(",")),
+            });
+            if (inserted) added += 1;
+          }
+          deps.health.recordSec(true);
+          if (added > 0) deps.db.logEvent("info", "sec", `${company.ticker}: ${added} new 8-K filings`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.health.recordSec(false, `${company.ticker}: ${message}`);
+          deps.db.logEvent("warn", "sec", `${company.ticker}: ${message}`);
+        }
+        await sleep(150); // SEC fair-access pacing: ~6.7 req/s ceiling
+      }
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
+  void tick();
+  return { stop: () => clearInterval(timer) };
+}
+
+/**
+ * GDELT poller: slow, spaced, breadth-only. Two seconds between companies so
+ * a full 24-name rotation takes under a minute against a 5-minute cycle.
+ */
+export function startGdeltPoller(deps: {
+  companies: Company[];
+  pipeline: Pipeline;
+  db: Desk;
+  health: HealthTracker;
+  intervalSeconds: number;
+}): SchedulerControl {
+  let running = false;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      for (const company of deps.companies) {
+        try {
+          const articles = await fetchGdeltArticles(`"${company.name}" OR "${company.ticker}"`);
+          let added = 0;
+          for (const a of articles) {
+            if (!matchesCompany(company, a.title)) continue;
+            const inserted = deps.pipeline.ingest({
+              companyId: company.id,
+              kind: "rss",
+              sourceName: a.domain,
+              sourceUrl: a.url,
+              tier: tierForHost(a.url),
+              title: a.title,
+              snippet: "",
+              publishedAt: a.seenAt,
+              retrievedAt: Date.now(),
+              digest: mentionDigest("gdelt", a.url, a.title),
+            });
+            if (inserted) added += 1;
+          }
+          deps.health.recordRss(true);
+          if (added > 0) deps.db.logEvent("info", "gdelt", `${company.ticker}: ${added} new`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.health.recordRss(false, `gdelt ${company.ticker}: ${message}`);
+          deps.db.logEvent("warn", "gdelt", `${company.ticker}: ${message}`);
+        }
+        await sleep(2_000);
       }
     } finally {
       running = false;

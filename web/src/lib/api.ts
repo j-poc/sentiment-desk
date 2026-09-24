@@ -48,7 +48,7 @@ export interface MentionScore {
 export interface Mention {
   id: string;
   companyId: string;
-  source: { name: string; url: string; kind: "rss" | "x"; tier: SourceTier };
+  source: { name: string; url: string; kind: "rss" | "x" | "sec"; tier: SourceTier };
   title: string;
   snippet: string;
   publishedAt: number;
@@ -129,6 +129,7 @@ export interface HealthDTO {
     rss: SourceHealth;
     x: SourceHealth;
     quotes: SourceHealth;
+    sec: SourceHealth;
     jev: SourceHealth & { model: string };
   };
   usage: { calls: number; inputTokens: number; outputTokens: number; costUsd: number };

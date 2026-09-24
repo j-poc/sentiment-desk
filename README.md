@@ -11,9 +11,15 @@ The core idea is the live "BS meter" pattern: per-item typed questions (~400 ms,
 
 ## What is real
 
-- **Mentions**: Google News RSS per company (always on), X API v2 recent search
-  (when `X_BEARER_TOKEN` is set). Real headlines, real timestamps, deduped by
-  content digest.
+- **Mentions** (all free, no keys required):
+  Google News RSS per company (breadth), Yahoo Finance per-ticker headline RSS
+  (speed), GDELT DOC 2.0 (global breadth + confirmation, keyless, slow-polled),
+  and **SEC EDGAR 8-K filings** — the company speaking under penalty of law,
+  with exchange-accepted sub-second timestamps. 8-K items map onto the event
+  taxonomy (Item 2.02 = results, 5.02 = leadership, 4.02 = accounting
+  non-reliance). Filings carry the gold `8-K FILING` badge and outrank every
+  news tier in the weight blend. X API v2 recent search joins when
+  `X_BEARER_TOKEN` is set. Every mention is deduped by content digest.
 - **Market data**: Yahoo Finance chart endpoint (no key). Snapshot quotes for
   all 24 tickers plus context indices (SPY, QQQ, VIX) every 45 seconds, and
   intraday price series for the chart overlay. Quota-safe: paced requests, one
@@ -79,6 +85,9 @@ Or with Docker: `docker build -t sentiment-desk . && docker run -p 8787:8787
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |
+| `SEC_USER_AGENT` | generic research default | personalize (name + email) for long unattended runs |
+| `POLL_SEC_SECONDS` | `90` | EDGAR submissions poll cadence |
+| `POLL_GDELT_SECONDS` | `300` | GDELT breadth poll cadence |
 | `POLL_RSS_SECONDS` | `45` | news poll cadence |
 | `POLL_X_SECONDS` | `180` | X poll cadence |
 | `POLL_QUOTES_SECONDS` | `45` | quote poll cadence |

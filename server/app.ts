@@ -127,7 +127,7 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/tape", (c) => {
     const limit = clampNumber(c.req.query("limit"), 1, 100, 40);
-    return c.json(deps.db.recentScored(limit));
+    return c.json(deps.db.recentVisible(limit));
   });
 
   app.get("/api/stream", (c) =>

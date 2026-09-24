@@ -7,6 +7,7 @@ const TIER_DOT: Record<string, string> = {
   trade: "#94a3b8",
   blog: "#c4b5fd",
   social: "#fda4af",
+  filing: "#fbbf24", // filings outrank everything: gold
 };
 
 export function Pill({
@@ -91,6 +92,7 @@ export function MentionCard({ m, compact, dense }: { m: Mention; compact?: boole
       {s && (
         <div className={`flex flex-wrap items-center gap-1.5 ${dense ? "mt-1" : "mt-2.5"}`}>
           <Pill color={dir}>{s.sentiment.toUpperCase()}</Pill>
+          {m.source.kind === "sec" && <Pill color="#fbbf24">8-K FILING</Pill>}
           <Pill color="#a5b4fc">{TYPE_LABEL[s.eventType] ?? "NEWS"}</Pill>
           {s.eventScore >= 60 && <Pill color="#fbbf24">EVENT {Math.round(s.eventScore)}</Pill>}
           {s.surprise >= 0.7 && s.novel >= 0.6 && <Pill color="#5eead4">FRESH</Pill>}

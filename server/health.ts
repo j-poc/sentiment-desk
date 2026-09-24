@@ -17,6 +17,7 @@ export interface HealthSnapshot {
   rss: SourceCounters;
   x: SourceCounters;
   quotes: SourceCounters;
+  sec: SourceCounters;
   jev: SourceCounters & { model: string };
 }
 
@@ -26,11 +27,13 @@ export class HealthTracker {
   private readonly jev: SourceCounters & { model: string };
 
   private readonly quotes: SourceCounters;
+  private readonly sec: SourceCounters;
 
-  constructor(xEnabled: boolean, jevEnabled: boolean, jevModel: string) {
+  constructor(xEnabled: boolean, jevEnabled: boolean, jevModel: string, secEnabled = false) {
     this.rss = fresh(true);
     this.x = fresh(xEnabled);
     this.quotes = fresh(true);
+    this.sec = fresh(secEnabled);
     this.jev = { ...fresh(jevEnabled), model: jevModel };
   }
 
@@ -46,6 +49,10 @@ export class HealthTracker {
     this.record(this.x, ok, error);
   }
 
+  recordSec(ok: boolean, error?: string): void {
+    this.record(this.sec, ok, error);
+  }
+
   recordJev(ok: boolean, error?: string): void {
     this.record(this.jev, ok, error);
   }
@@ -55,6 +62,7 @@ export class HealthTracker {
       rss: { ...this.rss },
       x: { ...this.x },
       quotes: { ...this.quotes },
+      sec: { ...this.sec },
       jev: { ...this.jev },
     };
   }

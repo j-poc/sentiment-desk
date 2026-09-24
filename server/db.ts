@@ -256,10 +256,15 @@ export class Desk {
     return rows.map(rowToDTO);
   }
 
-  recentScored(limit: number): MentionDTO[] {
+  /**
+   * Tape: scored mentions first-class, but pending ones stay visible so the
+   * live flow is observable even before scoring is configured. Failed items
+   * are health-panel material, not tape material.
+   */
+  recentVisible(limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE status IN ('scored', 'off_target')
+        `SELECT * FROM mentions WHERE status IN ('scored', 'off_target', 'pending')
          ORDER BY published_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as MentionRow[];

@@ -1,4 +1,4 @@
-export type SourceKind = "rss" | "x";
+export type SourceKind = "rss" | "x" | "sec";
 
 /**
  * Source tiers rank publishing venues by expected reliability for business
@@ -6,7 +6,7 @@ export type SourceKind = "rss" | "x";
  * judgment blends with it at scoring time. Both live in the stored score so
  * the blend is always auditable.
  */
-export type SourceTier = "wire" | "major" | "trade" | "blog" | "social";
+export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
 
 export interface Company {
   id: string;

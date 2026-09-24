@@ -4,11 +4,13 @@ import type { SourceTier } from "../types.js";
  * Deterministic source-tier prior from the publishing host. The wire tier is
  * reserved for agencies and market-moving first reporters; everything unknown
  * defaults to "trade", which is the honest middle for niche finance media.
+ * "filing" outranks everything: an 8-K is the company speaking under penalty
+ * of federal law, with an exchange-accepted timestamp.
  */
 const RULES: Array<[RegExp, SourceTier]> = [
   [/reuters\.com|apnews\.com|afp\.com|bloomberg\.com/, "wire"],
   [
-    /wsj\.com|ft\.com|nytimes\.com|washingtonpost\.com|cnbc\.com|barrons\.com|bbc\.(com|co\.uk)|theguardian\.com|economist\.com|wsj\.com/,
+    /wsj\.com|ft\.com|nytimes\.com|washingtonpost\.com|cnbc\.com|barrons\.com|bbc\.(com|co\.uk)|theguardian\.com|economist\.com/,
     "major",
   ],
   [
@@ -24,6 +26,7 @@ export const TIER_WEIGHT: Record<SourceTier, number> = {
   trade: 0.7,
   blog: 0.5,
   social: 0.45,
+  filing: 1,
 };
 
 export function tierForHost(url: string): SourceTier {
