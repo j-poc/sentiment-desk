@@ -21,6 +21,7 @@ const SERIES_CACHE_TTL_MS = 60_000;
 export class MarketData {
   private snapshot: MarketSnapshot = { quotes: {}, updatedAt: 0 };
   private readonly seriesCache = new Map<string, { at: number; points: PricePoint[] }>();
+  private readonly backfilled = new Set<string>();
 
   constructor(
     private readonly deps: {
@@ -28,6 +29,7 @@ export class MarketData {
       indices: string[];
       hub: Hub;
       health: HealthTracker;
+      db: Desk;
     },
   ) {}
 
@@ -59,9 +61,36 @@ export class MarketData {
       quotes: { ...this.snapshot.quotes, ...quotes },
       updatedAt: ok > 0 ? Date.now() : this.snapshot.updatedAt,
     };
+    // Persist our own price history: the poller appends a point per successful
+    // company quote, which accumulates into the intraday series used by the
+    // outcome-verification module. Company tickers only; indices are context.
+    for (const company of this.deps.companies) {
+      const q = quotes[company.ticker];
+      if (q) this.deps.db.upsertPricePoint(company.ticker, q.at, q.price);
+    }
+    void this.backfillSeries();
     if (ok > 0) this.deps.health.recordQuotes(true);
     if (fail > 0) this.deps.health.recordQuotes(false, lastError ?? "quote fetch failures");
     if (ok > 0) this.deps.hub.broadcast("quotes", { quotes, updatedAt: this.snapshot.updatedAt });
+  }
+
+  /**
+   * One-time per-ticker backfill from Yahoo's 5-day/30-minute history so the
+   * reaction module has depth immediately instead of waiting for the poller
+   * to accumulate. Failures are silent here; live points accrue regardless.
+   */
+  private async backfillSeries(): Promise<void> {
+    for (const company of this.deps.companies) {
+      if (this.backfilled.has(company.ticker)) continue;
+      this.backfilled.add(company.ticker);
+      try {
+        const points = await fetchPriceSeries(company.ticker, 72);
+        for (const p of points) this.deps.db.upsertPricePoint(company.ticker, p.t, p.price);
+      } catch {
+        /* backfill is best-effort */
+      }
+      await sleep(600);
+    }
   }
 
   async priceSeries(ticker: string, hours: number): Promise<PricePoint[]> {

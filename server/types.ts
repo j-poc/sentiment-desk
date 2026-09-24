@@ -63,6 +63,11 @@ export interface MentionScore {
   material: number;
   novel: number;
   credible: number;
+  eventType: string;
+  magnitude: number;
+  surprise: number;
+  /** 0-100 event-strength composite: materiality, surprise, magnitude. */
+  eventScore: number;
   /** Composite directional index in [-100, 100]. */
   impact: number;
   /** Relative weight of this mention inside any windowed index. */
@@ -87,6 +92,8 @@ export interface MentionDTO {
   status: MentionStatus;
   score: MentionScore | null;
   error: string | null;
+  /** Distinct near-duplicate items covering the same event (1 = sole report). */
+  confirmations?: number;
 }
 
 export interface CompanySnapshot {

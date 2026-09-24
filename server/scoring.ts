@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { SourceTier } from "./types.js";
 import { validateChoiceAnswer, validateNoulAnswer } from "./jev.js";
+import type { EventType } from "./rubric.js";
+import { EVENT_TYPES } from "./rubric.js";
 
 /**
  * Pure scoring functions. Everything here is deterministic so any stored score
@@ -18,6 +20,9 @@ export interface ParsedJudgment {
   material: number;
   novel: number;
   credible: number;
+  eventType: EventType;
+  magnitude: number;
+  surprise: number;
 }
 
 const SENTIMENTS = ["negative", "neutral", "positive"] as const;
@@ -62,6 +67,17 @@ export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment 
   const material = noul(answers, "material");
   const novel = noul(answers, "novel");
   const credible = noul(answers, "credible");
+  const magnitude = noul(answers, "magnitude");
+  const surprise = noul(answers, "surprise");
+
+  const rawEvent = answers["event_type"];
+  if (rawEvent == null) throw new JudgmentError("missing event_type answer");
+  const eventAnswer = validateChoiceAnswer(rawEvent);
+  const eventProbs = eventAnswer.probabilities ?? {};
+  const eventType: EventType =
+    eventAnswer.choice != null && (EVENT_TYPES as readonly string[]).includes(eventAnswer.choice)
+      ? (eventAnswer.choice as EventType)
+      : (topChoice(new Map(EVENT_TYPES.map((t) => [t, clamp01(eventProbs[t] ?? 0)]))) as EventType);
 
   return {
     sentiment,
@@ -73,6 +89,9 @@ export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment 
     material,
     novel,
     credible,
+    eventType,
+    magnitude,
+    surprise,
   };
 }
 
@@ -99,6 +118,11 @@ export interface FinalScore {
   material: number;
   novel: number;
   credible: number;
+  eventType: EventType;
+  magnitude: number;
+  surprise: number;
+  /** 0-100 event-strength composite: materiality, surprise, magnitude. */
+  eventScore: number;
   impact: number;
   weight: number;
   exclude: boolean;
@@ -115,7 +139,144 @@ export function applyPostRules(j: ParsedJudgment, sourceWeight: number): FinalSc
       sourceWeight *
       (0.5 + 0.5 * j.credible),
   );
-  return { ...j, impact, weight, exclude };
+  const eventScore = round2(100 * (0.34 * j.material + 0.33 * j.surprise + 0.33 * j.magnitude));
+  return { ...j, eventScore, impact, weight, exclude };
+}
+
+/* ------------------------------------------------------------------ */
+/* Outcome verification: measure the market's actual reaction against  */
+/* every judgment. We compute forward returns from stored price points */
+/* and report hit rates honestly (reaction is evidence, not causation).*/
+/* ------------------------------------------------------------------ */
+
+export interface PriceLike {
+  t: number;
+  price: number;
+}
+
+/** Price of the last known point at or before time t; null if none. */
+export function priceAt(points: PriceLike[], t: number): number | null {
+  let best: number | null = null;
+  for (const p of points) {
+    if (p.t <= t) best = p.price;
+    else break;
+  }
+  return best;
+}
+
+/**
+ * Forward return in % from the last price at or before `t` (plus a small
+ * detection allowance) to the last price at or before `t + windowMs`.
+ * Null when either end is missing: we never impute a reaction.
+ */
+export function forwardReturn(points: PriceLike[], t: number, windowMs: number): number | null {
+  const p0 = priceAt(points, t + 90_000);
+  const p1 = priceAt(points, t + windowMs);
+  if (p0 == null || p1 == null || p0 === 0) return null;
+  return Math.round(((p1 - p0) / p0) * 10000) / 100;
+}
+
+export interface ReactionSummary {
+  n: number;
+  median30m: number | null;
+  median4h: number | null;
+  /** Share of events where the 30m reaction matched the judged direction. */
+  hitRate: number | null;
+}
+
+export function summarizeReactions(
+  items: Array<{ sentiment: string; r30: number | null; r240: number | null }>,
+): ReactionSummary {
+  const usable = items.filter((x) => x.r30 != null || x.r240 != null);
+  const median = (arr: number[]): number | null => {
+    if (arr.length === 0) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    const a = s[mid];
+    const b = s[mid - 1];
+    if (a == null) return null;
+    const value = s.length % 2 ? a : b != null ? (a + b) / 2 : a;
+    return Math.round(value * 100) / 100;
+  };
+  const r30s = usable.map((x) => x.r30).filter((v): v is number => v != null);
+  const r240s = usable.map((x) => x.r240).filter((v): v is number => v != null);
+  const confirms = usable.filter((x) => {
+    const r = x.r30 ?? x.r240;
+    if (r == null) return false;
+    if (x.sentiment === "negative") return r < 0;
+    if (x.sentiment === "positive") return r > 0;
+    return Math.abs(r) < 0.25;
+  }).length;
+  return {
+    n: usable.length,
+    median30m: median(r30s),
+    median4h: median(r240s),
+    hitRate: usable.length > 0 ? Math.round((confirms / usable.length) * 100) : null,
+  };
+}
+
+const STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have", "in", "is", "it",
+  "its", "of", "on", "or", "says", "s", "that", "the", "to", "was", "were", "will", "with", "after",
+  "over", "amid", "report", "reports", "update", "updates",
+]);
+
+function tokens(title: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of title.toLowerCase().match(/[a-z0-9$%+.]+/g) ?? []) {
+    if (w.length > 2 && !STOPWORDS.has(w)) out.add(w);
+  }
+  return out;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter += 1;
+  return inter / (a.size + b.size - inter);
+}
+
+/**
+ * Cross-source confirmation: group mentions of the same company whose titles
+ * are near-duplicates within a 20-minute window. The count tells you how many
+ * distinct items cover the same event, which is a rough proxy for how many
+ * outlets moved at once.
+ */
+export function clusterConfirmations(
+  ms: Array<{ id: string; title: string; publishedAt: number; companyId: string }>,
+  windowMs = 20 * 60_000,
+): Map<string, number> {
+  const sizes = new Map<string, number>();
+  const byCompany = new Map<string, Array<{ id: string; title: string; publishedAt: number }>>();
+  for (const m of ms) {
+    const list = byCompany.get(m.companyId) ?? [];
+    list.push(m);
+    byCompany.set(m.companyId, list);
+  }
+  for (const list of byCompany.values()) {
+    list.sort((a, b) => a.publishedAt - b.publishedAt);
+    const clusters: Array<{ rep: Set<string>; t: number; ids: string[] }> = [];
+    for (const m of list) {
+      const tk = tokens(m.title);
+      let home: (typeof clusters)[number] | undefined;
+      for (const c of clusters) {
+        if (m.publishedAt - c.t <= windowMs && jaccard(tk, c.rep) >= 0.4) {
+          home = c;
+          break;
+        }
+      }
+      if (home) {
+        home.ids.push(m.id);
+        for (const t of tk) home.rep.add(t);
+      } else {
+        clusters.push({ rep: new Set(tk), t: m.publishedAt, ids: [m.id] });
+      }
+    }
+    for (const c of clusters) {
+      for (const id of c.ids) sizes.set(id, c.ids.length);
+    }
+  }
+  return sizes;
 }
 
 export interface WeightedMention {

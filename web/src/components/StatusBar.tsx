@@ -7,6 +7,19 @@ function fmtBytes(n: number | null): string {
   return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
+/** Detection lag: how far behind publication our ingestion runs. */
+function ingestP50(tape: Mention[]): string {
+  const vals = tape
+    .map((m) => Math.max(0, m.retrievedAt - m.publishedAt))
+    .sort((a, b) => a - b);
+  if (vals.length === 0) return "--";
+  const mid = vals[Math.floor(vals.length / 2)];
+  const s = (mid ?? 0) / 1000;
+  if (s < 90) return `${Math.round(s)}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s / 3600)}h`;
+}
+
 function p50Latency(tape: Mention[]): string {
   const vals = tape
     .map((m) => m.score?.latencyMs)
@@ -51,6 +64,9 @@ export function StatusBar({
       </span>
       <span>
         score p50 <span className="tabnum text-white/60">{p50Latency(tape)}</span>
+      </span>
+      <span>
+        ingest p50 <span className="tabnum text-white/60">{ingestP50(tape)}</span>
       </span>
 
       <span

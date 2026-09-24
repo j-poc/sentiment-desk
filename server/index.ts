@@ -56,7 +56,7 @@ async function main(): Promise<void> {
     concurrency: config.scoreConcurrency,
   });
 
-  const market = new MarketData({ companies, indices: config.indices, hub, health });
+  const market = new MarketData({ companies, indices: config.indices, hub, health, db });
 
   const app = createApp({
     db,

@@ -16,6 +16,7 @@ import { Watchlist, DeltaChip } from "./components/Watchlist.js";
 import { Gauge } from "./components/Gauge.js";
 import { SeriesChart } from "./components/SeriesChart.js";
 import { MentionCard } from "./components/MentionCard.js";
+import { OutcomeCheck } from "./components/OutcomeCheck.js";
 import { Tape } from "./components/Tape.js";
 import { HealthPanel } from "./components/HealthPanel.js";
 import { TopMovers } from "./components/TopMovers.js";
@@ -432,6 +433,8 @@ export default function App() {
                   />
                 </div>
               </div>
+
+              <OutcomeCheck companyId={selected.id} hours={windowHours} refreshToken={tape.length} />
 
               <div className="mb-2 mt-5 flex items-center justify-between">
                 <span className="micro">

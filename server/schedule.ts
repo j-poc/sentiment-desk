@@ -2,7 +2,7 @@ import type { Company } from "./types.js";
 import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Pipeline } from "./pipeline.js";
-import { fetchFeed, googleNewsUrl } from "./sources/rss.js";
+import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent } from "./sources/x.js";
 import { mentionDigest } from "./scoring.js";
 import { generateDemoMention } from "./demo.js";
@@ -31,35 +31,43 @@ export function startRssPoller(deps: {
     running = true;
     try {
       for (const company of deps.companies) {
-        try {
-          const items = await fetchFeed(googleNewsUrl(company));
-          let added = 0;
-          for (const item of items) {
-            if (!matchesCompany(company, item.title, item.snippet)) continue;
-            const inserted = deps.pipeline.ingest({
-              companyId: company.id,
-              kind: "rss",
-              sourceName: item.sourceName,
-              sourceUrl: item.url,
-              tier: item.tier,
-              title: item.title,
-              snippet: item.snippet,
-              publishedAt: item.publishedAt,
-              retrievedAt: Date.now(),
-              digest: mentionDigest("rss", item.url, item.title),
-            });
-            if (inserted) added += 1;
+        // Two feeds per company: Google News for breadth, Yahoo Finance's
+        // per-ticker feed for speed. Both flow through the same normalization.
+        const feeds: Array<{ url: string; fallbackName: string }> = [
+          { url: googleNewsUrl(company), fallbackName: company.name },
+          { url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance" },
+        ];
+        for (const feed of feeds) {
+          try {
+            const items = await fetchFeed(feed.url);
+            let added = 0;
+            for (const item of items) {
+              if (!matchesCompany(company, item.title, item.snippet)) continue;
+              const inserted = deps.pipeline.ingest({
+                companyId: company.id,
+                kind: "rss",
+                sourceName: item.sourceName || feed.fallbackName,
+                sourceUrl: item.url,
+                tier: item.tier,
+                title: item.title,
+                snippet: item.snippet,
+                publishedAt: item.publishedAt,
+                retrievedAt: Date.now(),
+                digest: mentionDigest("rss", item.url, item.title),
+              });
+              if (inserted) added += 1;
+            }
+            deps.health.recordRss(true);
+            if (added > 0) {
+              deps.db.logEvent("info", "rss", `${company.ticker}: ${added} new mentions`);
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            deps.health.recordRss(false, `${company.ticker}: ${message}`);
+            deps.db.logEvent("warn", "rss", `${company.ticker}: ${message}`);
           }
-          deps.health.recordRss(true);
-          if (added > 0) {
-            deps.db.logEvent("info", "rss", `${company.ticker}: ${added} new mentions`);
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          deps.health.recordRss(false, `${company.ticker}: ${message}`);
-          deps.db.logEvent("warn", "rss", `${company.ticker}: ${message}`);
+          await sleep(350);
         }
-        await sleep(400);
       }
     } finally {
       running = false;

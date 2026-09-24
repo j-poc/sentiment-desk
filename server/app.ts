@@ -8,6 +8,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
+import { clusterConfirmations, forwardReturn, summarizeReactions } from "./scoring.js";
 
 /**
  * HTTP surface: read-only JSON APIs plus the SSE stream. No client can write
@@ -67,8 +68,43 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/companies/:id/mentions", (c) => {
     const id = c.req.param("id");
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
-    const limit = clampNumber(c.req.query("limit"), 1, 200, 60);
-    return c.json(deps.db.mentionsForCompany(id, Date.now() - hours * 60 * 60 * 1000, limit));
+    const limit = clampNumber(c.req.query("limit"), 1, 200, 100);
+    const ms = deps.db.mentionsForCompany(id, Date.now() - hours * 60 * 60 * 1000, limit);
+    const confirmations = clusterConfirmations(
+      ms.map((m) => ({ id: m.id, title: m.title, publishedAt: m.publishedAt, companyId: m.companyId })),
+    );
+    return c.json(ms.map((m) => ({ ...m, confirmations: confirmations.get(m.id) ?? 1 })));
+  });
+
+  /**
+   * Outcome verification: forward price returns after each judged event, plus
+   * aggregate hit-rate stats. Reaction is evidence, not causation; the payload
+   * carries n so small samples stay visibly small.
+   */
+  app.get("/api/companies/:id/reactions", (c) => {
+    const id = c.req.param("id");
+    const hours = clampNumber(c.req.query("hours"), 6, 168, 24);
+    const ticker = deps.db.companies().find((x) => x.id === id)?.ticker;
+    if (!ticker) return c.json({ error: "unknown company" }, 404);
+    const since = Date.now() - hours * 60 * 60 * 1000;
+    const mentions = deps.db
+      .mentionsForCompany(id, since, 200)
+      .filter((m) => m.status === "scored" && m.score);
+    const series = deps.db.priceWindow(ticker, since - 60 * 60 * 1000);
+    const events = mentions.map((m) => ({
+      id: m.id,
+      title: m.title,
+      publishedAt: m.publishedAt,
+      sentiment: m.score?.sentiment ?? "neutral",
+      eventScore: m.score?.eventScore ?? 0,
+      eventType: m.score?.eventType ?? "other",
+      r30: forwardReturn(series, m.publishedAt, 30 * 60_000),
+      r240: forwardReturn(series, m.publishedAt, 4 * 60 * 60_000),
+    }));
+    const bull = summarizeReactions(events.filter((e) => e.sentiment === "positive"));
+    const bear = summarizeReactions(events.filter((e) => e.sentiment === "negative"));
+    const all = summarizeReactions(events);
+    return c.json({ ticker, events, bull, bear, all });
   });
 
   app.get("/api/companies/:id/series", (c) => {

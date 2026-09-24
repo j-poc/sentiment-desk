@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS mentions (
   material REAL,
   novel REAL,
   credible REAL,
+  event_type TEXT,
+  magnitude REAL,
+  surprise REAL,
+  event_score REAL,
   impact REAL,
   weight REAL,
   exclude INTEGER NOT NULL DEFAULT 0,
@@ -65,6 +69,12 @@ CREATE INDEX IF NOT EXISTS mentions_status ON mentions(status);
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS price_points (
+  ticker TEXT NOT NULL,
+  t INTEGER NOT NULL,
+  price REAL NOT NULL,
+  PRIMARY KEY (ticker, t)
 );
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +106,10 @@ interface MentionRow {
   material: number | null;
   novel: number | null;
   credible: number | null;
+  event_type: string | null;
+  magnitude: number | null;
+  surprise: number | null;
+  event_score: number | null;
   impact: number | null;
   weight: number | null;
   exclude: number;
@@ -118,6 +132,25 @@ export class Desk {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** Additive migrations for databases created before the current schema. */
+  private migrate(): void {
+    const cols = new Set(
+      (this.db.prepare("PRAGMA table_info(mentions)").all() as Array<{ name: string }>).map(
+        (r) => r.name,
+      ),
+    );
+    const additions: Array<[string, string]> = [
+      ["event_type", "TEXT"],
+      ["magnitude", "REAL"],
+      ["surprise", "REAL"],
+      ["event_score", "REAL"],
+    ];
+    for (const [name, ddl] of additions) {
+      if (!cols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
+    }
   }
 
   seedCompanies(companies: Company[]): void {
@@ -172,7 +205,8 @@ export class Desk {
       .prepare(
         `UPDATE mentions SET
            status = ?, sentiment = ?, confidence = ?, p_pos = ?, p_neu = ?, p_neg = ?,
-           about = ?, material = ?, novel = ?, credible = ?, impact = ?, weight = ?,
+           about = ?, material = ?, novel = ?, credible = ?, event_type = ?, magnitude = ?,
+           surprise = ?, event_score = ?, impact = ?, weight = ?,
            exclude = ?, engine = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?,
            latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?
          WHERE id = ?`,
@@ -188,6 +222,10 @@ export class Desk {
         s.material,
         s.novel,
         s.credible,
+        s.eventType,
+        s.magnitude,
+        s.surprise,
+        s.eventScore,
         s.impact,
         s.weight,
         exclude ? 1 : 0,
@@ -244,6 +282,18 @@ export class Desk {
       impact: r.impact,
       weight: r.weight,
     }));
+  }
+
+  upsertPricePoint(ticker: string, t: number, price: number): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO price_points (ticker, t, price) VALUES (?, ?, ?)")
+      .run(ticker, Math.floor(t / 1000) * 1000, price);
+  }
+
+  priceWindow(ticker: string, sinceMs: number): Array<{ t: number; price: number }> {
+    return this.db
+      .prepare("SELECT t, price FROM price_points WHERE ticker = ? AND t >= ? ORDER BY t")
+      .all(ticker, sinceMs) as unknown as Array<{ t: number; price: number }>;
   }
 
   counts24h(sinceMs: number): Map<string, { count: number; lastAt: number | null }> {
@@ -324,6 +374,10 @@ export function rowToDTO(r: MentionRow): MentionDTO {
           material: r.material ?? 0,
           novel: r.novel ?? 0,
           credible: r.credible ?? 0,
+          eventType: r.event_type ?? "other",
+          magnitude: r.magnitude ?? 0,
+          surprise: r.surprise ?? 0,
+          eventScore: r.event_score ?? 0,
           impact: r.impact ?? 0,
           weight: r.weight ?? 0,
           engine: r.engine ?? "",

@@ -100,6 +100,10 @@ export const demoJudge: JudgeFn = async (state: JevState) => {
   const material = clamp(Math.max(0.15, templateMaterial(state.mention.snippet)) + (nextRand(seed + 12) - 0.5) * 0.2);
   const novel = clamp(0.25 + nextRand(seed + 13) * 0.7);
 
+  const eventType = pickEvent(state.mention.title);
+  const eventProbs: Record<string, number> = {};
+  for (const k of EVENT_KEYS) eventProbs[k] = k === eventType ? 0.72 : round4(nextRand(seed + k.length) * 0.05);
+
   return {
     answers: {
       sentiment: {
@@ -111,6 +115,9 @@ export const demoJudge: JudgeFn = async (state: JevState) => {
       material: { noul: round4(material) },
       novel: { noul: round4(novel) },
       credible: { noul: round4(tierCred[state.mention.source.tier] ?? 0.6) },
+      event_type: { choice: eventType, probabilities: eventProbs },
+      magnitude: { noul: round4(clamp(Math.max(0.1, templateMaterial(state.mention.snippet)) + (nextRand(seed + 15) - 0.5) * 0.25)) },
+      surprise: { noul: round4(clamp(0.2 + nextRand(seed + 16) * 0.75)) },
     },
     model: "demo-sim",
     inputTokens: 900 + (seed % 400),
@@ -147,6 +154,29 @@ function polarityBias(title: string): number {
   for (const w of pos) if (t.includes(w)) bias += 1;
   for (const w of neg) if (t.includes(w)) bias -= 1;
   return Math.max(-1, Math.min(1, bias));
+}
+
+const EVENT_KEYS = [
+  "results",
+  "corporate_action",
+  "legal_regulatory",
+  "leadership",
+  "product",
+  "analyst_action",
+  "macro_sector",
+  "other",
+] as const;
+
+/** Map demo template keywords to an event type so demo data stays coherent. */
+function pickEvent(title: string): (typeof EVENT_KEYS)[number] {
+  const t = title.toLowerCase();
+  if (t.includes("guidance") || t.includes("estimates") || t.includes("results")) return "results";
+  if (t.includes("probe") || t.includes("sued") || t.includes("antitrust")) return "legal_regulatory";
+  if (t.includes("buyback") || t.includes("deal") || t.includes("contract")) return "corporate_action";
+  if (t.includes("upgrade") || t.includes("downgrade")) return "analyst_action";
+  if (t.includes("unveils") || t.includes("recalls") || t.includes("launch")) return "product";
+  if (t.includes("names") || t.includes("appoints")) return "leadership";
+  return "other";
 }
 
 /** Demo templates carry a materiality prior; recover it from the snippet text. */

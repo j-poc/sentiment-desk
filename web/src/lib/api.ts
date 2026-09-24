@@ -30,6 +30,10 @@ export interface MentionScore {
   material: number;
   novel: number;
   credible: number;
+  eventType: string;
+  magnitude: number;
+  surprise: number;
+  eventScore: number;
   impact: number;
   weight: number;
   engine: string;
@@ -52,6 +56,33 @@ export interface Mention {
   status: MentionStatus;
   score: MentionScore | null;
   error: string | null;
+  confirmations?: number;
+}
+
+export interface ReactionEvent {
+  id: string;
+  title: string;
+  publishedAt: number;
+  sentiment: string;
+  eventScore: number;
+  eventType: string;
+  r30: number | null;
+  r240: number | null;
+}
+
+export interface ReactionSummary {
+  n: number;
+  median30m: number | null;
+  median4h: number | null;
+  hitRate: number | null;
+}
+
+export interface ReactionsDTO {
+  ticker: string;
+  events: ReactionEvent[];
+  bull: ReactionSummary;
+  bear: ReactionSummary;
+  all: ReactionSummary;
 }
 
 export interface SeriesPoint {

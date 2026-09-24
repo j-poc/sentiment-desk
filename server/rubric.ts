@@ -56,6 +56,44 @@ export const RUBRIC: Rubric = {
     instructions:
       "The publishing source demonstrates professional editorial standards and a track record of factual accuracy for business reporting, rather than anonymous aggregation, unverified accounts, or promotion.",
   },
+  event_type: {
+    type: "choice",
+    instructions:
+      "Classify the dominant event in this item for the company named in the state. Pick the single best type. If the item contains several events, classify the one with the largest potential bearing on the company.",
+    criteria: {
+      results: "Earnings, revenue, margins, KPIs, or guidance: reported results, pre-announcements, or changes to forward guidance and forecasts.",
+      corporate_action: "Capital structure and corporate events: M&A, buybacks, dividends, splits, listings, restructurings, joint ventures, major contracts.",
+      legal_regulatory: "Government or legal action touching the company: investigations, probes, lawsuits, rulings, fines, sanctions, new regulation aimed at it.",
+      leadership: "People changes with governance weight: CEO/CFO or other C-suite appointments, departures, board changes, succession.",
+      product: "Products and operations: launches, recalls, defects, outages, safety events, clinical or trial milestones, supply issues.",
+      analyst_action: "Sell-side or rating actions naming the company: upgrades, downgrades, price-target changes, initiations, index changes.",
+      macro_sector: "Industry-wide or macro forces hitting the company with its peers: tariffs, commodity swings, sector demand shifts, rates. Company-specific facts are not the driver.",
+      other: "Real company news that fits none of the above cleanly.",
+    },
+  },
+  magnitude: {
+    type: "noul",
+    instructions:
+      "If the reported facts are as stated, the plausible effect on the company's fundamental value or near-term expectations is large, on the order of multiple percent of equity value, not marginal.",
+  },
+  surprise: {
+    type: "noul",
+    instructions:
+      "This item carries genuinely new information relative to prior public knowledge and market expectations: not previously reported, not an anticipated confirmation, not a rehash of a known story.",
+  },
 };
+
+export const EVENT_TYPES = [
+  "results",
+  "corporate_action",
+  "legal_regulatory",
+  "leadership",
+  "product",
+  "analyst_action",
+  "macro_sector",
+  "other",
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
 
 export const RUBRIC_SHA = createHash("sha256").update(JSON.stringify(RUBRIC)).digest("hex");

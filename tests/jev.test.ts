@@ -103,7 +103,16 @@ describe("JevClient", () => {
 
 describe("rubric", () => {
   it("has the five fixed questions with stable hash", () => {
-    expect(Object.keys(RUBRIC).sort()).toEqual(["about", "credible", "material", "novel", "sentiment"]);
+    expect(Object.keys(RUBRIC).sort()).toEqual([
+      "about",
+      "credible",
+      "event_type",
+      "magnitude",
+      "material",
+      "novel",
+      "sentiment",
+      "surprise",
+    ]);
     const sentimentQ = RUBRIC["sentiment"];
     expect(sentimentQ?.type).toBe("choice");
     if (sentimentQ && sentimentQ.type === "choice") {

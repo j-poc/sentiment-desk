@@ -36,6 +36,17 @@ export function Pill({
   );
 }
 
+const TYPE_LABEL: Record<string, string> = {
+  results: "RESULTS",
+  corporate_action: "CORP ACT",
+  legal_regulatory: "LEGAL",
+  leadership: "LEADERSHIP",
+  product: "PRODUCT",
+  analyst_action: "ANALYST",
+  macro_sector: "MACRO",
+  other: "NEWS",
+};
+
 export function MentionCard({ m, compact, dense }: { m: Mention; compact?: boolean; dense?: boolean }) {
   const s = m.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
@@ -80,8 +91,12 @@ export function MentionCard({ m, compact, dense }: { m: Mention; compact?: boole
       {s && (
         <div className={`flex flex-wrap items-center gap-1.5 ${dense ? "mt-1" : "mt-2.5"}`}>
           <Pill color={dir}>{s.sentiment.toUpperCase()}</Pill>
+          <Pill color="#a5b4fc">{TYPE_LABEL[s.eventType] ?? "NEWS"}</Pill>
+          {s.eventScore >= 60 && <Pill color="#fbbf24">EVENT {Math.round(s.eventScore)}</Pill>}
+          {s.surprise >= 0.7 && s.novel >= 0.6 && <Pill color="#5eead4">FRESH</Pill>}
           {s.material >= 0.6 && <Pill color="#a5b4fc">MATERIAL</Pill>}
-          {s.novel >= 0.6 && <Pill color="#5eead4">NEW INFO</Pill>}
+          {s.novel >= 0.6 && s.surprise < 0.7 && <Pill color="#5eead4">NEW INFO</Pill>}
+          {(m.confirmations ?? 1) >= 3 && <Pill color="#67e8f9">×{m.confirmations} SOURCES</Pill>}
           {s.confidence < 0.55 && <Pill color="#fbbf24">LOW CONF</Pill>}
           {offTarget && <Pill dim>OFF TARGET</Pill>}
           <span className="ml-auto flex items-center gap-1.5 text-[10px] text-white/35">

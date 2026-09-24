@@ -23,6 +23,15 @@ export function googleNewsUrl(company: Company, windowDays = 2): string {
   return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
 }
 
+/**
+ * Yahoo Finance per-ticker headline feed. Slower to aggregate than a wire but
+ * tightly scoped to the ticker, which makes it the fastest broad-coverage
+ * second source for confirmation counting.
+ */
+export function yahooFinanceUrl(company: Company): string {
+  return `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(company.ticker)}&region=US&lang=en-US`;
+}
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
