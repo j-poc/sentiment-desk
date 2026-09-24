@@ -5,17 +5,16 @@ import { dayTime, shortTime } from "../lib/format.js";
 /**
  * Sentiment index chart with an optional price overlay.
  *
- * X axis: session time. When price bars are available, x-position is indexed
- * by trading bar, not wall-clock time — nights, weekends, and halts compress
- * to nothing, exactly like a professional financial chart, and the sentiment
- * series is placed onto that same scale by interpolating between bars. This
- * kills the long straight diagonals that linear-time charts draw across
- * session gaps.
+ * Both series share one uniform time grid: the server resamples prices onto
+ * the exact bucket grid the sentiment index uses (carrying the last known
+ * price forward through closed periods), so a single linear x axis aligns
+ * them point-for-point with no density artifacts and no session-gap
+ * diagonals.
  *
- * The sentiment series is a smoothed leaky-integrator index (continuous by
- * construction), rendered as Catmull-Rom curves split into green above the
- * zero line and red below. The price overlay is normalized to its own min/max
- * on a right axis. Hover shows both series at the hovered bar.
+ * The sentiment series is a smoothed leaky-integrator index, rendered as
+ * Catmull-Rom curves split into green above the zero line and red below. The
+ * price overlay is normalized to its own min/max on a right axis and drawn
+ * as a straight polyline through bucket samples.
  */
 
 const W = 800;
@@ -76,37 +75,7 @@ export function SeriesChart({
     const t0 = points[0]?.t ?? 0;
     const t1 = points[Math.max(0, n - 1)]?.t ?? 1;
     const yOf = (v: number) => zeroY - (Math.max(-100, Math.min(100, v)) / 100) * ((H - TOP - BOTTOM) / 2);
-
-    // ---- X scale: session bars when available, linear time otherwise ----
-    const bars =
-      mode === "overlay" && price && price.length >= 2
-        ? price
-            .filter((p) => Number.isFinite(p.price) && p.t >= t0 - 36 * 3600_000 && p.t <= t1 + 36 * 3600_000)
-            .map((p) => ({ t: p.t, price: p.price }))
-            .sort((a, b) => a.t - b.t)
-        : null;
-    const useBars = bars != null && bars.length >= 2;
-    const barCount = bars?.length ?? 0;
-
-    const xBar = (i: number) => PAD_X + (i / Math.max(1, barCount - 1)) * (W - 2 * PAD_X);
-    const xOfT = useBars
-      ? (t: number) => {
-          const bs = bars!;
-          if (t <= bs[0]!.t) return PAD_X;
-          if (t >= bs[barCount - 1]!.t) return W - PAD_X;
-          let lo = 0;
-          let hi = barCount - 1;
-          while (hi - lo > 1) {
-            const mid = (lo + hi) >> 1;
-            if ((bs[mid]?.t ?? 0) <= t) lo = mid;
-            else hi = mid;
-          }
-          const a = bs[lo]!;
-          const b = bs[hi]!;
-          const f = (t - a.t) / Math.max(1, b.t - a.t);
-          return xBar(lo) + f * (xBar(hi) - xBar(lo));
-        }
-      : (t: number) => PAD_X + ((t - t0) / Math.max(1, t1 - t0)) * (W - 2 * PAD_X);
+    const xOfT = (t: number) => PAD_X + ((t - t0) / Math.max(1, t1 - t0)) * (W - 2 * PAD_X);
 
     const pts: Pt[] = [];
     points.forEach((p) => {
@@ -152,7 +121,7 @@ export function SeriesChart({
       return `${smoothPath(seg)} L${last.x.toFixed(1)},${zeroY.toFixed(1)} L${first.x.toFixed(1)},${zeroY.toFixed(1)} Z`;
     };
 
-    // Price overlay on the same bar-indexed x scale.
+    // Price overlay on the same uniform grid.
     let priceLine: {
       path: string;
       min: number;
@@ -160,44 +129,45 @@ export function SeriesChart({
       last?: { xFrac: number; yFrac: number; price: number };
       at: (t: number) => number | null;
     } | null = null;
-    if (useBars && bars) {
-      let min = Infinity;
-      let max = -Infinity;
-      for (const b of bars) {
-        min = Math.min(min, b.price);
-        max = Math.max(max, b.price);
-      }
-      if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
-        const pad = (max - min) * 0.08;
-        min -= pad;
-        max += pad;
-        const yP = (p: number) => TOP + (1 - (p - min) / (max - min)) * (H - TOP - BOTTOM);
-        const pp: Pt[] = bars.map((b, i) => ({ x: xBar(i), y: yP(b.price), t: b.t, v: b.price, n: 0 }));
-        const lastPt = pp[pp.length - 1];
-        // Straight polyline: bars are OHLC-adjacent samples, smoothing would invent shape.
-        const path = pp.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-        priceLine = {
-          path,
-          min,
-          max,
-          last: lastPt ? { xFrac: lastPt.x / W, yFrac: lastPt.y / H, price: lastPt.v } : undefined,
-          at: (t: number) => {
-            if (barCount === 0) return null;
-            let lo = 0;
-            let hi = barCount - 1;
-            if (t <= (bars[0]?.t ?? 0)) return bars[0]?.price ?? null;
-            if (t >= (bars[barCount - 1]?.t ?? 0)) return bars[barCount - 1]?.price ?? null;
-            while (hi - lo > 1) {
-              const mid = (lo + hi) >> 1;
-              if ((bars[mid]?.t ?? 0) <= t) lo = mid;
-              else hi = mid;
-            }
-            const a = bars[lo]!;
-            const b = bars[hi]!;
-            const f = (t - a.t) / Math.max(1, b.t - a.t);
-            return a.price + f * (b.price - a.price);
-          },
-        };
+    if (mode === "overlay" && price && price.length >= 2) {
+      const inDomain = price
+        .filter((p) => Number.isFinite(p.price) && p.t >= t0 - 60_000 && p.t <= t1 + 60_000)
+        .sort((a, b) => a.t - b.t);
+      const source = inDomain.length >= 2 ? inDomain : [...(price ?? [])].sort((a, b) => a.t - b.t);
+      if (source.length >= 2) {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const p of source) {
+          min = Math.min(min, p.price);
+          max = Math.max(max, p.price);
+        }
+        if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
+          const pad = (max - min) * 0.08;
+          min -= pad;
+          max += pad;
+          const yP = (p: number) => TOP + (1 - (p - min) / (max - min)) * (H - TOP - BOTTOM);
+          const pp: Pt[] = source.map((p) => ({ x: xOfT(p.t), y: yP(p.price), t: p.t, v: p.price, n: 0 }));
+          const lastPt = pp[pp.length - 1];
+          const path = pp.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+          priceLine = {
+            path,
+            min,
+            max,
+            last: lastPt ? { xFrac: lastPt.x / W, yFrac: lastPt.y / H, price: lastPt.v } : undefined,
+            at: (t: number) => {
+              let best: number | null = null;
+              let bestDist = Infinity;
+              for (const p of pp) {
+                const d = Math.abs(p.t - t);
+                if (d < bestDist) {
+                  bestDist = d;
+                  best = p.v;
+                }
+              }
+              return best;
+            },
+          };
+        }
       }
     }
 
@@ -208,8 +178,6 @@ export function SeriesChart({
     const box = boxRef.current?.getBoundingClientRect();
     if (!box) return;
     const svgX = ((e.clientX - box.left) / box.width) * W;
-    // Nearest sentiment point in x: on the bar-indexed scale, x is non-uniform
-    // in time, so nearest-x is the correct hover model.
     let bestI = -1;
     let bestDist = Infinity;
     for (let i = 0; i < geom.n; i++) {

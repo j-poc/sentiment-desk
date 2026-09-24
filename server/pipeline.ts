@@ -3,7 +3,7 @@ import { rowToDTO } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { RUBRIC_SHA } from "./rubric.js";
-import { applyPostRules, hasNearDuplicateTitle, parseJudgment, shouldAlert, smoothedSeries, weightedIndex } from "./scoring.js";
+import { applyPostRules, bucketMsFor, hasNearDuplicateTitle, parseJudgment, shouldAlert, smoothedSeries, weightedIndex } from "./scoring.js";
 import { TIER_WEIGHT } from "./sources/tiers.js";
 import type {
   CompanySnapshot,
@@ -299,8 +299,7 @@ export class Pipeline {
   series(companyId: string, windowHours: number): SeriesPoint[] {
     const now = Date.now();
     const windowMs = windowHours * 60 * 60 * 1000;
-    const bucketMs = windowHours <= 6 ? 5 * 60_000 : windowHours <= 48 ? 15 * 60_000 : 60 * 60_000;
     const items = this.deps.db.scoredMentions(now - windowMs).filter((m) => m.companyId === companyId);
-    return smoothedSeries(items, windowMs, bucketMs, now);
+    return smoothedSeries(items, windowMs, bucketMsFor(windowHours), now);
   }
 }

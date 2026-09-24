@@ -8,7 +8,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { clusterConfirmations, forwardReturn, summarizeReactions, validateSignal } from "./scoring.js";
+import { bucketMsFor, clusterConfirmations, forwardReturn, summarizeReactions, validateSignal } from "./scoring.js";
 
 /**
  * HTTP surface: read-only JSON APIs plus the SSE stream. No client can write
@@ -117,16 +117,36 @@ export function createApp(deps: AppDeps): Hono {
     const ticker = (c.req.query("ticker") ?? "").toUpperCase();
     if (!/^[A-Z^.\-=]{1,12}$/.test(ticker)) return c.json({ error: "bad ticker" }, 400);
     const hours = clampNumber(c.req.query("hours"), 1, 720, 24);
+    const now = Date.now();
+    const since = now - hours * 60 * 60 * 1000;
     // Our own accumulated price history first (poller points + Yahoo backfill);
-    // it spans the full window once the desk has run. Yahoo is the fallback.
-    const local = deps.db.priceWindow(ticker, Date.now() - hours * 60 * 60 * 1000);
-    if (local.length >= 8) return c.json(local);
-    try {
-      return c.json(await deps.market.priceSeries(ticker, hours));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return c.json({ error: message }, 502);
+    // Yahoo is the fallback when local history is thin.
+    let pts: Array<{ t: number; price: number }> = deps.db.priceWindow(ticker, since);
+    if (pts.length < 8) {
+      try {
+        pts = await deps.market.priceSeries(ticker, hours);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return c.json({ error: message }, 502);
+      }
     }
+    // Resample onto the exact bucket grid the sentiment series uses, carrying
+    // the last known price forward: both series then share one uniform x axis,
+    // and closed periods render flat instead of as artifacts.
+    const bucketMs = bucketMsFor(hours);
+    const first = Math.floor(since / bucketMs) * bucketMs;
+    const out: Array<{ t: number; price: number }> = [];
+    let pi = 0;
+    let last: number | null = null;
+    for (let t = first; t <= now; t += bucketMs) {
+      const end = t + bucketMs;
+      while (pi < pts.length && pts[pi]!.t < end) {
+        last = pts[pi]!.price;
+        pi += 1;
+      }
+      if (last != null) out.push({ t, price: last });
+    }
+    return c.json(out);
   });
 
   /**

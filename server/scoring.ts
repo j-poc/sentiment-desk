@@ -463,6 +463,11 @@ export function smoothedSeries(
   return out;
 }
 
+/** Shared bucket rule so the sentiment series and the price series align point-for-point. */
+export function bucketMsFor(hours: number): number {
+  return hours <= 6 ? 5 * 60_000 : hours <= 48 ? 15 * 60_000 : 60 * 60_000;
+}
+
 /**
  * Normalize a headline for identity: the same story syndicated across feeds
  * with different URLs is one event, not three.
