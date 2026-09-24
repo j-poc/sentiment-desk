@@ -7,9 +7,11 @@ const ARROW: Record<string, string> = { positive: "▲", negative: "▼", neutra
 export function Tape({
   mentions,
   tickerOf,
+  onOpen,
 }: {
   mentions: Mention[];
   tickerOf: (companyId: string) => string;
+  onOpen?: (m: Mention) => void;
 }) {
   const newest = mentions[0]?.id;
   return (
@@ -26,6 +28,12 @@ export function Tape({
             href={m.source.url}
             target="_blank"
             rel="noreferrer"
+            onClick={(e) => {
+              if (onOpen) {
+                e.preventDefault();
+                onOpen(m);
+              }
+            }}
             className={`flex items-baseline gap-2 border-b border-white/[0.04] px-4 py-2.5 transition-colors hover:bg-white/[0.03] ${
               m.id === newest ? "flash-in" : ""
             }`}

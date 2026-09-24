@@ -82,6 +82,14 @@ async function main(): Promise<void> {
     engineLabel,
     inputPricePerMTok: config.jev.inputPricePerMTok,
     concurrency: config.scoreConcurrency,
+    alert: config.alertWebhookUrl
+      ? {
+          webhookUrl: config.alertWebhookUrl,
+          eventScore: config.alertEventScore,
+          impact: config.alertImpact,
+          freshMinutes: config.alertFreshMinutes,
+        }
+      : undefined,
   });
 
   const market = new MarketData({ companies, indices: config.indices, hub, health, db });
@@ -122,7 +130,14 @@ async function main(): Promise<void> {
   // Demo mode is fully synthetic on the sentiment side: no real sources mixed in.
   if (!config.demo) {
     schedulers.push(
-      startRssPoller({ companies, pipeline, db, health, intervalSeconds: config.pollRssSeconds }),
+      startRssPoller({
+      companies,
+      pipeline,
+      db,
+      health,
+      intervalSeconds: config.pollRssSeconds,
+      concurrency: config.rssConcurrency,
+    }),
     );
   }
   if (!config.demo && config.secUserAgent && cikByTicker.size > 0) {

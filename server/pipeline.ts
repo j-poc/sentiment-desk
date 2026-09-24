@@ -3,7 +3,7 @@ import { rowToDTO } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { RUBRIC_SHA } from "./rubric.js";
-import { applyPostRules, hasNearDuplicateTitle, parseJudgment, smoothedSeries, weightedIndex } from "./scoring.js";
+import { applyPostRules, hasNearDuplicateTitle, parseJudgment, shouldAlert, smoothedSeries, weightedIndex } from "./scoring.js";
 import { TIER_WEIGHT } from "./sources/tiers.js";
 import type {
   CompanySnapshot,
@@ -40,6 +40,7 @@ export interface PipelineDeps {
   engineLabel: string;
   inputPricePerMTok: number;
   concurrency: number;
+  alert?: { webhookUrl: string; eventScore: number; impact: number; freshMinutes: number };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -162,6 +163,7 @@ export class Pipeline {
       if (updated) {
         this.deps.hub.broadcast("mention", rowToDTO(updated));
         this.deps.hub.broadcast("company", this.snapshot(row.company_id));
+        this.maybeAlert(updated);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -169,6 +171,45 @@ export class Pipeline {
       this.deps.health.recordJev(false, message);
       db.logEvent("warn", "jev", `score failed for ${id}: ${message}`);
     }
+  }
+
+  /** Fire-and-forget webhook on fresh, high-strength events; never blocks scoring. */
+  private maybeAlert(row: {
+    company_id: string;
+    title: string;
+    published_at: number;
+    impact: number | null;
+    event_score: number | null;
+  }): void {
+    const alert = this.deps.alert;
+    if (!alert?.webhookUrl) return;
+    if (row.impact == null || row.event_score == null) return;
+    const meta = this.companyMeta(row.company_id);
+    if (
+      !shouldAlert({
+        eventScore: row.event_score,
+        impact: row.impact,
+        publishedAt: row.published_at,
+        now: Date.now(),
+        thresholdScore: alert.eventScore,
+        thresholdImpact: alert.impact,
+        freshMs: alert.freshMinutes * 60_000,
+      })
+    ) {
+      return;
+    }
+    const impact = row.impact;
+    const eventScore = row.event_score;
+    const arrow = impact > 0 ? "↑" : impact < 0 ? "↓" : "·";
+    const text = `${arrow} ${meta.ticker} ${impact > 0 ? "+" : ""}${impact.toFixed(0)} (event ${Math.round(eventScore)}) — ${row.title.slice(0, 140)}`;
+    void fetch(alert.webhookUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, content: text }),
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => {
+      /* alerts are best-effort */
+    });
   }
 
   private companyMeta(companyId: string): { name: string; ticker: string; sector: string; color: string } {

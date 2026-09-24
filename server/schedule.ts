@@ -29,20 +29,28 @@ export function startRssPoller(deps: {
   db: Desk;
   health: HealthTracker;
   intervalSeconds: number;
+  concurrency: number;
 }): SchedulerControl {
   let running = false;
   const tick = async (): Promise<void> => {
     if (running) return;
     running = true;
     try {
+      // Two feeds per company: Google News for breadth, Yahoo Finance's
+      // per-ticker feed for speed. Fetched with a small worker pool so a full
+      // sweep completes in seconds, not minutes: detection lag is the product.
+      const feeds: Array<{ company: Company; url: string; fallbackName: string }> = [];
       for (const company of deps.companies) {
-        // Two feeds per company: Google News for breadth, Yahoo Finance's
-        // per-ticker feed for speed. Both flow through the same normalization.
-        const feeds: Array<{ url: string; fallbackName: string }> = [
-          { url: googleNewsUrl(company), fallbackName: company.name },
-          { url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance" },
-        ];
-        for (const feed of feeds) {
+        feeds.push({ company, url: googleNewsUrl(company), fallbackName: company.name });
+        feeds.push({ company, url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance" });
+      }
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const job = feeds[next];
+          next += 1;
+          if (!job) return;
+          const { company, feed } = { company: job.company, feed: { url: job.url, fallbackName: job.fallbackName } };
           try {
             const items = await fetchFeed(feed.url);
             let added = 0;
@@ -87,9 +95,11 @@ export function startRssPoller(deps: {
             deps.health.recordRss(false, `${company.ticker}: ${message}`);
             deps.db.logEvent("warn", "rss", `${company.ticker}: ${message}`);
           }
-          await sleep(350);
+          await sleep(120);
         }
-      }
+      };
+      const workers = Array.from({ length: Math.max(1, deps.concurrency) }, () => worker());
+      await Promise.all(workers);
     } finally {
       running = false;
     }

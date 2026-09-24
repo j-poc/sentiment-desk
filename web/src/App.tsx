@@ -18,6 +18,7 @@ import { SeriesChart } from "./components/SeriesChart.js";
 import { MentionCard } from "./components/MentionCard.js";
 import { OutcomeCheck } from "./components/OutcomeCheck.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
+import { MentionDrawer } from "./components/MentionDrawer.js";
 import { Tape } from "./components/Tape.js";
 import { HealthPanel } from "./components/HealthPanel.js";
 import { TopMovers } from "./components/TopMovers.js";
@@ -79,6 +80,7 @@ export default function App() {
   const [sortMode, setSortMode] = useState<"delta" | "alpha">("delta");
   const [clock, setClock] = useState(Date.now());
   const [session, setSession] = useState<SessionInfo>(() => sessionInfo());
+  const [drawerMention, setDrawerMention] = useState<Mention | null>(null);
 
   const selectedIdRef = useRef<string | null>(null);
   const windowRef = useRef(24);
@@ -308,6 +310,15 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [feedFilter]);
 
+  // Fresh, high-strength events across the whole watchlist: the speed lane.
+  const breaking = useMemo(
+    () =>
+      tape.filter(
+        (m) => m.score && m.score.eventScore >= 60 && Date.now() - m.publishedAt < 45 * 60_000,
+      ).slice(0, 6),
+    [tape],
+  );
+
   const tickerOf = useCallback(
     (id: string) => companies.find((c) => c.id === id)?.ticker ?? id.slice(0, 4).toUpperCase(),
     [companies],
@@ -316,7 +327,7 @@ export default function App() {
   const filteredMentions = useMemo(() => applyFilter(mentions, feedFilter), [mentions, feedFilter]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       <Header connected={connected} health={health} totalMentions={totalMentions} clock={clock} />
       <TickerTape
         market={market}
@@ -348,11 +359,11 @@ export default function App() {
           />
         </aside>
 
-        <main className="min-h-0 overflow-y-auto px-5 py-4">
+        <main className="flex min-h-0 flex-col px-4 py-3">
           {selected ? (
-            <div className="mx-auto max-w-3xl">
-              <div className="panel flex flex-wrap items-center gap-6 px-5 py-4">
-                <Gauge value={selected.index} />
+            <>
+              <div className="panel flex shrink-0 items-center gap-4 px-4 py-2">
+                <Gauge value={selected.index} size={92} />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-[18px] font-semibold">{selected.name}</h1>
@@ -409,7 +420,7 @@ export default function App() {
                     <span className="text-white/30">vs trailing 24h</span>
                   </div>
                 </div>
-                <div className="flex flex-col gap-1">
+                <div className="flex shrink-0 flex-row gap-1">
                   {WINDOWS.map((w, i) => (
                     <button
                       key={w.h}
@@ -427,7 +438,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="panel mt-4">
+              <div className="panel mt-2 shrink-0">
                 <div className="panel-head">
                   <span className="micro">
                     {chartMode === "overlay" ? "Sentiment × Price" : "Sentiment"}
@@ -450,7 +461,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="px-3 py-3 pl-9">
+                <div className="px-3 py-2 pl-9">
                   <SeriesChart
                     points={series}
                     hours={windowHours}
@@ -461,43 +472,69 @@ export default function App() {
                 </div>
               </div>
 
-              <OutcomeCheck companyId={selected.id} hours={windowHours} refreshToken={tape.length} />
-              <ValidationPanel />
-
-              <div className="mb-2 mt-5 flex items-center justify-between">
-                <span className="micro">
-                  Mentions · {health?.health.jev.model ?? "jev"}
-                </span>
-                <div className="flex items-center gap-1">
-                  {FILTERS.map((f) => (
+              {breaking.length > 0 && (
+                <div className="no-scrollbar panel mt-2 flex shrink-0 items-center gap-1.5 overflow-x-auto px-2 py-1.5">
+                  <span className="micro shrink-0 px-1 text-amber-300/80">Just landed</span>
+                  {breaking.map((m) => (
                     <button
-                      key={f.key}
-                      onClick={() => setFeedFilter(f.key)}
-                      className={`rounded-md px-2 py-[3px] text-[10.5px] transition-colors ${
-                        feedFilter === f.key
-                          ? "bg-white/[0.09] text-white"
-                          : "text-white/40 hover:bg-white/[0.04] hover:text-white/70"
-                      }`}
+                      key={m.id}
+                      onClick={() => setDrawerMention(m)}
+                      className="flex shrink-0 items-baseline gap-1.5 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[10.5px] hover:bg-white/[0.06]"
                     >
-                      {f.label}
-                      <kbd className="ml-1 opacity-0 group-hover:opacity-100">f</kbd>
+                      <span className="font-semibold text-white/80">{tickerOf(m.companyId)}</span>
+                      <span
+                        className="tabnum font-medium"
+                        style={{ color: (m.score?.impact ?? 0) >= 0 ? "#34d399" : "#f87171" }}
+                      >
+                        {(m.score?.impact ?? 0) > 0 ? "+" : ""}
+                        {(m.score?.impact ?? 0).toFixed(0)}
+                      </span>
+                      <span className="clamp-1 max-w-[240px] text-white/60">{m.title}</span>
                     </button>
                   ))}
                 </div>
-              </div>
-              <div className="flex flex-col gap-1.5 pb-6">
-                {filteredMentions.map((m) => (
-                  <MentionCard key={m.id} m={m} dense />
-                ))}
-                {filteredMentions.length === 0 && (
-                  <div className="panel px-4 py-6 text-[12px] text-white/35">
-                    {mentions.length === 0
-                      ? "No mentions in this window yet. New mentions are scored within seconds of arrival."
-                      : "Nothing matches this filter."}
+              )}
+
+              <div className="mt-2 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_330px] gap-3">
+                <div className="panel flex min-h-0 flex-col">
+                  <div className="panel-head shrink-0">
+                    <span className="micro">Mentions · {health?.health.jev.model ?? "jev"}</span>
+                    <div className="flex items-center gap-1">
+                      {FILTERS.map((f) => (
+                        <button
+                          key={f.key}
+                          onClick={() => setFeedFilter(f.key)}
+                          className={`rounded-md px-2 py-[3px] text-[10.5px] transition-colors ${
+                            feedFilter === f.key
+                              ? "bg-white/[0.09] text-white"
+                              : "text-white/40 hover:bg-white/[0.04] hover:text-white/70"
+                          }`}
+                        >
+                          {f.label}
+                          <kbd className="ml-1">f</kbd>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                )}
+                  <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
+                    {filteredMentions.map((m) => (
+                      <MentionCard key={m.id} m={m} dense onOpen={setDrawerMention} />
+                    ))}
+                    {filteredMentions.length === 0 && (
+                      <div className="px-3 py-4 text-[12px] text-white/35">
+                        {mentions.length === 0
+                          ? "No mentions in this window yet. New mentions are scored within seconds of arrival."
+                          : "Nothing matches this filter."}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1">
+                  <OutcomeCheck companyId={selected.id} hours={windowHours} refreshToken={tape.length} />
+                  <ValidationPanel />
+                </div>
               </div>
-            </div>
+            </>
           ) : (
             <div className="flex h-full items-center justify-center text-[12px] text-white/35">
               {companies.length === 0 ? "Connecting to the desk…" : "Select a company from the watchlist."}
@@ -515,7 +552,7 @@ export default function App() {
           <div className="panel-head sticky top-0 z-0 mt-3 border-t border-desk-line bg-[#0a0c11]/95 backdrop-blur">
             <span className="micro">Live tape</span>
           </div>
-          <Tape mentions={tape} tickerOf={tickerOf} />
+          <Tape mentions={tape} tickerOf={tickerOf} onOpen={setDrawerMention} />
 
           <div className="mt-3 border-t border-desk-line">
             <div className="panel-head">
@@ -526,6 +563,7 @@ export default function App() {
         </aside>
       </div>
 
+      <MentionDrawer mention={drawerMention} onClose={() => setDrawerMention(null)} />
       <StatusBar health={health} session={session} connected={connected} tape={tape} />
     </div>
   );

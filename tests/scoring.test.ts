@@ -7,6 +7,7 @@ import {
   mentionDigest,
   parseJudgment,
   hasNearDuplicateTitle,
+  shouldAlert,
   smoothedSeries,
   summarizeReactions,
   weightedIndex,
@@ -276,6 +277,17 @@ describe("applyPostRules investor relevance", () => {
     const f = applyPostRules(judgment({ investorRelevant: 0.2 }), 1);
     expect(f.exclude).toBe(true);
     expect(applyPostRules(judgment({ investorRelevant: 0.5 }), 1).exclude).toBe(false);
+  });
+});
+
+describe("shouldAlert (alert gate)", () => {
+  const now = 1_000_000_000;
+  const base = { now, thresholdScore: 65, thresholdImpact: 55, freshMs: 15 * 60_000 };
+  it("fires only on fresh, strong, directional events", () => {
+    expect(shouldAlert({ ...base, eventScore: 80, impact: -70, publishedAt: now - 60_000 })).toBe(true);
+    expect(shouldAlert({ ...base, eventScore: 80, impact: -70, publishedAt: now - 30 * 60_000 })).toBe(false); // stale
+    expect(shouldAlert({ ...base, eventScore: 50, impact: -70, publishedAt: now - 60_000 })).toBe(false); // weak
+    expect(shouldAlert({ ...base, eventScore: 80, impact: -20, publishedAt: now - 60_000 })).toBe(false); // small move
   });
 });
 

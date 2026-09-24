@@ -10,6 +10,17 @@ const TIER_DOT: Record<string, string> = {
   filing: "#fbbf24", // filings outrank everything: gold
 };
 
+const TYPE_LABEL: Record<string, string> = {
+  results: "RESULTS",
+  corporate_action: "CORP ACT",
+  legal_regulatory: "LEGAL",
+  leadership: "LEADERSHIP",
+  product: "PRODUCT",
+  analyst_action: "ANALYST",
+  macro_sector: "MACRO",
+  other: "NEWS",
+};
+
 export function Pill({
   children,
   color,
@@ -37,29 +48,23 @@ export function Pill({
   );
 }
 
-const TYPE_LABEL: Record<string, string> = {
-  results: "RESULTS",
-  corporate_action: "CORP ACT",
-  legal_regulatory: "LEGAL",
-  leadership: "LEADERSHIP",
-  product: "PRODUCT",
-  analyst_action: "ANALYST",
-  macro_sector: "MACRO",
-  other: "NEWS",
-};
-
-export function MentionCard({ m, compact, dense }: { m: Mention; compact?: boolean; dense?: boolean }) {
+export function MentionCard({
+  m,
+  compact,
+  dense,
+  onOpen,
+}: {
+  m: Mention;
+  compact?: boolean;
+  dense?: boolean;
+  onOpen?: (m: Mention) => void;
+}) {
   const s = m.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
   const offTarget = m.status === "off_target";
 
-  return (
-    <a
-      href={m.source.url}
-      target="_blank"
-      rel="noreferrer"
-      className={`panel block transition-colors hover:border-white/15 ${dense ? "px-3 py-2" : "px-3.5 py-3"} ${offTarget ? "opacity-55" : ""}`}
-    >
+  const body = (
+    <>
       <div className="flex items-center gap-2 text-[11px] text-desk-dim">
         <span
           className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
@@ -80,9 +85,7 @@ export function MentionCard({ m, compact, dense }: { m: Mention; compact?: boole
         {m.title}
       </div>
 
-      {m.status === "pending" && (
-        <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>
-      )}
+      {m.status === "pending" && <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>}
       {m.status === "failed" && (
         <div className="mt-2 text-[11px] text-red-400/80" title={m.error ?? ""}>
           scoring failed
@@ -113,6 +116,23 @@ export function MentionCard({ m, compact, dense }: { m: Mention; compact?: boole
           </span>
         </div>
       )}
+    </>
+  );
+
+  const cls = `panel block text-left transition-colors hover:border-white/15 ${dense ? "px-3 py-2" : "px-3.5 py-3"} ${
+    offTarget ? "opacity-55" : ""
+  }`;
+
+  if (onOpen) {
+    return (
+      <button type="button" onClick={() => onOpen(m)} className={`${cls} cursor-pointer`}>
+        {body}
+      </button>
+    );
+  }
+  return (
+    <a href={m.source.url} target="_blank" rel="noreferrer" className={cls}>
+      {body}
     </a>
   );
 }

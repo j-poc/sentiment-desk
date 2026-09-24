@@ -74,11 +74,17 @@ export const config = {
    */
   secUserAgent: process.env.SEC_USER_AGENT?.trim() || "sentiment-desk/0.3 (personal research desk)",
   pollSecSeconds: int(process.env.POLL_SEC_SECONDS, 90),
-  pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 45),
+  pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 30),
+  /** Webhook (Discord/Slack-style JSON) pinged on fresh, high-strength events. */
+  alertWebhookUrl: process.env.ALERT_WEBHOOK_URL?.trim() || "",
+  alertEventScore: int(process.env.ALERT_EVENT_SCORE, 65),
+  alertImpact: int(process.env.ALERT_IMPACT, 55),
+  alertFreshMinutes: int(process.env.ALERT_FRESH_MINUTES, 15),
   pollXSeconds: int(process.env.POLL_X_SECONDS, 180),
   pollGdeltSeconds: int(process.env.POLL_GDELT_SECONDS, 300),
   pollQuotesSeconds: int(process.env.POLL_QUOTES_SECONDS, 45),
   scoreConcurrency: int(process.env.SCORE_CONCURRENCY, 6),
+  rssConcurrency: int(process.env.RSS_CONCURRENCY, 4),
   demo: bool(process.env.DEMO),
   /** Market context rows shown on the tape; never scored, never in the watchlist. */
   indices: (process.env.INDICES?.split(",") ?? ["SPY", "QQQ", "^VIX"])

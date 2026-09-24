@@ -372,6 +372,26 @@ export function isFinanceRelevant(check: RelevanceCheck): boolean {
   return FINANCE_CONTEXT_RE.test(hay) || MONEY_RE.test(hay);
 }
 
+/* ------------------------------------------------------------------ */
+/* Alert gate: a fresh, high-strength, clearly-directional event is      */
+/* worth interrupting someone for. Everything else stays on the desk.    */
+/* ------------------------------------------------------------------ */
+
+export interface AlertCheck {
+  eventScore: number;
+  impact: number;
+  publishedAt: number;
+  now: number;
+  thresholdScore: number;
+  thresholdImpact: number;
+  freshMs: number;
+}
+
+export function shouldAlert(p: AlertCheck): boolean {
+  if (p.publishedAt < p.now - p.freshMs) return false;
+  return p.eventScore >= p.thresholdScore && Math.abs(p.impact) >= p.thresholdImpact;
+}
+
 export interface WeightedMention {
   publishedAt: number;
   impact: number;
