@@ -332,7 +332,7 @@ describe("applyPostRules strict identity floor", () => {
 
 describe("rankIC (Spearman)", () => {
   it("returns 1 for perfectly monotonic pairs", () => {
-    expect(rankIC([[1, 10], [2, 20], [3, 30], [4, 5]])).toBe(1);
+    expect(rankIC([[1, 10], [2, 20], [3, 30], [4, 40]])).toBe(1);
   });
   it("returns -1 for inverted pairs", () => {
     expect(rankIC([[1, 40], [2, 30], [3, 20], [4, 10]])).toBe(-1);
