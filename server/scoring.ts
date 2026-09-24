@@ -20,6 +20,7 @@ export interface ParsedJudgment {
   material: number;
   novel: number;
   credible: number;
+  investorRelevant: number;
   eventType: EventType;
   magnitude: number;
   surprise: number;
@@ -69,6 +70,7 @@ export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment 
   const credible = noul(answers, "credible");
   const magnitude = noul(answers, "magnitude");
   const surprise = noul(answers, "surprise");
+  const investorRelevant = noul(answers, "investor_relevant");
 
   const rawEvent = answers["event_type"];
   if (rawEvent == null) throw new JudgmentError("missing event_type answer");
@@ -89,6 +91,7 @@ export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment 
     material,
     novel,
     credible,
+    investorRelevant,
     eventType,
     magnitude,
     surprise,
@@ -118,6 +121,7 @@ export interface FinalScore {
   material: number;
   novel: number;
   credible: number;
+  investorRelevant: number;
   eventType: EventType;
   magnitude: number;
   surprise: number;
@@ -129,7 +133,9 @@ export interface FinalScore {
 }
 
 export function applyPostRules(j: ParsedJudgment, sourceWeight: number): FinalScore {
-  const exclude = j.about < 0.5;
+  /** Off-target: not really about the company, or about it only as consumer
+   * entertainment / brand lifestyle rather than an investment. Both fail. */
+  const exclude = j.about < 0.5 || j.investorRelevant < 0.35;
   const impact = round2((j.pPos - j.pNeg) * 100);
   const dampedConfidence = j.confidence < 0.55 ? j.confidence * 0.6 : j.confidence;
   const weight = round4(
@@ -277,6 +283,43 @@ export function clusterConfirmations(
     }
   }
   return sizes;
+}
+
+/* ------------------------------------------------------------------ */
+/* Ingest-time relevance guard. Free and deterministic: finance-context  */
+/* lexicon for weak-tier outlets, trusted tiers bypass, cashtag rule for */
+/* social. Kills word-collision and lifestyle noise before it costs a    */
+/* Jev call. False drops are acceptable: wires re-report anything that   */
+/* matters.                                                             */
+/* ------------------------------------------------------------------ */
+
+const FINANCE_CONTEXT_RE =
+  /\b(stocks?|shares?|share price|market cap|markets?|earnings|revenue|profits?|guidance|outlook|forecast|quarterly|quarter|fiscal|q[1-4]\b|analysts?|upgrade|downgrade|price target|investors?|wall street|dow|s&p|nasdaq|sec\b|filing|filings|8-k|10-k|10-q|ceo|cfo|coo|founder|board of directors|merger|acqui\w+|takeover|buyback|dividend|ipo|lawsuit|sues|sued|probe|antitrust|regulators?|regulatory|fda|doj|ftc|layoffs?|restructuring|bankruptcy|valuation|beats|misses|raises|supply chain|tariffs?|inflation|factory|plant|chip|chips|data center|smartphone|smartphones|handset|handsets|sales fell|sales rose|demand for|deliveries|subscribers|price cut)\b/i;
+
+const MONEY_RE = /[$€£]\s?\d|\b\d+(\.\d+)?\s?(billion|million|bn)\b/i;
+
+export interface RelevanceCheck {
+  title: string;
+  snippet: string;
+  tier: string;
+  kind: string;
+  ticker: string;
+}
+
+/**
+ * True when the item plausibly concerns the company as a business. Trusted
+ * finance/official venues pass on tier alone; everything else must show a
+ * finance-context term, a money amount, or (for social) a cashtag.
+ */
+export function isFinanceRelevant(check: RelevanceCheck): boolean {
+  if (check.tier === "filing") return true;
+  if (check.tier === "wire" || check.tier === "major") return true;
+  if ((check.kind === "x" || check.kind === "reddit") &&
+    new RegExp(`\\$${check.ticker}\\b`, "i").test(check.title)) {
+    return true;
+  }
+  const hay = `${check.title} ${check.snippet}`;
+  return FINANCE_CONTEXT_RE.test(hay) || MONEY_RE.test(hay);
 }
 
 export interface WeightedMention {

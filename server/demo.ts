@@ -115,6 +115,7 @@ export const demoJudge: JudgeFn = async (state: JevState) => {
       material: { noul: round4(material) },
       novel: { noul: round4(novel) },
       credible: { noul: round4(tierCred[state.mention.source.tier] ?? 0.6) },
+      investor_relevant: { noul: round4(clamp(0.45 + material * 0.5 + (nextRand(seed + 17) - 0.5) * 0.2)) },
       event_type: { choice: eventType, probabilities: eventProbs },
       magnitude: { noul: round4(clamp(Math.max(0.1, templateMaterial(state.mention.snippet)) + (nextRand(seed + 15) - 0.5) * 0.25)) },
       surprise: { noul: round4(clamp(0.2 + nextRand(seed + 16) * 0.75)) },

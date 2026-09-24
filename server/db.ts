@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS mentions (
   material REAL,
   novel REAL,
   credible REAL,
+  investor_relevant REAL,
   event_type TEXT,
   magnitude REAL,
   surprise REAL,
@@ -106,6 +107,7 @@ interface MentionRow {
   material: number | null;
   novel: number | null;
   credible: number | null;
+  investor_relevant: number | null;
   event_type: string | null;
   magnitude: number | null;
   surprise: number | null;
@@ -147,6 +149,7 @@ export class Desk {
       ["magnitude", "REAL"],
       ["surprise", "REAL"],
       ["event_score", "REAL"],
+      ["investor_relevant", "REAL"],
     ];
     for (const [name, ddl] of additions) {
       if (!cols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
@@ -205,7 +208,7 @@ export class Desk {
       .prepare(
         `UPDATE mentions SET
            status = ?, sentiment = ?, confidence = ?, p_pos = ?, p_neu = ?, p_neg = ?,
-           about = ?, material = ?, novel = ?, credible = ?, event_type = ?, magnitude = ?,
+           about = ?, material = ?, novel = ?, credible = ?, investor_relevant = ?, event_type = ?, magnitude = ?,
            surprise = ?, event_score = ?, impact = ?, weight = ?,
            exclude = ?, engine = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?,
            latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?
@@ -222,6 +225,7 @@ export class Desk {
         s.material,
         s.novel,
         s.credible,
+        s.investorRelevant,
         s.eventType,
         s.magnitude,
         s.surprise,
@@ -264,7 +268,7 @@ export class Desk {
   recentVisible(limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE status IN ('scored', 'off_target', 'pending')
+        `SELECT * FROM mentions WHERE status IN ('scored', 'pending')
          ORDER BY published_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as MentionRow[];
@@ -299,6 +303,28 @@ export class Desk {
     return this.db
       .prepare("SELECT t, price FROM price_points WHERE ticker = ? AND t >= ? ORDER BY t")
       .all(ticker, sinceMs) as unknown as Array<{ t: number; price: number }>;
+  }
+
+  /**
+   * Rubric migration: re-queue scored mentions judged by an older rubric so
+   * they are re-judged under the current wording (and its new questions).
+   * Returns how many were requeued.
+   */
+  resetOutdatedRubric(currentSha: string): number {
+    const res = this.db
+      .prepare(
+        `UPDATE mentions SET status = 'pending'
+         WHERE status IN ('scored', 'off_target') AND rubric_sha IS NOT NULL AND rubric_sha != ?`,
+      )
+      .run(currentSha);
+    return Number(res.changes);
+  }
+
+  pendingIds(limit: number): string[] {
+    return (
+      this.db.prepare("SELECT id FROM mentions WHERE status = 'pending' ORDER BY published_at DESC LIMIT ?")
+        .all(limit) as unknown as Array<{ id: string }>
+    ).map((r) => r.id);
   }
 
   counts24h(sinceMs: number): Map<string, { count: number; lastAt: number | null }> {
@@ -379,6 +405,8 @@ export function rowToDTO(r: MentionRow): MentionDTO {
           material: r.material ?? 0,
           novel: r.novel ?? 0,
           credible: r.credible ?? 0,
+          // Legacy rows judged before this question existed pass through.
+          investorRelevant: r.investor_relevant ?? 1,
           eventType: r.event_type ?? "other",
           magnitude: r.magnitude ?? 0,
           surprise: r.surprise ?? 0,

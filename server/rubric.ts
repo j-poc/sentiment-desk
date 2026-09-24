@@ -39,7 +39,12 @@ export const RUBRIC: Rubric = {
   about: {
     type: "noul",
     instructions:
-      "The item is genuinely about the company named in the state (including its named subsidiaries or flagship products), not a different entity with a similar name, and not the sector as a whole with the company only mentioned in passing.",
+      "The item is genuinely about the company named in the state (including its named subsidiaries or flagship products), not a different entity with a similar name, not the word used in another sense, and not the sector as a whole with the company only mentioned in passing.",
+  },
+  investor_relevant: {
+    type: "noul",
+    instructions:
+      "This item is relevant to an investor in the company: it bears on the investment case, such as financial results, guidance, operations, supply chain, competitive position, leadership, legal or regulatory matters, capital allocation, or products considered as business lines, rather than being consumer or entertainment coverage of the brand's output, lifestyle or celebrity news involving the brand, general commentary on the word, or background pieces with no business signal.",
   },
   material: {
     type: "noul",

@@ -61,6 +61,13 @@ export class Pipeline {
     return inserted;
   }
 
+  /** Re-queue existing pending mentions (used after rubric migrations). */
+  drainPending(limit = 1_000): number {
+    const ids = this.deps.db.pendingIds(limit);
+    for (const id of ids) this.enqueue(id);
+    return ids.length;
+  }
+
   private enqueue(id: string): void {
     if (this.queued.has(id)) return;
     this.queued.add(id);
@@ -129,6 +136,7 @@ export class Pipeline {
         material: parsed.material,
         novel: parsed.novel,
         credible: parsed.credible,
+        investorRelevant: parsed.investorRelevant,
         eventType: parsed.eventType,
         magnitude: parsed.magnitude,
         surprise: parsed.surprise,

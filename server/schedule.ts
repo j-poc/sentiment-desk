@@ -8,7 +8,7 @@ import { getRedditToken, searchReddit, type RedditClient } from "./sources/reddi
 import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent } from "./sources/x.js";
-import { mentionDigest } from "./scoring.js";
+import { isFinanceRelevant, mentionDigest } from "./scoring.js";
 import { fetchPrimaryDocText, fetchRecent8Ks, titleForItems } from "./sources/sec.js";
 import { generateDemoMention } from "./demo.js";
 
@@ -46,8 +46,21 @@ export function startRssPoller(deps: {
           try {
             const items = await fetchFeed(feed.url);
             let added = 0;
+            let dropped = 0;
             for (const item of items) {
               if (!matchesCompany(company, item.title, item.snippet)) continue;
+              if (
+                !isFinanceRelevant({
+                  title: item.title,
+                  snippet: item.snippet,
+                  tier: item.tier,
+                  kind: "rss",
+                  ticker: company.ticker,
+                })
+              ) {
+                dropped += 1;
+                continue;
+              }
               const inserted = deps.pipeline.ingest({
                 companyId: company.id,
                 kind: "rss",
@@ -65,6 +78,9 @@ export function startRssPoller(deps: {
             deps.health.recordRss(true);
             if (added > 0) {
               deps.db.logEvent("info", "rss", `${company.ticker}: ${added} new mentions`);
+            }
+            if (dropped > 0) {
+              deps.db.logEvent("info", "relevance", `${company.ticker}: ${dropped} dropped by ingest guard`);
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -107,6 +123,18 @@ export function startXPoller(deps: {
           }
           let added = 0;
           for (const post of res.posts) {
+            if (!matchesCompany(company, post.text)) continue;
+            if (
+              !isFinanceRelevant({
+                title: post.text,
+                snippet: "",
+                tier: "social",
+                kind: "x",
+                ticker: company.ticker,
+              })
+            ) {
+              continue;
+            }
             const url = `https://x.com/${post.handle}/status/${post.id}`;
             const inserted = deps.pipeline.ingest({
               companyId: company.id,
@@ -227,8 +255,21 @@ export function startGdeltPoller(deps: {
         try {
           const articles = await fetchGdeltArticles(`"${company.name}" OR "${company.ticker}"`);
           let added = 0;
+          let dropped = 0;
           for (const a of articles) {
             if (!matchesCompany(company, a.title)) continue;
+            if (
+              !isFinanceRelevant({
+                title: a.title,
+                snippet: "",
+                tier: tierForHost(a.url),
+                kind: "rss",
+                ticker: company.ticker,
+              })
+            ) {
+              dropped += 1;
+              continue;
+            }
             const inserted = deps.pipeline.ingest({
               companyId: company.id,
               kind: "rss",
@@ -245,6 +286,7 @@ export function startGdeltPoller(deps: {
           }
           deps.health.recordRss(true);
           if (added > 0) deps.db.logEvent("info", "gdelt", `${company.ticker}: ${added} new`);
+          if (dropped > 0) deps.db.logEvent("info", "relevance", `gdelt ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           deps.health.recordRss(false, `gdelt ${company.ticker}: ${message}`);
@@ -312,8 +354,21 @@ export function startFinnhubPoller(deps: {
         try {
           const news = await fetchFinnhubNews(company.ticker, deps.token);
           let added = 0;
+          let dropped = 0;
           for (const n of news) {
             if (!matchesCompany(company, n.headline, n.summary)) continue;
+            if (
+              !isFinanceRelevant({
+                title: n.headline,
+                snippet: n.summary,
+                tier: tierForHost(n.url),
+                kind: "finnhub",
+                ticker: company.ticker,
+              })
+            ) {
+              dropped += 1;
+              continue;
+            }
             const inserted = deps.pipeline.ingest({
               companyId: company.id,
               kind: "finnhub",
@@ -330,6 +385,7 @@ export function startFinnhubPoller(deps: {
           }
           deps.health.recordFinnhub(true);
           if (added > 0) deps.db.logEvent("info", "finnhub", `${company.ticker}: ${added} new`);
+          if (dropped > 0) deps.db.logEvent("info", "relevance", `finnhub ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           deps.health.recordFinnhub(false, `${company.ticker}: ${message}`);
@@ -373,8 +429,21 @@ export function startRedditPoller(deps: {
         try {
           const posts = await searchReddit(active, `"${company.name}" OR "$${company.ticker}"`);
           let added = 0;
+          let dropped = 0;
           for (const p of posts) {
             if (!matchesCompany(company, p.title, p.selftext)) continue;
+            if (
+              !isFinanceRelevant({
+                title: p.title,
+                snippet: p.selftext,
+                tier: "social",
+                kind: "reddit",
+                ticker: company.ticker,
+              })
+            ) {
+              dropped += 1;
+              continue;
+            }
             const inserted = deps.pipeline.ingest({
               companyId: company.id,
               kind: "reddit",
@@ -391,6 +460,7 @@ export function startRedditPoller(deps: {
           }
           deps.health.recordReddit(true);
           if (added > 0) deps.db.logEvent("info", "reddit", `${company.ticker}: ${added} new`);
+          if (dropped > 0) deps.db.logEvent("info", "relevance", `reddit ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           deps.health.recordReddit(false, `${company.ticker}: ${message}`);

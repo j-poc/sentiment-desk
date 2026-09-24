@@ -4,6 +4,7 @@ import {
   bucketSeries,
   clusterConfirmations,
   forwardReturn,
+  isFinanceRelevant,
   mentionDigest,
   parseJudgment,
   summarizeReactions,
@@ -22,6 +23,7 @@ function judgment(over: Partial<ParsedJudgment> = {}): ParsedJudgment {
     material: 0.8,
     novel: 0.7,
     credible: 0.8,
+    investorRelevant: 0.9,
     eventType: "legal_regulatory",
     magnitude: 0.7,
     surprise: 0.8,
@@ -36,6 +38,7 @@ function answers(over: Record<string, unknown> = {}) {
     material: { noul: 0.8 },
     novel: { noul: 0.6 },
     credible: { noul: 0.9 },
+    investor_relevant: { noul: 0.85 },
     event_type: { choice: "legal_regulatory", probabilities: { legal_regulatory: 0.8, other: 0.2 } },
     magnitude: { noul: 0.7 },
     surprise: { noul: 0.8 },
@@ -195,6 +198,67 @@ describe("clusterConfirmations", () => {
     expect(sizes.get("b")).toBe(2);
     expect(sizes.get("c")).toBe(1);
     expect(sizes.get("d")).toBe(1);
+  });
+});
+
+describe("isFinanceRelevant (ingest guard)", () => {
+  it("drops word-collision and lifestyle noise from weak sources for free", () => {
+    expect(
+      isFinanceRelevant({
+        title: "Apple pie recipe: the classic dessert everyone loves",
+        snippet: "A warm apple dessert with cinnamon.",
+        tier: "trade",
+        kind: "rss",
+        ticker: "AAPL",
+      }),
+    ).toBe(false);
+    expect(
+      isFinanceRelevant({
+        title: "See the teaser trailer for the new thriller everyone is talking about",
+        snippet: "The streaming hit arrives this fall.",
+        tier: "trade",
+        kind: "rss",
+        ticker: "NFLX",
+      }),
+    ).toBe(false);
+  });
+
+  it("admits finance-context headlines and trusted tiers", () => {
+    expect(
+      isFinanceRelevant({
+        title: "Apple suppliers rally on stronger iPhone demand outlook",
+        snippet: "",
+        tier: "trade",
+        kind: "rss",
+        ticker: "AAPL",
+      }),
+    ).toBe(true);
+    expect(
+      isFinanceRelevant({
+        title: "Anything at all",
+        snippet: "",
+        tier: "wire",
+        kind: "rss",
+        ticker: "AAPL",
+      }),
+    ).toBe(true);
+    expect(
+      isFinanceRelevant({
+        title: "$AAPL to the moon, earnings next week",
+        snippet: "",
+        tier: "social",
+        kind: "reddit",
+        ticker: "AAPL",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("applyPostRules investor relevance", () => {
+  it("excludes consumer/entertainment coverage as off-target", () => {
+    const f = applyPostRules(judgment({ investorRelevant: 0.2 }), 1);
+    expect(f.exclude).toBe(true);
+    expect(applyPostRules(judgment({ investorRelevant: 0.5 }), 1).exclude).toBe(false);
   });
 });
 

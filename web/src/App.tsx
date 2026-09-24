@@ -43,7 +43,9 @@ type FilterKey = (typeof FILTERS)[number]["key"];
 function applyFilter(ms: Mention[], f: FilterKey): Mention[] {
   switch (f) {
     case "all":
-      return ms;
+      // The default view is the investor feed: off-target judgments exist in
+      // the database and behind the explicit filter, not in your face.
+      return ms.filter((m) => m.status !== "off_target");
     case "bull":
       return ms.filter((m) => m.score?.sentiment === "positive");
     case "bear":

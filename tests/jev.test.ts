@@ -107,6 +107,7 @@ describe("rubric", () => {
       "about",
       "credible",
       "event_type",
+      "investor_relevant",
       "magnitude",
       "material",
       "novel",

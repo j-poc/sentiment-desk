@@ -63,6 +63,7 @@ export interface MentionScore {
   material: number;
   novel: number;
   credible: number;
+  investorRelevant: number;
   eventType: string;
   magnitude: number;
   surprise: number;

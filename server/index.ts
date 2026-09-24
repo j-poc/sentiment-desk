@@ -5,7 +5,7 @@ import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
 import { JevClient } from "./jev.js";
 import { Pipeline, type JudgeFn } from "./pipeline.js";
-import { RUBRIC } from "./rubric.js";
+import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
 import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import {
@@ -85,6 +85,15 @@ async function main(): Promise<void> {
   });
 
   const market = new MarketData({ companies, indices: config.indices, hub, health, db });
+
+  // Rubric migration: re-judge anything scored under an older rubric so the
+  // whole history answers to the current questions (including investor
+  // relevance). One-time cost per rubric change; fail-closed preserved.
+  const requeued = db.resetOutdatedRubric(RUBRIC_SHA);
+  if (requeued > 0) {
+    console.log(`[desk] rubric changed: re-queueing ${requeued} mentions for re-judgment`);
+    pipeline.drainPending(2_000);
+  }
 
   const app = createApp({
     db,
