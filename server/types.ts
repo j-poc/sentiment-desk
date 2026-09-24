@@ -55,6 +55,13 @@ export interface JevState {
     source: { name: string; url: string; tier: SourceTier };
     publishedAt: string;
   };
+  /** TradingAgents-style reflection: measured 30-minute reactions after this
+   * desk's own past judgments on this company, included for calibration.
+   * Populated only when there are enough measured events to be meaningful. */
+  deskMemory?: {
+    overall?: string;
+    byType?: Record<string, string>;
+  };
 }
 
 export type MentionStatus = "pending" | "scored" | "off_target" | "failed";

@@ -7,11 +7,13 @@ import {
   applyPostRules,
   bucketMsFor,
   clusterEvents,
+  forwardReturn,
   hasNearDuplicateTitle,
   hasStrongIdentity,
   parseJudgment,
   shouldAlert,
   smoothedSeries,
+  summarizeReactions,
   weightedIndex,
 } from "./scoring.js";
 import { TIER_WEIGHT } from "./sources/tiers.js";
@@ -24,6 +26,7 @@ import type {
   SeriesPoint,
   SourceTier,
 } from "./types.js";
+import type { EventCluster } from "./scoring.js";
 
 /**
  * The pipeline ties ingestion to judgment: normalized mentions enter, validated
@@ -61,6 +64,8 @@ export class Pipeline {
   private readonly queue: string[] = [];
   private readonly queued = new Set<string>();
   private inFlight = 0;
+  private memoryCache: Map<string, { at: number; block: JevState["deskMemory"] }> = new Map();
+
   private companyCache: Map<
     string,
     { name: string; ticker: string; sector: string; color: string; aliases: string[]; ambiguous?: boolean }
@@ -129,6 +134,7 @@ export class Pipeline {
       scoped: row.scoped === 1,
     });
     const strictAbout = meta.ambiguous === true && !strongIdentity;
+    const deskMemory = this.memoryFor(row.company_id, meta.ticker);
     const state: JevState = {
       company: {
         id: row.company_id,
@@ -146,6 +152,7 @@ export class Pipeline {
         },
         publishedAt: new Date(row.published_at).toISOString(),
       },
+      deskMemory,
     };
 
     try {
@@ -234,6 +241,47 @@ export class Pipeline {
     }).catch(() => {
       /* alerts are best-effort */
     });
+  }
+
+  /**
+   * TradingAgents-style reflection: measured 30-minute reactions after this
+   * desk's own past judgments on this company, cached for 10 minutes and
+   * attached to scoring state for calibration. Omitted below 5 measured
+   * events — no memory is better than a noisy one.
+   */
+  private memoryFor(companyId: string, ticker: string): JevState["deskMemory"] {
+    const cached = this.memoryCache.get(companyId);
+    if (cached && Date.now() - cached.at < 10 * 60_000) return cached.block;
+    let block: JevState["deskMemory"] | undefined;
+    try {
+      const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const events = this.deps.db.scoredMentionEvents(since).filter((e) => e.companyId === companyId);
+      const series = this.deps.db.priceWindow(ticker, since - 60 * 60 * 1000);
+      const rows = events.map((e) => ({
+        sentiment: e.sentiment,
+        eventType: e.eventType,
+        r30: forwardReturn(series, e.publishedAt, 30 * 60_000),
+        r240: null,
+      }));
+      const overall = summarizeReactions(rows);
+      if (overall.n >= 5) {
+        const fmt = (v: number | null) => (v == null ? "--" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
+        const byType: Record<string, string> = {};
+        for (const t of new Set(rows.map((r) => r.eventType))) {
+          const s = summarizeReactions(rows.filter((r) => r.eventType === t));
+          if (s.n >= 3) byType[t] = `n=${s.n}, median30m=${fmt(s.median30m)}, hit=${s.hitRate ?? "-"}%`;
+        }
+        block = {
+          overall: `n=${overall.n}, median30m=${fmt(overall.median30m)}, hit=${overall.hitRate ?? "-"}%`,
+          byType,
+        };
+        this.deps.db.logEvent("info", "memory", `${ticker}: ${block.overall}`);
+      }
+    } catch {
+      block = undefined;
+    }
+    this.memoryCache.set(companyId, { at: Date.now(), block });
+    return block;
   }
 
   private companyMeta(companyId: string): {
