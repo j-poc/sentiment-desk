@@ -35,6 +35,8 @@ export interface RawMention {
   snippet: string;
   publishedAt: number;
   retrievedAt: number;
+  /** SEC only: the filing date declared by EDGAR (distinct from acceptance). */
+  filedAt?: number;
   /** True when the item arrived via a symbol-scoped query (Yahoo ticker feed, Finnhub, X, Reddit, SEC): the scoping itself is identity evidence. */
   scoped?: boolean;
 }
@@ -95,6 +97,8 @@ export interface MentionDTO {
   snippet: string;
   publishedAt: number;
   retrievedAt: number;
+  /** SEC only: EDGAR filing date (distinct from the acceptance timestamp). */
+  filedAt?: number | null;
   status: MentionStatus;
   score: MentionScore | null;
   error: string | null;

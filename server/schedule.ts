@@ -225,6 +225,7 @@ export function startSecPoller(deps: {
               title: titleForItems(f.formType, f.items),
               snippet: snippet || `Form ${f.formType}, items ${(f.items.join(", ") || "none")}. Accepted ${new Date(f.acceptanceAt).toISOString()}.`,
               publishedAt: f.acceptanceAt,
+              filedAt: Number.isFinite(f.filedAt) ? f.filedAt : undefined,
               retrievedAt: Date.now(),
               digest: mentionDigest("sec", f.accessionNo, f.items.join(",")),
             });

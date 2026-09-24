@@ -107,10 +107,10 @@ export function MentionCard({
       <div
         className={`leading-snug ${
           s && s.takeaway !== "routine"
-            ? "mt-0.5 clamp-1 text-[11.5px] text-white/50"
-            : compact || dense
+            ? "mt-0.5 clamp-2 text-[11.5px] text-white/50"
+            : compact
               ? "mt-1.5 clamp-1 text-[12px] text-desk-bright"
-              : "mt-1.5 clamp-2 text-[13px] text-desk-bright"
+              : "mt-1.5 clamp-2 text-[12.5px] text-desk-bright"
         }`}
       >
         {m.title}

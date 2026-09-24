@@ -61,6 +61,7 @@ export interface Mention {
   snippet: string;
   publishedAt: number;
   retrievedAt: number;
+  filedAt?: number | null;
   status: MentionStatus;
   score: MentionScore | null;
   error: string | null;

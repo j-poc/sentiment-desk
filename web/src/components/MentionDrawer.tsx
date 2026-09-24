@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { Mention } from "../lib/api.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
-import { NEU, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
+import { NEU, dayTime, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
 
 function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
   const pct = Math.round(Math.min(1, Math.max(0, value)) * 100);
@@ -133,12 +133,29 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
                   <span>rubric</span>
                   <span className="tabnum text-white/70">{s.rubricSha.slice(0, 12)}…</span>
                 </div>
-                <div className="flex justify-between py-[2px]">
-                  <span>published / retrieved</span>
-                  <span className="tabnum text-white/70">
-                    {shortTime(mention.publishedAt)} / {shortTime(mention.retrievedAt)}
-                  </span>
-                </div>
+                {mention.source.kind === "sec" ? (
+                  <>
+                    <div className="flex justify-between py-[2px]">
+                      <span>filed (EDGAR)</span>
+                      <span className="tabnum text-white/70">{dayTime(mention.filedAt ?? mention.publishedAt)}</span>
+                    </div>
+                    <div className="flex justify-between py-[2px]">
+                      <span>accepted (public)</span>
+                      <span className="tabnum text-white/70">{dayTime(mention.publishedAt)}</span>
+                    </div>
+                    <div className="flex justify-between py-[2px]">
+                      <span>observed (desk)</span>
+                      <span className="tabnum text-white/70">{dayTime(mention.retrievedAt)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between py-[2px]">
+                    <span>published / retrieved</span>
+                    <span className="tabnum text-white/70">
+                      {shortTime(mention.publishedAt)} / {shortTime(mention.retrievedAt)}
+                    </span>
+                  </div>
+                )}
                 {(mention.confirmations ?? 1) > 1 && (
                   <div className="flex justify-between py-[2px]">
                     <span>sources covering</span>

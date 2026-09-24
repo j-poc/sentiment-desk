@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS mentions (
   snippet TEXT NOT NULL,
   published_at INTEGER NOT NULL,
   retrieved_at INTEGER NOT NULL,
+  filed_at INTEGER,
   scoped INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'pending',
   sentiment TEXT,
@@ -101,6 +102,7 @@ interface MentionRow {
   snippet: string;
   published_at: number;
   retrieved_at: number;
+  filed_at: number | null;
   status: string;
   sentiment: string | null;
   confidence: number | null;
@@ -158,6 +160,7 @@ export class Desk {
       ["investor_relevant", "REAL"],
       ["takeaway", "TEXT"],
       ["scoped", "INTEGER NOT NULL DEFAULT 0"],
+      ["filed_at", "INTEGER"],
     ];
     for (const [name, ddl] of additions) {
       if (!mentionCols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
@@ -201,8 +204,8 @@ export class Desk {
       .prepare(
         `INSERT OR IGNORE INTO mentions
          (id, company_id, source_name, source_url, source_kind, source_tier,
-          title, snippet, published_at, retrieved_at, scoped, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+          title, snippet, published_at, retrieved_at, filed_at, scoped, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       )
       .run(
         m.companyId + ":" + m.digest,
@@ -215,6 +218,7 @@ export class Desk {
         m.snippet,
         m.publishedAt,
         m.retrievedAt,
+        m.filedAt ?? null,
         m.scoped ? 1 : 0,
       );
     return Number(res.changes) > 0;
@@ -545,6 +549,7 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     snippet: r.snippet,
     publishedAt: r.published_at,
     retrievedAt: r.retrieved_at,
+    filedAt: r.filed_at ?? null,
     status,
     score,
     error: r.score_error,
