@@ -1,0 +1,17 @@
+services:
+  sentiment-desk:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: "8787"
+      DB_PATH: /app/data/desk.db
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - desk-data:/app/data
+
+volumes:
+  desk-data:

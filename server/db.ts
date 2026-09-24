@@ -435,11 +435,20 @@ export class Desk {
   /** Scored, non-excluded events across the watchlist with ticker identity. */
   scoredMentionEvents(
     sinceMs: number,
-  ): Array<{ companyId: string; ticker: string; publishedAt: number; sentiment: string; eventScore: number; title: string }> {
+  ): Array<{
+    companyId: string;
+    ticker: string;
+    publishedAt: number;
+    sentiment: string;
+    eventScore: number;
+    eventType: string;
+    title: string;
+  }> {
     return this.db
       .prepare(
         `SELECT m.company_id AS companyId, c.ticker AS ticker, m.published_at AS publishedAt,
-                m.sentiment AS sentiment, m.event_score AS eventScore, m.title AS title
+                m.sentiment AS sentiment, m.event_score AS eventScore,
+                COALESCE(m.event_type, 'other') AS eventType, m.title AS title
          FROM mentions m JOIN companies c ON c.id = m.company_id
          WHERE m.status = 'scored' AND m.published_at >= ? AND m.impact IS NOT NULL
          ORDER BY m.published_at`,
@@ -450,6 +459,7 @@ export class Desk {
         publishedAt: number;
         sentiment: string;
         eventScore: number;
+        eventType: string;
         title: string;
       }>;
   }

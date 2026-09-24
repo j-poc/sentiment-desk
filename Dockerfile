@@ -12,6 +12,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/config ./config
+RUN mkdir -p /app/data && chown node:node /app/data
 EXPOSE 8787
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \

@@ -1,0 +1,97 @@
+{
+  "applicability": "required",
+  "status": "partial",
+  "intended_use": "Private, single-user research interface; not an authoritative point-in-time research archive or investment signal service.",
+  "delivery": "Local Docker Compose or local Node process. The public source/build does not provide a hosted data service.",
+  "sources": [
+    {
+      "name": "Google News RSS",
+      "required": true,
+      "identity": "Article URL and feed-provided GUID when available; matched to configured company.",
+      "time": "RSS pubDate is used when valid; missing or invalid pubDate currently falls back to local retrieval time.",
+      "retention": "Normalized mention fields are stored in SQLite; raw feed bodies and response digests are not retained.",
+      "rights": "Provider terms and downstream redistribution rights have not been reviewed for this project."
+    },
+    {
+      "name": "Yahoo Finance RSS and chart endpoint",
+      "required": true,
+      "identity": "Configured ticker for quotes and chart series; article URL for RSS items.",
+      "units": "Quote price in provider currency; percent change relative to provider previous close.",
+      "time": "Quote uses regularMarketTime when present and currently falls back to retrieval time; collected history is also timestamped at local polling time.",
+      "retention": "Normalized quote and price points are stored in SQLite; raw responses and response digests are not retained.",
+      "rights": "Provider terms, retention, and redistribution rights have not been reviewed for this project."
+    },
+    {
+      "name": "GDELT DOC 2.0",
+      "required": true,
+      "identity": "Article URL and domain, matched to configured company.",
+      "time": "Provider seendate is retained as seenAt when parseable; the adapter currently falls back to local retrieval time when absent or invalid.",
+      "retention": "Normalized mention fields are stored in SQLite; raw responses and response digests are not retained.",
+      "rights": "Provider terms and downstream redistribution rights have not been reviewed for this project."
+    },
+    {
+      "name": "SEC EDGAR submissions and filing documents",
+      "required": true,
+      "identity": "CIK, accession number, form type, and filing items.",
+      "time": "Filing date and acceptanceDateTime are kept separately when supplied by the SEC.",
+      "retention": "Normalized filing metadata and bounded extracted text are stored with mentions; raw response bodies and response digests are not retained.",
+      "rights": "Official public endpoints are used; project-specific retention and redistribution policy has not been reviewed."
+    },
+    {
+      "name": "Finnhub company news, earnings, and calendar",
+      "required": false,
+      "identity": "Provider symbol, article URL, and earnings period when supplied.",
+      "time": "News datetime and earnings date are taken from provider responses.",
+      "retention": "Optional source enabled only with the operator's FINNHUB_API_KEY; normalized fields only.",
+      "rights": "Operator must supply credentials and follow provider terms; project-specific storage limits have not been reviewed."
+    },
+    {
+      "name": "X API recent search",
+      "required": false,
+      "identity": "Provider post ID and configured ticker/company match.",
+      "time": "Provider-created time when supplied.",
+      "retention": "Optional source enabled only with the operator's X_BEARER_TOKEN; normalized fields only.",
+      "rights": "Operator must supply credentials and follow provider terms; project-specific storage limits have not been reviewed."
+    },
+    {
+      "name": "Reddit search",
+      "required": false,
+      "identity": "Provider post ID and configured company match.",
+      "time": "Provider-created time when supplied.",
+      "retention": "Optional source enabled only with the operator's Reddit app credentials; normalized fields only.",
+      "rights": "Operator must supply credentials and follow provider terms; project-specific storage limits have not been reviewed."
+    }
+  ],
+  "checks": {
+    "fixture": {
+      "command": "npm test",
+      "covers": "Offline parsing and scoring fixtures, including RSS and SEC filing examples.",
+      "status": "passed"
+    },
+    "failure": {
+      "command": "npm test -- --run tests/rss.test.ts tests/sec.test.ts tests/finnhub.test.ts",
+      "covers": "Malformed or empty RSS inputs, filtered SEC records, and missing or unusable earnings values. Does not cover provider timeout, rate-limit recovery, or identity conflicts end to end.",
+      "status": "partial"
+    },
+    "replay": {
+      "command": "./scripts/verify-live-compose.sh",
+      "covers": "Recreates a container over a retained SQLite volume. This is process recovery, not replay from retained raw provider responses.",
+      "status": "not_run",
+      "blocker": "No usable Docker daemon: the selected Citrini context belongs to a separate build, and the generic default Colima profile could not start because its saved disk configuration requires an unsupported shrink; see the dated project log."
+    },
+    "live_smoke": {
+      "command": "./scripts/verify-live-compose.sh",
+      "covers": "Credential-free live quote and news/filing source success through the HTTP API, with DEMO and Jev scoring disabled.",
+      "status": "blocked",
+      "blocker": "No usable Docker daemon: the selected Citrini context belongs to a separate build, and the generic default Colima profile could not start because its saved disk configuration requires an unsupported shrink; see the dated project log."
+    }
+  },
+  "known_gaps": [
+    "Raw source bodies, response digests, acquisition receipts, and adapter versions are not retained, so raw-input replay is unavailable.",
+    "Source-health counters describe fetch cycles but do not separate delivery freshness from observation freshness in the API/UI.",
+    "Several adapters substitute retrieval time when provider event time is missing; this can make unknown timing look precise.",
+    "Quote history uses local polling time for collected points and is not suitable as a point-in-time market-data archive.",
+    "Retention and redistribution rights have not been reviewed across all upstream providers; fetched source content is not republished by the build.",
+    "Provider outage, rate-limit, duplicate-delivery, out-of-order completion, and clean raw-response replay behavior lack end-to-end checks."
+  ]
+}

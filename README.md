@@ -1,9 +1,14 @@
 # Sentiment Desk
 
-Real-time company sentiment, scored mention by mention. Every headline or post
-that touches a watchlisted company is judged within seconds by **Jev** (TypeSafe
-AI System One) against one fixed, published rubric. The terminal shows the
-meter, the change, live quotes, and the exact evidence behind every point.
+Sentiment Desk is a private, single-user research product that runs against live
+public sources. Its source and build can be shared publicly so other researchers
+can rebuild their own local copy with their own provider credentials. It is not
+a hosted multi-user data service.
+
+Every eligible headline or post that touches a watchlisted company is judged by
+**Jev** (TypeSafe AI System One) against one fixed, published rubric when a
+`TYPESAFE_API_KEY` is configured. Without that key, live collection continues
+and mentions stay unscored.
 
 The core idea is the live "BS meter" pattern: per-item typed questions (~400 ms,
 ~$0.00005 per call), the same questions for everyone, no claim of fact-checking
@@ -11,25 +16,21 @@ The core idea is the live "BS meter" pattern: per-item typed questions (~400 ms,
 
 ## What is real
 
-- **Mentions** (all free, no keys required):
-  Google News RSS per company (breadth), Yahoo Finance per-ticker headline RSS
-  (speed), GDELT DOC 2.0 (global breadth + confirmation, keyless, slow-polled),
-  and **SEC EDGAR 8-K filings** — the company speaking under penalty of law,
-  with exchange-accepted sub-second timestamps. 8-K items map onto the event
-  taxonomy (Item 2.02 = results, 5.02 = leadership, 4.02 = accounting
-  non-reliance). Filings carry the gold `8-K FILING` badge and outrank every
-  news tier in the weight blend. X API v2 recent search joins when
-  `X_BEARER_TOKEN` is set. Every mention is deduped by content digest.
-- **Market data**: Yahoo Finance chart endpoint (no key). Snapshot quotes for
-  all 24 tickers plus context indices (SPY, QQQ, VIX) every 45 seconds, and
-  intraday price series for the chart overlay. Quota-safe: paced requests, one
-  backoff retry, cycle aborts on 429.
-- **Judgment**: live Jev scoring the moment `TYPESAFE_API_KEY` is present.
-  Resolution order: `.env`, then `~/.newsjack/.env` (shared with the newsjack
-  CLI). Without a key, ingestion continues and the header shows ADD API KEY
-  while mentions stay pending. With `DEMO=1` a deterministic stub scores a
-  synthetic stream so the full pipeline is observable without any key; the UI
-  badges it as DEMO SENTIMENT.
+- **Mentions**: Google News RSS, Yahoo Finance headline RSS, and GDELT DOC 2.0
+  run without provider keys. SEC EDGAR 8-K filings also run by default; set
+  `SEC_USER_AGENT` to a contact-bearing value for unattended use. Optional
+  Finnhub, Reddit, and X collectors start only when their own credentials are
+  configured. 8-K items map onto the event taxonomy and retain filing and
+  acceptance timestamps when the SEC provides them.
+- **Market data**: Yahoo Finance chart endpoint (no key) supplies snapshot
+  quotes for watched tickers and context indices plus price series for the
+  chart overlay. The quote health panel reports collection failures and the
+  latest successful cycle. Last-known values are retained in process after a
+  failed cycle; freshness is not modeled separately for every ticker.
+- **Judgment**: Jev scoring starts when `TYPESAFE_API_KEY` is present. For a
+  local Node run, the app also checks `~/.newsjack/.env`; Docker Compose passes
+  values from this project’s `.env` only. Without a key, real collection still
+  runs and mentions stay pending.
 
 ## The terminal
 
@@ -62,9 +63,9 @@ coverage; it does not price securities.
 ```bash
 npm install
 cp .env.example .env       # add TYPESAFE_API_KEY to go live on judgment
-npm run dev                # real ingestion + real quotes on :8787
+npm run dev                # live sources + live quotes on :8787
 npm run dev:web            # Vite dev UI on :5173 (proxies /api)
-npm run demo               # synthetic sentiment through the same pipeline
+npm run demo               # optional synthetic-sentiment interface exercise
 ```
 
 Production:
@@ -74,23 +75,58 @@ npm run build              # web -> dist/web, server -> dist/server
 npm start                  # one process serves API + UI on :8787
 ```
 
-Or with Docker: `docker build -t sentiment-desk . && docker run -p 8787:8787
---env-file .env sentiment-desk`. Mount a volume at `/app/data` to keep history.
+## Rebuild and run with real data
+
+Docker Compose builds the server and dashboard from source, starts the live
+news and market-data collectors, and stores SQLite history in a named volume.
+No API key is required to start. Add your own `TYPESAFE_API_KEY` to `.env` to
+enable Jev scoring; without it, real stories are collected but remain pending.
+Optional Finnhub, Reddit, and X keys enable those additional sources.
+
+```bash
+docker compose up --build
+```
+
+Docker Compose 2.24 or newer is required for optional `.env` loading ([Compose
+reference](https://docs.docker.com/reference/compose-file/services/#env_file)).
+Open <http://127.0.0.1:8787>. The service binds to this computer only. To add credentials or change settings,
+copy `.env.example` to `.env` and edit that local file; `.env` is ignored by Git
+and excluded from the Docker build context. Compose does not mount your host
+`~/.newsjack/.env` file into the container.
+
+The database survives container rebuilds and `docker compose down`; `docker
+compose down -v` removes the saved database. To inspect the running service,
+use `docker compose logs -f sentiment-desk`.
+
+The default rebuild never enables demo mode. `npm run demo` or `DEMO=1` is an
+optional interface exercise with synthetic sentiment; it disables news
+collectors and still fetches real market quotes. It does not replace the live
+data path.
+
+To verify a live, credential-free Compose rebuild and persistent-volume
+recovery, run `./scripts/verify-live-compose.sh`. It uses a temporary Compose
+project, disables Jev and optional credentialed sources, checks live quote and
+news-source health through the API, recreates the container, then removes only
+its temporary volume.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | — | Jev scoring; `.env` or `~/.newsjack/.env` |
+| `TYPESAFE_API_KEY` | — | Jev scoring; local Node also checks `~/.newsjack/.env` |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |
 | `SEC_USER_AGENT` | generic research default | personalize (name + email) for long unattended runs |
 | `POLL_SEC_SECONDS` | `90` | EDGAR submissions poll cadence |
 | `POLL_GDELT_SECONDS` | `300` | GDELT breadth poll cadence |
-| `POLL_RSS_SECONDS` | `45` | news poll cadence |
+| `POLL_RSS_SECONDS` | `30` | news poll cadence |
 | `POLL_X_SECONDS` | `180` | X poll cadence |
 | `POLL_QUOTES_SECONDS` | `45` | quote poll cadence |
+| `POLL_FINNHUB_SECONDS` | `120` | Finnhub poll cadence |
+| `POLL_REDDIT_SECONDS` | `180` | Reddit poll cadence |
+| `BACKFILL_DAYS` | `5` | Finnhub company-news backfill window |
+| `RSS_CONCURRENCY` | `4` | concurrent RSS requests |
 | `INDICES` | `SPY,QQQ,^VIX` | context rows on the tape (never scored) |
 | `SCORE_CONCURRENCY` | `6` | parallel Jev calls |
 | `DB_PATH` | `./data/desk.db` | SQLite file |
@@ -126,6 +162,8 @@ unit-tested.
 | `GET /api/companies/:id/series?hours=` | bucketed sentiment series |
 | `GET /api/companies/:id/price?ticker=&hours=` | intraday price series (overlay) |
 | `GET /api/companies/:id/mentions?hours=&limit=` | mentions with full scores |
+| `GET /api/companies/:id/reactions?hours=` | measured price reactions after scored mentions |
+| `GET /api/validation?hours=` | watchlist-wide signal validation summary |
 | `GET /api/quotes` | latest quotes for tickers and indices |
 | `GET /api/tape?limit=` | latest scored mentions across companies |
 | `GET /api/health` | sources, Jev health, usage, events, DB size |
@@ -144,7 +182,7 @@ server/
   pipeline.ts   queue, state building, snapshots, broadcasts
   schedule.ts   RSS + X pollers, match guards, demo loop
   market.ts     quote store, poll loop, price-series cache
-  sources/      rss (Google News), x (API v2), quotes (Yahoo), tiers
+  sources/      Google/Yahoo RSS, SEC EDGAR, GDELT, Finnhub, Reddit, X, Yahoo quotes
   demo.ts       synthetic mentions + stub judge for keyless runs
 web/
   src/          React + Tailwind 4 terminal (SSE live updates)
@@ -153,12 +191,17 @@ tests/          vitest: wire contract, post-rules, RSS parsing
 
 Design rules worth keeping as the product grows:
 
-- Retrieval time never substitutes for publication time.
+- Provider event/publication times should stay distinct from retrieval times.
+  Some current source adapters still fill missing source timestamps with local
+  fetch time; see the [live-data contract](project-record/3-project-specs/live-data-etl.json)
+  for this known limitation.
 - A mention is never scored by default; missing answers fail closed.
 - The rubric is identical for every company; comparison rests on that.
 - Low-confidence and off-target judgments remain visible, just weighted
   honestly.
-- Quote failures degrade to last-known values with visible age, never to zeros.
+- Quote failures retain last-known values and increment health failures. The
+  displayed age is the latest successful cycle time, not a per-ticker
+  freshness guarantee.
 
 ## Cost model
 
