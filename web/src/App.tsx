@@ -99,6 +99,8 @@ export default function App() {
   const seriesRequestSeq = useRef(0);
   const priceKeyRef = useRef<string | null>(null);
   const priceRequestSeq = useRef(0);
+  const mentionStreamSequence = useRef(0);
+  const latestStreamedMention = useRef(new Map<string, { sequence: number; mention: Mention }>());
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
@@ -198,6 +200,7 @@ export default function App() {
   // Initial load: watchlist, tape, quotes, health snapshot.
   useEffect(() => {
     let alive = true;
+    const streamSequenceAtStart = mentionStreamSequence.current;
     (async () => {
       try {
         const cs = await getJSON<CompanySnapshot[]>("/api/companies");
@@ -209,7 +212,7 @@ export default function App() {
       }
       try {
         const t = await getJSON<Mention[]>("/api/tape?limit=60");
-        if (alive) setTape(t);
+        if (alive) setTape((prev) => mergeSnapshotWithLive(t, prev, latestStreamedMention.current, streamSequenceAtStart, 60));
       } catch {
         /* ignore */
       }
@@ -235,15 +238,21 @@ export default function App() {
       },
       onState: setConnected,
       onMention: (m) => {
-        setTape((prev) => (prev.some((x) => x.id === m.id) ? prev : [m, ...prev].slice(0, 60)));
-        if (m.companyId === selectedIdRef.current) {
-          setMentionsByCompany((prev) => {
-            const current = prev[m.companyId] ?? [];
-            return prev[m.companyId]?.some((x) => x.id === m.id)
-              ? prev
-              : { ...prev, [m.companyId]: [m, ...current].slice(0, 100) };
-          });
+        const sequence = ++mentionStreamSequence.current;
+        latestStreamedMention.current.delete(m.id);
+        latestStreamedMention.current.set(m.id, { sequence, mention: m });
+        if (latestStreamedMention.current.size > 500) {
+          const oldestId = latestStreamedMention.current.keys().next().value;
+          if (oldestId !== undefined) latestStreamedMention.current.delete(oldestId);
         }
+        setTape((prev) => upsertMention(prev, m, 60));
+        setMentionsByCompany((prev) => {
+          const cached = prev[m.companyId];
+          if (!cached && m.companyId !== selectedIdRef.current) return prev;
+          const current = cached ?? [];
+          return { ...prev, [m.companyId]: upsertMention(current, m, 100) };
+        });
+        setDrawerMention((current) => current?.id === m.id ? m : current);
         const now = Date.now();
         if (now - lastSeriesRefresh > 8_000) {
           lastSeriesRefresh = now;
@@ -274,6 +283,7 @@ export default function App() {
   useEffect(() => {
     if (!selectedId) return;
     let alive = true;
+    const streamSequenceAtStart = mentionStreamSequence.current;
     setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: false }));
     (async () => {
       try {
@@ -281,8 +291,10 @@ export default function App() {
         if (alive) {
           setMentionsByCompany((prev) => {
             const live = prev[selectedId] ?? [];
-            const responseIds = new Set(ms.map((mention) => mention.id));
-            return { ...prev, [selectedId]: [...live.filter((mention) => !responseIds.has(mention.id)), ...ms].slice(0, 100) };
+            return {
+              ...prev,
+              [selectedId]: mergeSnapshotWithLive(ms, live, latestStreamedMention.current, streamSequenceAtStart, 100),
+            };
           });
           setMentionsLoadedByCompany((prev) => ({ ...prev, [selectedId]: true }));
           setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: false }));
@@ -704,4 +716,27 @@ export default function App() {
     <MentionDrawer mention={drawerMention} onClose={closeDrawer} />
     </>
   );
+}
+
+function upsertMention(mentions: Mention[], mention: Mention, limit: number): Mention[] {
+  const existingIndex = mentions.findIndex((item) => item.id === mention.id);
+  if (existingIndex < 0) return [mention, ...mentions].slice(0, limit);
+  const updated = mentions.slice();
+  updated[existingIndex] = mention;
+  return updated;
+}
+
+function mergeSnapshotWithLive(
+  snapshot: Mention[],
+  current: Mention[],
+  latestStreamed: Map<string, { sequence: number; mention: Mention }>,
+  sequenceAtStart: number,
+  limit: number,
+): Mention[] {
+  const snapshotIds = new Set(snapshot.map((mention) => mention.id));
+  const responseRows = snapshot.map((mention) => {
+    const streamed = latestStreamed.get(mention.id);
+    return streamed && streamed.sequence > sequenceAtStart ? streamed.mention : mention;
+  });
+  return [...current.filter((mention) => !snapshotIds.has(mention.id)), ...responseRows].slice(0, limit);
 }

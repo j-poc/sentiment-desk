@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
 import type { Desk, DeliverySourceSchedule } from "./db.js";
 import type { HealthTracker } from "./health.js";
@@ -12,10 +13,9 @@ import { bucketMsFor, forwardReturn, rankIC, summarizeReactions, validateSignal 
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 
 /**
- * HTTP surface: read-only JSON APIs plus the SSE stream. No client can write
- * anything; the only writer is the server's own pipeline. Static assets come
- * from dist/web in production; in dev the Vite server hosts the UI and proxies
- * /api here.
+ * HTTP surface: read APIs, an explicitly confirmed single-item Jev retry, and
+ * the SSE stream. Static assets come from dist/web in production; in dev the
+ * Vite server hosts the UI and proxies /api here.
  */
 
 export interface AppDeps {
@@ -32,6 +32,10 @@ export interface AppDeps {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const retryConfirmationSchema = z.object({
+  confirmNewCharge: z.literal(true),
+  reviewedProviderUsage: z.boolean(),
+});
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
@@ -75,6 +79,28 @@ export function createApp(deps: AppDeps): Hono {
     const limit = clampNumber(c.req.query("limit"), 1, 200, 100);
     const ms = deps.db.mentionsForCompany(id, Date.now() - hours * 60 * 60 * 1000, limit);
     return c.json(ms);
+  });
+
+  app.post("/api/mentions/:id/retry", async (c) => {
+    if (deps.demo) return c.json({ error: "demo_retry_unavailable" }, 409);
+    const input = retryConfirmationSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "retry_confirmation_required" }, 400);
+
+    const result = deps.pipeline.retryFailed(c.req.param("id"), input.data.reviewedProviderUsage);
+    switch (result) {
+      case "queued":
+        return c.json({ status: "accepted" }, 202);
+      case "usage_review_required":
+        return c.json({ error: "provider_usage_review_required" }, 409);
+      case "not_retryable":
+        return c.json({ error: "mention_not_retryable" }, 409);
+      case "jev_unavailable":
+        return c.json({ error: "jev_not_configured" }, 503);
+      default: {
+        const exhaustive: never = result;
+        return c.json({ error: String(exhaustive) }, 500);
+      }
+    }
   });
 
   app.get("/api/companies/:id/radar", (c) => {

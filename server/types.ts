@@ -139,6 +139,7 @@ export interface MentionDTO {
   filedAt?: number | null;
   status: MentionStatus;
   scoreRetryAt: number | null;
+  usageCheckRequired: boolean;
   score: MentionScore | null;
   error: string | null;
 }

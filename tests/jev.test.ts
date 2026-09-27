@@ -88,6 +88,51 @@ describe("JevClient", () => {
     expect(impl).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves a valid Retry-After delay from an explicit provider rejection", async () => {
+    const impl = vi.fn(async () => new Response(JSON.stringify({ error: "rate limited" }), {
+      status: 429,
+      headers: { "retry-after": "120" },
+    })) as unknown as typeof fetch;
+
+    const error = await clientWith(impl).judge({}, RUBRIC).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(JevError);
+    expect((error as JevError).retryAfterMs).toBe(120_000);
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  it("parses an HTTP-date Retry-After value", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    try {
+      const retryAt = new Date(Date.now() + 90_000).toUTCString();
+      const impl = vi.fn(async () => new Response(JSON.stringify({ error: "rate limited" }), {
+        status: 429,
+        headers: { "retry-after": retryAt },
+      })) as unknown as typeof fetch;
+
+      const error = await clientWith(impl).judge({}, RUBRIC).catch((value: unknown) => value);
+
+      expect(error).toBeInstanceOf(JevError);
+      expect((error as JevError).retryAfterMs).toBe(90_000);
+      expect(impl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores malformed Retry-After values so the persisted queue can use backoff", async () => {
+    const impl = vi.fn(async () => new Response(JSON.stringify({ error: "rate limited" }), {
+      status: 429,
+      headers: { "retry-after": "later" },
+    })) as unknown as typeof fetch;
+
+    const error = await clientWith(impl).judge({}, RUBRIC).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(JevError);
+    expect((error as JevError).retryAfterMs).toBeUndefined();
+  });
+
   it("does not resubmit 5xx or ambiguous transport failures", async () => {
     const serverError = vi.fn(async () => jsonResponse({ error: "unavailable" }, 503)) as unknown as typeof fetch;
     const serverFailure = await clientWith(serverError).judge({}, RUBRIC).catch((value: unknown) => value);

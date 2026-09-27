@@ -1,7 +1,58 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "Local keyless fresh-start source/API/UI checks and isolated Docker live-data plus volume-recovery smoke passed. Jev remained disabled without a key; a prior controlled Jev fixture returned a valid off_target judgment. No current real observation was scored live. Source-use terms and labeled Jev accuracy/calibration remain unreviewed, GDELT returned HTTP 429, and social/Finnhub credentials were disabled. Independent reviews called the scoped local workflow ready (8.5/10 overall) but not 10/10 release-ready.",
+  "operational_status": "Prior local keyless source/API/UI checks and isolated Docker live-data plus volume-recovery smoke passed. The 2026-09-28 continuation added acknowledged retry recovery, `Retry-After` scheduling, and SSE state merging; 82 tests across 12 files, typecheck, and build pass. A fictional browser workflow used temporary SQLite and an in-process judge; no current public-source observation was sent to Jev. The ten-case synthetic evaluation is frozen but not run. Rights and account-retention findings remain open; GDELT's prior live check returned HTTP 429 and social/Finnhub were disabled. This product is not 10/10 release-ready.",
+  "rights_review": {
+    "as_of": "2026-09-28",
+    "status": "open; not a legal determination",
+    "findings": [
+      {
+        "source": "Google News RSS",
+        "evidence": "Google's terms say third-party content such as a newspaper article in Google News needs permission or another legal basis. Publisher authorization for retaining/displaying the stored title/snippet or forwarding it to TypeSafe is not recorded.",
+        "reference": "https://policies.google.com/terms?hl=en-US",
+        "action": "Do not claim a content license from RSS accessibility."
+      },
+      {
+        "source": "Yahoo Finance RSS and chart endpoints",
+        "evidence": "The app uses unofficial RSS/chart endpoints. The reviewed Yahoo API terms do not establish whether they govern these exact endpoints or grant the project's display, retention, or model-processing use.",
+        "reference": "https://legal.yahoo.com/us/en/yahoo/terms/product-atos/apiforydn/index.html",
+        "action": "Endpoint-specific authorization and publisher rights remain unverified."
+      },
+      {
+        "source": "GDELT",
+        "evidence": "The Article List path stores title, URL, domain, and provider-observed time. GDELT's dataset terms do not grant rights in linked publisher content or authorize forwarding that content to a model provider.",
+        "reference": "https://gdeltproject.org/about.html",
+        "action": "Keep publisher-content rights separate from GDELT dataset access."
+      },
+      {
+        "source": "SEC EDGAR",
+        "evidence": "SEC public API access has a fair-access policy and asks clients to identify themselves. This does not settle this product's text retention, display, or external model-processing policy; the configured application fallback User-Agent is generic.",
+        "reference": "https://www.sec.gov/about/developer-resources",
+        "action": "Use an identified User-Agent for unattended access and keep text/model-use review open."
+      },
+      {
+        "source": "TypeSafe Jev",
+        "evidence": "The current agreement assigns the customer responsibility for rights and states submitted inputs consume credits. Privacy terms describe processing/retention as reasonably necessary and US hosting; training use is disclaimed. Whether explicit 429/529 rejections consume credits is not documented in the reviewed API terms.",
+        "references": [
+          "https://typesafe.ai/legal/mca",
+          "https://typesafe.ai/legal/privacy-policy",
+          "https://docs.typesafe.ai/api",
+          "https://docs.typesafe.ai/models"
+        ],
+        "action": "No publisher text is sent until source permissions and account retention configuration are verified; rejected-request billing remains unresolved."
+      },
+      {
+        "source": "Optional X, Reddit, and Finnhub feeds",
+        "evidence": "These credentials are disabled in the current configuration. The reviewed terms do not establish project-specific permission for stored content, analytics, or external model forwarding.",
+        "references": [
+          "https://docs.x.com/developer-terms/policy",
+          "https://redditinc.com/policies/data-api-terms",
+          "https://finnhub.io/terms-of-service"
+        ],
+        "action": "Keep optional live paths disabled until the applicable plan and use rights are confirmed."
+      }
+    ]
+  },
   "intended_use": "Private, single-user research interface for investigating sourced observations and Jev judgments; not an authoritative point-in-time archive or investment signal service.",
   "delivery": "Local Docker Compose or local Node process. The public source/build does not provide a hosted data service.",
   "sources": [
@@ -11,7 +62,7 @@
       "identity": "Feed GUID when supplied, otherwise canonical article URL, namespaced by company and collector; company matching is deterministic.",
       "time": "Valid RSS pubDate is publisher-declared time; absent or invalid dates remain null. Provider retrieval and local ingestion times are stored separately.",
       "retention": "Normalized title, snippet, URL, publisher, identity, time fields, adapter version, and a SHA-256 digest of parsed normalized items are stored. Raw XML is not retained; Jev replay uses normalized local observations, not raw parser input.",
-      "rights": "Provider terms, permitted display, model access, retention, and redistribution rights have not been reviewed."
+      "rights": "High-level terms were reviewed on 2026-09-28. Google requires permission or another legal basis for third-party News content; this project's publisher authorization for snippet retention/display and TypeSafe processing is not documented."
     },
     {
       "name": "Yahoo Finance RSS and chart endpoint",
@@ -20,7 +71,7 @@
       "units": "Price is a decimal number in the provider-returned currency; changePct is percentage change from provider previous close. No FX conversion is applied.",
       "time": "Quote observation time is regularMarketTime when supplied and otherwise unknown. Local retrieval time and per-symbol last-attempt time are separate. Price-series source timestamps are retained, then bucketed using last-observation carry-forward for chart display.",
       "retention": "Current quote snapshots and their retrieval state are in memory. Price points are stored in SQLite using source timestamps. Price-series responses disclose network, one-minute memory cache, or local-store delivery and sourceLatestAt. Raw responses are not retained.",
-      "rights": "Provider terms, permitted display, model access, retention, and redistribution rights have not been reviewed."
+      "rights": "High-level terms were reviewed on 2026-09-28, but the reviewed Yahoo API terms do not establish their application to these exact unofficial RSS/chart endpoints or authorize project display, retention, or model processing."
     },
     {
       "name": "GDELT DOC 2.0",
@@ -28,7 +79,7 @@
       "identity": "Article URL and domain, namespaced by company and collector; company match is checked before storage.",
       "time": "GDELT seendate is provider-observed time, never publisher publication time. Missing or invalid seendate remains unknown; retrieval and ingestion clocks are separate.",
       "retention": "Normalized item fields and a SHA-256 digest of parsed normalized items are stored; raw responses are not retained. Jev replay uses normalized local observations.",
-      "rights": "Provider terms, permitted display, model access, retention, and redistribution rights have not been reviewed."
+      "rights": "GDELT dataset access was reviewed at a high level. Its dataset terms do not grant rights in linked publisher content or authorize forwarding that content to TypeSafe; publisher-content permission remains unresolved."
     },
     {
       "name": "SEC EDGAR submissions and filing documents",
@@ -36,7 +87,7 @@
       "identity": "CIK, accession number, form type, and filing items.",
       "time": "Filing date and EDGAR acceptanceDateTime are separate. Acceptance is used as the source-declared event timestamp; missing timestamps stay unknown.",
       "retention": "Normalized filing metadata and bounded extracted text are stored; acquisition receipts keep adapter versions and a digest of normalized parsed items, not raw SEC bytes. The source model receives the normalized excerpt.",
-      "rights": "Official public endpoints are used, but the display and retention policy for this project has not been reviewed. A tested packaged SEC connector contract available on the host says ui_display=false, so that connector is not substituted into this display product."
+      "rights": "The official endpoint's fair-access guidance was reviewed, but project-specific retention, display, and external model-processing policy remains open. Personalize the generic application User-Agent for unattended use. A tested packaged SEC connector contract available on the host says ui_display=false, so it is not substituted into this display product."
     },
     {
       "name": "Finnhub company news, earnings, and calendar",
@@ -44,7 +95,7 @@
       "identity": "Provider symbol, article URL, and earnings period when supplied.",
       "time": "News datetime and earnings dates use provider fields; absent event times remain unknown. Local retrieval and ingestion are separate.",
       "retention": "Optional source enabled only with the operator's FINNHUB_API_KEY; normalized items, response digests of parsed items, and bounded delivery receipts only. No raw response retention.",
-      "rights": "Operator must supply credentials and follow provider terms; permitted model access, display, and project retention have not been reviewed."
+      "rights": "Optional path disabled. Credential possession does not establish rights; confirm the applicable plan's model access, display, and retention terms before enabling."
     },
     {
       "name": "X API recent search",
@@ -52,7 +103,7 @@
       "identity": "Provider post ID and configured ticker/company match.",
       "time": "Provider-created time when supplied; absent time stays unknown. Retrieval and ingestion are separate.",
       "retention": "Optional source enabled only with the operator's X_BEARER_TOKEN; normalized items and parsed-item digests only. No raw response retention.",
-      "rights": "Operator must supply credentials and follow provider terms; permitted model access, display, and project retention have not been reviewed."
+      "rights": "Optional path disabled. Credential possession does not establish rights; confirm the applicable API terms for storage, display, analytics, and model forwarding before enabling."
     },
     {
       "name": "Reddit search",
@@ -60,7 +111,7 @@
       "identity": "Provider post ID and configured company match.",
       "time": "Provider-created time when supplied; absent time stays unknown. Retrieval and ingestion are separate.",
       "retention": "Optional source enabled only with the operator's Reddit app credentials; normalized items and parsed-item digests only. No raw response retention.",
-      "rights": "Operator must supply credentials and follow provider terms; permitted model access, display, and project retention have not been reviewed."
+      "rights": "Optional path disabled. Credential possession does not establish rights; confirm the applicable account plan for storage, display, and model processing before enabling."
     }
   ],
   "checks": {
@@ -111,6 +162,24 @@
       "covers": "An actual active HTTP SSE response is terminated during shutdown and the HTTP server close callback completes.",
       "status": "passed",
       "evidence": "2026-09-27: active-stream regression test passed. Shutdown closes registered SSE clients before SQLite closes; the server also closes remaining connections after server.close()."
+    },
+    "readiness_continuation": {
+      "command": "npm test -- --reporter=dot && npm run typecheck && npm run build",
+      "covers": "The complete current unit/API suite, TypeScript contracts, and production client/server build after retry, migration, Retry-After, and SSE changes.",
+      "status": "passed",
+      "evidence": "2026-09-28: 82 tests across 12 files passed; `tsc --noEmit` passed; Vite and esbuild production builds passed. Vite reports the existing main JS chunk is above its 500 kB advisory threshold (527.70 kB); this is a warning, not a build failure."
+    },
+    "jev_retry_browser": {
+      "command": "npm run verify:retry-browser with a loopback browser",
+      "covers": "The drawer confirmation, cancel path, usage-check guard, persisted retry, live SSE update, stale company-list and tape snapshots, and exact 390px confirmation/recovery workflow, using temporary SQLite and only an in-process fictional judge.",
+      "status": "passed_desktop_and_390px",
+      "evidence": "2026-09-28: browser cancel left the failed fixture intact. After explicit additional-credit and provider-usage acknowledgements, the drawer displayed the persisted synthetic judgment; the tape and company card also updated. Both the company mentions response and initial /api/tape response captured failed state and were delayed for 120 seconds; after each stale response returned, its list still showed the newer scored state. At 390x844, the retry drawer fit the viewport (innerWidth=390, document scrollWidth=390), Send remained disabled until both acknowledgements, and the persisted positive/product score appeared after the accepted local retry returned HTTP 202. Playwright console had zero errors or warnings. The fixture used one temporary SQLite database and an in-process fictional judge; no provider key, external Jev request, market data, or data/desk.db was used."
+    },
+    "jev_synthetic_sanity": {
+      "command": "npm run verify:jev-sanity",
+      "covers": "Ten frozen fictional cases through the configured Jev client and persisted pipeline, one fresh temporary SQLite database per case. Records every terminal state, rubric/model provenance, case digest, revision/dirty state, usage, estimated cost, latency, and errors without credentials.",
+      "status": "not_run",
+      "evidence": "The case set is frozen at scripts/jev-sanity-cases.json; no classification result has been read yet. Run only on the checkpointed code revision and report the ten-case result as synthetic sanity evidence, never production accuracy or investment quality."
     }
   },
   "known_gaps": [
@@ -121,8 +190,8 @@
     "Fresh local browser verification at 2026-09-27 14:13 EEST showed GDELT rate-limited with HTTP 429; Google News RSS, Yahoo Finance RSS, SEC EDGAR, and Yahoo quotes had successful current delivery. GDELT coverage is therefore a current limitation, not evidence of zero GDELT activity.",
     "No real publisher content was sent to Jev. The credentialed live smoke used one explicitly synthetic, off-target observation in a temporary database; this proves provider integration and provenance only, not classification quality or a current real-headline workflow.",
     "Optional X, Reddit, and Finnhub sources were disabled in final verification by explicit empty credentials. Their live coverage and rights are not verified.",
-    "Provider terms, permitted model access, display, retention, and redistribution have not been reviewed. Public availability is not treated as a license to republish, and the UI is private and local.",
-    "Source collectors retry on the next scheduled poll rather than an immediate generic loop. Jev retries only explicit retryable HTTP 429 or TypeSafe-documented HTTP 529 rejections through persisted, bounded scheduling (maximum three attempts); transport failures, generic server errors, malformed output, and model mismatches are marked failed/outcome-unknown and never automatically resubmitted. Terminal Jev failures have no operator requeue control; verify provider request/usage outcome before any deliberate replay to avoid duplicate charges. Provider coverage and pagination completeness are not proven exhaustive.",
+    "Provider rights review is now documented but unresolved: publisher permissions for stored/displayed snippets and external model processing are not recorded; the exact Yahoo endpoint rights are unclear; TypeSafe retention configuration and 429/529 billing semantics are not verified. Public availability is not treated as a license to republish. No real-source Jev scoring is enabled as a verified workflow.",
+    "Source collectors retry on the next scheduled poll rather than an immediate generic loop. Jev retries only explicit retryable HTTP 429 or TypeSafe-documented HTTP 529 rejections through persisted, bounded scheduling (maximum three attempts), honoring valid Retry-After values and otherwise exponential backoff. Transport failures, generic server errors, malformed output, and model mismatches are not automatically resubmitted. A failed submitted request requires operator charge acknowledgement and provider-usage review before manual retry; corrupt judgments cannot be retried. Provider coverage and pagination completeness are not proven exhaustive.",
     "The synthetic live provider path passed, but no current public-source headline was sent through Jev. Publisher model-use terms and account retention configuration, labeled accuracy/calibration, live-source-to-Jev quality, and provider 429 billing semantics remain external release gates."
   ]
 }

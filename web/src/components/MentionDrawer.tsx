@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Mention } from "../lib/api.js";
+import { retryMention } from "../lib/api.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { NEU, dayTime, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
 
@@ -32,6 +33,13 @@ const RUBRIC_ROWS: Array<{ key: ScoreKey; label: string }> = [
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+type RetryState =
+  | { type: "idle" }
+  | { type: "confirming"; chargeConfirmed: boolean; usageReviewed: boolean }
+  | { type: "submitting" }
+  | { type: "accepted" }
+  | { type: "failed"; message: string };
+
 /**
  * The detail sidebar: everything the desk knows about one judgment, opened
  * from any mention row instead of demanding scroll space on the main screen.
@@ -40,6 +48,7 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const [retryState, setRetryState] = useState<RetryState>({ type: "idle" });
 
   useEffect(() => {
     if (!mention) return;
@@ -78,7 +87,11 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
       const target = returnFocusRef.current;
       if (target?.isConnected) requestAnimationFrame(() => target.focus());
     };
-  }, [mention, onClose]);
+  }, [mention?.id, onClose]);
+
+  useEffect(() => {
+    setRetryState({ type: "idle" });
+  }, [mention?.id, mention?.status]);
 
   if (!mention) return null;
   const s = mention.score;
@@ -217,6 +230,91 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
                     ? "Jev is judging this item…"
                     : "Awaiting judgment…"}
             </div>
+          )}
+
+          {mention.status === "failed" && (
+            <section className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/[0.05] p-3" aria-label="Retry Jev judgment">
+              {retryState.type === "idle" && (
+                <button
+                  type="button"
+                  onClick={() => setRetryState({ type: "confirming", chargeConfirmed: false, usageReviewed: false })}
+                  className="w-full rounded-md border border-amber-200/25 bg-amber-200/[0.08] px-3 py-2 text-[11px] font-medium text-amber-100 hover:bg-amber-200/[0.13] focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                >
+                  Retry Jev
+                </button>
+              )}
+
+              {retryState.type === "confirming" && (
+                <div>
+                  <p className="text-[11px] leading-relaxed text-amber-100/90">
+                    This sends a new Jev input. TypeSafe charges for submitted inputs, so another attempt may consume more credits.
+                  </p>
+                  {mention.usageCheckRequired && (
+                    <p className="mt-2 text-[11px] leading-relaxed text-amber-200/80">
+                      The earlier provider request did not produce a saved judgment. Check TypeSafe usage before authorizing another attempt.
+                    </p>
+                  )}
+                  <label className="mt-3 flex cursor-pointer items-start gap-2 text-[10.5px] leading-relaxed text-white/65">
+                    <input
+                      type="checkbox"
+                      checked={retryState.chargeConfirmed}
+                      onChange={(event) => setRetryState({ ...retryState, chargeConfirmed: event.currentTarget.checked })}
+                      className="mt-0.5 accent-amber-300"
+                    />
+                    I understand this is a new request and may consume additional provider credits.
+                  </label>
+                  {mention.usageCheckRequired && (
+                    <label className="mt-2 flex cursor-pointer items-start gap-2 text-[10.5px] leading-relaxed text-white/65">
+                      <input
+                        type="checkbox"
+                        checked={retryState.usageReviewed}
+                        onChange={(event) => setRetryState({ ...retryState, usageReviewed: event.currentTarget.checked })}
+                        className="mt-0.5 accent-amber-300"
+                      />
+                      I checked provider usage for the earlier request.
+                    </label>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRetryState({ type: "idle" })}
+                      className="flex-1 rounded-md border border-white/10 px-2 py-1.5 text-[10.5px] text-white/55 hover:bg-white/[0.05]"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!retryState.chargeConfirmed || (mention.usageCheckRequired && !retryState.usageReviewed)}
+                      onClick={() => {
+                        setRetryState({ type: "submitting" });
+                        void retryMention(mention.id, {
+                          confirmNewCharge: true,
+                          reviewedProviderUsage: retryState.usageReviewed,
+                        }).then(
+                          () => setRetryState({ type: "accepted" }),
+                          (error: unknown) => setRetryState({
+                            type: "failed",
+                            message: error instanceof Error ? error.message : "Jev retry failed. Refresh the desk and check provider usage before trying again.",
+                          }),
+                        );
+                      }}
+                      className="flex-1 rounded-md bg-amber-200/15 px-2 py-1.5 text-[10.5px] font-medium text-amber-100 enabled:hover:bg-amber-200/25 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Send new Jev request
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {retryState.type === "submitting" && <p role="status" className="text-[11px] text-amber-100/80">Sending the authorized request…</p>}
+              {retryState.type === "accepted" && <p role="status" className="text-[11px] text-amber-100/80">Retry requested. Waiting for Jev to update this item.</p>}
+              {retryState.type === "failed" && (
+                <div role="alert" className="text-[11px] leading-relaxed text-amber-100/90">
+                  <p>{retryState.message}</p>
+                  <button type="button" onClick={() => setRetryState({ type: "idle" })} className="mt-2 underline underline-offset-2">Dismiss</button>
+                </div>
+              )}
+            </section>
           )}
         </div>
 

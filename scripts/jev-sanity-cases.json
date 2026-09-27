@@ -1,0 +1,72 @@
+[
+  {
+    "id": "clear-results-beat",
+    "kind": "clear",
+    "title": "Northstar Testworks reports a 38% revenue increase and raises its full-year outlook",
+    "snippet": "The fictional software company said subscription revenue and operating margin both exceeded its prior forecast, and management raised full-year guidance.",
+    "expected": { "sentiment": "positive", "eventType": "results" }
+  },
+  {
+    "id": "clear-product-recall",
+    "kind": "clear",
+    "title": "Northstar Testworks recalls its flagship storage device after overheating reports",
+    "snippet": "The company paused shipments and expects replacement costs after several customers reported overheating during normal use.",
+    "expected": { "sentiment": "negative", "eventType": "product" }
+  },
+  {
+    "id": "clear-dividend-increase",
+    "kind": "clear",
+    "title": "Northstar Testworks raises its quarterly dividend by 25%",
+    "snippet": "The fictional board approved a recurring dividend increase, citing durable free cash flow and a lower debt balance.",
+    "expected": { "sentiment": "positive", "eventType": "corporate_action" }
+  },
+  {
+    "id": "clear-regulatory-probe",
+    "kind": "clear",
+    "title": "Regulator opens a formal billing-practices investigation into Northstar Testworks",
+    "snippet": "The agency alleged that the company charged some customers after cancellation; Northstar said it is cooperating with the investigation.",
+    "expected": { "sentiment": "negative", "eventType": "legal_regulatory" }
+  },
+  {
+    "id": "clear-leadership-change",
+    "kind": "clear",
+    "title": "Northstar Testworks appoints a new chief financial officer after planned retirement",
+    "snippet": "The current CFO will retire at year end and the board appointed an external successor. The company made no change to its outlook.",
+    "expected": { "sentiment": "neutral", "eventType": "leadership" }
+  },
+  {
+    "id": "clear-analyst-downgrade",
+    "kind": "clear",
+    "title": "Harbor Street downgrades Northstar Testworks to sell and cuts its price target",
+    "snippet": "The analyst cited slower customer additions and reduced its next-year earnings estimate; no new company filing or guidance was issued.",
+    "expected": { "sentiment": "negative", "eventType": "analyst_action" }
+  },
+  {
+    "id": "clear-results-miss",
+    "kind": "clear",
+    "title": "Northstar Testworks misses quarterly expectations and lowers its annual forecast",
+    "snippet": "New results showed lower recurring revenue and margins than management previously guided, and the company cut full-year guidance.",
+    "expected": { "sentiment": "negative", "eventType": "results" }
+  },
+  {
+    "id": "boundary-namesake",
+    "kind": "namesake",
+    "title": "Northern lights return to the Northstar region after a strong geomagnetic storm",
+    "snippet": "A local astronomy group shared photographs of the natural aurora over the Northstar mountain range; the article does not concern Northstar Testworks.",
+    "expected": { "aboutBelow": 0.5 }
+  },
+  {
+    "id": "boundary-sector-mention",
+    "kind": "sector",
+    "title": "Cloud software billings cool across the industry in August",
+    "snippet": "The report describes slower sector-wide demand across twelve providers and lists Northstar Testworks among companies in the category without discussing its business or results.",
+    "expected": { "aboutBelow": 0.5 }
+  },
+  {
+    "id": "boundary-consumer-trivia",
+    "kind": "consumer_trivia",
+    "title": "Northstar Testworks shares an employee cookie recipe for the holidays",
+    "snippet": "The company posted a seasonal recipe from its office kitchen. The item contains no business, product, financial, leadership, legal, or operational news.",
+    "expected": { "investorRelevantBelow": 0.5 }
+  }
+]

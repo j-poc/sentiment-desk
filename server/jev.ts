@@ -41,6 +41,19 @@ const tokenCountSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const aliasModels = new Set(["jev-latest", "jev-preview"]);
 const resolvedJevModelPattern = /^jev-(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 
+function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  const header = value?.trim();
+  if (!header) return undefined;
+  if (/^\d+$/.test(header)) {
+    const delayMs = Number(header) * 1_000;
+    return Number.isSafeInteger(delayMs) ? delayMs : undefined;
+  }
+  const retryAt = Date.parse(header);
+  if (!Number.isFinite(retryAt)) return undefined;
+  const delayMs = Math.max(0, retryAt - now);
+  return Number.isSafeInteger(delayMs) ? delayMs : undefined;
+}
+
 function responseModelMatches(requested: string, returned: string): boolean {
   if (aliasModels.has(requested)) return resolvedJevModelPattern.test(returned);
   return returned === requested;
@@ -61,6 +74,7 @@ export class JevError extends Error {
     readonly status: number | undefined,
     readonly retryable: boolean,
     readonly outcomeUnknown = false,
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "JevError";
@@ -140,7 +154,13 @@ export class JevClient {
     }
 
     if (res.status === 429 || res.status === 529) {
-      throw new JevError(`TypeSafe rejected the request with HTTP ${res.status}`, res.status, true);
+      throw new JevError(
+        `TypeSafe rejected the request with HTTP ${res.status}`,
+        res.status,
+        true,
+        false,
+        retryAfterMs(res.headers.get("retry-after")),
+      );
     }
     if (res.status >= 500) {
       throw new JevError(`TypeSafe responded HTTP ${res.status}; request outcome is unknown`, res.status, false, true);

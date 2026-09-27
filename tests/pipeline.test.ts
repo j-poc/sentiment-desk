@@ -108,6 +108,23 @@ describe("Jev pipeline recovery", () => {
     }
   });
 
+  it("never schedules an explicit Jev retry earlier than a valid Retry-After delay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    const { db, pipeline, source } = setup(async () => {
+      throw new JevError("rate limited", 429, true, false, 120_000);
+    });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      const persisted = db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(persisted.scoreRetryAt).toBe(Date.now() + 120_000);
+      expect(persisted.status).toBe("retrying");
+    } finally {
+      db.close();
+    }
+  });
+
   it("stops after three 429 attempts and never retries an ambiguous provider outcome", async () => {
     vi.useFakeTimers();
     let calls = 0;

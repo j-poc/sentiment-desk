@@ -55,6 +55,8 @@ export interface PipelineDeps {
   alert?: { webhookUrl: string; eventScore: number; impact: number; freshMinutes: number };
 }
 
+export type OperatorRetryResult = "queued" | "usage_review_required" | "not_retryable" | "jev_unavailable";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CURRENT_WINDOW_MS = 3 * 60 * 60 * 1000;
 const MAX_JEV_ATTEMPTS = 3;
@@ -86,6 +88,19 @@ export class Pipeline {
     const ids = this.deps.db.pendingIds(limit);
     for (const id of ids) this.enqueue(id);
     return ids.length;
+  }
+
+  retryFailed(id: string, reviewedProviderUsage: boolean): OperatorRetryResult {
+    if (!this.deps.judge) return "jev_unavailable";
+    const result = this.deps.db.requeueFailed(id, reviewedProviderUsage);
+    if (result !== "queued") return result;
+    this.deps.db.logEvent(
+      "info",
+      "jev",
+      `operator authorized a new Jev input for failed judgment ${id}; provider usage review=${reviewedProviderUsage}`,
+    );
+    this.enqueue(id);
+    return "queued";
   }
 
   private enqueue(id: string): void {
@@ -134,6 +149,7 @@ export class Pipeline {
 
     const row = db.claimForScoring(id, Date.now());
     if (!row) return;
+    this.deps.hub.broadcast("mention", rowToDTO(row));
 
     const meta = this.companyMeta(row.company_id);
     // Lexically ambiguous names matched by text alone (Google News, GDELT)
@@ -168,8 +184,10 @@ export class Pipeline {
       deskMemory,
     };
 
+    let judgeResponseReceived = false;
     try {
       const out = await this.deps.judge(state);
+      judgeResponseReceived = true;
       if (
         !Number.isSafeInteger(out.inputTokens) || out.inputTokens < 0 ||
         !Number.isSafeInteger(out.outputTokens) || out.outputTokens < 0
@@ -218,13 +236,17 @@ export class Pipeline {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof JevError && err.retryable && row.score_attempts < MAX_JEV_ATTEMPTS) {
-        const retryAt = Date.now() + RETRY_BASE_MS * 2 ** (row.score_attempts - 1);
+        const backoffMs = RETRY_BASE_MS * 2 ** (row.score_attempts - 1);
+        const retryAt = Date.now() + Math.max(backoffMs, err.retryAfterMs ?? 0);
         db.markRetrying(id, `${message}; retry ${row.score_attempts + 1} of ${MAX_JEV_ATTEMPTS} is scheduled`, retryAt);
       } else {
         const outcomeNote = err instanceof JevError && err.outcomeUnknown
           ? "; provider outcome is unknown, so automatic retry is withheld to avoid a duplicate charge"
           : "";
-        db.markFailed(id, `${message}${outcomeNote}`);
+        const usageCheckRequired = judgeResponseReceived || (
+          err instanceof JevError && (err.outcomeUnknown || err.status != null)
+        );
+        db.markFailed(id, `${message}${outcomeNote}`, usageCheckRequired);
       }
       this.deps.health.recordJev(false, message);
       db.logEvent("warn", "jev", `score failed for ${id}: ${message}`);

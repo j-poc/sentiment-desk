@@ -1,8 +1,9 @@
 /**
- * API client: typed mirrors of the server DTOs, plain fetch helpers, and one
+ * API client: typed mirrors of the server DTOs, fetch helpers, and one
  * EventSource wrapper with liveness callbacks. The browser never sees source
- * credentials; everything here is read-only.
+ * credentials; Jev retry is the only explicit write action.
  */
+import { z } from "zod";
 
 export interface EarningsSurprise {
   percent: number;
@@ -71,6 +72,7 @@ export interface Mention {
   filedAt?: number | null;
   status: MentionStatus;
   scoreRetryAt: number | null;
+  usageCheckRequired: boolean;
   score: MentionScore | null;
   error: string | null;
 }
@@ -289,6 +291,34 @@ export async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   return (await res.json()) as T;
+}
+
+const retryErrorSchema = z.object({ error: z.string() });
+const retryErrorCopy: Record<string, string> = {
+  provider_usage_review_required: "Check TypeSafe usage before authorizing another attempt.",
+  mention_not_retryable: "This item changed state. Refresh its details before retrying.",
+  jev_not_configured: "Jev is not configured in the running desk.",
+  demo_retry_unavailable: "Retries are disabled in demo mode.",
+  retry_confirmation_required: "Confirm the new request and provider-usage review before retrying.",
+};
+
+export async function retryMention(
+  id: string,
+  confirmation: { confirmNewCharge: true; reviewedProviderUsage: boolean },
+): Promise<void> {
+  const response = await fetch(`/api/mentions/${encodeURIComponent(id)}/retry`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(confirmation),
+  });
+  if (response.status === 202) return;
+
+  const body: unknown = await response.json().catch(() => null);
+  const parsed = retryErrorSchema.safeParse(body);
+  const message = parsed.success
+    ? retryErrorCopy[parsed.data.error] ?? "Jev retry failed."
+    : "Jev retry failed. Refresh the desk and try again.";
+  throw new Error(message);
 }
 
 export interface StreamHandlers {

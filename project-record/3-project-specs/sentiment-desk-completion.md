@@ -1,14 +1,16 @@
 # Sentiment Desk completion plan
 
-Status: the local source-research workflow, isolated Compose recovery, and the
-latest chart/company-binding checks pass. The documented TypeSafe alias
-response is now accepted and preserved as `jev-1.13.0`; an isolated synthetic
-observation passed through the live provider, SQLite, local API, and visible
-detail drawer. The Jev compatibility fix is checkpointed at `4996759` on
-`origin/codex/real-data-rebuild`. This is not a 10/10 release:
-source-use/account-retention terms, labeled classifier evaluation, and
-operator recovery of terminal Jev failures remain open. The chart reliability
-checkpoint is also on `origin/codex/real-data-rebuild`.
+Status (2026-09-28): prior source workflow, isolated Compose recovery, chart
+selection, and company binding checks pass. Jev alias identity remains
+resolved and persisted as `jev-1.13.0`. This continuation adds an acknowledged
+operator retry, provider `Retry-After` handling, and SSE updates for existing
+mentions. An isolated fictional browser workflow persisted one score, updated
+the open drawer and company list, and kept the live judgment after a deliberately
+delayed stale mentions response arrived. `npm test` passes 82 tests across 12
+files; typecheck and production build pass. The ten fictional cases and runner
+are frozen but not yet run. This is not a 10/10 release: publisher rights,
+TypeSafe retention/billing details, and real-source classifier quality remain
+open; the ten-case synthetic sanity evaluation has not run.
 
 ## User and outcome
 
@@ -47,6 +49,10 @@ does not generate opportunity hypotheses or value-chain links.
   input or only normalized local records.
 - Verify real local collection, Jev behavior, dashboard operation, restart
   persistence, Docker build/run, and desktop/mobile rendering before Phase 2.
+  A 2026-09-28 hardening pass also verified acknowledged failed-judgment retry
+  and stale SSE/snapshot recovery at desktop and 390px widths. The ten-case
+  synthetic evaluation and source/account rights gates remain separate and
+  are not release evidence.
 
 ## Phase 2: Opportunity Radar on the operational base
 
@@ -127,7 +133,7 @@ does not generate opportunity hypotheses or value-chain links.
 6. Desktop and narrow-screen flows let the researcher select a company, read
    the score/index, inspect the source and Jev rubric, and understand data
    health without hidden overflow or dead controls.
-7. `npm test` (74 tests across 11 files), typecheck, production build, fresh
+7. `npm test` (82 tests across 12 files), typecheck, production build, fresh
    keyless local start, 390px and 1280px browser passes, accessible mention
    drawer interaction, SSE shutdown, and isolated Docker persistence smoke
    pass. The source-data contract records what these checks prove and what
@@ -239,9 +245,10 @@ of quality. The current checks directly verify:
 1. Malformed Jev choice answers, invalid probabilities, and invalid token usage
    must fail closed; no default category or clamped probability may become a
    stored judgment. Keep the rubric and classifier identity unchanged.
-2. Transient Jev exhaustion must have a bounded, persisted recovery path. Bad
-   credentials and invalid model output must not retry forever; restart and
-   recovery must not duplicate judgments or charges.
+2. Transient Jev exhaustion must have a bounded, persisted recovery path. Honor
+   a valid provider `Retry-After` delay when present and otherwise use
+   exponential backoff. Bad credentials and invalid model output must not
+   retry forever; restart and recovery must not duplicate judgments or charges.
 3. Scheduler shutdown must await in-flight collection before SQLite closes.
 4. Radar evidence pagination must use the exact overview time and ingestion
    snapshot so page totals and groups cannot drift while the view is open.
@@ -288,10 +295,12 @@ in temporary SQLite and never reads or modifies `data/desk.db`.
 ### Hard gates
 
 1. A retry is available only for a failed, non-corrupt judgment. It requires an
-   explicit operator confirmation that a new request may incur a charge; for
-   an outcome-unknown failure, the confirmation also says to check provider
-   usage first. No UI or server path automatically retries that unknown
-   outcome.
+   explicit operator confirmation that each submitted Jev input consumes
+   provider credits and a new request may consume another; for an
+   earlier request that did not produce a saved score, the confirmation also
+   requires a provider-usage review because 429/529 billing semantics are not
+   documented. No UI or server path automatically retries an outcome-unknown
+   request.
 2. The server performs a single atomic failed→pending transition. Duplicate or
    stale retry requests cannot queue another call; retrying, scoring, scored,
    off-target, and corrupt rows cannot be requeued.
@@ -313,9 +322,10 @@ in temporary SQLite and never reads or modifies `data/desk.db`.
    label and boundary result separately. This ten-case synthetic pilot is not
    a production classifier-accuracy or calibration gate.
 6. `npm test`, typecheck, production build, and the browser retry workflow pass;
-   browser checks cover desktop and 390px, confirmation/cancel behavior,
-   repeated submission, explicit-rejection recovery, and outcome-unknown
-   quarantine. Record failures rather than narrowing cases.
+   browser checks cover desktop, confirmation/cancel behavior, and
+   outcome-unknown quarantine; the separate API tests cover duplicate
+   submission and rejected-request recovery. Keep the retry panel within the
+   viewport at 390px.
 
 ### Objective measures and limits
 
@@ -331,13 +341,26 @@ in temporary SQLite and never reads or modifies `data/desk.db`.
 
 ### Representative failure/recovery cases
 
+- An SSE judgment update for an already-loaded mention replaces the matching
+  item in the tape, company list, and open drawer without changing other
+  companies' rows.
 - Retry confirmation cancelled: zero calls and the original failure remains.
 - Two retry submissions race: at most one persisted transition and one new
   provider call.
 - A prior unknown-outcome failure: no automatic resubmission; a new request can
   start only after the explicit usage-check acknowledgement.
+- Any submitted request that ends without a saved score, including an explicit
+  429/529 rejection, requires provider-usage review before a deliberate manual
+  retry while billing semantics remain unverified.
 - A new explicit 429/529 rejection: existing bounded retry semantics remain;
   terminal state and next operator action stay visible.
+- A valid `Retry-After` delay: the persisted retry is not scheduled earlier
+  than the provider's requested time; absent or malformed headers fall back to
+  bounded exponential backoff.
+- A company mentions response captured before a new Jev SSE event but returned
+  afterward cannot replace the newer event in the company list.
+- An initial tape snapshot captured before a new Jev SSE event but returned
+  afterward cannot replace the newer event in the tape.
 - Invalid output or malformed persisted judgment: score is withheld and a
   corrupt row has no retry control.
 - Off-target/namesake and sector-only synthetic items remain separate from
@@ -348,6 +371,38 @@ in temporary SQLite and never reads or modifies `data/desk.db`.
 Keep retry language calm and explicit in the current dark desk design. Show the
 source and failure reason next to the control; make the charge warning clear
 before the operator authorizes a new request.
+
+### 2026-09-28 continuation gate status
+
+- `PASS` — focused route/pipeline tests prove missing acknowledgement does not
+  send a request, unknown and rejected submitted attempts require usage review,
+  a successful acknowledged retry persists Jev's returned model, concurrent
+  requests admit one retry, and scored/corrupt rows cannot be requeued.
+- `PASS` — valid integer and HTTP-date `Retry-After` values are parsed;
+  malformed values fall back to exponential backoff, and the persisted retry
+  is not scheduled early.
+- `PASS` — loopback browser workflow used a temporary SQLite database and an
+  in-process synthetic judge. Cancel left the failed item intact; after the
+  two required acknowledgements, one request changed it to scored. The open
+  drawer, company list, and tape showed the SSE judgment. Both a company-list
+  response and the initial tape response captured before the SSE update were
+  delayed for two minutes; after each stale snapshot arrived, the new score
+  remained visible. A separate local API read returned HTTP 200 with the
+  persisted `scored` judgment and `synthetic-jev-fixture` label. No external
+  Jev call or real-source text was used in this browser check.
+- `PASS` — 82 unit/API tests across 12 files, typecheck, and production build.
+- `PASS` — Playwright browser at 390×844 opened the retry confirmation and
+  completed one synthetic retry. The drawer fit within the viewport, document
+  width remained 390px with no horizontal overflow, both acknowledgements
+  gated Send, the resulting score appeared in the open detail drawer, and the
+  console reported zero errors or warnings. The accepted local retry endpoint
+  returned HTTP 202. Temporary SQLite and an in-process fictional judge only.
+- `NOT RUN` — frozen ten-case Jev sanity evaluation; the runner is
+  `scripts/verify-jev-sanity.ts` and cases are
+  `scripts/jev-sanity-cases.json`. Run only after checkpointing this baseline.
+- `OPEN` — publisher rights for retention/display/model processing, TypeSafe
+  retention configuration and rejected-request billing semantics, and
+  representative real-source Jev quality are external release gates.
 
 ## Grounded architecture
 
@@ -391,7 +446,10 @@ Phase 2 consumer.
 - [x] Checkpoint later chart reliability and Jev alias repairs
   (`a685c2a`, `4996759`) with evidence updates (`c4004cb`, `c636736`) to
   `origin/codex/real-data-rebuild`.
-- [ ] Add and verify acknowledged operator retry for failed judgments, while
-  keeping outcome-unknown requests out of automatic retry.
-- [ ] Freeze and run the ten-case synthetic Jev pilot; report every case
-  without promoting it to real-source quality evidence.
+- [x] Add and verify acknowledged operator retry for failed judgments, while
+  keeping outcome-unknown requests out of automatic retry; require usage review
+  for submitted failures while rejected-request billing is unresolved.
+- [x] Freeze ten human-labeled fictional Jev cases and a per-case isolated
+  pipeline runner.
+- [ ] Run the ten-case synthetic Jev pilot; report every case without
+  promoting it to real-source quality evidence.

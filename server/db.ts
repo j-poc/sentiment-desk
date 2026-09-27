@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { z } from "zod";
 import type {
   CollectorId,
   Company,
@@ -99,7 +100,8 @@ CREATE TABLE IF NOT EXISTS jev_judgments (
   score_error TEXT,
   scored_at INTEGER,
   score_attempts INTEGER NOT NULL DEFAULT 0,
-  score_retry_at INTEGER
+  score_retry_at INTEGER,
+  score_usage_check_required INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS judgments_status ON jev_judgments(status);
 CREATE TABLE IF NOT EXISTS source_deliveries (
@@ -140,6 +142,11 @@ CREATE TABLE IF NOT EXISTS events (
   message TEXT NOT NULL
 );
 `;
+
+const retryRowSchema = z.object({
+  status: z.string(),
+  score_usage_check_required: z.number(),
+});
 
 interface MentionRow {
   id: string;
@@ -190,6 +197,7 @@ interface MentionRow {
   scored_at: number | null;
   score_attempts: number;
   score_retry_at: number | null;
+  score_usage_check_required: number;
 }
 
 export interface SourceDeliveryInput {
@@ -304,8 +312,11 @@ export class Desk {
           ].map(sqlValue);
           insertJudgment.run(...judgmentValues);
         }
-        this.db.exec("PRAGMA user_version = 3");
+        this.db.exec(`UPDATE jev_judgments SET status = 'failed',
+          score_error = 'Scoring was interrupted; provider outcome is unknown. Check provider usage before retrying.',
+          score_usage_check_required = 1 WHERE status = 'scoring'`);
         this.createMentionsView();
+        this.db.exec("PRAGMA user_version = 4");
         this.db.exec("COMMIT");
       } catch (err) {
         this.db.exec("ROLLBACK");
@@ -324,12 +335,15 @@ export class Desk {
       if (!judgmentCols.has("score_retry_at")) {
         this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_retry_at INTEGER");
       }
+      if (!judgmentCols.has("score_usage_check_required")) {
+        this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_usage_check_required INTEGER NOT NULL DEFAULT 0");
+      }
       if (object?.type === "view") this.db.exec("DROP VIEW mentions");
       this.db.exec(`UPDATE jev_judgments SET status = 'failed', score_error =
-        'Scoring was interrupted; the provider outcome is unknown. Automatic retry is withheld to avoid a duplicate charge.'
+        'Scoring was interrupted; provider outcome is unknown. Check provider usage before retrying.', score_usage_check_required = 1
         WHERE status = 'scoring'`);
       this.createMentionsView();
-      this.db.exec("PRAGMA user_version = 3");
+      this.db.exec("PRAGMA user_version = 4");
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
@@ -347,7 +361,7 @@ export class Desk {
         j.novel, j.credible, j.investor_relevant, j.event_type, j.takeaway, j.magnitude,
         j.surprise, j.event_score, j.impact, j.weight, j.exclude, j.engine, j.input_tokens,
         j.output_tokens, j.cost_usd, j.latency_ms, j.rubric_sha, j.score_error, j.scored_at,
-        j.score_attempts, j.score_retry_at
+        j.score_attempts, j.score_retry_at, j.score_usage_check_required
       FROM source_observations o JOIN jev_judgments j ON j.observation_id = o.id`);
   }
 
@@ -437,7 +451,8 @@ export class Desk {
            about = ?, material = ?, novel = ?, credible = ?, investor_relevant = ?, event_type = ?, takeaway = ?, magnitude = ?,
            surprise = ?, event_score = ?, impact = ?, weight = ?,
            exclude = ?, engine = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?,
-           latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?, score_retry_at = NULL
+           latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?, score_retry_at = NULL,
+           score_usage_check_required = 0
          WHERE observation_id = ?`,
       )
       .run(
@@ -471,16 +486,43 @@ export class Desk {
       );
   }
 
-  markFailed(id: string, error: string): void {
+  markFailed(id: string, error: string, usageCheckRequired: boolean): void {
     this.db
-      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ?, score_retry_at = NULL WHERE observation_id = ?")
-      .run(error.slice(0, 500), id);
+      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ?, score_retry_at = NULL, score_usage_check_required = ? WHERE observation_id = ?")
+      .run(error.slice(0, 500), usageCheckRequired ? 1 : 0, id);
   }
 
   markRetrying(id: string, error: string, retryAt: number): void {
     this.db.prepare(
-      "UPDATE jev_judgments SET status = 'retrying', score_error = ?, score_retry_at = ? WHERE observation_id = ? AND status = 'scoring'",
+      "UPDATE jev_judgments SET status = 'retrying', score_error = ?, score_retry_at = ?, score_usage_check_required = 0 WHERE observation_id = ? AND status = 'scoring'",
     ).run(error.slice(0, 500), retryAt, id);
+  }
+
+  requeueFailed(id: string, reviewedProviderUsage: boolean): "queued" | "usage_review_required" | "not_retryable" {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = retryRowSchema.safeParse(this.db.prepare(
+        "SELECT status, score_usage_check_required FROM jev_judgments WHERE observation_id = ?",
+      ).get(id));
+      if (!row.success || row.data.status !== "failed") {
+        this.db.exec("COMMIT");
+        return "not_retryable";
+      }
+      if (row.data.score_usage_check_required === 1 && !reviewedProviderUsage) {
+        this.db.exec("COMMIT");
+        return "usage_review_required";
+      }
+      const result = this.db.prepare(
+        `UPDATE jev_judgments SET status = 'pending', score_error = NULL,
+           score_retry_at = NULL, score_usage_check_required = 0
+         WHERE observation_id = ? AND status = 'failed'`,
+      ).run(id);
+      this.db.exec("COMMIT");
+      return Number(result.changes) === 1 ? "queued" : "not_retryable";
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   claimForScoring(id: string, now: number): MentionRow | undefined {
@@ -488,7 +530,7 @@ export class Desk {
     try {
       const result = this.db.prepare(
         `UPDATE jev_judgments SET status = 'scoring', score_attempts = score_attempts + 1,
-           score_retry_at = NULL, score_error = NULL
+           score_retry_at = NULL, score_error = NULL, score_usage_check_required = 0
          WHERE observation_id = ? AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`,
       ).run(id, now);
       const row = Number(result.changes) === 1
@@ -883,6 +925,7 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     filedAt: r.filed_at ?? null,
     status,
     scoreRetryAt: r.score_retry_at ?? null,
+    usageCheckRequired: r.score_usage_check_required === 1,
     score,
     error: status === "corrupt" ? (r.score_error ?? "Stored Jev judgment is incomplete and was withheld.") : r.score_error,
   };
