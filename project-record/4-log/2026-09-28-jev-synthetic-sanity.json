@@ -1,0 +1,518 @@
+{
+  "runId": "jev-sanity-2026-09-27T23-46-51-479Z",
+  "startedAt": "2026-09-27T23:46:51.480Z",
+  "status": "PASS_SYNTHETIC_SANITY_ONLY",
+  "caseSet": {
+    "path": "scripts/jev-sanity-cases.json",
+    "expectedCount": 10,
+    "actualCount": 10,
+    "sha256": "733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97"
+  },
+  "code": {
+    "revision": "f523e51ac12b85493d8f95e22f41c972c5a24586",
+    "sourceTreeDirty": false,
+    "untrackedFileCount": 2
+  },
+  "requestedModel": "jev-latest",
+  "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+  "dataBoundary": "fictional text only; independent temporary SQLite database per case; no market/source adapters",
+  "billingLimit": "estimated cost sums provider-reported input tokens; rejected/unknown attempts may not report usage, and billing for them is unverified",
+  "limitations": [
+    "Ten synthetic cases detect gross protocol/rubric/serving defects only; they do not estimate real-source accuracy, calibration, or investment performance.",
+    "The report does not treat synthetic labels as validated real-world ground truth.",
+    "Provider-reported token counts are not an account invoice; 429/529 usage semantics remain unverified."
+  ],
+  "cases": [
+    {
+      "id": "clear-results-beat",
+      "kind": "clear",
+      "expected": {
+        "sentiment": "positive",
+        "eventType": "results"
+      },
+      "actual": {
+        "sentiment": "positive",
+        "eventType": "results",
+        "about": 0.84,
+        "investorRelevant": 0.97,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1927,
+        "outputTokens": 383,
+        "estimatedInputCostUsd": 0.000080934,
+        "responseLatencyMs": 370
+      },
+      "terminalStatus": "scored",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 374,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:51.486Z",
+          "elapsedMs": 370,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1927,
+          "outputTokens": 383
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": true,
+        "eventType": true,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "clear-product-recall",
+      "kind": "clear",
+      "expected": {
+        "sentiment": "negative",
+        "eventType": "product"
+      },
+      "actual": {
+        "sentiment": "negative",
+        "eventType": "product",
+        "about": 0.93,
+        "investorRelevant": 0.96,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1919,
+        "outputTokens": 383,
+        "estimatedInputCostUsd": 0.000080598,
+        "responseLatencyMs": 266
+      },
+      "terminalStatus": "scored",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 268,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:51.862Z",
+          "elapsedMs": 266,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1919,
+          "outputTokens": 383
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": true,
+        "eventType": true,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "clear-dividend-increase",
+      "kind": "clear",
+      "expected": {
+        "sentiment": "positive",
+        "eventType": "corporate_action"
+      },
+      "actual": {
+        "sentiment": "positive",
+        "eventType": "corporate_action",
+        "about": 0.86,
+        "investorRelevant": 0.97,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1921,
+        "outputTokens": 387,
+        "estimatedInputCostUsd": 0.000080682,
+        "responseLatencyMs": 298
+      },
+      "terminalStatus": "scored",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 300,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:52.137Z",
+          "elapsedMs": 298,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1921,
+          "outputTokens": 387
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": true,
+        "eventType": true,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "clear-regulatory-probe",
+      "kind": "clear",
+      "expected": {
+        "sentiment": "negative",
+        "eventType": "legal_regulatory"
+      },
+      "actual": {
+        "sentiment": "negative",
+        "eventType": "legal_regulatory",
+        "about": 0.9,
+        "investorRelevant": 0.97,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1927,
+        "outputTokens": 385,
+        "estimatedInputCostUsd": 0.000080934,
+        "responseLatencyMs": 234
+      },
+      "terminalStatus": "scored",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 235,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:52.447Z",
+          "elapsedMs": 234,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1927,
+          "outputTokens": 385
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": true,
+        "eventType": true,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "clear-leadership-change",
+      "kind": "clear",
+      "expected": {
+        "sentiment": "neutral",
+        "eventType": "leadership"
+      },
+      "actual": {
+        "sentiment": "neutral",
+        "eventType": "leadership",
+        "about": 0.93,
+        "investorRelevant": 0.96,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1926,
+        "outputTokens": 385,
+        "estimatedInputCostUsd": 0.000080892,
+        "responseLatencyMs": 252
+      },
+      "terminalStatus": "scored",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 253,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:52.687Z",
+          "elapsedMs": 252,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1926,
+          "outputTokens": 385
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": true,
+        "eventType": true,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "clear-analyst-downgrade",
+      "kind": "clear",
+      "expected": {
+        "sentiment": "negative",
+        "eventType": "analyst_action"
+      },
+      "actual": {
+        "sentiment": "negative",
+        "eventType": "analyst_action",
+        "about": 0.9,
+        "investorRelevant": 0.96,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1930,
+        "outputTokens": 385,
+        "estimatedInputCostUsd": 0.00008106000000000001,
+        "responseLatencyMs": 280
+      },
+      "terminalStatus": "scored",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 281,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:52.943Z",
+          "elapsedMs": 280,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1930,
+          "outputTokens": 385
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": true,
+        "eventType": true,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "clear-results-miss",
+      "kind": "clear",
+      "expected": {
+        "sentiment": "negative",
+        "eventType": "results"
+      },
+      "actual": {
+        "sentiment": "negative",
+        "eventType": "results",
+        "about": 0.94,
+        "investorRelevant": 0.98,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1919,
+        "outputTokens": 383,
+        "estimatedInputCostUsd": 0.000080598,
+        "responseLatencyMs": 275
+      },
+      "terminalStatus": "scored",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 276,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:53.228Z",
+          "elapsedMs": 275,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1919,
+          "outputTokens": 383
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": true,
+        "eventType": true,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "boundary-namesake",
+      "kind": "namesake",
+      "expected": {
+        "aboutBelow": 0.5
+      },
+      "actual": {
+        "sentiment": "neutral",
+        "eventType": "other",
+        "about": 0.02,
+        "investorRelevant": 0.01,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1931,
+        "outputTokens": 381,
+        "estimatedInputCostUsd": 0.00008110200000000001,
+        "responseLatencyMs": 263
+      },
+      "terminalStatus": "off_target",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 265,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:53.511Z",
+          "elapsedMs": 263,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1931,
+          "outputTokens": 381
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": null,
+        "eventType": null,
+        "aboutBoundary": true,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "boundary-sector-mention",
+      "kind": "sector",
+      "expected": {
+        "aboutBelow": 0.5
+      },
+      "actual": {
+        "sentiment": "neutral",
+        "eventType": "macro_sector",
+        "about": 0.07,
+        "investorRelevant": 0.45,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1925,
+        "outputTokens": 382,
+        "estimatedInputCostUsd": 0.00008085000000000001,
+        "responseLatencyMs": 254
+      },
+      "terminalStatus": "off_target",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 255,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:53.778Z",
+          "elapsedMs": 254,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1925,
+          "outputTokens": 382
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": null,
+        "eventType": null,
+        "aboutBoundary": true,
+        "investorRelevantBoundary": null
+      },
+      "pass": true,
+      "errorCategory": null
+    },
+    {
+      "id": "boundary-consumer-trivia",
+      "kind": "consumer_trivia",
+      "expected": {
+        "investorRelevantBelow": 0.5
+      },
+      "actual": {
+        "sentiment": "neutral",
+        "eventType": "other",
+        "about": 0.51,
+        "investorRelevant": 0.02,
+        "model": "jev-1.13.0",
+        "rubricSha": "a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e",
+        "inputTokens": 1928,
+        "outputTokens": 381,
+        "estimatedInputCostUsd": 0.000080976,
+        "responseLatencyMs": 323
+      },
+      "terminalStatus": "off_target",
+      "scoreAttempts": 1,
+      "requestCount": 1,
+      "endToEndMs": 325,
+      "providerAttempts": [
+        {
+          "startedAt": "2026-09-27T23:46:54.040Z",
+          "elapsedMs": 323,
+          "outcome": "response",
+          "model": "jev-1.13.0",
+          "inputTokens": 1928,
+          "outputTokens": 381
+        }
+      ],
+      "checks": {
+        "terminal": true,
+        "sentiment": null,
+        "eventType": null,
+        "aboutBoundary": null,
+        "investorRelevantBoundary": true
+      },
+      "pass": true,
+      "errorCategory": null
+    }
+  ],
+  "finishedAt": "2026-09-27T23:46:54.366Z",
+  "summary": {
+    "allTenCasesTerminal": true,
+    "passingCases": 10,
+    "totalCases": 10,
+    "sevenClearCases": {
+      "exactDirectionAndEventMatchCount": 7,
+      "total": 7
+    },
+    "boundaryCases": [
+      {
+        "id": "boundary-namesake",
+        "kind": "namesake",
+        "pass": true,
+        "checks": {
+          "terminal": true,
+          "sentiment": null,
+          "eventType": null,
+          "aboutBoundary": true,
+          "investorRelevantBoundary": null
+        }
+      },
+      {
+        "id": "boundary-sector-mention",
+        "kind": "sector",
+        "pass": true,
+        "checks": {
+          "terminal": true,
+          "sentiment": null,
+          "eventType": null,
+          "aboutBoundary": true,
+          "investorRelevantBoundary": null
+        }
+      },
+      {
+        "id": "boundary-consumer-trivia",
+        "kind": "consumer_trivia",
+        "pass": true,
+        "checks": {
+          "terminal": true,
+          "sentiment": null,
+          "eventType": null,
+          "aboutBoundary": null,
+          "investorRelevantBoundary": true
+        }
+      }
+    ],
+    "requestCount": 10,
+    "reportedInputTokens": 19253,
+    "reportedOutputTokens": 3835,
+    "estimatedInputCostUsd": 0.000808626,
+    "successfulResponseLatencyMs": [
+      370,
+      266,
+      298,
+      234,
+      252,
+      280,
+      275,
+      263,
+      254,
+      323
+    ]
+  }
+}

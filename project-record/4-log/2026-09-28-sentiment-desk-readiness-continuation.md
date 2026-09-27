@@ -97,9 +97,11 @@ hosting, provider enrollment, publication, or PR was added.
 ## Evaluation and handoff
 
 The ten-case run is separate from the browser fixture. Before dispatch, the
-frozen input file has 10 cases and SHA-256
-`733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97`; the
-checkpointed revision is `2f70bb1f8e48db1acbab0f77c82df1538bf402a7`, with no
+frozen input file had 10 cases and SHA-256
+`733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97`. Source
+code was checkpointed at `2f70bb1f8e48db1acbab0f77c82df1538bf402a7`; a
+documentation-only dispatch checkpoint `f523e51ac12b85493d8f95e22f41c972c5a24586`
+was pushed before the run. The evaluation used that exact revision with no
 tracked source changes. A prior one-request synthetic provider smoke and the
 fictional retry browser workflow are the end-to-end smoke evidence; no
 publisher text is in scope.
@@ -118,6 +120,31 @@ state, reported tokens, estimated cost, latency, and terminal state.
 Do not represent this small pilot as classifier accuracy/calibration, alpha,
 or release-readiness evidence.
 
+### Jev synthetic sanity result
+
+`npm run verify:jev-sanity` completed as run
+`jev-sanity-2026-09-27T23-46-51-479Z`. The saved per-case ledger is
+`project-record/4-log/2026-09-28-jev-synthetic-sanity.json`.
+
+- `PASS_SYNTHETIC_SANITY_ONLY` — all ten cases were terminal with ten requests;
+  no automatic or repeated request was needed.
+- The seven clear cases matched both expected sentiment and event type (7/7).
+  The namesake and sector-only cases each passed `about < 0.5`; the consumer
+  trivia case passed `investor_relevant < 0.5` (3/3 boundaries).
+- Each successful response identified `jev-1.13.0` and rubric SHA
+  `a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e`.
+  The case-file digest matched the frozen SHA above; the report identifies
+  code revision `f523e51ac12b85493d8f95e22f41c972c5a24586`, with no tracked
+  source changes.
+- Provider-reported usage was 19,253 input and 3,835 output tokens. At the
+  configured input rate the estimated input cost is USD 0.000808626; this is
+  not an invoice or confirmation of provider billing. Successful responses
+  took 234–370 ms.
+- All data were fictional and isolated per case in temporary SQLite. This
+  small sanity pilot does not establish real-source accuracy, calibration,
+  publisher rights, provider retention/billing terms, alpha, or investment
+  quality.
+
 Local hardening is not equivalent to 10/10 release readiness. Rights,
 retention, rejected-request billing, real-source labeled quality, and the
-frozen ten-case Jev pilot remain separate gates.
+source coverage gaps remain separate gates.

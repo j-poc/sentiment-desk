@@ -1,7 +1,7 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "Prior local keyless source/API/UI checks and isolated Docker live-data plus volume-recovery smoke passed. The 2026-09-28 continuation added acknowledged retry recovery, `Retry-After` scheduling, and SSE state merging; 82 tests across 12 files, typecheck, and build pass. A fictional browser workflow used temporary SQLite and an in-process judge; no current public-source observation was sent to Jev. The ten-case synthetic evaluation is frozen but not run. Rights and account-retention findings remain open; GDELT's prior live check returned HTTP 429 and social/Finnhub were disabled. This product is not 10/10 release-ready.",
+  "operational_status": "Prior local keyless source/API/UI checks and isolated Docker live-data plus volume-recovery smoke passed. The 2026-09-28 continuation added acknowledged retry recovery, `Retry-After` scheduling, and SSE state merging; 82 tests across 12 files, typecheck, production build, and desktop/390px retry browser checks pass. Ten fictional Jev cases passed their synthetic checks on run revision f523e51ac12b85493d8f95e22f41c972c5a24586; no current public-source observation was sent to Jev. Rights and account-retention findings remain open; GDELT's prior live check returned HTTP 429 and social/Finnhub were disabled. This product is not 10/10 release-ready.",
   "rights_review": {
     "as_of": "2026-09-28",
     "status": "open; not a legal determination",
@@ -178,8 +178,8 @@
     "jev_synthetic_sanity": {
       "command": "npm run verify:jev-sanity",
       "covers": "Ten frozen fictional cases through the configured Jev client and persisted pipeline, one fresh temporary SQLite database per case. Records every terminal state, rubric/model provenance, case digest, revision/dirty state, usage, estimated cost, latency, and errors without credentials.",
-      "status": "not_run",
-      "evidence": "The case set is frozen at scripts/jev-sanity-cases.json; no classification result has been read yet. Run only on the checkpointed code revision and report the ten-case result as synthetic sanity evidence, never production accuracy or investment quality."
+      "status": "passed_synthetic_sanity_only",
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     }
   },
   "known_gaps": [

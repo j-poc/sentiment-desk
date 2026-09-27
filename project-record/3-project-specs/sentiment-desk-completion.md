@@ -5,12 +5,12 @@ selection, and company binding checks pass. Jev alias identity remains
 resolved and persisted as `jev-1.13.0`. This continuation adds an acknowledged
 operator retry, provider `Retry-After` handling, and SSE updates for existing
 mentions. An isolated fictional browser workflow persisted one score, updated
-the open drawer and company list, and kept the live judgment after a deliberately
-delayed stale mentions response arrived. `npm test` passes 82 tests across 12
-files; typecheck and production build pass. The ten fictional cases and runner
-are frozen but not yet run. This is not a 10/10 release: publisher rights,
-TypeSafe retention/billing details, and real-source classifier quality remain
-open; the ten-case synthetic sanity evaluation has not run.
+the open drawer, company list, and tape after deliberately delayed stale
+snapshots arrived. The retry flow passed at 390px. `npm test` passes 82 tests
+across 12 files; typecheck and production build pass. The ten fictional cases
+and runner are frozen; their 2026-09-28 Jev run passed its synthetic checks.
+This is not a 10/10 release: publisher rights, TypeSafe retention/billing
+details, and real-source classifier quality remain open.
 
 ## User and outcome
 
@@ -397,9 +397,12 @@ before the operator authorizes a new request.
   gated Send, the resulting score appeared in the open detail drawer, and the
   console reported zero errors or warnings. The accepted local retry endpoint
   returned HTTP 202. Temporary SQLite and an in-process fictional judge only.
-- `NOT RUN` — frozen ten-case Jev sanity evaluation; the runner is
-  `scripts/verify-jev-sanity.ts` and cases are
-  `scripts/jev-sanity-cases.json`. Run only after checkpointing this baseline.
+- `PASS — synthetic sanity only` — all ten frozen fictional cases reached a
+  terminal state in ten requests. All seven clear direction/event labels and
+  all three boundary thresholds passed; returned model was `jev-1.13.0` with
+  the frozen rubric hash. The ledger is
+  `project-record/4-log/2026-09-28-jev-synthetic-sanity.json`; this is not
+  production accuracy, calibration, alpha, or release-readiness evidence.
 - `OPEN` — publisher rights for retention/display/model processing, TypeSafe
   retention configuration and rejected-request billing semantics, and
   representative real-source Jev quality are external release gates.
@@ -451,5 +454,5 @@ Phase 2 consumer.
   for submitted failures while rejected-request billing is unresolved.
 - [x] Freeze ten human-labeled fictional Jev cases and a per-case isolated
   pipeline runner.
-- [ ] Run the ten-case synthetic Jev pilot; report every case without
-  promoting it to real-source quality evidence.
+- [x] Run and record the ten-case synthetic Jev pilot; report every case
+  without promoting it to real-source quality evidence.
