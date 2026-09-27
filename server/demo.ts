@@ -1,6 +1,7 @@
 import type { RawMention, JevState } from "./types.js";
 import type { JudgeFn } from "./pipeline.js";
 import { tierForHost } from "./sources/tiers.js";
+import { EVENT_TYPES, TAKEAWAY_KEYS } from "./rubric.js";
 
 /**
  * Demo mode. Generates synthetic mentions and scores them with a deterministic
@@ -101,26 +102,29 @@ export const demoJudge: JudgeFn = async (state: JevState) => {
   const material = clamp(Math.max(0.15, templateMaterial(state.mention.snippet)) + (nextRand(seed + 12) - 0.5) * 0.2);
   const novel = clamp(0.25 + nextRand(seed + 13) * 0.7);
 
+  const sentimentChoice = pPos > pNeg && pPos > pNeu ? "positive" : pNeg > pPos && pNeg > pNeu ? "negative" : "neutral";
   const eventType = pickEvent(state.mention.title);
-  const eventProbs: Record<string, number> = {};
-  for (const k of EVENT_KEYS) eventProbs[k] = k === eventType ? 0.72 : round4(nextRand(seed + k.length) * 0.05);
+  const eventWeights = Object.fromEntries(EVENT_TYPES.map((key) => [key, key === eventType ? 0.72 : nextRand(seed + key.length) * 0.05]));
+  const takeaway = demoTakeaway(state.mention.title, bias);
+  const takeawayWeights = Object.fromEntries(TAKEAWAY_KEYS.map((key) => [key, key === takeaway ? 0.8 : 0.2 / (TAKEAWAY_KEYS.length - 1)]));
 
   return {
     answers: {
       sentiment: {
-        choice: pPos > pNeg && pPos > pNeu ? "positive" : pNeg > pPos && pNeg > pNeu ? "negative" : "neutral",
+        type: "choice",
+        choice: sentimentChoice,
         probabilities: { positive: round4(pPos), neutral: round4(pNeu), negative: round4(pNeg) },
         confidence: round4(0.55 + nextRand(seed + 14) * 0.44),
       },
-      about: { noul: round4(about) },
-      material: { noul: round4(material) },
-      novel: { noul: round4(novel) },
-      credible: { noul: round4(tierCred[state.mention.source.tier] ?? 0.6) },
-      investor_relevant: { noul: round4(clamp(0.45 + material * 0.5 + (nextRand(seed + 17) - 0.5) * 0.2)) },
-      event_type: { choice: eventType, probabilities: eventProbs },
-      takeaway: { choice: demoTakeaway(state.mention.title, bias) },
-      magnitude: { noul: round4(clamp(Math.max(0.1, templateMaterial(state.mention.snippet)) + (nextRand(seed + 15) - 0.5) * 0.25)) },
-      surprise: { noul: round4(clamp(0.2 + nextRand(seed + 16) * 0.75)) },
+      about: { type: "noul", noul: round4(about) },
+      material: { type: "noul", noul: round4(material) },
+      novel: { type: "noul", noul: round4(novel) },
+      credible: { type: "noul", noul: round4(tierCred[state.mention.source.tier] ?? 0.6) },
+      investor_relevant: { type: "noul", noul: round4(clamp(0.45 + material * 0.5 + (nextRand(seed + 17) - 0.5) * 0.2)) },
+      event_type: choiceAnswer(eventType, eventWeights, EVENT_TYPES),
+      takeaway: choiceAnswer(takeaway, takeawayWeights, TAKEAWAY_KEYS),
+      magnitude: { type: "noul", noul: round4(clamp(Math.max(0.1, templateMaterial(state.mention.snippet)) + (nextRand(seed + 15) - 0.5) * 0.25)) },
+      surprise: { type: "noul", noul: round4(clamp(0.2 + nextRand(seed + 16) * 0.75)) },
     },
     model: "demo-sim",
     inputTokens: 900 + (seed % 400),
@@ -159,17 +163,6 @@ function polarityBias(title: string): number {
   return Math.max(-1, Math.min(1, bias));
 }
 
-const EVENT_KEYS = [
-  "results",
-  "corporate_action",
-  "legal_regulatory",
-  "leadership",
-  "product",
-  "analyst_action",
-  "macro_sector",
-  "other",
-] as const;
-
 /** Deterministic takeaway for demo mentions, mapped from template keywords. */
 function demoTakeaway(title: string, bias: number): string {
   const t = title.toLowerCase();
@@ -187,7 +180,7 @@ function demoTakeaway(title: string, bias: number): string {
 }
 
 /** Map demo template keywords to an event type so demo data stays coherent. */
-function pickEvent(title: string): (typeof EVENT_KEYS)[number] {
+function pickEvent(title: string): (typeof EVENT_TYPES)[number] {
   const t = title.toLowerCase();
   if (t.includes("guidance") || t.includes("estimates") || t.includes("results")) return "results";
   if (t.includes("probe") || t.includes("sued") || t.includes("antitrust")) return "legal_regulatory";
@@ -196,6 +189,18 @@ function pickEvent(title: string): (typeof EVENT_KEYS)[number] {
   if (t.includes("unveils") || t.includes("recalls") || t.includes("launch")) return "product";
   if (t.includes("names") || t.includes("appoints")) return "leadership";
   return "other";
+}
+
+function choiceAnswer<T extends string>(
+  selected: T,
+  weights: Record<string, number>,
+  choices: readonly T[],
+): { type: "choice"; choice: T; probabilities: Record<string, number>; confidence: number } {
+  const total = choices.reduce((sum, key) => sum + (weights[key] ?? 0), 0);
+  const probabilities = Object.fromEntries(
+    choices.map((key) => [key, round4((weights[key] ?? 0) / total)]),
+  );
+  return { type: "choice", choice: selected, probabilities, confidence: probabilities[selected] ?? 0 };
 }
 
 /** Demo templates carry a materiality prior; recover it from the snippet text. */

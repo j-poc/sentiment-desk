@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getJSON, type RadarDTO, type RadarEvidencePageDTO, type RadarEventType } from "../lib/api.js";
 import { timeAgo } from "../lib/format.js";
 
@@ -162,7 +162,7 @@ export function OpportunityRadar({
               <div className="micro">Not in comparison</div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
                 <span><b className="tabnum text-amber-200">{data.untimedScored}</b> <span className="text-white/45">untimed</span></span>
-                <span><b className="tabnum text-white/75">{data.unjudged}</b> <span className="text-white/45">pending / failed</span></span>
+                <span><b className="tabnum text-white/75">{data.unjudged}</b> <span className="text-white/45">unjudged / failed</span></span>
               </div>
             </div>
           </div>
@@ -212,7 +212,7 @@ export function OpportunityRadar({
             )}
             <div className="grid shrink-0 gap-2 xl:grid-cols-2">
               {visibleCategories.map((category) => (
-                <CategoryCard key={`${companyId}:${hours}:${category.eventType}`} companyId={companyId} category={category} hours={hours} />
+                <CategoryCard key={`${companyId}:${hours}:${category.eventType}`} companyId={companyId} category={category} hours={hours} asOf={data.generatedAt} />
               ))}
             </div>
           </div>
@@ -244,7 +244,7 @@ function Metric({ label, current, previous, change }: { label: string; current: 
   );
 }
 
-function CategoryCard({ companyId, category, hours }: { companyId: string; category: RadarDTO["categories"][number]; hours: number }) {
+function CategoryCard({ companyId, category, hours, asOf }: { companyId: string; category: RadarDTO["categories"][number]; hours: number; asOf: number }) {
   const direction = category.current;
   return (
     <section className="panel min-w-0 p-3">
@@ -273,8 +273,8 @@ function CategoryCard({ companyId, category, hours }: { companyId: string; categ
           Evidence · {direction.headlineGroups} current, {category.previous.headlineGroups} previous headline groups
         </summary>
         <div className="mt-2 space-y-3">
-          <EvidenceWindow companyId={companyId} hours={hours} eventType={category.eventType} period="current" label="Current period" initial={category.recentEvidence} total={direction.headlineGroups} />
-          <EvidenceWindow companyId={companyId} hours={hours} eventType={category.eventType} period="previous" label="Previous period" initial={category.previousEvidence} total={category.previous.headlineGroups} />
+          <EvidenceWindow companyId={companyId} hours={hours} asOf={asOf} eventType={category.eventType} period="current" label="Current period" initial={category.recentEvidence} total={direction.headlineGroups} />
+          <EvidenceWindow companyId={companyId} hours={hours} asOf={asOf} eventType={category.eventType} period="previous" label="Previous period" initial={category.previousEvidence} total={category.previous.headlineGroups} />
         </div>
       </details>
     </section>
@@ -284,6 +284,7 @@ function CategoryCard({ companyId, category, hours }: { companyId: string; categ
 function EvidenceWindow({
   companyId,
   hours,
+  asOf,
   eventType,
   period,
   label,
@@ -292,6 +293,7 @@ function EvidenceWindow({
 }: {
   companyId: string;
   hours: number;
+  asOf: number;
   eventType: RadarEventType;
   period: RadarEvidencePageDTO["period"];
   label: string;
@@ -301,7 +303,14 @@ function EvidenceWindow({
   const [additional, setAdditional] = useState<RadarEvidencePageDTO["items"]>([]);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const requestSnapshot = useRef(asOf);
   const groups = [...initial, ...additional];
+
+  useEffect(() => {
+    requestSnapshot.current = asOf;
+    setAdditional([]);
+    setFailed(false);
+  }, [asOf]);
 
   const loadMore = async () => {
     if (loading || groups.length >= total) return;
@@ -309,13 +318,15 @@ function EvidenceWindow({
     setFailed(false);
     try {
       const result = await getJSON<RadarEvidencePageDTO>(
-        `/api/companies/${companyId}/radar/evidence?hours=${hours}&period=${period}&eventType=${eventType}&offset=${groups.length}&limit=5`,
+        `/api/companies/${companyId}/radar/evidence?hours=${hours}&asOf=${asOf}&period=${period}&eventType=${eventType}&offset=${groups.length}&limit=5`,
       );
-      setAdditional((current) => [...current, ...result.items]);
+      if (requestSnapshot.current === asOf && result.generatedAt === asOf) {
+        setAdditional((current) => [...current, ...result.items]);
+      }
     } catch {
-      setFailed(true);
+      if (requestSnapshot.current === asOf) setFailed(true);
     } finally {
-      setLoading(false);
+      if (requestSnapshot.current === asOf) setLoading(false);
     }
   };
 

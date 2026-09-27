@@ -11,30 +11,36 @@ import { z } from "zod";
  *   -> { "model": "...", "answers": { <key>: {choice?, probabilities?,
  *        confidence?} | {noul} }, "usage": { "input_tokens", "output_tokens" } }
  *
- * Retries: 4 attempts, exponential backoff, only on 429, 5xx, and transport
- * failures. Other 4xx is a request problem and fails immediately. A response
- * without a valid answers map fails closed: it never becomes a score.
+ * A single request is sent per persisted pipeline attempt. Explicit 429
+ * rejections may be retried by the persisted queue; 5xx and transport errors
+ * have unknown execution outcomes and are never automatically resubmitted.
+ * Other 4xx responses and invalid bodies fail closed.
  */
 
-const choiceAnswerSchema = z
-  .object({
-    choice: z.string().optional(),
-    probabilities: z.record(z.string(), z.number()).optional(),
-    confidence: z.number().min(0).max(1).optional(),
-  })
-  .passthrough();
+const probabilitySchema = z.number().finite().min(0).max(1);
 
-const noulAnswerSchema = z.object({ noul: z.number().min(0).max(1) }).passthrough();
+const choiceAnswerSchema = z.object({
+  type: z.literal("choice"),
+  choice: z.string().min(1),
+  probabilities: z.record(z.string(), probabilitySchema),
+  confidence: probabilitySchema,
+}).passthrough();
+
+const noulAnswerSchema = z.object({
+  type: z.literal("noul"),
+  noul: probabilitySchema,
+}).passthrough();
+
+const answerSchema = z.discriminatedUnion("type", [choiceAnswerSchema, noulAnswerSchema]);
+const tokenCountSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 export const jevResponseSchema = z.object({
-  model: z.string().optional(),
-  answers: z.record(z.string(), z.unknown()),
-  usage: z
-    .object({
-      input_tokens: z.number().optional(),
-      output_tokens: z.number().optional(),
-    })
-    .optional(),
+  model: z.string().min(1),
+  answers: z.record(z.string(), answerSchema).refine((answers) => Object.keys(answers).length > 0),
+  usage: z.object({
+    input_tokens: tokenCountSchema,
+    output_tokens: tokenCountSchema,
+  }),
 });
 
 export class JevError extends Error {
@@ -42,6 +48,7 @@ export class JevError extends Error {
     message: string,
     readonly status: number | undefined,
     readonly retryable: boolean,
+    readonly outcomeUnknown = false,
   ) {
     super(message);
     this.name = "JevError";
@@ -50,7 +57,7 @@ export class JevError extends Error {
 
 export interface JudgeOutcome {
   answers: Record<string, unknown>;
-  model?: string;
+  model: string;
   inputTokens: number;
   outputTokens: number;
   latencyMs: number;
@@ -71,9 +78,6 @@ export interface JevClientOptions {
   timeoutMs: number;
   fetchImpl?: typeof fetch;
 }
-
-const ATTEMPTS = 4;
-const BACKOFF_BASE_MS = 500;
 
 export class JevClient {
   private readonly fetchImpl: typeof fetch;
@@ -103,65 +107,70 @@ export class JevClient {
 
     const body = JSON.stringify({ model: this.opts.model, state, questions });
     const started = Date.now();
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-      if (attempt > 0) {
-        await sleep(BACKOFF_BASE_MS * 2 ** (attempt - 1));
-      }
-      try {
-        const res = await this.fetchImpl(`${this.opts.baseUrl}/v1/systemone`, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${this.opts.apiKey}`,
-            "content-type": "application/json",
-          },
-          body,
-          signal: AbortSignal.timeout(this.opts.timeoutMs),
-        });
-
-        if (res.status === 429 || res.status >= 500) {
-          lastError = new JevError(`TypeSafe responded HTTP ${res.status}`, res.status, true);
-          continue;
-        }
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new JevError(
-            `TypeSafe responded HTTP ${res.status}${text ? `: ${text.slice(0, 300)}` : ""}`,
-            res.status,
-            false,
-          );
-        }
-
-        const parsed = jevResponseSchema.parse(await res.json());
-        if (Object.keys(parsed.answers).length === 0) {
-          throw new JevError("TypeSafe response has no answers", res.status, false);
-        }
-        return {
-          answers: parsed.answers,
-          model: parsed.model,
-          inputTokens: parsed.usage?.input_tokens ?? 0,
-          outputTokens: parsed.usage?.output_tokens ?? 0,
-          latencyMs: Date.now() - started,
-        };
-      } catch (err) {
-        if (err instanceof JevError && !err.retryable) throw err;
-        // Schema failures and non-JSON bodies are contract violations, not transient.
-        if (err instanceof z.ZodError) {
-          throw new JevError(`TypeSafe response failed contract validation: ${err.message}`, undefined, false);
-        }
-        if (err instanceof SyntaxError) {
-          throw new JevError("TypeSafe response was not valid JSON", undefined, false);
-        }
-        lastError = err;
-      }
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.opts.baseUrl}/v1/systemone`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.opts.apiKey}`,
+          "content-type": "application/json",
+        },
+        body,
+        signal: AbortSignal.timeout(this.opts.timeoutMs),
+      });
+    } catch (err) {
+      throw new JevError(
+        `TypeSafe request failed before a response was received: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        false,
+        true,
+      );
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new JevError("TypeSafe call failed after retries", undefined, true);
-  }
-}
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+    if (res.status === 429) {
+      throw new JevError("TypeSafe rejected the request with HTTP 429", 429, true);
+    }
+    if (res.status >= 500) {
+      throw new JevError(`TypeSafe responded HTTP ${res.status}; request outcome is unknown`, res.status, false, true);
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new JevError(
+        `TypeSafe responded HTTP ${res.status}${text ? `: ${text.slice(0, 300)}` : ""}`,
+        res.status,
+        false,
+      );
+    }
+
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch {
+      throw new JevError("TypeSafe response was not valid JSON; request outcome is unknown", res.status, false, true);
+    }
+    const parsed = jevResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new JevError(
+        `TypeSafe response failed contract validation; request outcome is unknown: ${parsed.error.message}`,
+        res.status,
+        false,
+        true,
+      );
+    }
+    if (parsed.data.model !== this.opts.model) {
+      throw new JevError(
+        `TypeSafe response model mismatch: expected ${this.opts.model}, received ${parsed.data.model}; request outcome is unknown`,
+        res.status,
+        false,
+        true,
+      );
+    }
+    return {
+      answers: parsed.data.answers,
+      model: parsed.data.model,
+      inputTokens: parsed.data.usage.input_tokens,
+      outputTokens: parsed.data.usage.output_tokens,
+      latencyMs: Date.now() - started,
+    };
+  }
 }

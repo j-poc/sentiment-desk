@@ -65,6 +65,44 @@ body {
   border-bottom: 1px solid var(--color-desk-line);
 }
 
+.mentions-filters {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.mentions-panel-head {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mentions-filters > button {
+  min-width: 0;
+  padding-inline: 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+@media (max-width: 639px) {
+  .chart-panel-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .chart-panel-meta {
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    width: 100%;
+    min-width: 0;
+    gap: 6px 10px;
+  }
+
+}
+
 .no-scrollbar {
   scrollbar-width: none;
 }

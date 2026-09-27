@@ -4,6 +4,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { Desk } from "./db.js";
 import { classifyDeliveryError, recordDelivery } from "./delivery.js";
+import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 
 /**
  * The market store: one poll loop, one in-memory snapshot, broadcast on change.
@@ -37,6 +38,7 @@ export class MarketData {
   private snapshot: MarketSnapshot = { quotes: {}, updatedAt: 0 };
   private readonly seriesCache = new Map<string, { retrievedAt: number; points: PricePoint[] }>();
   private readonly backfilled = new Set<string>();
+  private backfillTask: Promise<void> | null = null;
 
   constructor(
     private readonly deps: {
@@ -100,10 +102,22 @@ export class MarketData {
       const q = quotes[company.ticker];
       if (q?.at != null) this.deps.db.upsertPricePoint(company.ticker, q.at, q.price);
     }
-    void this.backfillSeries();
+    this.startBackfill();
     if (ok > 0) this.deps.health.recordQuotes(true);
     if (fail > 0) this.deps.health.recordQuotes(false, lastError ?? "quote fetch failures");
     if (Object.keys(quotes).length > 0) this.deps.hub.broadcast("quotes", { quotes, updatedAt: this.snapshot.updatedAt });
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.backfillTask;
+  }
+
+  private startBackfill(): void {
+    if (this.backfillTask) return;
+    const task = this.backfillSeries().finally(() => {
+      if (this.backfillTask === task) this.backfillTask = null;
+    });
+    this.backfillTask = task;
   }
 
   /**
@@ -189,7 +203,7 @@ export function startQuotesPoller(deps: {
   market: MarketData;
   db: Desk;
   intervalSeconds: number;
-}): { stop(): void } {
+}): SchedulerControl {
   let running = false;
   const tick = async () => {
     if (running) return;
@@ -202,9 +216,7 @@ export function startQuotesPoller(deps: {
       running = false;
     }
   };
-  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
-  void tick();
-  return { stop: () => clearInterval(timer) };
+  return scheduleTask(tick, deps.intervalSeconds * 1000);
 }
 
 function sleep(ms: number): Promise<void> {

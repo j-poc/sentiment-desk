@@ -21,20 +21,13 @@ export function TickerTape({
   const quotes = market?.quotes ?? {};
   const labelFor = (t: string) => t.replace("^", "");
 
-  const cell = (key: string, ticker: string, quote?: Quote, sentiment?: number | null, companyId?: string) => {
+  const cell = (key: string, ticker: string, quote?: Quote, sentiment?: number | null, company?: CompanySnapshot) => {
     const price = quote?.price;
     const changePct = quote?.changePct;
     const color = changePct != null ? (changePct > 0.001 ? "#34d399" : changePct < -0.001 ? "#f87171" : "#94a3b8") : "#64748b";
-    const selected = companyId != null && companyId === selectedId;
-    const body = (
-      <span
-        key={key}
-        onClick={companyId ? () => onSelect(companyId) : undefined}
-        className={`flex shrink-0 items-baseline gap-1.5 border-r border-white/[0.05] px-3.5 text-[11px] ${
-          companyId ? "cursor-pointer hover:bg-white/[0.04]" : ""
-        } ${selected ? "bg-white/[0.05]" : ""}`}
-        title={quote ? `${quote.delivery === "cache" ? "Last-known cached quote" : "Yahoo Finance network quote"}; ${quote.currency}; source time ${quote.at == null ? "unknown" : new Date(quote.at).toISOString()}; retrieved ${timeAgo(quote.retrievedAt)}` : undefined}
-      >
+    const selected = company != null && company.id === selectedId;
+    const contents = (
+      <>
         <span className="font-semibold tracking-wide text-white/75">{labelFor(ticker)}</span>
         {price != null ? (
           <span className={`tabnum ${quote?.delivery === "cache" ? "text-amber-300/80" : "text-white/90"}`}>{price >= 1000 ? price.toFixed(0) : price.toFixed(2)} {quote?.currency}</span>
@@ -47,18 +40,39 @@ export function TickerTape({
           </span>
         )}
         {quote?.delivery === "cache" && <span className="text-[8px] text-amber-300/80">cached {timeAgo(quote.retrievedAt)}</span>}
-        {sentiment != null && companyId && (
+        {sentiment != null && company && (
           <span
             className="mb-[3px] inline-block h-1.5 w-1.5 rounded-full"
-            style={{
-              background: sentimentColor(sentiment > 3 ? "positive" : sentiment < -3 ? "negative" : "neutral"),
-            }}
-            title={`sentiment ${sentiment?.toFixed(1)}`}
+            style={{ background: sentimentColor(sentiment > 3 ? "positive" : sentiment < -3 ? "negative" : "neutral") }}
+            title={`sentiment ${sentiment.toFixed(1)}`}
           />
         )}
+      </>
+    );
+    const className = `flex h-[34px] shrink-0 items-baseline gap-1.5 border-r border-white/[0.05] px-3.5 text-[11px] ${
+      company ? "cursor-pointer hover:bg-white/[0.04] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300" : ""
+    } ${selected ? "bg-white/[0.05]" : ""}`;
+    const title = quote ? `${quote.delivery === "cache" ? "Last-known cached quote" : "Yahoo Finance network quote"}; ${quote.currency}; source time ${quote.at == null ? "unknown" : new Date(quote.at).toISOString()}; retrieved ${timeAgo(quote.retrievedAt)}` : undefined;
+    if (company) {
+      return (
+        <button
+          key={key}
+          type="button"
+          aria-label={`Select ${company.name} (${ticker})`}
+          aria-pressed={selected}
+          onClick={() => onSelect(company.id)}
+          className={className}
+          title={title}
+        >
+          {contents}
+        </button>
+      );
+    }
+    return (
+      <span key={key} className={className} title={title}>
+        {contents}
       </span>
     );
-    return body;
   };
 
   return (
@@ -69,7 +83,7 @@ export function TickerTape({
       })}
       {companies.map((c) => {
         const q = quotes[c.ticker];
-        return cell(c.id, c.ticker, q, c.index, c.id);
+        return cell(c.id, c.ticker, q, c.index, c);
       })}
       {market && market.updatedAt > 0 && (
         <span className="tabnum shrink-0 px-3 text-[9.5px] text-white/25" title="latest successful quote retrieval across symbols">

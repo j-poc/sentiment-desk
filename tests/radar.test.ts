@@ -196,17 +196,28 @@ describe("Opportunity Radar evidence comparison", () => {
         ]),
         coverage: expect.arrayContaining([expect.objectContaining({ collector: "google_news_rss", state: "failed" })]),
       }));
+      const snapshotAt = (body as { generatedAt: number }).generatedAt;
 
       const firstPage = await app.fetch(new Request(
-        "http://localhost/api/companies/acme/radar/evidence?hours=24&period=current&eventType=product&offset=0&limit=1",
+        `http://localhost/api/companies/acme/radar/evidence?hours=24&asOf=${snapshotAt}&period=current&eventType=product&offset=0&limit=1`,
       ));
       const firstPageBody: unknown = await firstPage.json();
       expect(firstPageBody).toEqual(expect.objectContaining({
         period: "current", total: 2,
         items: expect.arrayContaining([expect.objectContaining({ title: "Acme adds a manufacturing site" })]),
       }));
+      await new Promise((resolve) => setTimeout(resolve, 3));
+      storeItem(db, {
+        sourceItemId: "arrived-after-snapshot",
+        publishedAt: recent + 2_500,
+        retrievedAt: collected + 2_500,
+        title: "Acme launches another product update",
+        sourceUrl: "https://c.example/story",
+        publisherName: "Publisher C",
+        publisherDomain: "c.example",
+      }, "positive");
       const secondPage = await app.fetch(new Request(
-        "http://localhost/api/companies/acme/radar/evidence?hours=24&period=current&eventType=product&offset=1&limit=1",
+        `http://localhost/api/companies/acme/radar/evidence?hours=24&asOf=${snapshotAt}&period=current&eventType=product&offset=1&limit=1`,
       ));
       const secondPageBody: unknown = await secondPage.json();
       expect(secondPageBody).toEqual(expect.objectContaining({
@@ -214,7 +225,7 @@ describe("Opportunity Radar evidence comparison", () => {
         items: expect.arrayContaining([expect.objectContaining({ title: "Acme launches product update" })]),
       }));
       const previousPage = await app.fetch(new Request(
-        "http://localhost/api/companies/acme/radar/evidence?hours=24&period=previous&eventType=product",
+        `http://localhost/api/companies/acme/radar/evidence?hours=24&asOf=${snapshotAt}&period=previous&eventType=product`,
       ));
       const previousPageBody: unknown = await previousPage.json();
       expect(previousPageBody).toEqual(expect.objectContaining({
@@ -225,6 +236,10 @@ describe("Opportunity Radar evidence comparison", () => {
         "http://localhost/api/companies/acme/radar/evidence?eventType=thematic_inference",
       ));
       expect(invalidEventType.status).toBe(400);
+      const invalidSnapshot = await app.fetch(new Request(
+        "http://localhost/api/companies/acme/radar/evidence?asOf=not-a-timestamp&eventType=product",
+      ));
+      expect(invalidSnapshot.status).toBe(400);
 
       const missingCompany = await app.fetch(new Request("http://localhost/api/companies/missing/radar"));
       expect(missingCompany.status).toBe(404);

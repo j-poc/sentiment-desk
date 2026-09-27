@@ -97,7 +97,9 @@ CREATE TABLE IF NOT EXISTS jev_judgments (
   latency_ms INTEGER,
   rubric_sha TEXT,
   score_error TEXT,
-  scored_at INTEGER
+  scored_at INTEGER,
+  score_attempts INTEGER NOT NULL DEFAULT 0,
+  score_retry_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS judgments_status ON jev_judgments(status);
 CREATE TABLE IF NOT EXISTS source_deliveries (
@@ -186,6 +188,8 @@ interface MentionRow {
   rubric_sha: string | null;
   score_error: string | null;
   scored_at: number | null;
+  score_attempts: number;
+  score_retry_at: number | null;
 }
 
 export interface SourceDeliveryInput {
@@ -300,7 +304,7 @@ export class Desk {
           ].map(sqlValue);
           insertJudgment.run(...judgmentValues);
         }
-        this.db.exec("PRAGMA user_version = 2");
+        this.db.exec("PRAGMA user_version = 3");
         this.createMentionsView();
         this.db.exec("COMMIT");
       } catch (err) {
@@ -309,12 +313,32 @@ export class Desk {
       }
       return;
     }
-    this.createMentionsView();
-    this.db.exec("PRAGMA user_version = 2");
+    const judgmentCols = new Set(
+      (this.db.prepare("PRAGMA table_info(jev_judgments)").all() as Array<{ name: string }>).map((r) => r.name),
+    );
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!judgmentCols.has("score_attempts")) {
+        this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_attempts INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!judgmentCols.has("score_retry_at")) {
+        this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_retry_at INTEGER");
+      }
+      if (object?.type === "view") this.db.exec("DROP VIEW mentions");
+      this.db.exec(`UPDATE jev_judgments SET status = 'failed', score_error =
+        'Scoring was interrupted; the provider outcome is unknown. Automatic retry is withheld to avoid a duplicate charge.'
+        WHERE status = 'scoring'`);
+      this.createMentionsView();
+      this.db.exec("PRAGMA user_version = 3");
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   private createMentionsView(): void {
-    this.db.exec(`CREATE VIEW IF NOT EXISTS mentions AS
+    this.db.exec(`CREATE VIEW mentions AS
       SELECT o.id, o.company_id, o.source_name, o.source_url, o.source_kind, o.source_tier,
         o.title, o.snippet, o.publisher_published_at AS published_at, o.publisher_published_at,
         o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector,
@@ -322,7 +346,8 @@ export class Desk {
         j.status, j.sentiment, j.confidence, j.p_pos, j.p_neu, j.p_neg, j.about, j.material,
         j.novel, j.credible, j.investor_relevant, j.event_type, j.takeaway, j.magnitude,
         j.surprise, j.event_score, j.impact, j.weight, j.exclude, j.engine, j.input_tokens,
-        j.output_tokens, j.cost_usd, j.latency_ms, j.rubric_sha, j.score_error, j.scored_at
+        j.output_tokens, j.cost_usd, j.latency_ms, j.rubric_sha, j.score_error, j.scored_at,
+        j.score_attempts, j.score_retry_at
       FROM source_observations o JOIN jev_judgments j ON j.observation_id = o.id`);
   }
 
@@ -412,7 +437,7 @@ export class Desk {
            about = ?, material = ?, novel = ?, credible = ?, investor_relevant = ?, event_type = ?, takeaway = ?, magnitude = ?,
            surprise = ?, event_score = ?, impact = ?, weight = ?,
            exclude = ?, engine = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?,
-           latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?
+           latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?, score_retry_at = NULL
          WHERE observation_id = ?`,
       )
       .run(
@@ -448,8 +473,33 @@ export class Desk {
 
   markFailed(id: string, error: string): void {
     this.db
-      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ? WHERE observation_id = ?")
+      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ?, score_retry_at = NULL WHERE observation_id = ?")
       .run(error.slice(0, 500), id);
+  }
+
+  markRetrying(id: string, error: string, retryAt: number): void {
+    this.db.prepare(
+      "UPDATE jev_judgments SET status = 'retrying', score_error = ?, score_retry_at = ? WHERE observation_id = ? AND status = 'scoring'",
+    ).run(error.slice(0, 500), retryAt, id);
+  }
+
+  claimForScoring(id: string, now: number): MentionRow | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.db.prepare(
+        `UPDATE jev_judgments SET status = 'scoring', score_attempts = score_attempts + 1,
+           score_retry_at = NULL, score_error = NULL
+         WHERE observation_id = ? AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`,
+      ).run(id, now);
+      const row = Number(result.changes) === 1
+        ? this.db.prepare("SELECT * FROM mentions WHERE id = ?").get(id) as MentionRow | undefined
+        : undefined;
+      this.db.exec("COMMIT");
+      return row;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   recordDelivery(delivery: SourceDeliveryInput): void {
@@ -589,7 +639,7 @@ export class Desk {
     return rows.map(rowToDTO);
   }
 
-  radarEvidence(companyId: string, fromMs: number, toMs: number): RadarItemEvidence[] {
+  radarEvidence(companyId: string, fromMs: number, toMs: number, asOf = Number.MAX_SAFE_INTEGER): RadarItemEvidence[] {
     return this.db.prepare(
       `SELECT id, title, source_url AS sourceUrl, publisher_name AS publisherName,
         publisher_domain AS publisherDomain, publisher_published_at AS publishedAt,
@@ -598,22 +648,23 @@ export class Desk {
        FROM mentions
        WHERE company_id = ? AND status = 'scored' AND impact IS NOT NULL
          AND time_basis = 'publisher_declared' AND publisher_published_at >= ?
-         AND publisher_published_at < ?
+         AND publisher_published_at < ? AND ingested_at <= ? AND scored_at <= ?
        ORDER BY publisher_published_at DESC, ingested_at DESC`,
-    ).all(companyId, fromMs, toMs) as unknown as RadarItemEvidence[];
+    ).all(companyId, fromMs, toMs, asOf, asOf) as unknown as RadarItemEvidence[];
   }
 
-  radarUncounted(companyId: string, retrievedFromMs: number, retrievedToMs: number): {
+  radarUncounted(companyId: string, retrievedFromMs: number, retrievedToMs: number, asOf = Number.MAX_SAFE_INTEGER): {
     untimedScored: number;
     unjudged: number;
   } {
     const row = this.db.prepare(
       `SELECT
-        SUM(CASE WHEN status = 'scored' AND impact IS NOT NULL
+        SUM(CASE WHEN status IN ('scored', 'off_target') AND scored_at <= ? AND impact IS NOT NULL
           AND (time_basis != 'publisher_declared' OR publisher_published_at IS NULL) THEN 1 ELSE 0 END) AS untimedScored,
-        SUM(CASE WHEN status IN ('pending', 'failed', 'corrupt') THEN 1 ELSE 0 END) AS unjudged
-       FROM mentions WHERE company_id = ? AND retrieved_at >= ? AND retrieved_at < ?`,
-    ).get(companyId, retrievedFromMs, retrievedToMs) as {
+        SUM(CASE WHEN status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt')
+          OR (status IN ('scored', 'off_target') AND scored_at > ?) THEN 1 ELSE 0 END) AS unjudged
+       FROM mentions WHERE company_id = ? AND retrieved_at >= ? AND retrieved_at <= ? AND ingested_at <= ?`,
+    ).get(asOf, asOf, companyId, retrievedFromMs, retrievedToMs, asOf) as {
       untimedScored: number | null;
       unjudged: number | null;
     };
@@ -623,12 +674,13 @@ export class Desk {
   /**
    * Tape: scored mentions first-class, but pending ones stay visible so the
    * live flow is observable even before scoring is configured. Failed items
-   * are health-panel material, not tape material.
+   * stay visible so a user can inspect the item-level failure and its
+   * recovery state after a page reload.
    */
   recentVisible(limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE status IN ('scored', 'pending', 'corrupt')
+        `SELECT * FROM mentions WHERE status IN ('scored', 'pending', 'retrying', 'scoring', 'failed', 'corrupt')
          ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as MentionRow[];
@@ -682,8 +734,10 @@ export class Desk {
 
   pendingIds(limit: number): string[] {
     return (
-      this.db.prepare("SELECT id FROM mentions WHERE status = 'pending' ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC LIMIT ?")
-        .all(limit) as unknown as Array<{ id: string }>
+      this.db.prepare(`SELECT id FROM mentions
+        WHERE status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?)
+        ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC LIMIT ?`)
+        .all(Date.now(), limit) as unknown as Array<{ id: string }>
     ).map((r) => r.id);
   }
 
@@ -828,6 +882,7 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     timeBasis: r.time_basis as TimeBasis,
     filedAt: r.filed_at ?? null,
     status,
+    scoreRetryAt: r.score_retry_at ?? null,
     score,
     error: status === "corrupt" ? (r.score_error ?? "Stored Jev judgment is incomplete and was withheld.") : r.score_error,
   };

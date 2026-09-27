@@ -84,19 +84,28 @@ export function createApp(deps: AppDeps): Hono {
     }
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
     const now = Date.now();
+    const rawAsOf = c.req.query("asOf");
+    let asOf = now;
+    if (rawAsOf != null) {
+      if (!/^\d+$/.test(rawAsOf)) return c.json({ error: "invalid snapshot time" }, 400);
+      asOf = Number(rawAsOf);
+      if (!Number.isSafeInteger(asOf) || asOf < 0 || asOf > now) {
+        return c.json({ error: "invalid snapshot time" }, 400);
+      }
+    }
     const duration = hours * 60 * 60 * 1000;
-    const currentFrom = now - duration;
+    const currentFrom = asOf - duration;
     const previousFrom = currentFrom - duration;
-    const uncounted = deps.db.radarUncounted(id, currentFrom, now);
+    const uncounted = deps.db.radarUncounted(id, currentFrom, asOf, asOf);
     const coverage = deps.db.deliveryHealth(deps.deliverySources, now).filter(({ collector }) =>
       ["google_news_rss", "yahoo_finance_rss", "gdelt_doc_api", "sec_edgar", "finnhub", "reddit", "x"].includes(collector),
     );
     return c.json({
       ...buildRadar({
         hours,
-        now,
-        currentRows: deps.db.radarEvidence(id, currentFrom, now),
-        previousRows: deps.db.radarEvidence(id, previousFrom, currentFrom),
+        now: asOf,
+        currentRows: deps.db.radarEvidence(id, currentFrom, asOf, asOf),
+        previousRows: deps.db.radarEvidence(id, previousFrom, currentFrom, asOf),
         untimedScored: uncounted.untimedScored,
         unjudged: uncounted.unjudged,
       }),
@@ -115,18 +124,27 @@ export function createApp(deps: AppDeps): Hono {
     if (rawPeriod !== "current" && rawPeriod !== "previous") return c.json({ error: "unknown period" }, 400);
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
     const now = Date.now();
+    const rawAsOf = c.req.query("asOf");
+    let asOf = now;
+    if (rawAsOf != null) {
+      if (!/^\d+$/.test(rawAsOf)) return c.json({ error: "invalid snapshot time" }, 400);
+      asOf = Number(rawAsOf);
+      if (!Number.isSafeInteger(asOf) || asOf < 0 || asOf > now) {
+        return c.json({ error: "invalid snapshot time" }, 400);
+      }
+    }
     const duration = hours * 60 * 60 * 1000;
-    const currentFrom = now - duration;
+    const currentFrom = asOf - duration;
     const from = rawPeriod === "current" ? currentFrom : currentFrom - duration;
-    const to = rawPeriod === "current" ? now : currentFrom;
+    const to = rawPeriod === "current" ? asOf : currentFrom;
     const offset = clampNumber(c.req.query("offset"), 0, 5_000, 0);
     const limit = clampNumber(c.req.query("limit"), 1, 25, 5);
     return c.json({
-      generatedAt: now,
+      generatedAt: asOf,
       hours,
       period: rawPeriod,
       ...radarEvidencePage({
-        rows: deps.db.radarEvidence(id, from, to),
+        rows: deps.db.radarEvidence(id, from, to, asOf),
         eventType: rawEventType,
         offset,
         limit,
@@ -264,24 +282,27 @@ export function createApp(deps: AppDeps): Hono {
     streamSSE(c, async (stream) => {
       let open = true;
       let hb: ReturnType<typeof setInterval> | undefined;
+      let resolveClosed!: () => void;
+      const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+      const cleanup = () => {
+        if (!open) return;
+        open = false;
+        deps.hub.remove(send);
+        if (hb) clearInterval(hb);
+        resolveClosed();
+      };
       // The hub serializes payloads; send() receives pre-encoded strings.
       const send = (event: string, data: string): Promise<void> => {
         if (!open) return Promise.resolve();
         return stream.writeSSE({ event, data }).catch(() => {
-          open = false;
-          deps.hub.remove(send);
+          cleanup();
         }) as Promise<void>;
       };
-      deps.hub.add(send);
-      stream.onAbort(() => {
-        open = false;
-        deps.hub.remove(send);
-        if (hb) clearInterval(hb);
-      });
+      deps.hub.add(send, cleanup);
+      stream.onAbort(cleanup);
       await send("hello", JSON.stringify({ demo: deps.demo, now: Date.now() }));
-      hb = setInterval(() => void send("ping", String(Date.now())), 15_000);
-      // Hold the stream open until the client disconnects; onAbort cleans up.
-      await new Promise<never>(() => {});
+      if (open) hb = setInterval(() => void send("ping", String(Date.now())), 15_000);
+      await closed;
     }),
   );
 

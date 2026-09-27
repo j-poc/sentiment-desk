@@ -76,4 +76,26 @@ describe("market quote provenance", () => {
     expect(second.cacheAgeMs).not.toBeNull();
     db.close();
   });
+
+  it("waits for the quote backfill side task before database shutdown", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([company]);
+    const data = market(db);
+    let releaseBackfill!: (response: Response) => void;
+    const backfillResponse = new Promise<Response>((resolve) => { releaseBackfill = resolve; });
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("interval=30m") ? backfillResponse : chartResponse(),
+    );
+
+    await data.refresh();
+    let settled = false;
+    const waiting = data.waitForIdle().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseBackfill(chartResponse());
+    await waiting;
+    expect(settled).toBe(true);
+    expect(db.priceWindow("ACME", 0).length).toBeGreaterThan(0);
+    db.close();
+  });
 });

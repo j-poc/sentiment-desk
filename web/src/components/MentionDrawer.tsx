@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { Mention } from "../lib/api.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { NEU, dayTime, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
@@ -30,18 +30,54 @@ const RUBRIC_ROWS: Array<{ key: ScoreKey; label: string }> = [
   { key: "credible", label: "Source credibility" },
 ];
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 /**
  * The detail sidebar: everything the desk knows about one judgment, opened
  * from any mention row instead of demanding scroll space on the main screen.
  */
 export function MentionDrawer({ mention, onClose }: { mention: Mention | null; onClose: () => void }) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!mention) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusFrame = requestAnimationFrame(() => closeButtonRef.current?.focus());
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const dialog = dialogRef.current;
+      const focusable = [...(dialog?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter(
+        (element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true",
+      );
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) {
+        e.preventDefault();
+        dialog?.focus();
+      } else if (e.shiftKey && (document.activeElement === first || !dialog?.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !dialog?.contains(document.activeElement))) {
+        e.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKey, true);
+      const target = returnFocusRef.current;
+      if (target?.isConnected) requestAnimationFrame(() => target.focus());
+    };
   }, [mention, onClose]);
 
   if (!mention) return null;
@@ -50,15 +86,22 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
 
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-black/40" onClick={onClose} />
+      <div className="fixed inset-0 z-40 bg-black/40" aria-hidden="true" onClick={onClose} />
       <aside
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mention-dialog-label"
+        tabIndex={-1}
         className="fixed inset-y-0 right-0 z-50 flex w-[440px] max-w-[92vw] flex-col border-l border-desk-line bg-[#0b0d13] shadow-2xl"
         style={{ animation: "rise-in 0.18s ease-out" }}
       >
         <div className="panel-head shrink-0">
-          <span className="micro">Mention detail</span>
+          <span id="mention-dialog-label" className="micro">Mention detail</span>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
+            aria-label="Close mention details"
             className="tabnum rounded border border-white/10 px-2 py-[1px] text-[10px] text-white/50 hover:bg-white/[0.05]"
           >
             esc
@@ -166,7 +209,13 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
             </>
           ) : (
             <div className="mt-4 text-[11.5px] text-white/40">
-              {mention.status === "failed" ? `Scoring failed: ${mention.error ?? "unknown error"}` : "Awaiting judgment…"}
+              {mention.status === "failed" || mention.status === "corrupt"
+                ? `Scoring failed: ${mention.error ?? "unknown error"}`
+                : mention.status === "retrying"
+                  ? `Rate-limited; retry scheduled${mention.scoreRetryAt == null ? "" : ` for ${dayTime(mention.scoreRetryAt)}`}.`
+                  : mention.status === "scoring"
+                    ? "Jev is judging this item…"
+                    : "Awaiting judgment…"}
             </div>
           )}
         </div>

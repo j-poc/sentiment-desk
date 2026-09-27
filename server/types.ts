@@ -85,7 +85,7 @@ export interface JevState {
   };
 }
 
-export type MentionStatus = "pending" | "scored" | "off_target" | "failed" | "corrupt";
+export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off_target" | "failed" | "corrupt";
 
 export interface MentionScore {
   sentiment: "negative" | "neutral" | "positive";
@@ -138,6 +138,7 @@ export interface MentionDTO {
   /** SEC only: EDGAR filing date (distinct from the acceptance timestamp). */
   filedAt?: number | null;
   status: MentionStatus;
+  scoreRetryAt: number | null;
   score: MentionScore | null;
   error: string | null;
 }

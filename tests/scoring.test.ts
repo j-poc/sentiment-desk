@@ -12,6 +12,7 @@ import {
   weightedIndex,
 } from "../server/scoring.js";
 import type { ParsedJudgment } from "../server/scoring.js";
+import { EVENT_TYPES, TAKEAWAY_KEYS } from "../server/rubric.js";
 
 function judgment(over: Partial<ParsedJudgment> = {}): ParsedJudgment {
   return {
@@ -34,17 +35,23 @@ function judgment(over: Partial<ParsedJudgment> = {}): ParsedJudgment {
 }
 
 function answers(over: Record<string, unknown> = {}) {
+  const eventTypeProbabilities = Object.fromEntries(
+    EVENT_TYPES.map((eventType) => [eventType, eventType === "legal_regulatory" ? 0.8 : 0.2 / (EVENT_TYPES.length - 1)]),
+  );
+  const takeawayProbabilities = Object.fromEntries(
+    TAKEAWAY_KEYS.map((key) => [key, key === "legal_hit" ? 0.8 : 0.2 / (TAKEAWAY_KEYS.length - 1)]),
+  );
   return {
-    sentiment: { choice: "negative", probabilities: { negative: 0.7, neutral: 0.2, positive: 0.1 }, confidence: 0.9 },
-    about: { noul: 0.95 },
-    material: { noul: 0.8 },
-    novel: { noul: 0.6 },
-    credible: { noul: 0.9 },
-    investor_relevant: { noul: 0.85 },
-    event_type: { choice: "legal_regulatory", probabilities: { legal_regulatory: 0.8, other: 0.2 } },
-    takeaway: { choice: "legal_hit" },
-    magnitude: { noul: 0.7 },
-    surprise: { noul: 0.8 },
+    sentiment: { type: "choice", choice: "negative", probabilities: { negative: 0.7, neutral: 0.2, positive: 0.1 }, confidence: 0.9 },
+    about: { type: "noul", noul: 0.95 },
+    material: { type: "noul", noul: 0.8 },
+    novel: { type: "noul", noul: 0.6 },
+    credible: { type: "noul", noul: 0.9 },
+    investor_relevant: { type: "noul", noul: 0.85 },
+    event_type: { type: "choice", choice: "legal_regulatory", probabilities: eventTypeProbabilities, confidence: 0.8 },
+    takeaway: { type: "choice", choice: "legal_hit", probabilities: takeawayProbabilities, confidence: 0.8 },
+    magnitude: { type: "noul", noul: 0.7 },
+    surprise: { type: "noul", noul: 0.8 },
     ...over,
   };
 }
@@ -62,14 +69,18 @@ describe("parseJudgment", () => {
     expect(j.surprise).toBe(0.8);
   });
 
-  it("falls back to top probability when choice is missing, alphabetical tie-break", () => {
-    const j = parseJudgment(
-      answers({
-        sentiment: { probabilities: { negative: 0.4, neutral: 0.4, positive: 0.2 } },
-      }),
-    );
-    // negative and neutral tie at 0.4; alphabetical order picks negative.
-    expect(j.sentiment).toBe("negative");
+  it("rejects a missing, unknown, or probability-inconsistent choice", () => {
+    const validSentiment = answers().sentiment;
+    expect(() => parseJudgment(answers({ sentiment: { ...(validSentiment as object), choice: undefined } }))).toThrow();
+    expect(() => parseJudgment(answers({ sentiment: { ...(validSentiment as object), choice: "bullish" } }))).toThrow();
+    expect(() => parseJudgment(answers({ sentiment: { ...(validSentiment as object), choice: "positive" } }))).toThrow();
+  });
+
+  it("rejects incomplete, out-of-range, or unnormalized choice probabilities", () => {
+    const validSentiment = answers().sentiment;
+    expect(() => parseJudgment(answers({ sentiment: { ...(validSentiment as object), probabilities: { negative: 1 } } }))).toThrow();
+    expect(() => parseJudgment(answers({ sentiment: { ...(validSentiment as object), probabilities: { negative: 1.2, neutral: 0, positive: 0 } } }))).toThrow();
+    expect(() => parseJudgment(answers({ sentiment: { ...(validSentiment as object), probabilities: { negative: 0.2, neutral: 0.2, positive: 0.2 } } }))).toThrow();
   });
 
   it("fails closed on missing answers", () => {
@@ -85,6 +96,7 @@ describe("parseJudgment", () => {
 
   it("rejects out-of-range noul values", () => {
     expect(() => parseJudgment(answers({ about: { noul: 1.5 } }))).toThrow();
+    expect(() => parseJudgment(answers({ about: { type: "choice", noul: 0.5 } }))).toThrow();
   });
 });
 

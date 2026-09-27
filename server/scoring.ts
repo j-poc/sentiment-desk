@@ -1,7 +1,7 @@
 import type { SourceTier } from "./types.js";
 import { validateChoiceAnswer, validateNoulAnswer } from "./jev.js";
 import type { EventType, TakeawayKey } from "./rubric.js";
-import { EVENT_TYPES, TAKEAWAY_KEYS } from "./rubric.js";
+import { EVENT_TYPES, RUBRIC, TAKEAWAY_KEYS } from "./rubric.js";
 
 /**
  * Pure scoring functions. Everything here is deterministic so any stored score
@@ -41,28 +41,18 @@ export class JudgmentError extends Error {
  * defaults. Choice ties break alphabetically, mirroring the Go adapter.
  */
 export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment {
-  const rawSentiment = answers["sentiment"];
-  if (rawSentiment == null) throw new JudgmentError("missing sentiment answer");
-
-  const choice = validateChoiceAnswer(rawSentiment);
-  const probs = choice.probabilities ?? {};
-  const allowed = new Map(
-    SENTIMENTS.map((s) => [s, clamp01(probs[s] ?? 0)] as const),
-  );
-
-  let sentiment: (typeof SENTIMENTS)[number];
-  if (choice.choice != null && (SENTIMENTS as readonly string[]).includes(choice.choice)) {
-    sentiment = choice.choice as (typeof SENTIMENTS)[number];
-  } else {
-    sentiment = topChoice(allowed) as (typeof SENTIMENTS)[number];
+  const expectedAnswers = Object.keys(RUBRIC).sort();
+  const actualAnswers = Object.keys(answers).sort();
+  if (
+    actualAnswers.length !== expectedAnswers.length ||
+    actualAnswers.some((key, index) => key !== expectedAnswers[index])
+  ) {
+    throw new JudgmentError("Jev answer names do not match the fixed rubric");
   }
 
-  let confidence: number | undefined = choice.confidence;
-  if (confidence == null && choice.choice != null) {
-    const p = probs[choice.choice];
-    if (p != null) confidence = clamp01(p);
-  }
-  if (confidence == null) confidence = allowed.get(sentiment) ?? 0.5;
+  const sentimentAnswer = parseChoice(answers["sentiment"], "sentiment", SENTIMENTS);
+  const sentiment = sentimentAnswer.choice;
+  const confidence = sentimentAnswer.confidence;
 
   const about = noul(answers, "about");
   const material = noul(answers, "material");
@@ -72,30 +62,19 @@ export function parseJudgment(answers: Record<string, unknown>): ParsedJudgment 
   const surprise = noul(answers, "surprise");
   const investorRelevant = noul(answers, "investor_relevant");
 
-  const rawEvent = answers["event_type"];
-  if (rawEvent == null) throw new JudgmentError("missing event_type answer");
-  const eventAnswer = validateChoiceAnswer(rawEvent);
-  const eventProbs = eventAnswer.probabilities ?? {};
-  const eventType: EventType =
-    eventAnswer.choice != null && (EVENT_TYPES as readonly string[]).includes(eventAnswer.choice)
-      ? (eventAnswer.choice as EventType)
-      : (topChoice(new Map(EVENT_TYPES.map((t) => [t, clamp01(eventProbs[t] ?? 0)]))) as EventType);
+  const eventType: EventType = parseChoice(answers["event_type"], "event_type", EVENT_TYPES).choice;
+  const takeaway: TakeawayKey = parseChoice(answers["takeaway"], "takeaway", TAKEAWAY_KEYS).choice;
 
-  const rawTakeaway = answers["takeaway"];
-  if (rawTakeaway == null) throw new JudgmentError("missing takeaway answer");
-  const takeawayAnswer = validateChoiceAnswer(rawTakeaway);
-  const takeawayProbs = takeawayAnswer.probabilities ?? {};
-  const takeaway: TakeawayKey =
-    takeawayAnswer.choice != null && (TAKEAWAY_KEYS as readonly string[]).includes(takeawayAnswer.choice)
-      ? (takeawayAnswer.choice as TakeawayKey)
-      : (topChoice(new Map(TAKEAWAY_KEYS.map((t) => [t, clamp01(takeawayProbs[t] ?? 0)]))) as TakeawayKey);
+  const pPos = requiredProbability(sentimentAnswer.probabilities, "positive", "sentiment");
+  const pNeu = requiredProbability(sentimentAnswer.probabilities, "neutral", "sentiment");
+  const pNeg = requiredProbability(sentimentAnswer.probabilities, "negative", "sentiment");
 
   return {
     sentiment,
-    pPos: allowed.get("positive") ?? 0,
-    pNeu: allowed.get("neutral") ?? 0,
-    pNeg: allowed.get("negative") ?? 0,
-    confidence: clamp01(confidence),
+    pPos,
+    pNeu,
+    pNeg,
+    confidence,
     about,
     material,
     novel,
@@ -493,22 +472,47 @@ export function bucketMsFor(hours: number): number {
 function noul(answers: Record<string, unknown>, key: string): number {
   const raw = answers[key];
   if (raw == null) throw new JudgmentError(`missing ${key} answer`);
-  const parsed = validateNoulAnswer(raw);
-  return clamp01(parsed.noul);
+  return validateNoulAnswer(raw).noul;
 }
 
-function topChoice(probs: Map<string, number>): string {
-  let best = "";
-  let bestP = -1;
-  const keys = [...probs.keys()].sort();
-  for (const k of keys) {
-    const p = probs.get(k) ?? -1;
-    if (p > bestP) {
-      best = k;
-      bestP = p;
-    }
+function parseChoice<T extends string>(
+  raw: unknown,
+  question: string,
+  allowed: readonly T[],
+): { choice: T; probabilities: ReadonlyMap<T, number>; confidence: number } {
+  const answer = validateChoiceAnswer(raw);
+  const choice = allowed.find((option) => option === answer.choice);
+  if (choice == null) throw new JudgmentError(`${question} choice is outside the fixed rubric`);
+
+  const keys = Object.keys(answer.probabilities);
+  if (keys.length !== allowed.length || keys.some((key) => !allowed.some((option) => option === key))) {
+    throw new JudgmentError(`${question} probabilities do not match the fixed rubric`);
   }
-  return best;
+
+  const probabilities = new Map<T, number>();
+  let total = 0;
+  for (const option of allowed) {
+    const probability = answer.probabilities[option];
+    if (probability == null) throw new JudgmentError(`${question} is missing probability for ${option}`);
+    probabilities.set(option, probability);
+    total += probability;
+  }
+  // TypeSafe's API describes a complete distribution whose values sum to
+  // approximately 1. A 5-point tolerance allows decimal rounding only.
+  if (Math.abs(total - 1) > 0.05) throw new JudgmentError(`${question} probabilities do not sum to approximately 1`);
+  const choiceProbability = probabilities.get(choice);
+  const maximumProbability = Math.max(...probabilities.values());
+  if (choiceProbability == null || choiceProbability < maximumProbability - 1e-9) {
+    throw new JudgmentError(`${question} choice is not the highest-probability option`);
+  }
+
+  return { choice, probabilities, confidence: answer.confidence };
+}
+
+function requiredProbability(probabilities: ReadonlyMap<string, number>, key: string, question: string): number {
+  const probability = probabilities.get(key);
+  if (probability == null) throw new JudgmentError(`${question} is missing probability for ${key}`);
+  return probability;
 }
 
 function clamp01(n: number): number {

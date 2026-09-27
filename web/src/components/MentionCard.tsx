@@ -124,6 +124,12 @@ export function MentionCard({
       </div>
 
       {m.status === "pending" && <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>}
+      {m.status === "scoring" && <div className="mt-2 text-[11px] text-sky-200/70">Jev is judging this item…</div>}
+      {m.status === "retrying" && (
+        <div className="mt-2 text-[11px] text-amber-200/80" title={m.error ?? ""}>
+          retry scheduled{m.scoreRetryAt == null ? "" : ` · ${new Date(m.scoreRetryAt).toLocaleTimeString()}`}
+        </div>
+      )}
       {m.status === "failed" && (
         <div className="mt-2 text-[11px] text-red-400/80" title={m.error ?? ""}>
           scoring failed

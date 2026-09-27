@@ -196,4 +196,39 @@ describe("Desk observation and judgment storage", () => {
       db.close();
     }
   });
+
+  it("migrates v2 retry fields and holds interrupted scoring as unknown instead of resubmitting", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-v2-retry-migration-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    db.seedCompanies([company]);
+    const { observationId } = db.insertObservation(mention());
+    const claimed = db.claimForScoring(observationId, Date.now());
+    expect(claimed?.status).toBe("scoring");
+    expect(claimed?.score_attempts).toBe(1);
+    db.close();
+
+    const priorVersion = new DatabaseSync(path);
+    priorVersion.exec(`
+      DROP VIEW mentions;
+      ALTER TABLE jev_judgments DROP COLUMN score_retry_at;
+      ALTER TABLE jev_judgments DROP COLUMN score_attempts;
+      PRAGMA user_version = 2;
+      CREATE VIEW mentions AS SELECT id FROM jev_judgments;
+    `);
+    priorVersion.close();
+
+    db = new Desk(path);
+    try {
+      const recovered = db.mentionRow(observationId)!;
+      expect(recovered.status).toBe("failed");
+      expect(recovered.score_error).toContain("outcome is unknown");
+      expect(recovered.score_retry_at).toBeNull();
+      expect(db.pendingIds(10)).toEqual([]);
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("failed");
+    } finally {
+      db.close();
+    }
+  });
 });

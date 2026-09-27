@@ -2,6 +2,7 @@ import type { Desk, RawMentionInput } from "./db.js";
 import { rowToDTO } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
+import { JevError } from "./jev.js";
 import { RUBRIC_SHA } from "./rubric.js";
 import {
   applyPostRules,
@@ -36,9 +37,9 @@ import type {
 export interface JudgeFn {
   (state: JevState): Promise<{
     answers: Record<string, unknown>;
-    model?: string;
-    inputTokens?: number;
-    outputTokens?: number;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
     latencyMs: number;
   }>;
 }
@@ -56,11 +57,14 @@ export interface PipelineDeps {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CURRENT_WINDOW_MS = 3 * 60 * 60 * 1000;
+const MAX_JEV_ATTEMPTS = 3;
+const RETRY_BASE_MS = 30_000;
 
 export class Pipeline {
   private readonly queue: string[] = [];
   private readonly queued = new Set<string>();
   private inFlight = 0;
+  private readonly idleWaiters = new Set<() => void>();
   private memoryCache: Map<string, { at: number; block: JevState["deskMemory"] }> = new Map();
 
   private companyCache: Map<
@@ -100,14 +104,26 @@ export class Pipeline {
       void this.scoreOne(id).finally(() => {
         this.inFlight -= 1;
         this.pump();
+        this.resolveIdleWaiters();
       });
     }
   }
 
+  waitForIdle(): Promise<void> {
+    if (this.inFlight === 0 && this.queue.length === 0) return Promise.resolve();
+    return new Promise((resolve) => this.idleWaiters.add(resolve));
+  }
+
+  private resolveIdleWaiters(): void {
+    if (this.inFlight !== 0 || this.queue.length !== 0) return;
+    for (const resolve of this.idleWaiters) resolve();
+    this.idleWaiters.clear();
+  }
+
   private async scoreOne(id: string): Promise<void> {
     const db = this.deps.db;
-    const row = db.mentionRow(id);
-    if (!row || row.status !== "pending") return;
+    const queuedRow = db.mentionRow(id);
+    if (!queuedRow || (queuedRow.status !== "pending" && queuedRow.status !== "retrying")) return;
 
     if (!this.deps.judge) {
       // No engine configured and not demo: the mention stays pending and the
@@ -115,6 +131,9 @@ export class Pipeline {
       this.deps.health.recordJev(false, "no scoring engine configured");
       return;
     }
+
+    const row = db.claimForScoring(id, Date.now());
+    if (!row) return;
 
     const meta = this.companyMeta(row.company_id);
     // Lexically ambiguous names matched by text alone (Google News, GDELT)
@@ -151,10 +170,16 @@ export class Pipeline {
 
     try {
       const out = await this.deps.judge(state);
+      if (
+        !Number.isSafeInteger(out.inputTokens) || out.inputTokens < 0 ||
+        !Number.isSafeInteger(out.outputTokens) || out.outputTokens < 0
+      ) {
+        throw new Error("Jev returned invalid token usage; score withheld");
+      }
       const parsed = parseJudgment(out.answers);
       const tier = row.source_tier as SourceTier;
       const final = applyPostRules(parsed, TIER_WEIGHT[tier], { strictAbout: strictAbout });
-      const inputTokens = out.inputTokens ?? 0;
+      const inputTokens = out.inputTokens;
       const score: MentionScore = {
         sentiment: parsed.sentiment,
         pPos: parsed.pPos,
@@ -173,9 +198,9 @@ export class Pipeline {
         eventScore: final.eventScore,
         impact: final.impact,
         weight: final.weight,
-        engine: out.model ?? this.deps.engineLabel,
+        engine: out.model,
         inputTokens,
-        outputTokens: out.outputTokens ?? 0,
+        outputTokens: out.outputTokens,
         costUsd: (inputTokens / 1_000_000) * this.deps.inputPricePerMTok,
         latencyMs: out.latencyMs,
         rubricSha: RUBRIC_SHA,
@@ -192,9 +217,19 @@ export class Pipeline {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      db.markFailed(id, message);
+      if (err instanceof JevError && err.retryable && row.score_attempts < MAX_JEV_ATTEMPTS) {
+        const retryAt = Date.now() + RETRY_BASE_MS * 2 ** (row.score_attempts - 1);
+        db.markRetrying(id, `${message}; retry ${row.score_attempts + 1} of ${MAX_JEV_ATTEMPTS} is scheduled`, retryAt);
+      } else {
+        const outcomeNote = err instanceof JevError && err.outcomeUnknown
+          ? "; provider outcome is unknown, so automatic retry is withheld to avoid a duplicate charge"
+          : "";
+        db.markFailed(id, `${message}${outcomeNote}`);
+      }
       this.deps.health.recordJev(false, message);
       db.logEvent("warn", "jev", `score failed for ${id}: ${message}`);
+      const updated = db.mentionRow(id);
+      if (updated) this.deps.hub.broadcast("mention", rowToDTO(updated));
     }
   }
 

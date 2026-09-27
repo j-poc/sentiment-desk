@@ -12,6 +12,7 @@ import { isFinanceRelevant } from "./scoring.js";
 import { fetchPrimaryDocText, fetchRecent8Ks, titleForItems } from "./sources/sec.js";
 import { generateDemoMention } from "./demo.js";
 import { classifyDeliveryError, recordDelivery } from "./delivery.js";
+import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 
 /**
  * Polling schedulers. Each source loop is failure-isolated: one company's feed
@@ -19,10 +20,6 @@ import { classifyDeliveryError, recordDelivery } from "./delivery.js";
  * the events table. The RSS rotation sleeps briefly between companies to stay
  * polite to the feed host.
  */
-
-export interface SchedulerControl {
-  stop(): void;
-}
 
 export function startRssPoller(deps: {
   companies: Company[];
@@ -123,9 +120,7 @@ export function startRssPoller(deps: {
       running = false;
     }
   };
-  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
-  void tick();
-  return { stop: () => clearInterval(timer) };
+  return scheduleTask(tick, deps.intervalSeconds * 1000);
 }
 
 export function startXPoller(deps: {
@@ -219,9 +214,7 @@ export function startXPoller(deps: {
       running = false;
     }
   };
-  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
-  void tick();
-  return { stop: () => clearInterval(timer) };
+  return scheduleTask(tick, deps.intervalSeconds * 1000);
 }
 
 /**
@@ -305,9 +298,7 @@ export function startSecPoller(deps: {
       running = false;
     }
   };
-  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
-  void tick();
-  return { stop: () => clearInterval(timer) };
+  return scheduleTask(tick, deps.intervalSeconds * 1000);
 }
 
 /**
@@ -394,9 +385,7 @@ export function startGdeltPoller(deps: {
       running = false;
     }
   };
-  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
-  void tick();
-  return { stop: () => clearInterval(timer) };
+  return scheduleTask(tick, deps.intervalSeconds * 1000);
 }
 
 /**
@@ -600,9 +589,7 @@ export function startFinnhubPoller(deps: {
       running = false;
     }
   };
-  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
-  void tick();
-  return { stop: () => clearInterval(timer) };
+  return scheduleTask(tick, deps.intervalSeconds * 1000);
 }
 
 /** Reddit poller: social search per company with cached OAuth tokens. */
@@ -701,18 +688,19 @@ export function startRedditPoller(deps: {
       running = false;
     }
   };
-  const timer = setInterval(() => void tick(), deps.intervalSeconds * 1000);
-  void tick();
-  return { stop: () => clearInterval(timer) };
+  return scheduleTask(tick, deps.intervalSeconds * 1000);
 }
 
 export function startDemoLoop(deps: { companies: Company[]; pipeline: Pipeline }): SchedulerControl {
-  const timer = setInterval(() => {
+  return scheduleTask(() => {
     if (Math.random() < 0.72) {
       void deps.pipeline.ingest(generateDemoMention(deps.companies));
     }
-  }, 5_000);
-  return { stop: () => clearInterval(timer) };
+  }, 5_000, { immediate: false });
+}
+
+export function startJevRetryPoller(pipeline: Pipeline): SchedulerControl {
+  return scheduleTask(() => { pipeline.drainPending(5_000); }, 15_000, { immediate: false });
 }
 
 /**

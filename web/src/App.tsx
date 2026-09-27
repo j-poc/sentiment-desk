@@ -60,7 +60,7 @@ function applyFilter(ms: Mention[], f: FilterKey): Mention[] {
     case "offtarget":
       return ms.filter((m) => m.status === "off_target");
     case "failed":
-      return ms.filter((m) => m.status === "failed" || m.status === "pending");
+      return ms.filter((m) => ["failed", "pending", "retrying", "scoring", "corrupt"].includes(m.status));
   }
 }
 
@@ -87,6 +87,7 @@ export default function App() {
   const [clock, setClock] = useState(Date.now());
   const [session, setSession] = useState<SessionInfo>(() => sessionInfo());
   const [drawerMention, setDrawerMention] = useState<Mention | null>(null);
+  const closeDrawer = useCallback(() => setDrawerMention(null), []);
 
   const selectedIdRef = useRef<string | null>(null);
   const windowRef = useRef(24);
@@ -319,6 +320,7 @@ export default function App() {
   // Keyboard: j/k or arrows move, 1-4 windows, f cycles filter, c toggles chart mode.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (drawerMention) return;
       if (e.target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
       const move = (dir: number) => {
         const ids = orderRef.current;
@@ -338,7 +340,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [feedFilter]);
+  }, [drawerMention, feedFilter]);
 
   // Fresh, high-strength events across the whole watchlist: the speed lane.
   const breaking = useMemo(
@@ -357,7 +359,8 @@ export default function App() {
   const filteredMentions = useMemo(() => applyFilter(mentions, feedFilter), [mentions, feedFilter]);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <>
+    <div className="flex h-full flex-col overflow-hidden" inert={drawerMention !== null}>
       <Header connected={connected} health={health} totalMentions={totalMentions} clock={clock} />
       <TickerTape
         market={market}
@@ -418,8 +421,8 @@ export default function App() {
               />
             ) : (
             <>
-              <div className="panel flex shrink-0 items-center gap-4 px-4 py-2">
-                <Gauge value={selected.index} size={92} />
+              <div className="panel grid shrink-0 grid-cols-[88px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 px-3 py-2 sm:flex sm:gap-4 sm:px-4">
+                <Gauge value={selected.index} size={88} />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-[18px] font-semibold">{selected.name}</h1>
@@ -477,7 +480,7 @@ export default function App() {
                     <span className="text-white/30">vs trailing 24h</span>
                   </div>
                 </div>
-                <div className="flex shrink-0 flex-row gap-1">
+                <div className="col-span-2 flex w-full flex-row justify-between gap-1 sm:ml-auto sm:w-auto sm:shrink-0 sm:justify-start">
                   {WINDOWS.map((w, i) => (
                     <button
                       key={w.h}
@@ -496,11 +499,11 @@ export default function App() {
               </div>
 
               <div className="panel mt-2 shrink-0">
-                <div className="panel-head">
+                <div className="panel-head chart-panel-head">
                   <span className="micro">
                     {chartMode === "overlay" ? "Sentiment × Price" : "Sentiment"}
                   </span>
-                  <div className="flex items-center gap-2 text-[9.5px] text-white/40">
+                  <div className="chart-panel-meta flex items-center gap-2 text-[9.5px] text-white/40">
                     <span className="flex items-center gap-1">
                       <span className="inline-block h-[2px] w-3 bg-emerald-400" /> sentiment
                     </span>
@@ -562,11 +565,11 @@ export default function App() {
                 </div>
               )}
 
-              <div className="mt-2 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_330px] gap-3">
-                <div className="panel flex min-h-0 flex-col">
-                  <div className="panel-head shrink-0">
+              <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_330px] lg:overflow-hidden">
+                <div className="panel flex min-h-[45vh] max-h-[55vh] flex-col lg:min-h-0 lg:max-h-none">
+                  <div className="panel-head mentions-panel-head shrink-0">
                     <span className="micro">Mentions · {health?.health.jev.model ?? "jev"}</span>
-                    <div className="flex items-center gap-1">
+                    <div className="mentions-filters">
                       {FILTERS.map((f) => (
                         <button
                           key={f.key}
@@ -596,7 +599,7 @@ export default function App() {
                     )}
                   </div>
                 </div>
-                <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1">
+                <div className="flex min-h-0 flex-col gap-3 overflow-visible pb-2 pr-1 lg:overflow-y-auto lg:pb-0">
                   <OutcomeCheck companyId={selected.id} hours={windowHours} refreshToken={tape.length} />
                   <ValidationPanel />
                 </div>
@@ -631,8 +634,9 @@ export default function App() {
         </aside>
       </div>
 
-      <MentionDrawer mention={drawerMention} onClose={() => setDrawerMention(null)} />
       <StatusBar health={health} session={session} connected={connected} tape={tape} />
     </div>
+    <MentionDrawer mention={drawerMention} onClose={closeDrawer} />
+    </>
   );
 }

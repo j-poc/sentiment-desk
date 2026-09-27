@@ -19,11 +19,11 @@ function clientWith(fetchImpl: typeof fetch): JevClient {
 const okBody = {
   model: "jev-latest",
   answers: {
-    sentiment: { choice: "neutral", probabilities: { negative: 0.2, neutral: 0.6, positive: 0.2 }, confidence: 0.7 },
-    about: { noul: 0.9 },
-    material: { noul: 0.5 },
-    novel: { noul: 0.5 },
-    credible: { noul: 0.8 },
+    sentiment: { type: "choice", choice: "neutral", probabilities: { negative: 0.2, neutral: 0.6, positive: 0.2 }, confidence: 0.7 },
+    about: { type: "noul", noul: 0.9 },
+    material: { type: "noul", noul: 0.5 },
+    novel: { type: "noul", noul: 0.5 },
+    credible: { type: "noul", noul: 0.8 },
   },
   usage: { input_tokens: 123, output_tokens: 0 },
 };
@@ -52,19 +52,32 @@ describe("JevClient", () => {
     expect(questions["sentiment"]?.type).toBe("choice");
     expect(questions["about"]?.type).toBe("noul");
     expect(out.inputTokens).toBe(123);
-    expect(out.answers.about).toEqual({ noul: 0.9 });
+    expect(out.answers.about).toEqual({ type: "noul", noul: 0.9 });
   });
 
-  it("retries once on 429 then succeeds", async () => {
-    let calls = 0;
-    const impl = (async () => {
-      calls += 1;
-      return calls === 1 ? jsonResponse({ error: "slow down" }, 429) : jsonResponse(okBody);
-    }) as unknown as typeof fetch;
+  it("returns explicit 429 rejection for persisted retry without resubmitting in the client", async () => {
+    const impl = vi.fn(async () => jsonResponse({ error: "slow down" }, 429)) as unknown as typeof fetch;
+    const client = clientWith(impl);
+    const error = await client.judge({}, RUBRIC).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(JevError);
+    expect((error as JevError).retryable).toBe(true);
+    expect((error as JevError).outcomeUnknown).toBe(false);
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
 
-    const out = await clientWith(impl).judge({}, RUBRIC);
-    expect(calls).toBe(2);
-    expect(out.answers.sentiment).toBeTruthy();
+  it("does not resubmit 5xx or ambiguous transport failures", async () => {
+    const serverError = vi.fn(async () => jsonResponse({ error: "unavailable" }, 503)) as unknown as typeof fetch;
+    const serverFailure = await clientWith(serverError).judge({}, RUBRIC).catch((value: unknown) => value);
+    expect(serverFailure).toBeInstanceOf(JevError);
+    expect((serverFailure as JevError).retryable).toBe(false);
+    expect((serverFailure as JevError).outcomeUnknown).toBe(true);
+    expect(serverError).toHaveBeenCalledTimes(1);
+
+    const transport = vi.fn(async () => { throw new Error("socket timeout"); }) as unknown as typeof fetch;
+    const transportFailure = await clientWith(transport).judge({}, RUBRIC).catch((value: unknown) => value);
+    expect(transportFailure).toBeInstanceOf(JevError);
+    expect((transportFailure as JevError).outcomeUnknown).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry on non-429 4xx and fails closed on empty answers", async () => {
@@ -77,14 +90,29 @@ describe("JevClient", () => {
     expect(empty).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed on contract-violating responses", async () => {
-    const bad = (async () => jsonResponse({ answers: { sentiment: { choice: "neutral" } } })) as unknown as typeof fetch;
-    // Valid HTTP, but usage missing is tolerated; answers present -> ok.
-    const out = await clientWith(bad).judge({}, RUBRIC);
-    expect(out.inputTokens).toBe(0);
+  it("fails closed on missing required response fields or invalid token usage", async () => {
+    const missingUsage = (async () => jsonResponse({ model: "jev-latest", answers: { sentiment: { type: "choice", choice: "neutral", probabilities: { negative: 0.2, neutral: 0.6, positive: 0.2 }, confidence: 0.7 } } })) as unknown as typeof fetch;
+    await expect(clientWith(missingUsage).judge({}, RUBRIC)).rejects.toBeInstanceOf(JevError);
+
+    const fractionalUsage = (async () => jsonResponse({ ...okBody, usage: { input_tokens: 1.5, output_tokens: 0 } })) as unknown as typeof fetch;
+    await expect(clientWith(fractionalUsage).judge({}, RUBRIC)).rejects.toBeInstanceOf(JevError);
+
+    const negativeUsage = (async () => jsonResponse({ ...okBody, usage: { input_tokens: -1, output_tokens: 0 } })) as unknown as typeof fetch;
+    await expect(clientWith(negativeUsage).judge({}, RUBRIC)).rejects.toBeInstanceOf(JevError);
 
     const notJson = (async () => new Response("<html>oops</html>", { status: 200 })) as unknown as typeof fetch;
     await expect(clientWith(notJson).judge({}, RUBRIC)).rejects.toBeInstanceOf(JevError);
+  });
+
+  it("rejects a successful response from a different model without retrying", async () => {
+    const impl = vi.fn(async () => jsonResponse({ ...okBody, model: "jev-fallback" })) as unknown as typeof fetch;
+    const error = await clientWith(impl).judge({}, RUBRIC).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(JevError);
+    expect((error as JevError).retryable).toBe(false);
+    expect((error as JevError).outcomeUnknown).toBe(true);
+    expect((error as Error).message).toContain("model mismatch");
+    expect(impl).toHaveBeenCalledTimes(1);
   });
 
   it("refuses to call without a key", async () => {

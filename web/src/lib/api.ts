@@ -24,7 +24,7 @@ export interface CompanySnapshot {
 }
 
 export type Sentiment = "negative" | "neutral" | "positive";
-export type MentionStatus = "pending" | "scored" | "off_target" | "failed" | "corrupt";
+export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off_target" | "failed" | "corrupt";
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
 export type CollectorId = "legacy_unknown" | "demo_simulation" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
 
@@ -70,6 +70,7 @@ export interface Mention {
   publisherDomain: string | null;
   filedAt?: number | null;
   status: MentionStatus;
+  scoreRetryAt: number | null;
   score: MentionScore | null;
   error: string | null;
 }

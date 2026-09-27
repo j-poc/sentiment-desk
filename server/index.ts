@@ -12,12 +12,13 @@ import {
   startDemoLoop,
   startFinnhubPoller,
   startGdeltPoller,
+  startJevRetryPoller,
   startRedditPoller,
   startRssPoller,
   startSecPoller,
   startXPoller,
-  type SchedulerControl,
 } from "./schedule.js";
+import type { SchedulerControl } from "./scheduler.js";
 import { fetchTickerCikMap } from "./sources/sec.js";
 import { demoJudge } from "./demo.js";
 
@@ -128,6 +129,7 @@ async function main(): Promise<void> {
   const schedulers: SchedulerControl[] = [
     startQuotesPoller({ market, db, intervalSeconds: config.pollQuotesSeconds }),
   ];
+  if (judge) schedulers.push(startJevRetryPoller(pipeline));
   // Demo mode is fully synthetic on the sentiment side: no real sources mixed in.
   if (!config.demo) {
     schedulers.push(
@@ -223,12 +225,22 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     console.log(`[desk] ${signal}: shutting down`);
-    for (const s of schedulers) s.stop();
-    server.close(() => {
+    const httpClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+    void (async () => {
+      await Promise.all(schedulers.map((scheduler) => scheduler.stop()));
+      await market.waitForIdle();
+      await pipeline.waitForIdle();
+      // SSE responses otherwise keep server.close() pending indefinitely.
+      hub.closeAll();
+      // Tear down any remaining keep-alive or stalled HTTP sockets after the SSE routes close.
+      if ("closeAllConnections" in server) server.closeAllConnections();
+      await httpClosed;
       db.close();
       process.exit(0);
+    })().catch((error: unknown) => {
+      console.error("[desk] graceful shutdown failed:", error);
+      process.exitCode = 1;
     });
-    setTimeout(() => process.exit(0), 3_000).unref();
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));

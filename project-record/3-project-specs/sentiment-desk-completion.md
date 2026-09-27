@@ -1,8 +1,10 @@
 # Sentiment Desk completion plan
 
-Status: implementation and verification complete; final isolated Compose
-live-data and persistence checks passed. The authorized GitHub checkpoint was
-pushed as `603932b` to `codex/real-data-rebuild`.
+Status: local implementation and keyless verification pass, including the
+latest isolated Compose live-data and persistence checks. This is ready for the
+scoped local workflow, but it is not a 10/10 release: live current-item Jev
+scoring, source-use terms, and labeled classifier evaluation remain unproven.
+Latest hardening changes are being checkpointed to `codex/real-data-rebuild`.
 
 ## User and outcome
 
@@ -89,10 +91,11 @@ does not generate opportunity hypotheses or value-chain links.
 6. Desktop and narrow-screen flows let the researcher select a company, read
    the score/index, inspect the source and Jev rubric, and understand data
    health without hidden overflow or dead controls.
-7. `npm test`, typecheck, production build, a fresh keyless local start, a
-   desktop/mobile browser pass, and isolated Docker persistence smoke pass.
-   The source-data contract records what the checks prove and what remains
-   unavailable.
+7. `npm test` (63 tests across 11 files), typecheck, production build, fresh
+   keyless local start, 390px and 1280px browser passes, accessible mention
+   drawer interaction, SSE shutdown, and isolated Docker persistence smoke
+   pass. The source-data contract records what these checks prove and what
+   remains unavailable.
 
 ## Phase 2 acceptance criteria
 
@@ -103,6 +106,44 @@ coverage status, hard gates, measures, scenarios, and subjective review points.
 The implementation uses persisted Jev judgments and makes no second model
 call. The contract's test, API, type, build, browser, and final isolated Compose
 recovery gates passed.
+
+## Independent readiness review and hardening gates
+
+Three read-only reviewers completed a fresh pass after hardening. Their
+separate qualitative ratings were 8.5/10 for source operations and overall
+scoped readiness, 8.5/10 for local Jev implementation (7/10 for release
+readiness), and 9/10 for UI/Radar. These scores are judgments, not a composite
+product metric. They found strict-response validation, bounded transient
+retry scheduling, shutdown, snapshot, and mobile interaction defects addressed.
+The remaining terminal-failure operator-requeue gap is stated below. The
+current checks directly verify:
+
+1. Malformed Jev choice answers, invalid probabilities, and invalid token usage
+   must fail closed; no default category or clamped probability may become a
+   stored judgment. Keep the rubric and classifier identity unchanged.
+2. Transient Jev exhaustion must have a bounded, persisted recovery path. Bad
+   credentials and invalid model output must not retry forever; restart and
+   recovery must not duplicate judgments or charges.
+3. Scheduler shutdown must await in-flight collection before SQLite closes.
+4. Radar evidence pagination must use the exact overview time and ingestion
+   snapshot so page totals and groups cannot drift while the view is open.
+5. The 390px company picker works with keyboard and assistive technology; the
+   mention drawer traps focus, isolates the background, and restores focus on
+   close.
+
+One local operations gap remains: terminal Jev failures have no operator
+requeue action. Ambiguous provider outcomes are deliberately not retried
+automatically to avoid duplicate charges. Keep them quarantined until the
+provider outcome has been checked; do not present this as a live-verified Jev
+workflow.
+
+The current checkout has no Jev key configured. Offline provider-contract
+tests can prove validation and bounded retry behavior, but cannot prove that a
+current headline is scored by the live Jev service. A release-level 10/10 claim
+also requires a labeled accuracy/calibration evaluation, confirmation of
+provider 429 billing semantics and model/output compatibility, and review of
+source display/model-use/retention terms. Those external proofs are not
+available in this checkout.
 
 ## Grounded architecture
 
@@ -139,7 +180,8 @@ Phase 2 consumer.
   without exposing a key.
 - [x] Freeze Phase 2 inputs and acceptance after the Phase 1 gate passed.
 - [x] Build and verify Opportunity Radar over persisted judgment records.
-- [x] Finish final verification: 52 tests, typecheck, production build, fresh
-  local/browser pass, and isolated Compose live/recovery pass.
-- [x] Review the decision trail, commit, and push the checkpoint to the
+- [x] Finish local hardening verification: 63 tests across 11 files,
+  typecheck, production build, fresh browser pass, and isolated Compose
+  live/recovery smoke.
+- [ ] Checkpoint the reviewed implementation and project records on the
   existing GitHub branch.

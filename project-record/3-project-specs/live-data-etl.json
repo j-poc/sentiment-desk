@@ -1,7 +1,7 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "Keyless fresh-start source/API/UI checks and an isolated Docker live-data plus volume-recovery smoke passed. Jev remained disabled without a key; a prior controlled Jev fixture returned a valid off_target judgment. Source-use terms remain unreviewed, GDELT was HTTP 429 in the fresh local run, and social/Finnhub credentials were disabled.",
+  "operational_status": "Local keyless fresh-start source/API/UI checks and isolated Docker live-data plus volume-recovery smoke passed. Jev remained disabled without a key; a prior controlled Jev fixture returned a valid off_target judgment. No current real observation was scored live. Source-use terms and labeled Jev accuracy/calibration remain unreviewed, GDELT returned HTTP 429, and social/Finnhub credentials were disabled. Independent reviews called the scoped local workflow ready (8.5/10 overall) but not 10/10 release-ready.",
   "intended_use": "Private, single-user research interface for investigating sourced observations and Jev judgments; not an authoritative point-in-time archive or investment signal service.",
   "delivery": "Local Docker Compose or local Node process. The public source/build does not provide a hosted data service.",
   "sources": [
@@ -68,25 +68,25 @@
       "command": "npm test",
       "covers": "Offline parsing and scoring fixtures, including RSS and SEC filing examples.",
       "status": "passed",
-      "evidence": "2026-09-27: npm test passed 52 tests across 8 files, including immutable observation/revision, delivery state, quote cache provenance, Radar aggregation, and paginated evidence routes. npm run typecheck and npm run build passed."
+      "evidence": "2026-09-27: npm test passed 63 tests across 11 files, including immutable observation/revision, delivery state, quote cache provenance, Jev response/model validation, bounded retry, pipeline replay, scheduler drain, active SSE shutdown, Radar aggregation, and paginated evidence routes. npm run typecheck and npm run build passed."
     },
     "failure": {
-      "command": "npm test -- --run tests/rss.test.ts tests/sec.test.ts tests/finnhub.test.ts",
-      "covers": "Malformed or empty RSS inputs, filtered SEC records, and missing or unusable earnings values. Does not cover provider timeout, rate-limit recovery, or identity conflicts end to end.",
+      "command": "npm test",
+      "covers": "Offline failure behavior, including malformed RSS, source-time handling, Jev response validation, and bounded retry scheduling. Does not prove live provider rate-limit billing semantics or identity conflicts end to end.",
       "status": "passed",
-      "evidence": "2026-09-27: unit/API tests cover malformed RSS, missing source times, observation revisions, idempotent replay, failed/overdue/disabled delivery states, Jev retry/contract fixtures, quote cache labeling, invalid Radar categories, and missing companies. Fresh live run showed GDELT HTTP 429 as failed while Google News, Yahoo Finance RSS, SEC, and Yahoo quotes continued independently."
+      "evidence": "2026-09-27: unit/API tests cover malformed RSS, missing source times, observation revisions, idempotent replay, failed/overdue/disabled delivery states, Jev output and configured-model contract fixtures, transient 429 retry scheduling, safe handling of unknown request outcomes, quote cache labeling, invalid Radar categories, and missing companies. Fresh live run showed GDELT HTTP 429 as failed while Google News, Yahoo Finance RSS, SEC, and Yahoo quotes continued independently."
     },
     "replay": {
       "command": "./scripts/verify-live-compose.sh",
       "covers": "Recreates a container over a retained SQLite volume. This is process recovery, not replay from retained raw provider responses.",
       "status": "passed",
-      "evidence": "2026-09-27: env DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh rebuilt the final credential-free image, preserved a real pending observation across container recreation, and removed its own temporary Compose volume. Result: RECOVERY_SMOKE_RESULT companies=24 dbSizeBytes=2416640 pendingObservationPreserved=true."
+      "evidence": "2026-09-27: DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh rebuilt the hardened credential-free image, preserved a real pending observation across container recreation, and removed its own temporary Compose volume. Result: RECOVERY_SMOKE_RESULT companies=24 dbSizeBytes=2387968 pendingObservationPreserved=true."
     },
     "live_smoke": {
       "command": "./scripts/verify-live-compose.sh",
       "covers": "Credential-free live quote and news/filing source success through the HTTP API, with DEMO and Jev scoring disabled.",
       "status": "passed",
-      "evidence": "2026-09-27: final isolated Compose API smoke returned LIVE_SMOKE_RESULT quotes=27 companies=24 dbSizeBytes=2383872 pendingId=meta:95b59b5ec488545508853a0e6c2f07ffa7eb3b1d0e27cab565752cf44d6b67d4 collector=google_news_rss timeBasis=publisher_declared with Jev and optional credentials disabled."
+      "evidence": "2026-09-27: final isolated Compose API smoke returned LIVE_SMOKE_RESULT quotes=27 companies=24 dbSizeBytes=2215936 pendingId=nvidia:<redacted> collector=google_news_rss timeBasis=publisher_declared with Jev and optional credentials disabled."
     },
     "fresh_start": {
       "command": "npm start with an isolated HOME, DB_PATH, empty Jev and optional provider credentials, and DEMO=0",
@@ -98,7 +98,13 @@
       "command": "Playwright CLI against isolated live and synthetic demo instances",
       "covers": "Fresh-start desk and Radar view, shared company selection, expandable source provenance, synthetic label, and responsive layout.",
       "status": "passed",
-      "evidence": "2026-09-27: at 1280px and 390px the user opened Desk/Radar, selected Coinbase and retained it across the view switch; mobile document width equaled viewport width (390px). Live keyless Radar showed pending/untimed and failed/disabled coverage clearly. The synthetic demo showed its DEMO · SYNTHETIC EVIDENCE label and expandable source link, publisher time, and collection time."
+      "evidence": "2026-09-27: at 1280px and 390px Desk/Radar workflows had no horizontal overflow. The 390px mention drawer exposed dialog semantics, trapped focus, isolated the background, ignored app shortcuts while open, and restored focus on Escape. Live keyless Radar showed pending/untimed and failed/disabled coverage clearly. The synthetic demo showed its DEMO · SYNTHETIC EVIDENCE label and expandable source link, publisher time, and collection time. Reviewer verified desktop Radar width at 1280px without console errors."
+    },
+    "active_stream_shutdown": {
+      "command": "npm test -- --run tests/app-stream.test.ts",
+      "covers": "An actual active HTTP SSE response is terminated during shutdown and the HTTP server close callback completes.",
+      "status": "passed",
+      "evidence": "2026-09-27: active-stream regression test passed. Shutdown closes registered SSE clients before SQLite closes; the server also closes remaining connections after server.close()."
     }
   },
   "known_gaps": [
@@ -110,6 +116,7 @@
     "No Jev credential was supplied during fresh-start and Compose verification, so current real observations stayed pending. A separate bounded controlled Jev fixture previously returned a valid off_target judgment; the fresh live production run did not exercise scoring of a real headline.",
     "Optional X, Reddit, and Finnhub sources were disabled in final verification by explicit empty credentials. Their live coverage and rights are not verified.",
     "Provider terms, permitted model access, display, retention, and redistribution have not been reviewed. Public availability is not treated as a license to republish, and the UI is private and local.",
-    "Source retries happen on the next scheduled poll (quote and Jev clients also have bounded request retries); source collectors do not perform an immediate generic retry loop. Provider coverage and pagination completeness are not proven exhaustive."
+    "Source collectors retry on the next scheduled poll rather than an immediate generic loop. Jev retries only explicit retryable responses such as HTTP 429 through persisted, bounded scheduling (maximum three attempts); transport failures, server errors, malformed output, and model mismatches are marked failed/outcome-unknown and never automatically resubmitted. Terminal Jev failures have no operator requeue control; verify provider request/usage outcome before any deliberate replay to avoid duplicate charges. Provider coverage and pagination completeness are not proven exhaustive.",
+    "No credentialed current-observation-to-Jev-to-persistence-to-UI run was performed. A real provider contract/model compatibility check, proof of 429 billing semantics, labeled accuracy/calibration evaluation, and source-use terms review remain external release gates."
   ]
 }

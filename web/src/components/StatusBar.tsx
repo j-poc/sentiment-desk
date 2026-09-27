@@ -54,19 +54,19 @@ export function StatusBar({
     : "…";
 
   return (
-    <footer className="flex h-[26px] shrink-0 items-center gap-4 border-t border-desk-line bg-black/60 px-4 text-[10px] text-white/40">
+    <footer className="flex h-[26px] shrink-0 items-center gap-2 whitespace-nowrap border-t border-desk-line bg-black/60 px-2 text-[9px] text-white/40 sm:gap-4 sm:px-4 sm:text-[10px]">
       <span className="tabnum">v{health?.version ?? "0.2.0"}</span>
       <span className="flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 rounded-full ${connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
         {connected ? "stream live" : "stream offline"}
       </span>
-      <span>
+      <span className="hidden sm:inline">
         engine <span className="text-white/60">{engine}</span>
       </span>
-      <span>
+      <span className="hidden md:inline">
         score p50 <span className="tabnum text-white/60">{p50Latency(tape)}</span>
       </span>
-      <span>
+      <span className="hidden md:inline">
         ingest p50 <span className="tabnum text-white/60">{ingestP50(tape)}</span>
       </span>
 
@@ -81,11 +81,11 @@ export function StatusBar({
       </span>
       <span className="tabnum">{session.etClock}</span>
 
-      <span className="tabnum" title="quote store age">
+      <span className="hidden tabnum md:inline" title="quote store age">
         quotes {health?.health.quotes.ok ? "ok" : "--"}
       </span>
-      <span className="tabnum">sse {health?.sseClients ?? 0}</span>
-      <span className="tabnum" title="sqlite file size">
+      <span className="hidden tabnum md:inline">sse {health?.sseClients ?? 0}</span>
+      <span className="hidden tabnum md:inline" title="sqlite file size">
         db {fmtBytes(health?.dbSizeBytes ?? null)}
       </span>
     </footer>
