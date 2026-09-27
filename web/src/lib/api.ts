@@ -24,8 +24,9 @@ export interface CompanySnapshot {
 }
 
 export type Sentiment = "negative" | "neutral" | "positive";
-export type MentionStatus = "pending" | "scored" | "off_target" | "failed";
-export type SourceTier = "wire" | "major" | "trade" | "blog" | "social";
+export type MentionStatus = "pending" | "scored" | "off_target" | "failed" | "corrupt";
+export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
+export type CollectorId = "legacy_unknown" | "demo_simulation" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
 
 export interface MentionScore {
   sentiment: Sentiment;
@@ -56,16 +57,21 @@ export interface MentionScore {
 export interface Mention {
   id: string;
   companyId: string;
-  source: { name: string; url: string; kind: "rss" | "x" | "sec"; tier: SourceTier };
+  source: { name: string; url: string; kind: "rss" | "x" | "sec" | "finnhub" | "reddit"; tier: SourceTier; collector: CollectorId; publisher: string; publisherDomain: string | null };
   title: string;
   snippet: string;
-  publishedAt: number;
+  publishedAt: number | null;
+  providerObservedAt: number | null;
   retrievedAt: number;
+  ingestedAt: number;
+  timeBasis: "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown";
+  collector: CollectorId;
+  publisherName: string;
+  publisherDomain: string | null;
   filedAt?: number | null;
   status: MentionStatus;
   score: MentionScore | null;
   error: string | null;
-  confirmations?: number;
 }
 
 export interface ReactionEvent {
@@ -111,6 +117,83 @@ export interface ValidationDTO {
   generatedAt: number;
 }
 
+export type RadarEventType =
+  | "results"
+  | "corporate_action"
+  | "legal_regulatory"
+  | "leadership"
+  | "product"
+  | "analyst_action"
+  | "macro_sector"
+  | "other";
+
+export interface RadarEvidenceItem {
+  id: string;
+  title: string;
+  sourceUrl: string;
+  publisherName: string;
+  publisherDomain: string | null;
+  publishedAt: number;
+  retrievedAt: number;
+  collector: CollectorId;
+  eventType: string;
+  sentiment: string;
+  takeaway: string;
+}
+
+export interface RadarPeriodSummary {
+  sourceRows: number;
+  headlineGroups: number;
+  publisherCount: number;
+  publisherJudgments: number;
+  positive: number;
+  neutral: number;
+  negative: number;
+  mixed: number;
+}
+
+export interface RadarDTO {
+  hours: number;
+  generatedAt: number;
+  currentFrom: number;
+  currentTo: number;
+  previousFrom: number;
+  previousTo: number;
+  current: RadarPeriodSummary;
+  previous: RadarPeriodSummary;
+  headlineChange: number;
+  untimedScored: number;
+  unjudged: number;
+  unclassified: number;
+  categories: Array<{
+    eventType: RadarEventType;
+    current: RadarPeriodSummary;
+    previous: RadarPeriodSummary;
+    headlineChange: number;
+    recentEvidence: Array<{
+      title: string;
+      latestPublishedAt: number;
+      sources: RadarEvidenceItem[];
+    }>;
+    previousEvidence: Array<{
+      title: string;
+      latestPublishedAt: number;
+      sources: RadarEvidenceItem[];
+    }>;
+  }>;
+  coverage: HealthDTO["deliveryHealth"];
+}
+
+export interface RadarEvidencePageDTO {
+  generatedAt: number;
+  hours: number;
+  period: "current" | "previous";
+  eventType: RadarEventType;
+  offset: number;
+  total: number;
+  items: RadarDTO["categories"][number]["recentEvidence"];
+}
+
 export interface SeriesPoint {
   t: number;
   v: number | null;
@@ -122,7 +205,10 @@ export interface Quote {
   price: number;
   changePct: number;
   currency: string;
-  at: number;
+  at: number | null;
+  retrievedAt: number;
+  lastAttemptAt: number;
+  delivery: "network" | "cache";
 }
 
 export interface MarketSnapshot {
@@ -133,6 +219,15 @@ export interface MarketSnapshot {
 export interface PricePoint {
   t: number;
   price: number;
+}
+
+export interface PriceSeriesDTO {
+  points: PricePoint[];
+  delivery: "network" | "memory_cache" | "local_store";
+  servedAt: number;
+  sourceLatestAt: number | null;
+  cacheAgeMs: number | null;
+  resampling: "bucketed_last_observation";
 }
 
 export interface SourceHealth {
@@ -160,6 +255,31 @@ export interface HealthDTO {
     reddit: SourceHealth;
     jev: SourceHealth & { model: string };
   };
+  deliveries: Array<{
+    collector: CollectorId;
+    companyId: string | null;
+    result: "success" | "empty" | "partial" | "failed" | "rate_limited" | "invalid";
+    completedAt: number;
+    parsedItemCount: number;
+    adapterVersion: string;
+    error: string | null;
+  }>;
+  deliveryHealth: Array<{
+    collector: CollectorId;
+    enabled: boolean;
+    state: "current" | "overdue" | "failed" | "partial" | "never" | "disabled";
+    intervalSeconds: number;
+    targetCount: number;
+    coverageCount: number;
+    latestDeliveryAt: number | null;
+    latestResult: "success" | "empty" | "partial" | "failed" | "rate_limited" | "invalid" | null;
+    latestItemCount: number | null;
+    latestError: string | null;
+    adapterVersion: string | null;
+    latestObservationAt: number | null;
+    latestObservationBasis: "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown" | null;
+    latestObservationRetrievedAt: number | null;
+  }>;
   usage: { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
   events: Array<{ at: number; level: string; source: string; message: string }>;
 }

@@ -10,7 +10,8 @@ function fmtBytes(n: number | null): string {
 /** Detection lag: how far behind publication our ingestion runs. */
 function ingestP50(tape: Mention[]): string {
   const vals = tape
-    .map((m) => Math.max(0, m.retrievedAt - m.publishedAt))
+    .filter((m) => m.publishedAt != null && m.timeBasis === "publisher_declared")
+    .map((m) => Math.max(0, m.retrievedAt - m.publishedAt!))
     .sort((a, b) => a - b);
   if (vals.length === 0) return "--";
   const mid = vals[Math.floor(vals.length / 2)];

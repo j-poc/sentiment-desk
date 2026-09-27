@@ -1,4 +1,4 @@
-import type { CompanySnapshot, MarketSnapshot } from "../lib/api.js";
+import type { CompanySnapshot, MarketSnapshot, Quote } from "../lib/api.js";
 import { fmtDelta, sentimentColor, timeAgo } from "../lib/format.js";
 
 /**
@@ -21,7 +21,9 @@ export function TickerTape({
   const quotes = market?.quotes ?? {};
   const labelFor = (t: string) => t.replace("^", "");
 
-  const cell = (key: string, ticker: string, price?: number, changePct?: number, sentiment?: number | null, companyId?: string) => {
+  const cell = (key: string, ticker: string, quote?: Quote, sentiment?: number | null, companyId?: string) => {
+    const price = quote?.price;
+    const changePct = quote?.changePct;
     const color = changePct != null ? (changePct > 0.001 ? "#34d399" : changePct < -0.001 ? "#f87171" : "#94a3b8") : "#64748b";
     const selected = companyId != null && companyId === selectedId;
     const body = (
@@ -31,10 +33,11 @@ export function TickerTape({
         className={`flex shrink-0 items-baseline gap-1.5 border-r border-white/[0.05] px-3.5 text-[11px] ${
           companyId ? "cursor-pointer hover:bg-white/[0.04]" : ""
         } ${selected ? "bg-white/[0.05]" : ""}`}
+        title={quote ? `${quote.delivery === "cache" ? "Last-known cached quote" : "Yahoo Finance network quote"}; ${quote.currency}; source time ${quote.at == null ? "unknown" : new Date(quote.at).toISOString()}; retrieved ${timeAgo(quote.retrievedAt)}` : undefined}
       >
         <span className="font-semibold tracking-wide text-white/75">{labelFor(ticker)}</span>
         {price != null ? (
-          <span className="tabnum text-white/90">{price >= 1000 ? price.toFixed(0) : price.toFixed(2)}</span>
+          <span className={`tabnum ${quote?.delivery === "cache" ? "text-amber-300/80" : "text-white/90"}`}>{price >= 1000 ? price.toFixed(0) : price.toFixed(2)} {quote?.currency}</span>
         ) : (
           <span className="tabnum text-white/25">--</span>
         )}
@@ -43,6 +46,7 @@ export function TickerTape({
             {fmtDelta(changePct)}%
           </span>
         )}
+        {quote?.delivery === "cache" && <span className="text-[8px] text-amber-300/80">cached {timeAgo(quote.retrievedAt)}</span>}
         {sentiment != null && companyId && (
           <span
             className="mb-[3px] inline-block h-1.5 w-1.5 rounded-full"
@@ -61,14 +65,14 @@ export function TickerTape({
     <div className="no-scrollbar flex h-[34px] shrink-0 items-center overflow-x-auto border-b border-desk-line bg-black/50">
       {indices.map((t) => {
         const q = quotes[t];
-        return cell(`idx-${t}`, t, q?.price, q?.changePct);
+        return cell(`idx-${t}`, t, q);
       })}
       {companies.map((c) => {
         const q = quotes[c.ticker];
-        return cell(c.id, c.ticker, q?.price, q?.changePct, c.index, c.id);
+        return cell(c.id, c.ticker, q, c.index, c.id);
       })}
       {market && market.updatedAt > 0 && (
-        <span className="tabnum shrink-0 px-3 text-[9.5px] text-white/25" title="quote age">
+        <span className="tabnum shrink-0 px-3 text-[9.5px] text-white/25" title="latest successful quote retrieval across symbols">
           {timeAgo(market.updatedAt)}
         </span>
       )}

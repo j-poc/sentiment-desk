@@ -51,6 +51,30 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
         <Row label="uptime" value={`${Math.max(1, Math.floor(health.uptimeSec / 60))}m`} />
       </div>
 
+      <div className="mt-3 border-t border-white/[0.05] pt-2.5">
+        <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-white/30">source delivery and evidence age</div>
+        {health.deliveryHealth.map((delivery) => {
+          const color = delivery.state === "current" ? "text-emerald-300/70"
+            : delivery.state === "failed" ? "text-red-300/80"
+              : delivery.state === "disabled" || delivery.state === "never" ? "text-white/30"
+                : "text-amber-300/80";
+          const name = delivery.collector.replaceAll("_", " ");
+          const evidenceLabel = delivery.latestObservationAt == null
+            ? delivery.latestObservationBasis === "unknown" || delivery.latestObservationBasis === "legacy_unknown" ? "source time unknown" : "no stored item"
+            : `${delivery.latestObservationBasis === "provider_observed" ? "seen" : "published"} ${timeAgo(delivery.latestObservationAt)}`;
+          return (
+            <div key={delivery.collector}
+              className="flex items-baseline gap-2 py-[2px] text-[10.5px]" title={delivery.latestError ?? delivery.adapterVersion ?? undefined}>
+              <span className="min-w-0 flex-1 truncate text-white/45">{name}</span>
+              <span className={`w-16 shrink-0 text-right uppercase ${color}`}>{delivery.state}</span>
+              <span className="tabnum shrink-0 text-white/30">{delivery.latestDeliveryAt == null ? "no delivery" : timeAgo(delivery.latestDeliveryAt)}</span>
+              <span className="w-32 shrink-0 truncate text-right text-white/30">{evidenceLabel}</span>
+            </div>
+          );
+        })}
+        {health.deliveryHealth.length === 0 && <div className="text-[10.5px] text-white/30">No source delivery schedules configured.</div>}
+      </div>
+
       {health.events.length > 0 && (
         <div className="mt-3 border-t border-white/[0.05] pt-2.5">
           <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-white/30">events</div>

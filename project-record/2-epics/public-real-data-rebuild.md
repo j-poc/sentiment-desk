@@ -24,6 +24,7 @@ sentiment is an optional interface exercise, never the default data path.
 ## Boundaries
 
 This work does not change sentiment scoring, provider selection, or upstream
-data rights. Current data-provenance and freshness gaps are recorded in
-`3-project-specs/live-data-etl.json`. No license is added or inferred; source
-reuse terms remain undecided.
+data rights. Current data-provenance, provider coverage, and freshness gaps are
+recorded in `3-project-specs/live-data-etl.json`. The user chose to keep the
+repository without a LICENSE for now. Public visibility does not grant reuse
+rights.

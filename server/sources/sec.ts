@@ -21,7 +21,7 @@ export interface SecFiling {
   accessionNo: string;
   formType: string;
   items: string[];
-  filedAt: number; // filingDate
+  filedAt: number | null; // filingDate, absent if EDGAR did not provide a valid value
   acceptanceAt: number; // acceptanceDateTime, the exchange-accepted instant
   primaryDocUrl: string;
 }
@@ -86,7 +86,9 @@ export function parseRecent8Ks(
       accessionNo: acc,
       formType: form,
       items,
-      filedAt: Date.parse(recent.filingDate?.[i] ?? acceptance) || acceptanceAt,
+      filedAt: Number.isFinite(Date.parse(recent.filingDate?.[i] ?? ""))
+        ? Date.parse(recent.filingDate?.[i] ?? "")
+        : null,
       acceptanceAt,
       primaryDocUrl:
         primaryDoc && primaryDoc.length > 0

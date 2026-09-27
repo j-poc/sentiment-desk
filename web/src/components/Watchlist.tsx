@@ -73,11 +73,11 @@ export function Watchlist({
             <Sparkline points={sparks[c.id]} />
 
             <span className="w-[58px] shrink-0 text-right">
-              <span className="tabnum block text-[11.5px] text-white/85">
-                {q ? (q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)) : "--"}
+              <span className={`tabnum block text-[11.5px] ${q?.delivery === "cache" ? "text-amber-300/80" : "text-white/85"}`} title={q ? `${q.currency}; source time ${q.at == null ? "unknown" : new Date(q.at).toISOString()}; retrieved ${timeAgo(q.retrievedAt)}` : undefined}>
+                {q ? `${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}` : "--"}
               </span>
-              <span className="tabnum block text-[9.5px]" style={{ color: changeColor }}>
-                {change != null ? `${fmtDelta(change)}%` : "--"}
+              <span className="tabnum block truncate text-[9.5px]" style={{ color: q?.delivery === "cache" ? "#fbbf24" : changeColor }}>
+                {q?.delivery === "cache" ? `cached ${timeAgo(q.retrievedAt)}` : change != null ? `${fmtDelta(change)}%` : "--"}
               </span>
             </span>
 

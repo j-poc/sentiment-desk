@@ -15,7 +15,7 @@ export interface Quote {
   price: number;
   changePct: number;
   currency: string;
-  at: number; // ms, exchange-reported regularMarketTime
+  at: number | null; // ms, exchange-reported regularMarketTime; never inferred from retrieval
 }
 
 export interface PricePoint {
@@ -95,7 +95,9 @@ export async function fetchQuote(ticker: string, timeoutMs = 10_000): Promise<Qu
     price,
     changePct: Math.round(((price - prev) / prev) * 10000) / 100,
     currency: meta?.currency ?? "USD",
-    at: (meta?.regularMarketTime ?? Math.floor(Date.now() / 1000)) * 1000,
+    at: typeof meta?.regularMarketTime === "number" && Number.isFinite(meta.regularMarketTime)
+      ? meta.regularMarketTime * 1000
+      : null,
   };
 }
 

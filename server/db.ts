@@ -1,22 +1,26 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { isNearDuplicateTitle, mentionDigest, normalizeTitle } from "./scoring.js";
+import { createHash, randomUUID } from "node:crypto";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type {
+  CollectorId,
   Company,
+  EvidenceChannel,
   MentionDTO,
   MentionScore,
   MentionStatus,
   RawMention,
+  RadarItemEvidence,
   SourceKind,
   SourceTier,
+  TimeBasis,
 } from "./types.js";
+import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 
 /**
- * SQLite via node:sqlite (built into Node 22+). WAL mode, single writer, one
- * process. Every scored mention keeps full provenance columns so the dashboard
- * can always answer: which source, when published vs when fetched, which
- * rubric hash, what the model said, what it cost.
+ * Source observations, Jev judgments, and delivery attempts have separate
+ * persistence. The mentions view is a read-only compatibility projection for
+ * the existing API while callers move to the domain records.
  */
 
 const SCHEMA = `
@@ -29,19 +33,44 @@ CREATE TABLE IF NOT EXISTS companies (
   color TEXT NOT NULL,
   ambiguous INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS mentions (
+CREATE TABLE IF NOT EXISTS source_observations (
   id TEXT PRIMARY KEY,
   company_id TEXT NOT NULL REFERENCES companies(id),
+  identity_key TEXT NOT NULL,
+  revision_digest TEXT NOT NULL,
+  collector TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  publisher_name TEXT NOT NULL,
+  publisher_domain TEXT,
+  source_item_id TEXT,
   source_name TEXT NOT NULL,
   source_url TEXT NOT NULL,
   source_kind TEXT NOT NULL,
   source_tier TEXT NOT NULL,
   title TEXT NOT NULL,
   snippet TEXT NOT NULL,
-  published_at INTEGER NOT NULL,
+  publisher_published_at INTEGER,
+  provider_observed_at INTEGER,
   retrieved_at INTEGER NOT NULL,
+  ingested_at INTEGER NOT NULL,
+  time_basis TEXT NOT NULL,
+  legacy_published_at INTEGER,
   filed_at INTEGER,
   scoped INTEGER NOT NULL DEFAULT 0,
+  response_digest TEXT,
+  adapter_version TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observations_company_source_time ON source_observations(company_id, publisher_published_at);
+CREATE INDEX IF NOT EXISTS observations_company_observed_time ON source_observations(company_id, provider_observed_at);
+CREATE INDEX IF NOT EXISTS observations_company_retrieved ON source_observations(company_id, retrieved_at);
+CREATE UNIQUE INDEX IF NOT EXISTS observations_identity_revision ON source_observations(identity_key, revision_digest);
+CREATE TRIGGER IF NOT EXISTS source_observations_no_update BEFORE UPDATE ON source_observations
+BEGIN SELECT RAISE(ABORT, 'source observations are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS source_observations_no_delete BEFORE DELETE ON source_observations
+BEGIN SELECT RAISE(ABORT, 'source observations are immutable'); END;
+CREATE TABLE IF NOT EXISTS jev_judgments (
+  id TEXT PRIMARY KEY,
+  observation_id TEXT NOT NULL UNIQUE REFERENCES source_observations(id),
   status TEXT NOT NULL DEFAULT 'pending',
   sentiment TEXT,
   confidence REAL,
@@ -70,8 +99,27 @@ CREATE TABLE IF NOT EXISTS mentions (
   score_error TEXT,
   scored_at INTEGER
 );
-CREATE INDEX IF NOT EXISTS mentions_company_published ON mentions(company_id, published_at);
-CREATE INDEX IF NOT EXISTS mentions_status ON mentions(status);
+CREATE INDEX IF NOT EXISTS judgments_status ON jev_judgments(status);
+CREATE TABLE IF NOT EXISTS source_deliveries (
+  id TEXT PRIMARY KEY,
+  collector TEXT NOT NULL,
+  company_id TEXT REFERENCES companies(id),
+  request_key_hash TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  completed_at INTEGER NOT NULL,
+  result TEXT NOT NULL,
+  parsed_item_count INTEGER NOT NULL,
+  response_digest TEXT,
+  adapter_version TEXT NOT NULL,
+  error TEXT,
+  CHECK (parsed_item_count >= 0),
+  CHECK (result IN ('success', 'empty', 'partial', 'failed', 'rate_limited', 'invalid'))
+);
+CREATE INDEX IF NOT EXISTS deliveries_collector_completed ON source_deliveries(collector, completed_at DESC);
+CREATE TRIGGER IF NOT EXISTS source_deliveries_no_update BEFORE UPDATE ON source_deliveries
+BEGIN SELECT RAISE(ABORT, 'source deliveries are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS source_deliveries_no_delete BEFORE DELETE ON source_deliveries
+BEGIN SELECT RAISE(ABORT, 'source deliveries are immutable'); END;
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -100,8 +148,15 @@ interface MentionRow {
   source_tier: string;
   title: string;
   snippet: string;
-  published_at: number;
+  published_at: number | null;
+  publisher_published_at: number | null;
+  provider_observed_at: number | null;
   retrieved_at: number;
+  ingested_at: number;
+  time_basis: string;
+  collector: string;
+  publisher_name: string;
+  publisher_domain: string | null;
   filed_at: number | null;
   status: string;
   sentiment: string | null;
@@ -133,6 +188,26 @@ interface MentionRow {
   scored_at: number | null;
 }
 
+export interface SourceDeliveryInput {
+  collector: CollectorId;
+  companyId: string | null;
+  requestKey: string;
+  startedAt: number;
+  completedAt: number;
+  result: "success" | "empty" | "partial" | "failed" | "rate_limited" | "invalid";
+  parsedItemCount: number;
+  responseDigest?: string | null;
+  adapterVersion: string;
+  error?: string | null;
+}
+
+export interface DeliverySourceSchedule {
+  collector: CollectorId;
+  enabled: boolean;
+  intervalSeconds: number;
+  targetCount: number;
+}
+
 export class Desk {
   private readonly db: DatabaseSync;
 
@@ -145,26 +220,8 @@ export class Desk {
     this.migrate();
   }
 
-  /** Additive migrations for databases created before the current schema. */
+  /** Migrate the v1 combined table atomically, retaining it for audit/rollback. */
   private migrate(): void {
-    const mentionCols = new Set(
-      (this.db.prepare("PRAGMA table_info(mentions)").all() as Array<{ name: string }>).map(
-        (r) => r.name,
-      ),
-    );
-    const additions: Array<[string, string]> = [
-      ["event_type", "TEXT"],
-      ["magnitude", "REAL"],
-      ["surprise", "REAL"],
-      ["event_score", "REAL"],
-      ["investor_relevant", "REAL"],
-      ["takeaway", "TEXT"],
-      ["scoped", "INTEGER NOT NULL DEFAULT 0"],
-      ["filed_at", "INTEGER"],
-    ];
-    for (const [name, ddl] of additions) {
-      if (!mentionCols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
-    }
     const companyCols = new Set(
       (this.db.prepare("PRAGMA table_info(companies)").all() as Array<{ name: string }>).map(
         (r) => r.name,
@@ -173,6 +230,100 @@ export class Desk {
     if (!companyCols.has("ambiguous")) {
       this.db.exec("ALTER TABLE companies ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0");
     }
+
+    const object = this.db.prepare("SELECT type FROM sqlite_master WHERE name = 'mentions'").get() as
+      | { type: string }
+      | undefined;
+    if (object?.type === "table") {
+      const mentionCols = new Set(
+        (this.db.prepare("PRAGMA table_info(mentions)").all() as Array<{ name: string }>).map((r) => r.name),
+      );
+      const additions: Array<[string, string]> = [
+        ["event_type", "TEXT"], ["magnitude", "REAL"], ["surprise", "REAL"],
+        ["event_score", "REAL"], ["investor_relevant", "REAL"], ["takeaway", "TEXT"],
+        ["scoped", "INTEGER NOT NULL DEFAULT 0"], ["filed_at", "INTEGER"],
+      ];
+      for (const [name, ddl] of additions) {
+        if (!mentionCols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
+      }
+
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.exec("ALTER TABLE mentions RENAME TO mentions_legacy_v1");
+        const legacy = this.db.prepare("SELECT * FROM mentions_legacy_v1 ORDER BY id").all() as unknown as Array<Record<string, unknown>>;
+        const insertObservation = this.db.prepare(
+          `INSERT INTO source_observations
+           (id, company_id, identity_key, revision_digest, collector, channel, publisher_name,
+            publisher_domain, source_item_id, source_name, source_url, source_kind, source_tier,
+            title, snippet, publisher_published_at, provider_observed_at, retrieved_at, ingested_at,
+            time_basis, legacy_published_at, filed_at, scoped, response_digest, adapter_version)
+           VALUES (?, ?, ?, 'legacy-v1', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, 'legacy-v1')`,
+        );
+        const insertJudgment = this.db.prepare(
+          `INSERT INTO jev_judgments
+           (id, observation_id, status, sentiment, confidence, p_pos, p_neu, p_neg, about, material,
+            novel, credible, investor_relevant, event_type, takeaway, magnitude, surprise, event_score,
+            impact, weight, exclude, engine, input_tokens, output_tokens, cost_usd, latency_ms,
+            rubric_sha, score_error, scored_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const r of legacy) {
+          const oldId = String(r.id);
+          const sourceKind = String(r.source_kind);
+          const isSec = sourceKind === "sec";
+          const collector: CollectorId = isSec ? "sec_edgar" : sourceKind === "x" || sourceKind === "reddit" || sourceKind === "finnhub" ? sourceKind : "legacy_unknown";
+          const channel: EvidenceChannel = isSec ? "filing" : sourceKind === "x" || sourceKind === "reddit" ? "social" : "news";
+          const status = String(r.status);
+          const scoreFields = ["sentiment", "confidence", "p_pos", "p_neu", "p_neg", "about", "material", "novel", "credible", "investor_relevant", "event_type", "takeaway", "magnitude", "surprise", "event_score", "impact", "weight", "engine", "input_tokens", "output_tokens", "cost_usd", "latency_ms", "rubric_sha", "scored_at"];
+          const corrupt = (status === "scored" || status === "off_target") && scoreFields.some((field) => r[field] == null);
+          const migratedStatus = corrupt ? "corrupt" : status;
+          const publisherTime = isSec ? nullableNumber(r.published_at) : null;
+          const oldTime = nullableNumber(r.published_at);
+          const retrievedAt = finiteNumber(r.retrieved_at) ?? 0;
+          const sourceUrl = String(r.source_url ?? "");
+          insertObservation.run(
+            oldId, String(r.company_id), `legacy:${oldId}`, collector, channel, String(r.source_name ?? "Unknown"),
+            oldId, String(r.source_name ?? "Unknown"), sourceUrl, sourceKind, String(r.source_tier ?? "blog"),
+            String(r.title ?? ""), String(r.snippet ?? ""), publisherTime, retrievedAt, retrievedAt,
+            isSec && publisherTime != null ? "publisher_declared" : "legacy_unknown", isSec ? null : oldTime,
+            nullableNumber(r.filed_at), r.scoped === 1 ? 1 : 0,
+          );
+          const judgmentValues: SQLInputValue[] = [
+            oldId, oldId, migratedStatus, r.sentiment ?? null, r.confidence ?? null, r.p_pos ?? null,
+            r.p_neu ?? null, r.p_neg ?? null, r.about ?? null, r.material ?? null, r.novel ?? null,
+            r.credible ?? null, r.investor_relevant ?? null, r.event_type ?? null, r.takeaway ?? null,
+            r.magnitude ?? null, r.surprise ?? null, r.event_score ?? null, r.impact ?? null, r.weight ?? null,
+            r.exclude === 1 ? 1 : 0, r.engine ?? null, r.input_tokens ?? null, r.output_tokens ?? null,
+            r.cost_usd ?? null, r.latency_ms ?? null, r.rubric_sha ?? null,
+            corrupt ? "Legacy row claimed a score but did not contain every required Jev field." : r.score_error ?? null,
+            r.scored_at ?? null,
+          ].map(sqlValue);
+          insertJudgment.run(...judgmentValues);
+        }
+        this.db.exec("PRAGMA user_version = 2");
+        this.createMentionsView();
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
+      return;
+    }
+    this.createMentionsView();
+    this.db.exec("PRAGMA user_version = 2");
+  }
+
+  private createMentionsView(): void {
+    this.db.exec(`CREATE VIEW IF NOT EXISTS mentions AS
+      SELECT o.id, o.company_id, o.source_name, o.source_url, o.source_kind, o.source_tier,
+        o.title, o.snippet, o.publisher_published_at AS published_at, o.publisher_published_at,
+        o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector,
+        o.publisher_name, o.publisher_domain, o.filed_at, o.scoped,
+        j.status, j.sentiment, j.confidence, j.p_pos, j.p_neu, j.p_neg, j.about, j.material,
+        j.novel, j.credible, j.investor_relevant, j.event_type, j.takeaway, j.magnitude,
+        j.surprise, j.event_score, j.impact, j.weight, j.exclude, j.engine, j.input_tokens,
+        j.output_tokens, j.cost_usd, j.latency_ms, j.rubric_sha, j.score_error, j.scored_at
+      FROM source_observations o JOIN jev_judgments j ON j.observation_id = o.id`);
   }
 
   seedCompanies(companies: Company[]): void {
@@ -198,30 +349,55 @@ export class Desk {
     }));
   }
 
-  /** Returns false when the digest already exists; inserts are otherwise idempotent. */
-  insertMention(m: RawMentionInput): boolean {
-    const res = this.db
-      .prepare(
-        `INSERT OR IGNORE INTO mentions
-         (id, company_id, source_name, source_url, source_kind, source_tier,
-          title, snippet, published_at, retrieved_at, filed_at, scoped, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      )
-      .run(
-        m.companyId + ":" + m.digest,
-        m.companyId,
-        m.sourceName,
-        m.sourceUrl,
-        m.kind,
-        m.tier,
-        m.title,
-        m.snippet,
-        m.publishedAt,
-        m.retrievedAt,
-        m.filedAt ?? null,
-        m.scoped ? 1 : 0,
+  /** Exact same-collector source revisions are idempotent; similar headlines survive. */
+  insertObservation(m: RawMentionInput): { inserted: boolean; observationId: string } {
+    const collector = m.collector ?? legacyCollectorFor(m.kind);
+    const sourceItemId = m.sourceItemId ?? null;
+    const identityMaterial = `${m.companyId}\u0000${collector}\u0000${sourceItemId ?? canonicalUrl(m.sourceUrl)}`;
+    const identityKey = createHash("sha256").update(identityMaterial).digest("hex");
+    const publisherName = m.publisherName ?? m.sourceName;
+    const publisherDomain = m.publisherDomain === undefined ? domainOf(m.sourceUrl) : m.publisherDomain;
+    const providerObservedAt = m.providerObservedAt ?? null;
+    const publisherPublishedAt = m.publishedAt ?? null;
+    const stableRevision = JSON.stringify({
+      title: m.title.trim(), snippet: m.snippet.trim(), url: canonicalUrl(m.sourceUrl),
+      publisherPublishedAt, filedAt: m.filedAt ?? null,
+    });
+    const revisionDigest = createHash("sha256").update(stableRevision).digest("hex");
+    const observationId = `${m.companyId}:${createHash("sha256").update(`${identityMaterial}\u0000${revisionDigest}`).digest("hex")}`;
+    const timeBasis: TimeBasis = publisherPublishedAt != null
+      ? "publisher_declared"
+      : providerObservedAt != null ? "provider_observed" : "unknown";
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const res = this.db.prepare(
+        `INSERT OR IGNORE INTO source_observations
+         (id, company_id, identity_key, revision_digest, collector, channel, publisher_name,
+          publisher_domain, source_item_id, source_name, source_url, source_kind, source_tier,
+          title, snippet, publisher_published_at, provider_observed_at, retrieved_at, ingested_at,
+          time_basis, legacy_published_at, filed_at, scoped, response_digest, adapter_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`
+      ).run(
+        observationId, m.companyId, identityKey, revisionDigest, collector, channelFor(m.kind), publisherName,
+        publisherDomain, sourceItemId, m.sourceName, m.sourceUrl, m.kind, m.tier, m.title, m.snippet,
+        publisherPublishedAt, providerObservedAt, m.retrievedAt, Date.now(), timeBasis, m.filedAt ?? null,
+        m.scoped ? 1 : 0, m.responseDigest ?? null, m.adapterVersion ?? `${collector}/1`,
       );
-    return Number(res.changes) > 0;
+      if (Number(res.changes) > 0) {
+        this.db.prepare("INSERT INTO jev_judgments (id, observation_id, status) VALUES (?, ?, 'pending')")
+          .run(observationId, observationId);
+      }
+      this.db.exec("COMMIT");
+      return { inserted: Number(res.changes) > 0, observationId };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  /** Compatibility wrapper used by older fixtures and demo data. */
+  insertMention(m: RawMentionInput): boolean {
+    return this.insertObservation(m).inserted;
   }
 
   mentionRow(id: string): MentionRow | undefined {
@@ -231,13 +407,13 @@ export class Desk {
   markScored(id: string, s: MentionScore, exclude: boolean): void {
     this.db
       .prepare(
-        `UPDATE mentions SET
+        `UPDATE jev_judgments SET
            status = ?, sentiment = ?, confidence = ?, p_pos = ?, p_neu = ?, p_neg = ?,
            about = ?, material = ?, novel = ?, credible = ?, investor_relevant = ?, event_type = ?, takeaway = ?, magnitude = ?,
            surprise = ?, event_score = ?, impact = ?, weight = ?,
            exclude = ?, engine = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?,
            latency_ms = ?, rubric_sha = ?, score_error = NULL, scored_at = ?
-         WHERE id = ?`,
+         WHERE observation_id = ?`,
       )
       .run(
         exclude ? "off_target" : "scored",
@@ -272,18 +448,176 @@ export class Desk {
 
   markFailed(id: string, error: string): void {
     this.db
-      .prepare("UPDATE mentions SET status = 'failed', score_error = ? WHERE id = ?")
+      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ? WHERE observation_id = ?")
       .run(error.slice(0, 500), id);
+  }
+
+  recordDelivery(delivery: SourceDeliveryInput): void {
+    this.db.prepare(
+      `INSERT OR IGNORE INTO source_deliveries
+       (id, collector, company_id, request_key_hash, started_at, completed_at, result,
+        parsed_item_count, response_digest, adapter_version, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      randomUUID(), delivery.collector, delivery.companyId,
+      createHash("sha256").update(delivery.requestKey).digest("hex"), delivery.startedAt,
+      delivery.completedAt, delivery.result, delivery.parsedItemCount,
+      delivery.responseDigest ?? null, delivery.adapterVersion,
+      delivery.error ? delivery.error.slice(0, 500) : null,
+    );
+  }
+
+  deliverySummary(): Array<{
+    collector: CollectorId; companyId: string | null; result: string; completedAt: number;
+    parsedItemCount: number; adapterVersion: string; error: string | null;
+  }> {
+    return this.db.prepare(
+      `SELECT collector, company_id AS companyId, result, completed_at AS completedAt,
+        parsed_item_count AS parsedItemCount, adapter_version AS adapterVersion, error
+       FROM source_deliveries ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
+    ).all() as unknown as Array<{
+      collector: CollectorId; companyId: string | null; result: string; completedAt: number;
+      parsedItemCount: number; adapterVersion: string; error: string | null;
+    }>;
+  }
+
+  deliveryHealth(sources: DeliverySourceSchedule[], now = Date.now()): Array<{
+    collector: CollectorId;
+    enabled: boolean;
+    state: DeliveryHealthState;
+    intervalSeconds: number;
+    targetCount: number;
+    coverageCount: number;
+    latestDeliveryAt: number | null;
+    latestResult: string | null;
+    latestItemCount: number | null;
+    latestError: string | null;
+    adapterVersion: string | null;
+    latestObservationAt: number | null;
+    latestObservationBasis: TimeBasis | null;
+    latestObservationRetrievedAt: number | null;
+  }> {
+    type DeliveryRow = {
+      collector: CollectorId;
+      companyId: string | null;
+      completedAt: number;
+      result: string;
+      parsedItemCount: number;
+      error: string | null;
+      adapterVersion: string;
+    };
+    const attempts = this.db.prepare(
+      `WITH ranked AS (
+        SELECT collector, company_id AS companyId, completed_at AS completedAt, result,
+          parsed_item_count AS parsedItemCount, error, adapter_version AS adapterVersion,
+          ROW_NUMBER() OVER (PARTITION BY collector, COALESCE(company_id, '')
+            ORDER BY completed_at DESC, started_at DESC, rowid DESC) AS rn
+        FROM source_deliveries
+      )
+      SELECT collector, companyId, completedAt, result, parsedItemCount, error, adapterVersion
+      FROM ranked WHERE rn = 1`,
+    ).all() as unknown as DeliveryRow[];
+    const byCollector = new Map<CollectorId, DeliveryRow[]>();
+    for (const row of attempts) byCollector.set(row.collector, [...(byCollector.get(row.collector) ?? []), row]);
+
+    type ObservationRow = {
+      collector: CollectorId;
+      publisherPublishedAt: number | null;
+      providerObservedAt: number | null;
+      retrievedAt: number;
+      timeBasis: TimeBasis;
+    };
+    const observations = this.db.prepare(
+      `WITH ranked AS (
+        SELECT collector, publisher_published_at AS publisherPublishedAt,
+          provider_observed_at AS providerObservedAt, retrieved_at AS retrievedAt, time_basis AS timeBasis,
+          ROW_NUMBER() OVER (PARTITION BY collector ORDER BY ingested_at DESC) AS rn
+        FROM source_observations
+      )
+      SELECT collector, publisherPublishedAt, providerObservedAt, retrievedAt, timeBasis
+      FROM ranked WHERE rn = 1`,
+    ).all() as unknown as ObservationRow[];
+    const observationByCollector = new Map(observations.map((row) => [row.collector, row]));
+
+    return sources.map((source) => {
+      const rows = byCollector.get(source.collector) ?? [];
+      const latest = [...rows].sort((a, b) => b.completedAt - a.completedAt)[0] ?? null;
+      const dueAfterMs = Math.max(source.intervalSeconds * 3_000, 180_000);
+      const recent = rows.filter((row) => now - row.completedAt <= dueAfterMs);
+      const coverageCount = recent.filter((row) => row.result === "success" || row.result === "empty").length;
+      const recentFailureCount = recent.filter((row) => ["failed", "rate_limited", "invalid"].includes(row.result)).length;
+      const recentPartialCount = recent.filter((row) => row.result === "partial").length;
+      const observation = observationByCollector.get(source.collector);
+      return {
+        collector: source.collector,
+        enabled: source.enabled,
+        state: deliveryHealthState({
+          enabled: source.enabled,
+          hasDelivery: latest != null,
+          latestDeliveryAt: latest?.completedAt ?? null,
+          latestResult: latest?.result ?? null,
+          recentFailureCount,
+          recentPartialCount,
+          coverageCount,
+          targetCount: source.targetCount,
+          now,
+          intervalSeconds: source.intervalSeconds,
+        }),
+        intervalSeconds: source.intervalSeconds,
+        targetCount: source.targetCount,
+        coverageCount,
+        latestDeliveryAt: latest?.completedAt ?? null,
+        latestResult: latest?.result ?? null,
+        latestItemCount: latest?.parsedItemCount ?? null,
+        latestError: latest?.error ?? null,
+        adapterVersion: latest?.adapterVersion ?? null,
+        latestObservationAt: observation?.publisherPublishedAt ?? observation?.providerObservedAt ?? null,
+        latestObservationBasis: observation?.timeBasis ?? null,
+        latestObservationRetrievedAt: observation?.retrievedAt ?? null,
+      };
+    });
   }
 
   mentionsForCompany(companyId: string, sinceMs: number, limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE company_id = ? AND published_at >= ?
-         ORDER BY published_at DESC LIMIT ?`,
+        `SELECT * FROM mentions WHERE company_id = ?
+           AND COALESCE(published_at, provider_observed_at, retrieved_at) >= ?
+         ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
       )
       .all(companyId, sinceMs, limit) as unknown as MentionRow[];
     return rows.map(rowToDTO);
+  }
+
+  radarEvidence(companyId: string, fromMs: number, toMs: number): RadarItemEvidence[] {
+    return this.db.prepare(
+      `SELECT id, title, source_url AS sourceUrl, publisher_name AS publisherName,
+        publisher_domain AS publisherDomain, publisher_published_at AS publishedAt,
+        retrieved_at AS retrievedAt, collector, event_type AS eventType,
+        sentiment, takeaway
+       FROM mentions
+       WHERE company_id = ? AND status = 'scored' AND impact IS NOT NULL
+         AND time_basis = 'publisher_declared' AND publisher_published_at >= ?
+         AND publisher_published_at < ?
+       ORDER BY publisher_published_at DESC, ingested_at DESC`,
+    ).all(companyId, fromMs, toMs) as unknown as RadarItemEvidence[];
+  }
+
+  radarUncounted(companyId: string, retrievedFromMs: number, retrievedToMs: number): {
+    untimedScored: number;
+    unjudged: number;
+  } {
+    const row = this.db.prepare(
+      `SELECT
+        SUM(CASE WHEN status = 'scored' AND impact IS NOT NULL
+          AND (time_basis != 'publisher_declared' OR publisher_published_at IS NULL) THEN 1 ELSE 0 END) AS untimedScored,
+        SUM(CASE WHEN status IN ('pending', 'failed', 'corrupt') THEN 1 ELSE 0 END) AS unjudged
+       FROM mentions WHERE company_id = ? AND retrieved_at >= ? AND retrieved_at < ?`,
+    ).get(companyId, retrievedFromMs, retrievedToMs) as {
+      untimedScored: number | null;
+      unjudged: number | null;
+    };
+    return { untimedScored: row.untimedScored ?? 0, unjudged: row.unjudged ?? 0 };
   }
 
   /**
@@ -294,8 +628,8 @@ export class Desk {
   recentVisible(limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE status IN ('scored', 'pending')
-         ORDER BY published_at DESC LIMIT ?`,
+        `SELECT * FROM mentions WHERE status IN ('scored', 'pending', 'corrupt')
+         ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as MentionRow[];
     return rows.map(rowToDTO);
@@ -313,7 +647,8 @@ export class Desk {
     const rows = this.db
       .prepare(
         `SELECT company_id, published_at, impact, weight, event_type, takeaway FROM mentions
-         WHERE status = 'scored' AND published_at >= ? AND impact IS NOT NULL`,
+         WHERE status = 'scored' AND published_at IS NOT NULL AND time_basis = 'publisher_declared'
+           AND published_at >= ? AND impact IS NOT NULL`,
       )
       .all(sinceMs) as unknown as Array<{
         company_id: string;
@@ -345,91 +680,11 @@ export class Desk {
       .all(ticker, sinceMs) as unknown as Array<{ t: number; price: number }>;
   }
 
-  /**
-   * Rubric migration: re-queue scored mentions judged by an older rubric so
-   * they are re-judged under the current wording (and its new questions).
-   * Returns how many were requeued.
-   */
-  resetOutdatedRubric(currentSha: string): number {
-    const res = this.db
-      .prepare(
-        `UPDATE mentions SET status = 'pending'
-         WHERE status IN ('scored', 'off_target') AND rubric_sha IS NOT NULL AND rubric_sha != ?`,
-      )
-      .run(currentSha);
-    return Number(res.changes);
-  }
-
   pendingIds(limit: number): string[] {
     return (
-      this.db.prepare("SELECT id FROM mentions WHERE status = 'pending' ORDER BY published_at DESC LIMIT ?")
+      this.db.prepare("SELECT id FROM mentions WHERE status = 'pending' ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC LIMIT ?")
         .all(limit) as unknown as Array<{ id: string }>
     ).map((r) => r.id);
-  }
-
-  recentTitles(companyId: string, sinceMs: number, limit = 40): Array<{ title: string }> {
-    return this.db
-      .prepare(
-        "SELECT title FROM mentions WHERE company_id = ? AND retrieved_at >= ? ORDER BY retrieved_at DESC LIMIT ?",
-      )
-      .all(companyId, sinceMs, limit) as unknown as Array<{ title: string }>;
-  }
-
-  /**
-   * One-time cleanup of syndication duplicates already in the database: per
-   * company, later near-duplicates of a kept story (same title family within
-   * the window) are removed, keeping the earliest copy. Returns delete count.
-   */
-  dedupeNearDuplicates(windowMs = 45 * 60_000, threshold = 0.55): number {
-    const rows = this.db
-      .prepare("SELECT id, company_id, title, published_at FROM mentions ORDER BY company_id, published_at")
-      .all() as unknown as Array<{ id: string; company_id: string; title: string; published_at: number }>;
-    const del = this.db.prepare("DELETE FROM mentions WHERE id = ?");
-    let deleted = 0;
-    let companyId: string | null = null;
-    let kept: Array<{ title: string; published_at: number; norm: string }> = [];
-    const seenNormByCompany = new Map<string, Set<string>>();
-    for (const r of rows) {
-      if (r.company_id !== companyId) {
-        companyId = r.company_id;
-        kept = [];
-      }
-      const norm = normalizeTitle(r.title);
-      const seen = seenNormByCompany.get(r.company_id) ?? new Set<string>();
-      // Exact normalized-title repeats are the same story at any distance in
-      // time (re-syndication, updates); near-duplicates only within the window.
-      const exactDup = seen.has(norm);
-      const nearDup = kept.some(
-        (k) => r.published_at - k.published_at <= windowMs && isNearDuplicateTitle(r.title, k.title, threshold),
-      );
-      if (exactDup || nearDup) {
-        del.run(r.id);
-        deleted += 1;
-      } else {
-        kept.push({ title: r.title, published_at: r.published_at, norm });
-      }
-      seen.add(norm);
-      seenNormByCompany.set(r.company_id, seen);
-    }
-
-    // Complete the digest migration: re-key surviving rows to content digests
-    // so INSERT OR IGNORE blocks re-syndication from any feed, forever.
-    const survivors = this.db
-      .prepare("SELECT id, company_id, title FROM mentions")
-      .all() as unknown as Array<{ id: string; company_id: string; title: string }>;
-    const exists = this.db.prepare("SELECT 1 FROM mentions WHERE id = ?");
-    const rekey = this.db.prepare("UPDATE mentions SET id = ? WHERE id = ?");
-    let rekeyed = 0;
-    for (const r of survivors) {
-      const target = `${r.company_id}:${mentionDigest("", "", r.title)}`;
-      if (target === r.id) continue;
-      if (!exists.get(target)) {
-        rekey.run(target, r.id);
-        rekeyed += 1;
-      }
-    }
-    if (rekeyed > 0) this.logEvent("info", "dedupe", `re-keyed ${rekeyed} mentions to content digests`);
-    return deleted;
   }
 
   /** Scored, non-excluded events across the watchlist with ticker identity. */
@@ -450,7 +705,8 @@ export class Desk {
                 m.sentiment AS sentiment, m.event_score AS eventScore,
                 COALESCE(m.event_type, 'other') AS eventType, m.title AS title
          FROM mentions m JOIN companies c ON c.id = m.company_id
-         WHERE m.status = 'scored' AND m.published_at >= ? AND m.impact IS NOT NULL
+         WHERE m.status = 'scored' AND m.published_at IS NOT NULL
+           AND m.time_basis = 'publisher_declared' AND m.published_at >= ? AND m.impact IS NOT NULL
          ORDER BY m.published_at`,
       )
       .all(sinceMs) as unknown as Array<{
@@ -467,8 +723,8 @@ export class Desk {
   counts24h(sinceMs: number): Map<string, { count: number; lastAt: number | null }> {
     const rows = this.db
       .prepare(
-        `SELECT company_id, COUNT(*) AS n, MAX(published_at) AS last_at
-         FROM mentions WHERE published_at >= ? GROUP BY company_id`,
+        `SELECT company_id, COUNT(*) AS n, MAX(retrieved_at) AS last_at
+         FROM mentions WHERE retrieved_at >= ? GROUP BY company_id`,
       )
       .all(sinceMs) as Array<{ company_id: string; n: number; last_at: number | null }>;
     return new Map(rows.map((r) => [r.company_id, { count: r.n, lastAt: r.last_at }]));
@@ -528,58 +784,98 @@ export class Desk {
 }
 
 export function rowToDTO(r: MentionRow): MentionDTO {
-  const status: MentionStatus =
-    r.status === "off_target" ? "off_target" : (r.status as MentionStatus);
-  const score: MentionScore | null =
-    r.status === "scored" || r.status === "off_target"
-      ? {
-          sentiment: (r.sentiment ?? "neutral") as MentionScore["sentiment"],
-          pPos: r.p_pos ?? 0,
-          pNeu: r.p_neu ?? 0,
-          pNeg: r.p_neg ?? 0,
-          confidence: r.confidence ?? 0,
-          about: r.about ?? 0,
-          material: r.material ?? 0,
-          novel: r.novel ?? 0,
-          credible: r.credible ?? 0,
-          // Legacy rows judged before this question existed pass through.
-          investorRelevant: r.investor_relevant ?? 1,
-          eventType: r.event_type ?? "other",
-          takeaway: r.takeaway ?? "routine",
-          magnitude: r.magnitude ?? 0,
-          surprise: r.surprise ?? 0,
-          eventScore: r.event_score ?? 0,
-          impact: r.impact ?? 0,
-          weight: r.weight ?? 0,
-          engine: r.engine ?? "",
-          inputTokens: r.input_tokens ?? 0,
-          outputTokens: r.output_tokens ?? 0,
-          costUsd: r.cost_usd ?? 0,
-          latencyMs: r.latency_ms ?? 0,
-          rubricSha: r.rubric_sha ?? "",
-          scoredAt: r.scored_at ?? 0,
-        }
-      : null;
+  const wantsScore = r.status === "scored" || r.status === "off_target";
+  const values = [r.p_pos, r.p_neu, r.p_neg, r.confidence, r.about, r.material, r.novel,
+    r.credible, r.investor_relevant, r.magnitude, r.surprise, r.event_score, r.impact,
+    r.weight, r.input_tokens, r.output_tokens, r.cost_usd, r.latency_ms, r.scored_at];
+  const complete = wantsScore && values.every((v) => typeof v === "number" && Number.isFinite(v))
+    && (r.sentiment === "positive" || r.sentiment === "neutral" || r.sentiment === "negative")
+    && typeof r.event_type === "string" && typeof r.takeaway === "string"
+    && typeof r.engine === "string" && typeof r.rubric_sha === "string";
+  const status: MentionStatus = r.status === "corrupt" || (wantsScore && !complete)
+    ? "corrupt"
+    : (r.status as MentionStatus);
+  const score: MentionScore | null = complete ? {
+    sentiment: r.sentiment as MentionScore["sentiment"],
+    pPos: r.p_pos!, pNeu: r.p_neu!, pNeg: r.p_neg!, confidence: r.confidence!,
+    about: r.about!, material: r.material!, novel: r.novel!, credible: r.credible!,
+    investorRelevant: r.investor_relevant!, eventType: r.event_type!, takeaway: r.takeaway!,
+    magnitude: r.magnitude!, surprise: r.surprise!, eventScore: r.event_score!, impact: r.impact!,
+    weight: r.weight!, engine: r.engine!, inputTokens: r.input_tokens!, outputTokens: r.output_tokens!,
+    costUsd: r.cost_usd!, latencyMs: r.latency_ms!, rubricSha: r.rubric_sha!, scoredAt: r.scored_at!,
+  } : null;
   return {
     id: r.id,
     companyId: r.company_id,
+    collector: r.collector as CollectorId,
+    publisherName: r.publisher_name,
+    publisherDomain: r.publisher_domain,
     source: {
       name: r.source_name,
       url: r.source_url,
       kind: r.source_kind as SourceKind,
       tier: r.source_tier as SourceTier,
+      collector: r.collector as CollectorId,
+      publisher: r.publisher_name,
+      publisherDomain: r.publisher_domain,
     },
     title: r.title,
     snippet: r.snippet,
-    publishedAt: r.published_at,
+    publishedAt: r.publisher_published_at,
     retrievedAt: r.retrieved_at,
+    ingestedAt: r.ingested_at,
+    providerObservedAt: r.provider_observed_at,
+    timeBasis: r.time_basis as TimeBasis,
     filedAt: r.filed_at ?? null,
     status,
     score,
-    error: r.score_error,
+    error: status === "corrupt" ? (r.score_error ?? "Stored Jev judgment is incomplete and was withheld.") : r.score_error,
   };
 }
 
-export interface RawMentionInput extends RawMention {
-  digest: string;
+export type RawMentionInput = RawMention;
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function sqlValue(value: unknown): SQLInputValue {
+  if (value == null) return null;
+  if (typeof value === "number" || typeof value === "string" || typeof value === "bigint") return value;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return String(value);
+}
+
+function nullableNumber(value: unknown): number | null {
+  return value == null ? null : finiteNumber(value);
+}
+
+function domainOf(url: string): string | null {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return null; }
+}
+
+function canonicalUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/^(utm_|fbclid$|gclid$|ocid$|cmpid$)/i.test(key)) parsed.searchParams.delete(key);
+    }
+    parsed.hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return url.trim();
+  }
+}
+
+function legacyCollectorFor(kind: SourceKind): CollectorId {
+  if (kind === "sec") return "sec_edgar";
+  if (kind === "x" || kind === "reddit" || kind === "finnhub") return kind;
+  return "legacy_unknown";
+}
+
+function channelFor(kind: SourceKind): EvidenceChannel {
+  if (kind === "sec") return "filing";
+  if (kind === "x" || kind === "reddit") return "social";
+  return "news";
 }

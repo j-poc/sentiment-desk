@@ -1,4 +1,4 @@
-import { XMLParser } from "fast-xml-parser";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 import type { Company, SourceTier } from "../types.js";
 import { tierForHost } from "./tiers.js";
 
@@ -13,7 +13,8 @@ export interface FeedItem {
   title: string;
   url: string;
   sourceName: string;
-  publishedAt: number;
+  publishedAt: number | null;
+  sourceItemId: string | null;
   snippet: string;
   tier: SourceTier;
 }
@@ -62,12 +63,14 @@ export function parseRss(xml: string): FeedItem[] {
 
     const pubRaw = asText(item["pubDate"]);
     const publishedAt = pubRaw ? Date.parse(pubRaw) : NaN;
+    const sourceItemId = asText(item["guid"]) || link;
 
     out.push({
       title: clean,
       url: link,
       sourceName,
-      publishedAt: Number.isFinite(publishedAt) ? publishedAt : Date.now(),
+      publishedAt: Number.isFinite(publishedAt) ? publishedAt : null,
+      sourceItemId,
       snippet: cleanText(asText(item["description"])).slice(0, 600),
       tier: tierForHost(sourceNode && typeof sourceNode["@_url"] === "string" ? sourceNode["@_url"] : link),
     });
@@ -81,7 +84,13 @@ export async function fetchFeed(url: string, timeoutMs = 15_000): Promise<FeedIt
     headers: { "user-agent": "SentimentDesk/0.1 (+https://github.com; personal research desk)" },
   });
   if (!res.ok) throw new Error(`feed HTTP ${res.status}`);
-  return parseRss(await res.text());
+  const xml = await res.text();
+  if (!/^\uFEFF?\s*(?:<\?xml[^>]*>\s*)?<(?:rss|rdf:RDF)\b/i.test(xml)) {
+    throw new Error("invalid feed response: body is not an RSS XML document");
+  }
+  const valid = XMLValidator.validate(xml);
+  if (valid !== true) throw new Error("invalid feed response: malformed RSS XML");
+  return parseRss(xml);
 }
 
 function asText(v: unknown): string {

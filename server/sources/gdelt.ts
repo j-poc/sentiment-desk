@@ -9,7 +9,7 @@ export interface GdeltArticle {
   title: string;
   url: string;
   domain: string;
-  seenAt: number;
+  seenAt: number | null;
 }
 
 interface GdeltResponse {
@@ -31,7 +31,10 @@ function parseSeenDate(raw: string | undefined): number {
   const h = Number(raw.slice(9, 11));
   const mi = Number(raw.slice(11, 13));
   const s = Number(raw.slice(13, 15));
+  if (![y, mo, d, h, mi, s].every(Number.isInteger) || mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return NaN;
   const t = Date.UTC(y, mo - 1, d, h, mi, s);
+  const parsed = new Date(t);
+  if (parsed.getUTCFullYear() !== y || parsed.getUTCMonth() !== mo - 1 || parsed.getUTCDate() !== d) return NaN;
   return Number.isFinite(t) ? t : NaN;
 }
 
@@ -65,7 +68,7 @@ export async function fetchGdeltArticles(
       title: a.title,
       url: a.url,
       domain: a.domain ?? "unknown",
-      seenAt: Number.isFinite(seenAt) ? seenAt : Date.now(),
+      seenAt: Number.isFinite(seenAt) ? seenAt : null,
     });
   }
   return out;

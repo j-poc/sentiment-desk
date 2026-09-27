@@ -73,9 +73,15 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
             />
             <span className="truncate">{mention.source.name}</span>
             <span className="text-white/20">·</span>
-            <span className="tabnum">{shortTime(mention.publishedAt)}</span>
+            <span className="tabnum">
+              {mention.publishedAt != null
+                ? `published ${shortTime(mention.publishedAt)}`
+                : mention.timeBasis === "provider_observed" && mention.providerObservedAt != null
+                  ? `provider observed ${shortTime(mention.providerObservedAt)}`
+                  : "source time unknown"}
+            </span>
             <span className="text-white/20">·</span>
-            <span>{timeAgo(mention.publishedAt)}</span>
+            <span>collected {timeAgo(mention.retrievedAt)}</span>
           </div>
 
           {s && s.takeaway !== "routine" && (
@@ -133,35 +139,26 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
                   <span>rubric</span>
                   <span className="tabnum text-white/70">{s.rubricSha.slice(0, 12)}…</span>
                 </div>
-                {mention.source.kind === "sec" ? (
-                  <>
-                    <div className="flex justify-between py-[2px]">
-                      <span>filed (EDGAR)</span>
-                      <span className="tabnum text-white/70">{dayTime(mention.filedAt ?? mention.publishedAt)}</span>
-                    </div>
-                    <div className="flex justify-between py-[2px]">
-                      <span>accepted (public)</span>
-                      <span className="tabnum text-white/70">{dayTime(mention.publishedAt)}</span>
-                    </div>
-                    <div className="flex justify-between py-[2px]">
-                      <span>observed (desk)</span>
-                      <span className="tabnum text-white/70">{dayTime(mention.retrievedAt)}</span>
-                    </div>
-                  </>
-                ) : (
+                {mention.source.kind === "sec" && (
                   <div className="flex justify-between py-[2px]">
-                    <span>published / retrieved</span>
-                    <span className="tabnum text-white/70">
-                      {shortTime(mention.publishedAt)} / {shortTime(mention.retrievedAt)}
-                    </span>
+                    <span>filed (EDGAR)</span>
+                    <span className="tabnum text-white/70">{mention.filedAt == null ? "unknown" : dayTime(mention.filedAt)}</span>
                   </div>
                 )}
-                {(mention.confirmations ?? 1) > 1 && (
+                <div className="flex justify-between py-[2px]">
+                  <span>{mention.source.kind === "sec" ? "accepted (EDGAR)" : "publisher time"}</span>
+                  <span className="tabnum text-white/70">{mention.publishedAt == null ? "unknown" : dayTime(mention.publishedAt)}</span>
+                </div>
+                {mention.providerObservedAt != null && (
                   <div className="flex justify-between py-[2px]">
-                    <span>sources covering</span>
-                    <span className="tabnum text-white/70">×{mention.confirmations}</span>
+                    <span>provider observed</span>
+                    <span className="tabnum text-white/70">{dayTime(mention.providerObservedAt)}</span>
                   </div>
                 )}
+                <div className="flex justify-between py-[2px]">
+                  <span>collected by desk</span>
+                  <span className="tabnum text-white/70">{dayTime(mention.retrievedAt)}</span>
+                </div>
                 {mention.status === "off_target" && (
                   <div className="py-[2px] text-amber-400/80">excluded from every index (off-target)</div>
                 )}

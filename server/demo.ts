@@ -1,7 +1,6 @@
 import type { RawMention, JevState } from "./types.js";
 import type { JudgeFn } from "./pipeline.js";
 import { tierForHost } from "./sources/tiers.js";
-import { mentionDigest } from "./scoring.js";
 
 /**
  * Demo mode. Generates synthetic mentions and scores them with a deterministic
@@ -47,7 +46,7 @@ const SOURCES = [
 export function generateDemoMention(
   companies: Array<{ id: string; name: string; ticker: string; aliases: string[] }>,
   now = Date.now(),
-): RawMention & { digest: string } {
+): RawMention {
   const company = pick(companies);
   const template = pick(TEMPLATES);
   const source = pick(SOURCES);
@@ -63,14 +62,16 @@ export function generateDemoMention(
   return {
     companyId: company.id,
     kind: "rss",
+    collector: "demo_simulation",
     sourceName: source.name,
+    publisherName: source.name,
+    publisherDomain: source.domain,
     sourceUrl: url,
     tier: tierForHost(url),
     title,
     snippet: `${title}. Full coverage at ${source.name}.`,
     publishedAt,
     retrievedAt: now,
-    digest: mentionDigest("rss", url, title),
   };
 }
 

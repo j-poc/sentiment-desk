@@ -6,9 +6,7 @@ import { RUBRIC_SHA } from "./rubric.js";
 import {
   applyPostRules,
   bucketMsFor,
-  clusterEvents,
   forwardReturn,
-  hasNearDuplicateTitle,
   hasStrongIdentity,
   parseJudgment,
   shouldAlert,
@@ -26,7 +24,6 @@ import type {
   SeriesPoint,
   SourceTier,
 } from "./types.js";
-import type { EventCluster } from "./scoring.js";
 
 /**
  * The pipeline ties ingestion to judgment: normalized mentions enter, validated
@@ -73,16 +70,11 @@ export class Pipeline {
 
   constructor(private readonly deps: PipelineDeps) {}
 
-  /** Insert a normalized mention; on first sight, schedule it for judgment. */
+  /** Insert a normalized source observation; exact replays do not reach Jev. */
   ingest(m: RawMentionInput): boolean {
-    // Syndication suppression: the same story re-arriving from another feed
-    // within the window is the same event; drop it before it costs anything.
-    const recent = this.deps.db.recentTitles(m.companyId, Date.now() - 45 * 60_000, 40);
-    if (hasNearDuplicateTitle(m.title, recent)) return false;
-    const id = `${m.companyId}:${m.digest}`;
-    const inserted = this.deps.db.insertMention(m);
-    if (inserted) this.enqueue(id);
-    return inserted;
+    const stored = this.deps.db.insertObservation(m);
+    if (stored.inserted) this.enqueue(stored.observationId);
+    return stored.inserted;
   }
 
   /** Re-queue existing pending mentions (used after rubric migrations). */
@@ -150,7 +142,9 @@ export class Pipeline {
           url: row.source_url,
           tier: row.source_tier as SourceTier,
         },
-        publishedAt: new Date(row.published_at).toISOString(),
+        publishedAt: row.published_at == null
+          ? "Unknown (publisher did not provide a timestamp)"
+          : new Date(row.published_at).toISOString(),
       },
       deskMemory,
     };
@@ -208,13 +202,13 @@ export class Pipeline {
   private maybeAlert(row: {
     company_id: string;
     title: string;
-    published_at: number;
+    published_at: number | null;
     impact: number | null;
     event_score: number | null;
   }): void {
     const alert = this.deps.alert;
     if (!alert?.webhookUrl) return;
-    if (row.impact == null || row.event_score == null) return;
+    if (row.impact == null || row.event_score == null || row.published_at == null) return;
     const meta = this.companyMeta(row.company_id);
     if (
       !shouldAlert({
@@ -312,7 +306,7 @@ export class Pipeline {
   snapshot(companyId: string): CompanySnapshot {
     const now = Date.now();
     const companies = new Map(this.deps.db.companies().map((c) => [c.id, c] as const));
-    const events = clusterEvents(this.deps.db.scoredMentions(now - DAY_MS));
+    const events = this.deps.db.scoredMentions(now - DAY_MS);
     const counts = this.deps.db.counts24h(now - DAY_MS);
     const extras = this.earningsExtras();
     return this.computeSnapshot(companies, counts, events, companyId, now, extras);
@@ -322,7 +316,7 @@ export class Pipeline {
     const now = Date.now();
     const companies = this.deps.db.companies();
     const byId = new Map(companies.map((c) => [c.id, c] as const));
-    const events = clusterEvents(this.deps.db.scoredMentions(now - DAY_MS));
+    const events = this.deps.db.scoredMentions(now - DAY_MS);
     const counts = this.deps.db.counts24h(now - DAY_MS);
     const extras = this.earningsExtras();
     return companies.map((c) => this.computeSnapshot(byId, counts, events, c.id, now, extras));
@@ -380,9 +374,7 @@ export class Pipeline {
   series(companyId: string, windowHours: number): SeriesPoint[] {
     const now = Date.now();
     const windowMs = windowHours * 60 * 60 * 1000;
-    const items = clusterEvents(
-      this.deps.db.scoredMentions(now - windowMs).filter((m) => m.companyId === companyId),
-    );
+    const items = this.deps.db.scoredMentions(now - windowMs).filter((m) => m.companyId === companyId);
     return smoothedSeries(items, windowMs, bucketMsFor(windowHours), now);
   }
 }

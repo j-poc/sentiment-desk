@@ -1,5 +1,5 @@
 import type { Mention } from "../lib/api.js";
-import { NEU, fmtIndex, sentimentColor, shortTime } from "../lib/format.js";
+import { NEU, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
 
 const TIER_DOT: Record<string, string> = {
   wire: "#e2e8f0",
@@ -90,7 +90,14 @@ export function MentionCard({
         />
         <span className="truncate">{m.source.name}</span>
         <span className="text-white/20">·</span>
-        <span className="tabnum shrink-0">{shortTime(m.publishedAt)}</span>
+        <span className="tabnum shrink-0">
+          {m.publishedAt != null
+            ? shortTime(m.publishedAt)
+            : m.timeBasis === "provider_observed" && m.providerObservedAt != null
+              ? `observed ${shortTime(m.providerObservedAt)}`
+              : "source time unknown"}
+        </span>
+        <span className="truncate text-[9px] text-white/25">collected {timeAgo(m.retrievedAt)}</span>
         {s && (
           <span className="tabnum ml-auto shrink-0 font-medium" style={{ color: dir }}>
             {fmtIndex(s.impact)}
@@ -122,6 +129,11 @@ export function MentionCard({
           scoring failed
         </div>
       )}
+      {m.status === "corrupt" && (
+        <div className="mt-2 text-[11px] text-amber-300/80" title={m.error ?? ""}>
+          stored Jev score is incomplete; score withheld
+        </div>
+      )}
 
       {s && (
         <div className={`flex flex-wrap items-center gap-1.5 ${dense ? "mt-1" : "mt-2.5"}`}>
@@ -132,7 +144,6 @@ export function MentionCard({
           {s.surprise >= 0.7 && s.novel >= 0.6 && <Pill color="#5eead4">FRESH</Pill>}
           {s.material >= 0.6 && <Pill color="#a5b4fc">MATERIAL</Pill>}
           {s.novel >= 0.6 && s.surprise < 0.7 && <Pill color="#5eead4">NEW INFO</Pill>}
-          {(m.confirmations ?? 1) >= 2 && <Pill color="#67e8f9">×{m.confirmations} SOURCES</Pill>}
           {s.confidence < 0.55 && <Pill color="#fbbf24">LOW CONF</Pill>}
           {offTarget && <Pill dim>OFF TARGET</Pill>}
           <span className="ml-auto flex items-center gap-1.5 text-[10px] text-white/35">

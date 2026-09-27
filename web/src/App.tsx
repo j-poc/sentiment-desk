@@ -7,6 +7,7 @@ import {
   type MarketSnapshot,
   type Mention,
   type PricePoint,
+  type PriceSeriesDTO,
   type SeriesPoint,
 } from "./lib/api.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
@@ -23,6 +24,7 @@ import { Tape } from "./components/Tape.js";
 import { HealthPanel } from "./components/HealthPanel.js";
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
+import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { timeAgo } from "./lib/format.js";
 
 const WINDOWS = [
@@ -41,6 +43,7 @@ const FILTERS = [
   { key: "failed", label: "Unscored" },
 ] as const;
 type FilterKey = (typeof FILTERS)[number]["key"];
+type ResearchView = "desk" | "radar";
 
 function applyFilter(ms: Mention[], f: FilterKey): Mention[] {
   switch (f) {
@@ -64,6 +67,7 @@ function applyFilter(ms: Mention[], f: FilterKey): Mention[] {
 export default function App() {
   const [companies, setCompanies] = useState<CompanySnapshot[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [researchView, setResearchView] = useState<ResearchView>("desk");
   const [tape, setTape] = useState<Mention[]>([]);
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [series, setSeries] = useState<SeriesPoint[]>([]);
@@ -71,6 +75,8 @@ export default function App() {
   const [sparks, setSparks] = useState<Record<string, SeriesPoint[]>>({});
   const [market, setMarket] = useState<MarketSnapshot | null>(null);
   const [price, setPrice] = useState<PricePoint[]>([]);
+  const [priceSource, setPriceSource] = useState<PriceSeriesDTO | null>(null);
+  const [priceLoadError, setPriceLoadError] = useState(false);
   const [health, setHealth] = useState<HealthDTO | null>(null);
   const [connected, setConnected] = useState(false);
   const [demo, setDemo] = useState(false);
@@ -85,12 +91,21 @@ export default function App() {
   const selectedIdRef = useRef<string | null>(null);
   const windowRef = useRef(24);
   const chartModeRef = useRef<"sentiment" | "overlay">("overlay");
+  const priceKeyRef = useRef<string | null>(null);
+  const priceRequestSeq = useRef(0);
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
   useEffect(() => {
     windowRef.current = windowHours;
   }, [windowHours]);
+  useEffect(() => {
+    priceKeyRef.current = `${selectedId ?? ""}:${windowHours}`;
+    priceRequestSeq.current += 1;
+    setPrice([]);
+    setPriceSource(null);
+    setPriceLoadError(false);
+  }, [selectedId, windowHours]);
   useEffect(() => {
     chartModeRef.current = chartMode;
   }, [chartMode]);
@@ -117,19 +132,34 @@ export default function App() {
     if (chartModeRef.current !== "overlay") return;
     const id = selectedIdRef.current;
     if (!id) return;
+    const hours = windowRef.current;
+    const requestKey = `${id}:${hours}`;
+    const requestSeq = ++priceRequestSeq.current;
+    if (priceKeyRef.current !== requestKey) {
+      priceKeyRef.current = requestKey;
+      setPrice([]);
+      setPriceSource(null);
+      setPriceLoadError(false);
+    }
     try {
       const all = await getJSON<CompanySnapshot[]>("/api/companies");
       const c = all.find((x) => x.id === id);
       if (!c) return;
-      setPrice(
-        await getJSON<PricePoint[]>(
-          `/api/companies/${id}/price?ticker=${encodeURIComponent(c.ticker)}&hours=${windowRef.current}`,
-        ),
+      const result = await getJSON<PriceSeriesDTO>(
+        `/api/companies/${id}/price?ticker=${encodeURIComponent(c.ticker)}&hours=${hours}`,
       );
+      if (priceKeyRef.current !== requestKey || priceRequestSeq.current !== requestSeq) return;
+      setPrice(result.points);
+      setPriceSource(result);
+      setPriceLoadError(false);
     } catch {
-      /* keep last price series */
+      if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) setPriceLoadError(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (chartMode === "overlay") void refreshPrice();
+  }, [chartMode, refreshPrice]);
 
   // Initial load: watchlist, tape, quotes, health snapshot.
   useEffect(() => {
@@ -314,7 +344,7 @@ export default function App() {
   const breaking = useMemo(
     () =>
       tape.filter(
-        (m) => m.score && m.score.eventScore >= 60 && Date.now() - m.publishedAt < 45 * 60_000,
+        (m) => m.score && m.publishedAt != null && m.score.eventScore >= 60 && Date.now() - m.publishedAt < 45 * 60_000,
       ).slice(0, 6),
     [tape],
   );
@@ -359,8 +389,34 @@ export default function App() {
           />
         </aside>
 
-        <main className="flex min-h-0 flex-col px-4 py-3">
+        <main className="flex min-h-0 flex-col px-3 py-2 sm:px-4 sm:py-3">
+          <div className="mb-2 flex shrink-0 items-center gap-1" role="group" aria-label="Research view">
+            {([
+              ["desk", "Desk"],
+              ["radar", "Opportunity Radar"],
+            ] as const).map(([view, label]) => (
+              <button
+                key={view}
+                type="button"
+                aria-pressed={researchView === view}
+                onClick={() => setResearchView(view)}
+                className={`rounded-md border px-2.5 py-1.5 text-[10.5px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 ${researchView === view ? "border-white/15 bg-white/[0.08] text-white/85" : "border-transparent text-white/40 hover:bg-white/[0.04] hover:text-white/70"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {selected ? (
+            researchView === "radar" ? (
+              <OpportunityRadar
+                key={selected.id}
+                companyId={selected.id}
+                ticker={selected.ticker}
+                hours={windowHours}
+                onHours={setWindowHours}
+                demo={demo}
+              />
+            ) : (
             <>
               <div className="panel flex shrink-0 items-center gap-4 px-4 py-2">
                 <Gauge value={selected.index} size={92} />
@@ -377,20 +433,21 @@ export default function App() {
                       return (
                         <span
                           className="tabnum rounded px-1.5 py-0.5 text-[10.5px] font-medium"
+                          title={`${q.delivery === "cache" ? "Last-known cached quote" : "Yahoo Finance quote"}; ${q.currency}; source time ${q.at == null ? "unknown" : new Date(q.at).toISOString()}; retrieved ${timeAgo(q.retrievedAt)}`}
                           style={{
-                            color: c > 0.001 ? "#34d399" : c < -0.001 ? "#f87171" : "#94a3b8",
+                            color: q.delivery === "cache" ? "#fbbf24" : c > 0.001 ? "#34d399" : c < -0.001 ? "#f87171" : "#94a3b8",
                             background: "rgba(255,255,255,0.04)",
                           }}
                         >
-                          ${q.price.toFixed(2)} {c > 0 ? "+" : ""}
-                          {c.toFixed(2)}%
+                          {q.currency} {q.price.toFixed(2)} {c > 0 ? "+" : ""}{c.toFixed(2)}%
+                          {q.delivery === "cache" ? ` · cached ${timeAgo(q.retrievedAt)}` : ""}
                         </span>
                       );
                     })()}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-white/40">
                     <span>
-                      {selected.sector} · {selected.mentions24h} mentions in 24h · last {timeAgo(selected.lastMentionAt)}
+                      {selected.sector} · {selected.mentions24h} collected in 24h · last {timeAgo(selected.lastMentionAt)}
                     </span>
                     {selected.earningsAt != null && (
                       <span
@@ -450,6 +507,16 @@ export default function App() {
                     {chartMode === "overlay" && (
                       <span className="flex items-center gap-1">
                         <span className="inline-block h-[2px] w-3 bg-white/80" /> price
+                      </span>
+                    )}
+                    {chartMode === "overlay" && (
+                      <span
+                        className={priceLoadError ? "text-amber-300/80" : "text-white/30"}
+                        title={priceSource ? `Source point ${priceSource.sourceLatestAt == null ? "time unknown" : new Date(priceSource.sourceLatestAt).toISOString()}; served ${new Date(priceSource.servedAt).toISOString()}${priceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(priceSource.cacheAgeMs / 1000)}s`}; values are bucketed last observations.` : undefined}
+                      >
+                        {priceLoadError ? "refresh failed · keeping prior series" : priceSource
+                          ? `${priceSource.delivery.replaceAll("_", " ")}${priceSource.cacheAgeMs == null ? "" : ` ${Math.round(priceSource.cacheAgeMs / 1000)}s`} · source ${timeAgo(priceSource.sourceLatestAt)}`
+                          : "price waiting"}
                       </span>
                     )}
                     <button
@@ -535,6 +602,7 @@ export default function App() {
                 </div>
               </div>
             </>
+            )
           ) : (
             <div className="flex h-full items-center justify-center text-[12px] text-white/35">
               {companies.length === 0 ? "Connecting to the desk…" : "Select a company from the watchlist."}

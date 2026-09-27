@@ -5,7 +5,7 @@ import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
 import { JevClient } from "./jev.js";
 import { Pipeline, type JudgeFn } from "./pipeline.js";
-import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
+import { RUBRIC } from "./rubric.js";
 import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import {
@@ -93,20 +93,11 @@ async function main(): Promise<void> {
   });
 
   const market = new MarketData({ companies, indices: config.indices, hub, health, db });
+  const secWatchlistCount = companies.filter((company) => cikByTicker.has(company.ticker)).length;
 
-  // Syndication cleanup: remove near-duplicate rows already stored.
-  const dupes = db.dedupeNearDuplicates();
-  if (dupes > 0) console.log(`[desk] removed ${dupes} syndication duplicates`);
-
-  // Rubric migration: re-judge anything scored under an older rubric so the
-  // whole history answers to the current questions (including investor
-  // relevance). One-time cost per rubric change; fail-closed preserved.
-  const requeued = db.resetOutdatedRubric(RUBRIC_SHA);
-  if (requeued > 0) {
-    console.log(`[desk] rubric changed: re-queueing ${requeued} mentions for re-judgment`);
-  }
-  // Pending work always drains on boot, whether it came from the migration,
-  // an earlier crash, or scoring that was interrupted by a missing key.
+  // Pending work always drains on boot, whether it came from an earlier crash
+  // or scoring that was interrupted by a missing key. Existing completed
+  // scores remain untouched when the current rubric changes.
   const drained = pipeline.drainPending(5_000);
   if (drained > 0) console.log(`[desk] re-queued ${drained} pending mentions`);
 
@@ -119,6 +110,16 @@ async function main(): Promise<void> {
     health,
     demo: config.demo,
     version: VERSION,
+    deliverySources: [
+      { collector: "google_news_rss", enabled: !config.demo, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
+      { collector: "yahoo_finance_rss", enabled: !config.demo, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
+      { collector: "gdelt_doc_api", enabled: !config.demo, intervalSeconds: config.pollGdeltSeconds, targetCount: companies.length },
+      { collector: "sec_edgar", enabled: !config.demo && secWatchlistCount > 0, intervalSeconds: config.pollSecSeconds, targetCount: secWatchlistCount },
+      { collector: "finnhub", enabled: !config.demo && config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length },
+      { collector: "reddit", enabled: !config.demo && config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
+      { collector: "x", enabled: !config.demo && config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },
+      { collector: "yahoo_quote", enabled: true, intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length },
+    ],
   });
 
   const server = serve({ fetch: app.fetch, port: config.port });

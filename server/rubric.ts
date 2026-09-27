@@ -15,8 +15,8 @@ export type RubricQuestion = ChoiceQuestion | NoulQuestion;
 export type Rubric = Record<string, RubricQuestion>;
 
 /**
- * The fixed sentiment rubric. Every mention is judged by the same five
- * questions, in the same shape, for every company. This is the fairness
+ * The fixed Jev rubric. Every mention is judged by the same questions, in
+ * the same shape, for every company. This is the fairness
  * contract of the product: identical rubric, identical post-rules, only the
  * mention and the company differ. The rubric ships as data and its hash is
  * stored with every score so any historical judgment can be replayed against

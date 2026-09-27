@@ -1,97 +1,115 @@
 {
   "applicability": "required",
   "status": "partial",
-  "intended_use": "Private, single-user research interface; not an authoritative point-in-time research archive or investment signal service.",
+  "operational_status": "Keyless fresh-start source/API/UI checks and an isolated Docker live-data plus volume-recovery smoke passed. Jev remained disabled without a key; a prior controlled Jev fixture returned a valid off_target judgment. Source-use terms remain unreviewed, GDELT was HTTP 429 in the fresh local run, and social/Finnhub credentials were disabled.",
+  "intended_use": "Private, single-user research interface for investigating sourced observations and Jev judgments; not an authoritative point-in-time archive or investment signal service.",
   "delivery": "Local Docker Compose or local Node process. The public source/build does not provide a hosted data service.",
   "sources": [
     {
       "name": "Google News RSS",
       "required": true,
-      "identity": "Article URL and feed-provided GUID when available; matched to configured company.",
-      "time": "RSS pubDate is used when valid; missing or invalid pubDate currently falls back to local retrieval time.",
-      "retention": "Normalized mention fields are stored in SQLite; raw feed bodies and response digests are not retained.",
-      "rights": "Provider terms and downstream redistribution rights have not been reviewed for this project."
+      "identity": "Feed GUID when supplied, otherwise canonical article URL, namespaced by company and collector; company matching is deterministic.",
+      "time": "Valid RSS pubDate is publisher-declared time; absent or invalid dates remain null. Provider retrieval and local ingestion times are stored separately.",
+      "retention": "Normalized title, snippet, URL, publisher, identity, time fields, adapter version, and a SHA-256 digest of parsed normalized items are stored. Raw XML is not retained; Jev replay uses normalized local observations, not raw parser input.",
+      "rights": "Provider terms, permitted display, model access, retention, and redistribution rights have not been reviewed."
     },
     {
       "name": "Yahoo Finance RSS and chart endpoint",
       "required": true,
-      "identity": "Configured ticker for quotes and chart series; article URL for RSS items.",
-      "units": "Quote price in provider currency; percent change relative to provider previous close.",
-      "time": "Quote uses regularMarketTime when present and currently falls back to retrieval time; collected history is also timestamped at local polling time.",
-      "retention": "Normalized quote and price points are stored in SQLite; raw responses and response digests are not retained.",
-      "rights": "Provider terms, retention, and redistribution rights have not been reviewed for this project."
+      "identity": "Configured symbol is the instrument key; article identity is feed GUID or canonical URL within the RSS collector.",
+      "units": "Price is a decimal number in the provider-returned currency; changePct is percentage change from provider previous close. No FX conversion is applied.",
+      "time": "Quote observation time is regularMarketTime when supplied and otherwise unknown. Local retrieval time and per-symbol last-attempt time are separate. Price-series source timestamps are retained, then bucketed using last-observation carry-forward for chart display.",
+      "retention": "Current quote snapshots and their retrieval state are in memory. Price points are stored in SQLite using source timestamps. Price-series responses disclose network, one-minute memory cache, or local-store delivery and sourceLatestAt. Raw responses are not retained.",
+      "rights": "Provider terms, permitted display, model access, retention, and redistribution rights have not been reviewed."
     },
     {
       "name": "GDELT DOC 2.0",
       "required": true,
-      "identity": "Article URL and domain, matched to configured company.",
-      "time": "Provider seendate is retained as seenAt when parseable; the adapter currently falls back to local retrieval time when absent or invalid.",
-      "retention": "Normalized mention fields are stored in SQLite; raw responses and response digests are not retained.",
-      "rights": "Provider terms and downstream redistribution rights have not been reviewed for this project."
+      "identity": "Article URL and domain, namespaced by company and collector; company match is checked before storage.",
+      "time": "GDELT seendate is provider-observed time, never publisher publication time. Missing or invalid seendate remains unknown; retrieval and ingestion clocks are separate.",
+      "retention": "Normalized item fields and a SHA-256 digest of parsed normalized items are stored; raw responses are not retained. Jev replay uses normalized local observations.",
+      "rights": "Provider terms, permitted display, model access, retention, and redistribution rights have not been reviewed."
     },
     {
       "name": "SEC EDGAR submissions and filing documents",
       "required": true,
       "identity": "CIK, accession number, form type, and filing items.",
-      "time": "Filing date and acceptanceDateTime are kept separately when supplied by the SEC.",
-      "retention": "Normalized filing metadata and bounded extracted text are stored with mentions; raw response bodies and response digests are not retained.",
-      "rights": "Official public endpoints are used; project-specific retention and redistribution policy has not been reviewed."
+      "time": "Filing date and EDGAR acceptanceDateTime are separate. Acceptance is used as the source-declared event timestamp; missing timestamps stay unknown.",
+      "retention": "Normalized filing metadata and bounded extracted text are stored; acquisition receipts keep adapter versions and a digest of normalized parsed items, not raw SEC bytes. The source model receives the normalized excerpt.",
+      "rights": "Official public endpoints are used, but the display and retention policy for this project has not been reviewed. A tested packaged SEC connector contract available on the host says ui_display=false, so that connector is not substituted into this display product."
     },
     {
       "name": "Finnhub company news, earnings, and calendar",
       "required": false,
       "identity": "Provider symbol, article URL, and earnings period when supplied.",
-      "time": "News datetime and earnings date are taken from provider responses.",
-      "retention": "Optional source enabled only with the operator's FINNHUB_API_KEY; normalized fields only.",
-      "rights": "Operator must supply credentials and follow provider terms; project-specific storage limits have not been reviewed."
+      "time": "News datetime and earnings dates use provider fields; absent event times remain unknown. Local retrieval and ingestion are separate.",
+      "retention": "Optional source enabled only with the operator's FINNHUB_API_KEY; normalized items, response digests of parsed items, and bounded delivery receipts only. No raw response retention.",
+      "rights": "Operator must supply credentials and follow provider terms; permitted model access, display, and project retention have not been reviewed."
     },
     {
       "name": "X API recent search",
       "required": false,
       "identity": "Provider post ID and configured ticker/company match.",
-      "time": "Provider-created time when supplied.",
-      "retention": "Optional source enabled only with the operator's X_BEARER_TOKEN; normalized fields only.",
-      "rights": "Operator must supply credentials and follow provider terms; project-specific storage limits have not been reviewed."
+      "time": "Provider-created time when supplied; absent time stays unknown. Retrieval and ingestion are separate.",
+      "retention": "Optional source enabled only with the operator's X_BEARER_TOKEN; normalized items and parsed-item digests only. No raw response retention.",
+      "rights": "Operator must supply credentials and follow provider terms; permitted model access, display, and project retention have not been reviewed."
     },
     {
       "name": "Reddit search",
       "required": false,
       "identity": "Provider post ID and configured company match.",
-      "time": "Provider-created time when supplied.",
-      "retention": "Optional source enabled only with the operator's Reddit app credentials; normalized fields only.",
-      "rights": "Operator must supply credentials and follow provider terms; project-specific storage limits have not been reviewed."
+      "time": "Provider-created time when supplied; absent time stays unknown. Retrieval and ingestion are separate.",
+      "retention": "Optional source enabled only with the operator's Reddit app credentials; normalized items and parsed-item digests only. No raw response retention.",
+      "rights": "Operator must supply credentials and follow provider terms; permitted model access, display, and project retention have not been reviewed."
     }
   ],
   "checks": {
     "fixture": {
       "command": "npm test",
       "covers": "Offline parsing and scoring fixtures, including RSS and SEC filing examples.",
-      "status": "passed"
+      "status": "passed",
+      "evidence": "2026-09-27: npm test passed 52 tests across 8 files, including immutable observation/revision, delivery state, quote cache provenance, Radar aggregation, and paginated evidence routes. npm run typecheck and npm run build passed."
     },
     "failure": {
       "command": "npm test -- --run tests/rss.test.ts tests/sec.test.ts tests/finnhub.test.ts",
       "covers": "Malformed or empty RSS inputs, filtered SEC records, and missing or unusable earnings values. Does not cover provider timeout, rate-limit recovery, or identity conflicts end to end.",
-      "status": "partial"
+      "status": "passed",
+      "evidence": "2026-09-27: unit/API tests cover malformed RSS, missing source times, observation revisions, idempotent replay, failed/overdue/disabled delivery states, Jev retry/contract fixtures, quote cache labeling, invalid Radar categories, and missing companies. Fresh live run showed GDELT HTTP 429 as failed while Google News, Yahoo Finance RSS, SEC, and Yahoo quotes continued independently."
     },
     "replay": {
       "command": "./scripts/verify-live-compose.sh",
       "covers": "Recreates a container over a retained SQLite volume. This is process recovery, not replay from retained raw provider responses.",
-      "status": "not_run",
-      "blocker": "No usable Docker daemon: the selected Citrini context belongs to a separate build, and the generic default Colima profile could not start because its saved disk configuration requires an unsupported shrink; see the dated project log."
+      "status": "passed",
+      "evidence": "2026-09-27: env DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh rebuilt the final credential-free image, preserved a real pending observation across container recreation, and removed its own temporary Compose volume. Result: RECOVERY_SMOKE_RESULT companies=24 dbSizeBytes=2416640 pendingObservationPreserved=true."
     },
     "live_smoke": {
       "command": "./scripts/verify-live-compose.sh",
       "covers": "Credential-free live quote and news/filing source success through the HTTP API, with DEMO and Jev scoring disabled.",
-      "status": "blocked",
-      "blocker": "No usable Docker daemon: the selected Citrini context belongs to a separate build, and the generic default Colima profile could not start because its saved disk configuration requires an unsupported shrink; see the dated project log."
+      "status": "passed",
+      "evidence": "2026-09-27: final isolated Compose API smoke returned LIVE_SMOKE_RESULT quotes=27 companies=24 dbSizeBytes=2383872 pendingId=meta:95b59b5ec488545508853a0e6c2f07ffa7eb3b1d0e27cab565752cf44d6b67d4 collector=google_news_rss timeBasis=publisher_declared with Jev and optional credentials disabled."
+    },
+    "fresh_start": {
+      "command": "npm start with an isolated HOME, DB_PATH, empty Jev and optional provider credentials, and DEMO=0",
+      "covers": "Fresh SQLite schema, live keyless collection through the consumer API, and honest pending/time/coverage states in the production UI.",
+      "status": "passed",
+      "evidence": "2026-09-27: isolated production start loaded 24 companies; Google News RSS, Yahoo Finance RSS, SEC EDGAR, and Yahoo quotes had current delivery; source items were pending with publisher_declared time and separate retrieval/ingestion times. GDELT HTTP 429 appeared as failed; Finnhub, Reddit, and X were disabled. No credentials were loaded."
+    },
+    "browser_workflow": {
+      "command": "Playwright CLI against isolated live and synthetic demo instances",
+      "covers": "Fresh-start desk and Radar view, shared company selection, expandable source provenance, synthetic label, and responsive layout.",
+      "status": "passed",
+      "evidence": "2026-09-27: at 1280px and 390px the user opened Desk/Radar, selected Coinbase and retained it across the view switch; mobile document width equaled viewport width (390px). Live keyless Radar showed pending/untimed and failed/disabled coverage clearly. The synthetic demo showed its DEMO · SYNTHETIC EVIDENCE label and expandable source link, publisher time, and collection time."
     }
   },
   "known_gaps": [
-    "Raw source bodies, response digests, acquisition receipts, and adapter versions are not retained, so raw-input replay is unavailable.",
-    "Source-health counters describe fetch cycles but do not separate delivery freshness from observation freshness in the API/UI.",
-    "Several adapters substitute retrieval time when provider event time is missing; this can make unknown timing look precise.",
-    "Quote history uses local polling time for collected points and is not suitable as a point-in-time market-data archive.",
-    "Retention and redistribution rights have not been reviewed across all upstream providers; fetched source content is not republished by the build.",
-    "Provider outage, rate-limit, duplicate-delivery, out-of-order completion, and clean raw-response replay behavior lack end-to-end checks."
+    "Raw upstream bodies are not retained. Delivery digests cover normalized parsed items and cannot prove parser correctness or replay raw bytes; Jev replay uses normalized observation fields.",
+    "Delivery state and newest collected-item event time are separate. An old source timestamp can coexist with a current successful delivery; source age is shown, but no universal content-staleness TTL is claimed because quiet periods and provider query semantics differ.",
+    "Yahoo quote retrieval time and source regularMarketTime are separate. A failed per-symbol refresh marks the retained quote as cached and exposes its original retrieval age. Market-closure and holiday correctness is not established by the app's weekday/session display.",
+    "Price-series display buckets use last-observation carry-forward; those bucket timestamps are derived display coordinates, not new source price observations. The API retains sourceLatestAt and the resampling policy.",
+    "Fresh local browser verification at 2026-09-27 14:13 EEST showed GDELT rate-limited with HTTP 429; Google News RSS, Yahoo Finance RSS, SEC EDGAR, and Yahoo quotes had successful current delivery. GDELT coverage is therefore a current limitation, not evidence of zero GDELT activity.",
+    "No Jev credential was supplied during fresh-start and Compose verification, so current real observations stayed pending. A separate bounded controlled Jev fixture previously returned a valid off_target judgment; the fresh live production run did not exercise scoring of a real headline.",
+    "Optional X, Reddit, and Finnhub sources were disabled in final verification by explicit empty credentials. Their live coverage and rights are not verified.",
+    "Provider terms, permitted model access, display, retention, and redistribution have not been reviewed. Public availability is not treated as a license to republish, and the UI is private and local.",
+    "Source retries happen on the next scheduled poll (quote and Jev clients also have bounded request retries); source collectors do not perform an immediate generic retry loop. Provider coverage and pagination completeness are not proven exhaustive."
   ]
 }

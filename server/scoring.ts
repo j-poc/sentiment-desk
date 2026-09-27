@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { SourceTier } from "./types.js";
 import { validateChoiceAnswer, validateNoulAnswer } from "./jev.js";
 import type { EventType, TakeawayKey } from "./rubric.js";
@@ -359,122 +358,6 @@ export function summarizeReactions(
 }
 
 /* ------------------------------------------------------------------ */
-/* Event clustering. Same company + same coarse event class (or takeaway)  */
-/* within a time window = one event, no matter how many outlets frame it.  */
-/* This stops triple-counting from inflating the index and gives the UI    */
-/* its coverage badge. Token-overlap dedupe stays for exact syndication;   */
-/* this layer handles paraphrase, which word matching cannot.              */
-/* ------------------------------------------------------------------ */
-
-export interface EventLike {
-  companyId: string;
-  publishedAt: number;
-  impact: number;
-  weight: number;
-  eventType: string;
-  takeaway: string;
-  /** Optional mention id, used to map members back to their cluster. */
-  id?: string;
-}
-
-export interface EventCluster extends EventLike {
-  /** How many framings of this event were merged. */
-  size: number;
-  memberIds: string[];
-}
-
-/**
- * Greedy time-anchored clustering. An event is anchored at its first mention;
- * later mentions of the same company join while inside the window and sharing
- * the event class or the takeaway. Impact is the weight-weighted mean across
- * framings; weight is the strongest framing's weight — one event, counted
- * once, at its best-evidenced strength.
- */
-export function clusterEvents(items: EventLike[], windowMs = 45 * 60_000): EventCluster[] {
-  const sorted = [...items].sort((a, b) => a.publishedAt - b.publishedAt);
-  const out: EventCluster[] = [];
-  let cur: {
-    companyId: string;
-    anchor: number;
-    wImpact: number;
-    wSum: number;
-    maxW: number;
-    size: number;
-    eventType: string;
-    takeaway: string;
-  } | null = null;
-
-  const memberIds: string[] = [];
-  const flush = () => {
-    if (cur && cur.size > 0) {
-      out.push({
-        companyId: cur.companyId,
-        publishedAt: cur.anchor,
-        impact: cur.wSum > 0 ? Math.round((cur.wImpact / cur.wSum) * 100) / 100 : 0,
-        weight: Math.round(cur.maxW * 10_000) / 10_000,
-        eventType: cur.eventType,
-        takeaway: cur.takeaway,
-        size: cur.size,
-        memberIds: [...memberIds],
-      });
-    }
-    memberIds.length = 0;
-    cur = null;
-  };
-
-  for (const m of sorted) {
-    const joins =
-      cur != null &&
-      m.companyId === cur.companyId &&
-      m.publishedAt - cur.anchor <= windowMs &&
-      (m.eventType === cur.eventType || m.takeaway === cur.takeaway);
-    if (joins && cur) {
-      cur.wImpact += m.weight * m.impact;
-      cur.wSum += m.weight;
-      cur.maxW = Math.max(cur.maxW, m.weight);
-      cur.size += 1;
-      if (m.id) memberIds.push(m.id);
-    } else {
-      flush();
-      if (m.id) memberIds.push(m.id);
-      cur = {
-        companyId: m.companyId,
-        anchor: m.publishedAt,
-        wImpact: m.weight * m.impact,
-        wSum: m.weight,
-        maxW: m.weight,
-        size: 1,
-        eventType: m.eventType,
-        takeaway: m.takeaway,
-      };
-    }
-  }
-  flush();
-  return out;
-}
-
-const STOPWORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have", "in", "is", "it",
-  "its", "of", "on", "or", "says", "s", "that", "the", "to", "was", "were", "will", "with", "after",
-  "over", "amid", "report", "reports", "update", "updates",
-]);
-
-function tokens(title: string): Set<string> {
-  const out = new Set<string>();
-  for (const w of title.toLowerCase().match(/[a-z0-9$%+.]+/g) ?? []) {
-    if (w.length > 2 && !STOPWORDS.has(w)) out.add(w);
-  }
-  return out;
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let inter = 0;
-  for (const t of a) if (b.has(t)) inter += 1;
-  return inter / (a.size + b.size - inter);
-}
-
-/* ------------------------------------------------------------------ */
 /* Ingest-time relevance guard. Free and deterministic: finance-context  */
 /* lexicon for weak-tier outlets, trusted tiers bypass, cashtag rule for */
 /* social. Kills word-collision and lifestyle noise before it costs a    */
@@ -605,40 +488,6 @@ export function smoothedSeries(
 /** Shared bucket rule so the sentiment series and the price series align point-for-point. */
 export function bucketMsFor(hours: number): number {
   return hours <= 6 ? 5 * 60_000 : hours <= 48 ? 15 * 60_000 : 60 * 60_000;
-}
-
-/**
- * Normalize a headline for identity: the same story syndicated across feeds
- * with different URLs is one event, not three.
- */
-export function normalizeTitle(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9$%]+/g, " ").trim();
-}
-
-/**
- * Content digest keyed on the normalized headline. kind and url are accepted
- * for call-site stability but deliberately excluded: the same story arriving
- * from Google News, Yahoo, and Finnhub under three URLs is one row.
- */
-export function mentionDigest(kind: string, url: string, title: string): string {
-  return createHash("sha256").update(normalizeTitle(title)).digest("hex").slice(0, 40);
-}
-
-/** Near-duplicate test for syndication suppression (token Jaccard). */
-export function isNearDuplicateTitle(a: string, b: string, threshold = 0.55): boolean {
-  return jaccard(tokens(a), tokens(b)) >= threshold;
-}
-
-/** True when any existing title is a near-duplicate of the candidate. */
-export function hasNearDuplicateTitle(
-  title: string,
-  existing: Array<{ title: string }>,
-  threshold = 0.55,
-): boolean {
-  for (const e of existing) {
-    if (isNearDuplicateTitle(title, e.title, threshold)) return true;
-  }
-  return false;
 }
 
 function noul(answers: Record<string, unknown>, key: string): number {

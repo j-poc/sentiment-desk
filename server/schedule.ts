@@ -8,9 +8,10 @@ import { getRedditToken, searchReddit, type RedditClient } from "./sources/reddi
 import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent } from "./sources/x.js";
-import { isFinanceRelevant, mentionDigest } from "./scoring.js";
+import { isFinanceRelevant } from "./scoring.js";
 import { fetchPrimaryDocText, fetchRecent8Ks, titleForItems } from "./sources/sec.js";
 import { generateDemoMention } from "./demo.js";
+import { classifyDeliveryError, recordDelivery } from "./delivery.js";
 
 /**
  * Polling schedulers. Each source loop is failure-isolated: one company's feed
@@ -39,10 +40,10 @@ export function startRssPoller(deps: {
       // Two feeds per company: Google News for breadth, Yahoo Finance's
       // per-ticker feed for speed. Fetched with a small worker pool so a full
       // sweep completes in seconds, not minutes: detection lag is the product.
-      const feeds: Array<{ company: Company; url: string; fallbackName: string }> = [];
+      const feeds: Array<{ company: Company; url: string; fallbackName: string; collector: "google_news_rss" | "yahoo_finance_rss" }> = [];
       for (const company of deps.companies) {
-        feeds.push({ company, url: googleNewsUrl(company), fallbackName: company.name });
-        feeds.push({ company, url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance" });
+        feeds.push({ company, url: googleNewsUrl(company), fallbackName: company.name, collector: "google_news_rss" });
+        feeds.push({ company, url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance", collector: "yahoo_finance_rss" });
       }
       let next = 0;
       const worker = async (): Promise<void> => {
@@ -50,9 +51,11 @@ export function startRssPoller(deps: {
           const job = feeds[next];
           next += 1;
           if (!job) return;
-          const { company, feed } = { company: job.company, feed: { url: job.url, fallbackName: job.fallbackName } };
+          const { company, feed } = { company: job.company, feed: { url: job.url, fallbackName: job.fallbackName, collector: job.collector } };
+          const startedAt = Date.now();
+          let items: Awaited<ReturnType<typeof fetchFeed>> = [];
           try {
-            const items = await fetchFeed(feed.url);
+            items = await fetchFeed(feed.url);
             let added = 0;
             let dropped = 0;
             for (const item of items) {
@@ -73,17 +76,26 @@ export function startRssPoller(deps: {
                 companyId: company.id,
                 kind: "rss",
                 sourceName: item.sourceName || feed.fallbackName,
+                publisherName: item.sourceName || feed.fallbackName,
                 sourceUrl: item.url,
+                sourceItemId: item.sourceItemId,
+                collector: feed.collector,
+                adapterVersion: `${feed.collector}/2`,
                 tier: item.tier,
                 title: item.title,
                 snippet: item.snippet,
                 publishedAt: item.publishedAt,
                 retrievedAt: Date.now(),
                 scoped: feed.fallbackName === "Yahoo Finance",
-                digest: mentionDigest("rss", item.url, item.title),
               });
               if (inserted) added += 1;
             }
+            recordDelivery({
+              db: deps.db, collector: feed.collector, companyId: company.id,
+              requestKey: feed.url, startedAt, adapterVersion: `${feed.collector}/2`,
+              result: items.length === 0 ? "empty" : "success", parsedItemCount: items.length,
+              normalizedItems: items,
+            });
             deps.health.recordRss(true);
             if (added > 0) {
               deps.db.logEvent("info", "rss", `${company.ticker}: ${added} new mentions`);
@@ -93,6 +105,12 @@ export function startRssPoller(deps: {
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            recordDelivery({
+              db: deps.db, collector: feed.collector, companyId: company.id,
+              requestKey: feed.url, startedAt, adapterVersion: `${feed.collector}/2`,
+              result: items.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: items.length,
+              normalizedItems: items, error: err,
+            });
             deps.health.recordRss(false, `${company.ticker}: ${message}`);
             deps.db.logEvent("warn", "rss", `${company.ticker}: ${message}`);
           }
@@ -124,10 +142,19 @@ export function startXPoller(deps: {
     running = true;
     try {
       for (const company of deps.companies) {
+        const startedAt = Date.now();
+        let posts: Awaited<ReturnType<typeof searchRecent>>["posts"] = [];
         try {
           const sinceId = deps.db.getKv(`x:since:${company.id}`);
           const res = await searchRecent({ bearer: deps.bearer, company, sinceId });
+          posts = res.posts;
           if (res.rateLimited) {
+            recordDelivery({
+              db: deps.db, collector: "x", companyId: company.id,
+              requestKey: `x:${company.id}:${sinceId ?? "initial"}`, startedAt,
+              adapterVersion: "x-search/1", result: "rate_limited", parsedItemCount: 0,
+              error: "X API rate limited this request",
+            });
             deps.health.recordX(false, "rate limited");
             deps.db.logEvent("warn", "x", `${company.ticker}: rate limited, pausing this cycle`);
             break;
@@ -155,18 +182,34 @@ export function startXPoller(deps: {
               tier: "social",
               title: post.text.slice(0, 140),
               snippet: post.text.slice(0, 600),
-              publishedAt: Number.isFinite(post.createdAt) ? post.createdAt : Date.now(),
+              publishedAt: Number.isFinite(post.createdAt) ? post.createdAt : null,
+              collector: "x",
+              sourceItemId: post.id,
+              publisherName: `@${post.handle}`,
+              publisherDomain: "x.com",
+              adapterVersion: "x-search/1",
               retrievedAt: Date.now(),
               scoped: true,
-              digest: mentionDigest("x", url, post.text),
             });
             if (inserted) added += 1;
           }
+          recordDelivery({
+            db: deps.db, collector: "x", companyId: company.id,
+            requestKey: `x:${company.id}:${sinceId ?? "initial"}`, startedAt,
+            adapterVersion: "x-search/1", result: posts.length === 0 ? "empty" : "success",
+            parsedItemCount: posts.length, normalizedItems: posts,
+          });
           if (res.newestId) deps.db.setKv(`x:since:${company.id}`, res.newestId);
           deps.health.recordX(true);
           if (added > 0) deps.db.logEvent("info", "x", `${company.ticker}: ${added} new posts`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          recordDelivery({
+            db: deps.db, collector: "x", companyId: company.id,
+            requestKey: `x:${company.id}`, startedAt, adapterVersion: "x-search/1",
+            result: posts.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: posts.length,
+            normalizedItems: posts, error: err,
+          });
           deps.health.recordX(false, `${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "x", `${company.ticker}: ${message}`);
         }
@@ -204,8 +247,10 @@ export function startSecPoller(deps: {
       for (const company of deps.companies) {
         const cik = deps.cikByTicker.get(company.ticker);
         if (!cik) continue;
+        const startedAt = Date.now();
+        let filings: Awaited<ReturnType<typeof fetchRecent8Ks>> = [];
         try {
-          const filings = await fetchRecent8Ks({ cik, ticker: company.ticker, sinceMs: since, userAgent: deps.userAgent });
+          filings = await fetchRecent8Ks({ cik, ticker: company.ticker, sinceMs: since, userAgent: deps.userAgent });
           let added = 0;
           for (const f of filings) {
             let snippet = "";
@@ -225,16 +270,32 @@ export function startSecPoller(deps: {
               title: titleForItems(f.formType, f.items),
               snippet: snippet || `Form ${f.formType}, items ${(f.items.join(", ") || "none")}. Accepted ${new Date(f.acceptanceAt).toISOString()}.`,
               publishedAt: f.acceptanceAt,
-              filedAt: Number.isFinite(f.filedAt) ? f.filedAt : undefined,
+              collector: "sec_edgar",
+              sourceItemId: f.accessionNo,
+              publisherName: "SEC EDGAR",
+              publisherDomain: "sec.gov",
+              adapterVersion: "sec-submissions/1",
+              filedAt: f.filedAt ?? undefined,
               retrievedAt: Date.now(),
-              digest: mentionDigest("sec", f.accessionNo, f.items.join(",")),
             });
             if (inserted) added += 1;
           }
+          recordDelivery({
+            db: deps.db, collector: "sec_edgar", companyId: company.id,
+            requestKey: `sec:${cik}:8-k:${since}`, startedAt, adapterVersion: "sec-submissions/1",
+            result: filings.length === 0 ? "empty" : "success", parsedItemCount: filings.length,
+            normalizedItems: filings,
+          });
           deps.health.recordSec(true);
           if (added > 0) deps.db.logEvent("info", "sec", `${company.ticker}: ${added} new 8-K filings`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          recordDelivery({
+            db: deps.db, collector: "sec_edgar", companyId: company.id,
+            requestKey: `sec:${cik}:8-k:${since}`, startedAt, adapterVersion: "sec-submissions/1",
+            result: filings.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: filings.length,
+            normalizedItems: filings, error: err,
+          });
           deps.health.recordSec(false, `${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "sec", `${company.ticker}: ${message}`);
         }
@@ -266,8 +327,11 @@ export function startGdeltPoller(deps: {
     running = true;
     try {
       for (const company of deps.companies) {
+        const startedAt = Date.now();
+        let articles: Awaited<ReturnType<typeof fetchGdeltArticles>> = [];
         try {
-          const articles = await fetchGdeltArticles(`"${company.name}" OR "${company.ticker}"`);
+          const query = `"${company.name}" OR "${company.ticker}"`;
+          articles = await fetchGdeltArticles(query);
           let added = 0;
           let dropped = 0;
           for (const a of articles) {
@@ -292,18 +356,35 @@ export function startGdeltPoller(deps: {
               tier: tierForHost(a.url),
               title: a.title,
               snippet: "",
-              publishedAt: a.seenAt,
+              publishedAt: null,
+              providerObservedAt: a.seenAt,
+              collector: "gdelt_doc_api",
+              sourceItemId: a.url,
+              publisherName: a.domain,
+              publisherDomain: a.domain,
+              adapterVersion: "gdelt-doc/1",
               retrievedAt: Date.now(),
               scoped: false,
-              digest: mentionDigest("gdelt", a.url, a.title),
             });
             if (inserted) added += 1;
           }
+          recordDelivery({
+            db: deps.db, collector: "gdelt_doc_api", companyId: company.id,
+            requestKey: `gdelt:${query}`, startedAt, adapterVersion: "gdelt-doc/1",
+            result: articles.length === 0 ? "empty" : "success", parsedItemCount: articles.length,
+            normalizedItems: articles,
+          });
           deps.health.recordRss(true);
           if (added > 0) deps.db.logEvent("info", "gdelt", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `gdelt ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          recordDelivery({
+            db: deps.db, collector: "gdelt_doc_api", companyId: company.id,
+            requestKey: `gdelt:${company.id}`, startedAt, adapterVersion: "gdelt-doc/1",
+            result: articles.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: articles.length,
+            normalizedItems: articles, error: err,
+          });
           deps.health.recordRss(false, `gdelt ${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "gdelt", `${company.ticker}: ${message}`);
         }
@@ -339,8 +420,10 @@ export function startFinnhubPoller(deps: {
     if (backfilled || deps.backfillDays <= 0) return;
     backfilled = true;
     for (const company of deps.companies) {
+      const startedAt = Date.now();
+      let news: Awaited<ReturnType<typeof fetchFinnhubNews>> = [];
       try {
-        const news = await fetchFinnhubNews(company.ticker, deps.token, deps.backfillDays);
+        news = await fetchFinnhubNews(company.ticker, deps.token, deps.backfillDays);
         let added = 0;
         for (const n of news) {
           if (!matchesCompany(company, n.headline, n.summary)) continue;
@@ -363,14 +446,29 @@ export function startFinnhubPoller(deps: {
             tier: tierForHost(n.url),
             title: n.headline,
             snippet: n.summary,
-            publishedAt: n.datetime || Date.now(),
+            publishedAt: n.datetime,
+            collector: "finnhub",
+            sourceItemId: n.url,
+            publisherName: n.source,
+            adapterVersion: "finnhub-news/1",
             retrievedAt: Date.now(),
-            digest: mentionDigest("finnhub", n.url, n.headline),
           });
           if (inserted) added += 1;
         }
+        recordDelivery({
+          db: deps.db, collector: "finnhub", companyId: company.id,
+          requestKey: `finnhub:${company.ticker}:backfill:${deps.backfillDays}`, startedAt,
+          adapterVersion: "finnhub-news/1", result: news.length === 0 ? "empty" : "success",
+          parsedItemCount: news.length, normalizedItems: news,
+        });
         deps.db.logEvent("info", "backfill", `${company.ticker}: ${added} historical mentions`);
       } catch (err) {
+        recordDelivery({
+          db: deps.db, collector: "finnhub", companyId: company.id,
+          requestKey: `finnhub:${company.ticker}:backfill:${deps.backfillDays}`, startedAt,
+          adapterVersion: "finnhub-news/1", result: news.length > 0 ? "partial" : classifyDeliveryError(err),
+          parsedItemCount: news.length, normalizedItems: news, error: err,
+        });
         deps.db.logEvent("warn", "backfill", `${company.ticker}: ${err instanceof Error ? err.message : String(err)}`);
       }
       await sleep(300);
@@ -378,23 +476,51 @@ export function startFinnhubPoller(deps: {
   };
   const refreshEarnings = async (): Promise<void> => {
     const symbols = new Set(deps.companies.map((c) => c.ticker));
+    const calendarStartedAt = Date.now();
     try {
       const upcoming = await fetchUpcomingEarnings(deps.token, symbols);
       for (const company of deps.companies) {
         const at = upcoming.get(company.ticker);
         if (at) deps.db.setKv(`finnhub:earnings:${company.id}`, String(at));
       }
+      recordDelivery({
+        db: deps.db, collector: "finnhub", companyId: null,
+        requestKey: `finnhub:earnings-calendar:${[...symbols].sort().join(",")}`,
+        startedAt: calendarStartedAt, adapterVersion: "finnhub-calendar/1",
+        result: upcoming.size === 0 ? "empty" : "success", parsedItemCount: upcoming.size,
+        normalizedItems: [...upcoming.entries()],
+      });
       deps.health.recordFinnhub(true);
     } catch (err) {
+      recordDelivery({
+        db: deps.db, collector: "finnhub", companyId: null,
+        requestKey: `finnhub:earnings-calendar:${[...symbols].sort().join(",")}`,
+        startedAt: calendarStartedAt, adapterVersion: "finnhub-calendar/1",
+        result: classifyDeliveryError(err), parsedItemCount: 0, error: err,
+      });
       deps.health.recordFinnhub(false, `calendar: ${err instanceof Error ? err.message : String(err)}`);
     }
     for (const company of deps.companies) {
+      const startedAt = Date.now();
+      let entries: Awaited<ReturnType<typeof fetchEarningsHistory>> = [];
       try {
-        const entries = await fetchEarningsHistory(company.ticker, deps.token);
+        entries = await fetchEarningsHistory(company.ticker, deps.token);
         const surprise = latestSurprise(entries);
         if (surprise) deps.db.setKv(`finnhub:surprise:${company.id}`, JSON.stringify(surprise));
+        recordDelivery({
+          db: deps.db, collector: "finnhub", companyId: company.id,
+          requestKey: `finnhub:earnings-history:${company.ticker}`, startedAt,
+          adapterVersion: "finnhub-earnings/1", result: entries.length === 0 ? "empty" : "success",
+          parsedItemCount: entries.length, normalizedItems: entries,
+        });
         deps.health.recordFinnhub(true);
       } catch (err) {
+        recordDelivery({
+          db: deps.db, collector: "finnhub", companyId: company.id,
+          requestKey: `finnhub:earnings-history:${company.ticker}`, startedAt,
+          adapterVersion: "finnhub-earnings/1", result: entries.length > 0 ? "partial" : classifyDeliveryError(err),
+          parsedItemCount: entries.length, normalizedItems: entries, error: err,
+        });
         deps.health.recordFinnhub(false, `${company.ticker}: ${err instanceof Error ? err.message : String(err)}`);
       }
       await sleep(300);
@@ -410,8 +536,10 @@ export function startFinnhubPoller(deps: {
         await refreshEarnings();
       }
       for (const company of deps.companies) {
+        const startedAt = Date.now();
+        let news: Awaited<ReturnType<typeof fetchFinnhubNews>> = [];
         try {
-          const news = await fetchFinnhubNews(company.ticker, deps.token);
+          news = await fetchFinnhubNews(company.ticker, deps.token);
           let added = 0;
           let dropped = 0;
           for (const n of news) {
@@ -436,18 +564,33 @@ export function startFinnhubPoller(deps: {
               tier: tierForHost(n.url),
               title: n.headline,
               snippet: n.summary,
-              publishedAt: n.datetime || Date.now(),
+              publishedAt: n.datetime,
+              collector: "finnhub",
+              sourceItemId: n.url,
+              publisherName: n.source,
+              adapterVersion: "finnhub-news/1",
               retrievedAt: Date.now(),
               scoped: true,
-              digest: mentionDigest("finnhub", n.url, n.headline),
             });
             if (inserted) added += 1;
           }
+          recordDelivery({
+            db: deps.db, collector: "finnhub", companyId: company.id,
+            requestKey: `finnhub:${company.ticker}:recent`, startedAt,
+            adapterVersion: "finnhub-news/1", result: news.length === 0 ? "empty" : "success",
+            parsedItemCount: news.length, normalizedItems: news,
+          });
           deps.health.recordFinnhub(true);
           if (added > 0) deps.db.logEvent("info", "finnhub", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `finnhub ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          recordDelivery({
+            db: deps.db, collector: "finnhub", companyId: company.id,
+            requestKey: `finnhub:${company.ticker}:recent`, startedAt,
+            adapterVersion: "finnhub-news/1", result: news.length > 0 ? "partial" : classifyDeliveryError(err),
+            parsedItemCount: news.length, normalizedItems: news, error: err,
+          });
           deps.health.recordFinnhub(false, `${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "finnhub", `${company.ticker}: ${message}`);
         }
@@ -480,14 +623,22 @@ export function startRedditPoller(deps: {
       try {
         client = await getRedditToken(deps.creds, client ?? undefined);
       } catch (err) {
+        recordDelivery({
+          db: deps.db, collector: "reddit", companyId: null, requestKey: "reddit:oauth",
+          startedAt: Date.now(), adapterVersion: "reddit-oauth/1",
+          result: classifyDeliveryError(err), parsedItemCount: 0, error: err,
+        });
         deps.health.recordReddit(false, err instanceof Error ? err.message : String(err));
         return;
       }
       for (const company of deps.companies) {
         const active = client;
         if (!active) break;
+        const startedAt = Date.now();
+        let posts: Awaited<ReturnType<typeof searchReddit>> = [];
         try {
-          const posts = await searchReddit(active, `"${company.name}" OR "$${company.ticker}"`);
+          const query = `"${company.name}" OR "$${company.ticker}"`;
+          posts = await searchReddit(active, query);
           let added = 0;
           let dropped = 0;
           for (const p of posts) {
@@ -512,18 +663,34 @@ export function startRedditPoller(deps: {
               tier: "social",
               title: p.title,
               snippet: p.selftext,
-              publishedAt: p.createdAt || Date.now(),
+              publishedAt: Number.isFinite(p.createdAt) ? p.createdAt : null,
+              collector: "reddit",
+              sourceItemId: p.id,
+              publisherName: `r/${p.subreddit}`,
+              publisherDomain: "reddit.com",
+              adapterVersion: "reddit-search/1",
               retrievedAt: Date.now(),
               scoped: true,
-              digest: mentionDigest("reddit", p.permalink, p.title),
             });
             if (inserted) added += 1;
           }
+          recordDelivery({
+            db: deps.db, collector: "reddit", companyId: company.id,
+            requestKey: `reddit:${company.id}:${query}`, startedAt,
+            adapterVersion: "reddit-search/1", result: posts.length === 0 ? "empty" : "success",
+            parsedItemCount: posts.length, normalizedItems: posts,
+          });
           deps.health.recordReddit(true);
           if (added > 0) deps.db.logEvent("info", "reddit", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `reddit ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          recordDelivery({
+            db: deps.db, collector: "reddit", companyId: company.id,
+            requestKey: `reddit:${company.id}`, startedAt, adapterVersion: "reddit-search/1",
+            result: posts.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: posts.length,
+            normalizedItems: posts, error: err,
+          });
           deps.health.recordReddit(false, `${company.ticker}: ${message}`);
           client = null; // force token refresh next cycle
           deps.db.logEvent("warn", "reddit", `${company.ticker}: ${message}`);

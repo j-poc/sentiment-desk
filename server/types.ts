@@ -1,4 +1,19 @@
 export type SourceKind = "rss" | "x" | "sec" | "finnhub" | "reddit";
+export type CollectorId =
+  | "legacy_unknown"
+  | "demo_simulation"
+  | "google_news_rss"
+  | "yahoo_finance_rss"
+  | "yahoo_quote"
+  | "gdelt_doc_api"
+  | "sec_edgar"
+  | "finnhub"
+  | "reddit"
+  | "x"
+  | "yahoo_chart";
+export type EvidenceChannel = "news" | "filing" | "social" | "market_context";
+export type TimeBasis = "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown";
+export type DeliveryHealthState = "current" | "overdue" | "failed" | "partial" | "never" | "disabled";
 
 /**
  * Source tiers rank publishing venues by expected reliability for business
@@ -21,9 +36,8 @@ export interface Company {
 
 /**
  * A mention as normalized from a source, before scoring. Provenance rules:
- * publishedAt is the source-declared time and is never inferred from when we
- * fetched it; retrievedAt is our clock; the digest (used as id) binds identity
- * to content so replays are idempotent.
+ * Source and collection clocks are separate. Missing publication and provider
+ * observation times remain null; retrievedAt is our own clock.
  */
 export interface RawMention {
   companyId: string;
@@ -33,8 +47,15 @@ export interface RawMention {
   tier: SourceTier;
   title: string;
   snippet: string;
-  publishedAt: number;
+  publishedAt: number | null;
+  providerObservedAt?: number | null;
   retrievedAt: number;
+  collector?: CollectorId;
+  publisherName?: string;
+  publisherDomain?: string | null;
+  sourceItemId?: string | null;
+  adapterVersion?: string;
+  responseDigest?: string | null;
   /** SEC only: the filing date declared by EDGAR (distinct from acceptance). */
   filedAt?: number;
   /** True when the item arrived via a symbol-scoped query (Yahoo ticker feed, Finnhub, X, Reddit, SEC): the scoping itself is identity evidence. */
@@ -64,7 +85,7 @@ export interface JevState {
   };
 }
 
-export type MentionStatus = "pending" | "scored" | "off_target" | "failed";
+export type MentionStatus = "pending" | "scored" | "off_target" | "failed" | "corrupt";
 
 export interface MentionScore {
   sentiment: "negative" | "neutral" | "positive";
@@ -99,18 +120,41 @@ export interface MentionScore {
 export interface MentionDTO {
   id: string;
   companyId: string;
-  source: { name: string; url: string; kind: SourceKind; tier: SourceTier };
+  source: {
+    name: string; url: string; kind: SourceKind; tier: SourceTier;
+    collector: CollectorId; publisher: string; publisherDomain: string | null;
+  };
   title: string;
   snippet: string;
-  publishedAt: number;
+  /** Source-declared event time, null when the source did not provide one. */
+  publishedAt: number | null;
+  providerObservedAt: number | null;
   retrievedAt: number;
+  ingestedAt: number;
+  timeBasis: TimeBasis;
+  collector: CollectorId;
+  publisherName: string;
+  publisherDomain: string | null;
   /** SEC only: EDGAR filing date (distinct from the acceptance timestamp). */
   filedAt?: number | null;
   status: MentionStatus;
   score: MentionScore | null;
   error: string | null;
-  /** Distinct near-duplicate items covering the same event (1 = sole report). */
-  confirmations?: number;
+}
+
+/** Minimal persisted evidence used by the deterministic Radar aggregation. */
+export interface RadarItemEvidence {
+  id: string;
+  title: string;
+  sourceUrl: string;
+  publisherName: string;
+  publisherDomain: string | null;
+  publishedAt: number;
+  retrievedAt: number;
+  collector: CollectorId;
+  eventType: string;
+  sentiment: string;
+  takeaway: string;
 }
 
 export interface EarningsSurprise {

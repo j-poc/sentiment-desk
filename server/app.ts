@@ -3,12 +3,13 @@ import path from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { serveStatic } from "@hono/node-server/serve-static";
-import type { Desk } from "./db.js";
+import type { Desk, DeliverySourceSchedule } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { bucketMsFor, clusterEvents, forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
+import { bucketMsFor, forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
+import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 
 /**
  * HTTP surface: read-only JSON APIs plus the SSE stream. No client can write
@@ -27,6 +28,7 @@ export interface AppDeps {
   demo: boolean;
   version: string;
   webRoot?: string;
+  deliverySources: DeliverySourceSchedule[];
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -56,6 +58,8 @@ export function createApp(deps: AppDeps): Hono {
       sseClients: deps.hub.size,
       dbSizeBytes,
       health: deps.health.snapshot(),
+      deliveries: deps.db.deliverySummary(),
+      deliveryHealth: deps.db.deliveryHealth(deps.deliverySources),
       usage: deps.db.usageSince(startOfDayUtc.getTime()),
       events: deps.db.recentEvents(20),
     });
@@ -70,25 +74,64 @@ export function createApp(deps: AppDeps): Hono {
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
     const limit = clampNumber(c.req.query("limit"), 1, 200, 100);
     const ms = deps.db.mentionsForCompany(id, Date.now() - hours * 60 * 60 * 1000, limit);
-    // Coverage badge: judgment-aware event clustering (same event class or
-    // takeaway within the window) replaces token-overlap counting, which could
-    // not see through paraphrase ("patent deal" vs "licensing agreement").
-    const sizeById = new Map(
-      clusterEvents(
-        ms
-          .filter((m) => m.score)
-          .map((m) => ({
-            id: m.id,
-            companyId: m.companyId,
-            publishedAt: m.publishedAt,
-            impact: m.score!.impact,
-            weight: m.score!.weight,
-            eventType: m.score!.eventType,
-            takeaway: m.score!.takeaway,
-          })),
-      ).flatMap((e) => e.memberIds.map((id) => [id, e.size] as const)),
+    return c.json(ms);
+  });
+
+  app.get("/api/companies/:id/radar", (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) {
+      return c.json({ error: "unknown company" }, 404);
+    }
+    const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
+    const now = Date.now();
+    const duration = hours * 60 * 60 * 1000;
+    const currentFrom = now - duration;
+    const previousFrom = currentFrom - duration;
+    const uncounted = deps.db.radarUncounted(id, currentFrom, now);
+    const coverage = deps.db.deliveryHealth(deps.deliverySources, now).filter(({ collector }) =>
+      ["google_news_rss", "yahoo_finance_rss", "gdelt_doc_api", "sec_edgar", "finnhub", "reddit", "x"].includes(collector),
     );
-    return c.json(ms.map((m) => ({ ...m, confirmations: sizeById.get(m.id) ?? 1 })));
+    return c.json({
+      ...buildRadar({
+        hours,
+        now,
+        currentRows: deps.db.radarEvidence(id, currentFrom, now),
+        previousRows: deps.db.radarEvidence(id, previousFrom, currentFrom),
+        untimedScored: uncounted.untimedScored,
+        unjudged: uncounted.unjudged,
+      }),
+      coverage,
+    });
+  });
+
+  app.get("/api/companies/:id/radar/evidence", (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) {
+      return c.json({ error: "unknown company" }, 404);
+    }
+    const rawEventType = c.req.query("eventType") ?? "";
+    if (!isRadarEventType(rawEventType)) return c.json({ error: "unknown event type" }, 400);
+    const rawPeriod = c.req.query("period") ?? "current";
+    if (rawPeriod !== "current" && rawPeriod !== "previous") return c.json({ error: "unknown period" }, 400);
+    const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
+    const now = Date.now();
+    const duration = hours * 60 * 60 * 1000;
+    const currentFrom = now - duration;
+    const from = rawPeriod === "current" ? currentFrom : currentFrom - duration;
+    const to = rawPeriod === "current" ? now : currentFrom;
+    const offset = clampNumber(c.req.query("offset"), 0, 5_000, 0);
+    const limit = clampNumber(c.req.query("limit"), 1, 25, 5);
+    return c.json({
+      generatedAt: now,
+      hours,
+      period: rawPeriod,
+      ...radarEvidencePage({
+        rows: deps.db.radarEvidence(id, from, to),
+        eventType: rawEventType,
+        offset,
+        limit,
+      }),
+    });
   });
 
   /**
@@ -104,17 +147,17 @@ export function createApp(deps: AppDeps): Hono {
     const since = Date.now() - hours * 60 * 60 * 1000;
     const mentions = deps.db
       .mentionsForCompany(id, since, 200)
-      .filter((m) => m.status === "scored" && m.score);
+      .filter((m) => m.status === "scored" && m.score && m.publishedAt != null);
     const series = deps.db.priceWindow(ticker, since - 60 * 60 * 1000);
     const events = mentions.map((m) => ({
       id: m.id,
       title: m.title,
-      publishedAt: m.publishedAt,
+      publishedAt: m.publishedAt!,
       sentiment: m.score?.sentiment ?? "neutral",
       eventScore: m.score?.eventScore ?? 0,
       eventType: m.score?.eventType ?? "other",
-      r30: forwardReturn(series, m.publishedAt, 30 * 60_000),
-      r240: forwardReturn(series, m.publishedAt, 4 * 60 * 60_000),
+      r30: forwardReturn(series, m.publishedAt!, 30 * 60_000),
+      r240: forwardReturn(series, m.publishedAt!, 4 * 60 * 60_000),
     }));
     const bull = summarizeReactions(events.filter((e) => e.sentiment === "positive"));
     const bear = summarizeReactions(events.filter((e) => e.sentiment === "negative"));
@@ -137,9 +180,18 @@ export function createApp(deps: AppDeps): Hono {
     // Our own accumulated price history first (poller points + Yahoo backfill);
     // Yahoo is the fallback when local history is thin.
     let pts: Array<{ t: number; price: number }> = deps.db.priceWindow(ticker, since);
+    let seriesDelivery: "network" | "memory_cache" | "local_store" = "local_store";
+    let seriesServedAt = Date.now();
+    let sourceLatestAt = pts.at(-1)?.t ?? null;
+    let cacheAgeMs: number | null = null;
     if (pts.length < 8) {
       try {
-        pts = await deps.market.priceSeries(ticker, hours);
+        const result = await deps.market.priceSeries(ticker, hours);
+        pts = result.points;
+        seriesDelivery = result.delivery;
+        seriesServedAt = result.servedAt;
+        sourceLatestAt = result.sourceLatestAt;
+        cacheAgeMs = result.cacheAgeMs;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return c.json({ error: message }, 502);
@@ -161,7 +213,14 @@ export function createApp(deps: AppDeps): Hono {
       }
       if (last != null) out.push({ t, price: last });
     }
-    return c.json(out);
+    return c.json({
+      points: out,
+      delivery: seriesDelivery,
+      servedAt: seriesServedAt,
+      sourceLatestAt,
+      cacheAgeMs,
+      resampling: "bucketed_last_observation",
+    });
   });
 
   /**

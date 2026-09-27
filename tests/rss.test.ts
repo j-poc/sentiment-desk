@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { googleNewsUrl, parseRss } from "../server/sources/rss.js";
+import { vi } from "vitest";
+import { fetchFeed, googleNewsUrl, parseRss } from "../server/sources/rss.js";
 
 const FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel><title>Google News</title>
@@ -47,5 +48,16 @@ describe("googleNewsUrl", () => {
     expect(url).toContain("news.google.com/rss/search");
     expect(decodeURIComponent(url)).toContain('"NVIDIA" OR "NVDA"');
     expect(decodeURIComponent(url)).toContain("when:2d");
+  });
+});
+
+describe("fetchFeed", () => {
+  it("rejects a 200 HTML error page instead of reporting a successful empty feed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>blocked</html>", { status: 200 })));
+    try {
+      await expect(fetchFeed("https://news.example/feed")).rejects.toThrow("not an RSS XML document");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

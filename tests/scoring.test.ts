@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPostRules,
-  clusterEvents,
   forwardReturn,
   isFinanceRelevant,
-  mentionDigest,
   parseJudgment,
   rankIC,
-  hasNearDuplicateTitle,
   hasStrongIdentity,
   shouldAlert,
   smoothedSeries,
@@ -207,42 +204,6 @@ describe("summarizeReactions", () => {
   });
 });
 
-describe("clusterEvents (paraphrase-safe event grouping)", () => {
-  const base = { companyId: "qcom", weight: 0.9 };
-  it("merges framings of the same event that share no meaningful words", () => {
-    const t0 = 1_000_000_000;
-    const ms = [
-      { ...base, publishedAt: t0 + 14 * 60_000, impact: 57, eventType: "corporate_action", takeaway: "legal_relief" },
-      { ...base, publishedAt: t0 + 44 * 60_000, impact: 83, eventType: "corporate_action", takeaway: "product_win" },
-      { ...base, publishedAt: t0 + 52 * 60_000, impact: 56, eventType: "corporate_action", takeaway: "legal_relief" },
-    ];
-    const events = clusterEvents(ms);
-    expect(events.length).toBe(1);
-    expect(events[0]?.size).toBe(3);
-    // impact is the weighted mean of framings, weight the strongest framing's.
-    expect(events[0]?.impact).toBeCloseTo(65.33, 1);
-    expect(events[0]?.weight).toBe(0.9);
-  });
-
-  it("keeps genuinely different events separate", () => {
-    const t0 = 1_000_000_000;
-    const ms = [
-      { ...base, publishedAt: t0, impact: 60, eventType: "results", takeaway: "results_beat" },
-      { ...base, publishedAt: t0 + 10 * 60_000, impact: -50, eventType: "legal_regulatory", takeaway: "legal_hit" },
-    ];
-    expect(clusterEvents(ms).length).toBe(2);
-  });
-
-  it("starts a new event after the window passes, even for the same class", () => {
-    const t0 = 1_000_000_000;
-    const ms = [
-      { ...base, publishedAt: t0, impact: 40, eventType: "results", takeaway: "results_beat" },
-      { ...base, publishedAt: t0 + 50 * 60_000, impact: 60, eventType: "results", takeaway: "results_beat" },
-    ];
-    expect(clusterEvents(ms).length).toBe(2);
-  });
-});
-
 describe("isFinanceRelevant (ingest guard)", () => {
   it("drops word-collision and lifestyle noise from weak sources for free", () => {
     expect(
@@ -373,39 +334,5 @@ describe("shouldAlert (alert gate)", () => {
     expect(shouldAlert({ ...base, eventScore: 80, impact: -70, publishedAt: now - 30 * 60_000 })).toBe(false); // stale
     expect(shouldAlert({ ...base, eventScore: 50, impact: -70, publishedAt: now - 60_000 })).toBe(false); // weak
     expect(shouldAlert({ ...base, eventScore: 80, impact: -20, publishedAt: now - 60_000 })).toBe(false); // small move
-  });
-});
-
-describe("mentionDigest (content-keyed)", () => {
-  it("collapses the same headline across sources and URLs", () => {
-    const t = "Apple (AAPL) Stock Could Be 32% Overpriced After Fresh AI Cost Concerns";
-    expect(mentionDigest("rss", "https://news.google.com/rss/articles/abc", t)).toBe(
-      mentionDigest("finnhub", "https://www.benzinga.com/x", t),
-    );
-  });
-
-  it("still separates different headlines", () => {
-    expect(mentionDigest("rss", "https://a", "Apple beats quarterly estimates")).not.toBe(
-      mentionDigest("rss", "https://b", "Apple cuts quarterly guidance"),
-    );
-  });
-});
-
-describe("hasNearDuplicateTitle (syndication suppression)", () => {
-  const syndicated = "Apple (AAPL) Stock Could Be 32% Overpriced After Fresh AI Cost Concerns";
-  it("flags the same story from another feed", () => {
-    expect(hasNearDuplicateTitle(syndicated, [{ title: syndicated }])).toBe(true);
-    expect(
-      hasNearDuplicateTitle(syndicated, [
-        { title: "Apple AAPL Stock Could Be 32% Overpriced After Fresh AI Cost Worries" },
-      ]),
-    ).toBe(true);
-  });
-  it("keeps genuinely different stories", () => {
-    expect(
-      hasNearDuplicateTitle("Bank of America Flags Mixed iPhone 18 Demand Signal", [
-        { title: "Apple suppliers rally on stronger demand outlook" },
-      ]),
-    ).toBe(false);
   });
 });

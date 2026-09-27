@@ -10,7 +10,7 @@ export interface FinnhubNewsItem {
   summary: string;
   source: string;
   url: string;
-  datetime: number; // unix seconds
+  datetime: number | null; // provider timestamp converted to milliseconds
 }
 
 export async function fetchFinnhubNews(
@@ -48,7 +48,9 @@ export async function fetchFinnhubNews(
       summary: (n.summary ?? "").slice(0, 600),
       source: n.source ?? "finnhub",
       url: n.url ?? "",
-      datetime: (n.datetime ?? 0) * 1000,
+      datetime: typeof n.datetime === "number" && Number.isFinite(n.datetime) && n.datetime > 0
+        ? n.datetime * 1000
+        : null,
     }));
 }
 
