@@ -129,6 +129,7 @@ The verified implementation and evidence are checkpointed in commit
 `4996759` (`fix(jev): accept resolved alias model responses`), pushed to
 `origin/codex/real-data-rebuild`. After fetching `origin`,
 `git rev-list --left-right --count HEAD...origin/codex/real-data-rebuild`
-returned `0 0` at this code checkpoint. This documentation follow-up is being
-pushed separately; its final remote equality check will be recorded after the
-push. Release-readiness gaps remain visible and block any 10/10 claim.
+returned `0 0` for the documentation checkpoint `c4004cb` as well. The only
+untracked local item is the synthetic UI screenshot under `output/`; it was
+kept out of Git. Release-readiness gaps remain visible and block any 10/10
+claim.
