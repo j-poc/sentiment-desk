@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   AreaSeries,
   ColorType,
@@ -31,18 +31,41 @@ export function SeriesChart({
   loading,
   mode,
   price,
+  priceLoading = false,
+  priceError = false,
+  seriesError = false,
+  seriesReady = true,
 }: {
   points: SeriesPoint[];
   hours: number;
   loading: boolean;
   mode: "sentiment" | "overlay";
   price?: PricePoint[];
+  priceLoading?: boolean;
+  priceError?: boolean;
+  seriesError?: boolean;
+  seriesReady?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const sentimentRef = useRef<ISeriesApi<"Area"> | null>(null);
   const priceRef = useRef<ISeriesApi<"Line"> | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const drawableSentiment = useMemo(
+    () => points.filter((point) => Number.isFinite(point.t) && (point.v == null || Number.isFinite(point.v))),
+    [points],
+  );
+  const hasSentiment = drawableSentiment.some((point) => point.v != null);
+  const drawablePrice = useMemo(
+    () => mode === "overlay"
+      ? (price ?? []).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.price))
+      : [],
+    [mode, price],
+  );
+  const hasPrice = drawablePrice.length >= 2;
+  const insufficientPrice = mode === "overlay" && drawablePrice.length === 1;
+  const hasChartData = hasSentiment || hasPrice;
+  const waitingForPrice = mode === "overlay" && priceLoading && !hasPrice;
 
   // Create the chart once.
   useEffect(() => {
@@ -140,25 +163,35 @@ export function SeriesChart({
     if (!sentiment || !priceSeries || !chart) return;
 
     sentiment.setData(
-      points.map((p) => (p.v == null ? { time: toSec(p.t) } : { time: toSec(p.t), value: p.v })),
+      drawableSentiment.map((p) => (p.v == null ? { time: toSec(p.t) } : { time: toSec(p.t), value: p.v })),
     );
 
-    if (mode === "overlay" && price && price.length >= 2) {
-      priceSeries.setData(
-        price.map((p) => ({ time: toSec(p.t), value: p.price })),
-      );
+    if (mode === "overlay" && drawablePrice.length >= 2) {
+      priceSeries.setData(drawablePrice.map((p) => ({ time: toSec(p.t), value: p.price })));
       priceSeries.applyOptions({ visible: true });
     } else {
       priceSeries.setData([]);
       priceSeries.applyOptions({ visible: false });
     }
 
-    const from = points[0]?.t;
-    const to = points[points.length - 1]?.t;
-    if (from != null && to != null) {
-      chart.timeScale().setVisibleRange({ from: toSec(from), to: toSec(to) });
-    }
-  }, [points, price, mode]);
+    // setVisibleRange throws when Lightweight Charts has no time points (for
+    // example, an all-whitespace Jev series before price history arrives).
+    // fitContent safely handles an empty chart and fits whichever series has
+    // drawable observations.
+    if (hasChartData) chart.timeScale().fitContent();
+  }, [drawableSentiment, drawablePrice, mode, hasChartData]);
+
+  const requestError = seriesError || (mode === "overlay" && priceError);
+  const noDataMessage = requestError
+    ? "Chart data could not be loaded. Check the source status above."
+    : mode === "sentiment"
+      ? "No Jev scores in this window."
+      : insufficientPrice
+        ? "One price observation is not enough to draw a line; no Jev scores in this window."
+      : "No price observations or Jev scores in this window.";
+  const noScoreMessage = seriesError
+    ? "Sentiment history could not be loaded. Check the source status above."
+    : "No Jev scores in this window";
 
   return (
     <div className="relative">
@@ -169,7 +202,22 @@ export function SeriesChart({
       />
       {loading && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-white/40">
-          loading series…
+          loading chart data…
+        </div>
+      )}
+      {!loading && !waitingForPrice && (seriesReady || seriesError) && !hasSentiment && hasPrice && (
+        <div role="status" className="pointer-events-none absolute left-3 top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10.5px] text-white/55">
+          {noScoreMessage}
+        </div>
+      )}
+      {!loading && !waitingForPrice && insufficientPrice && hasSentiment && (
+        <div role="status" className="pointer-events-none absolute left-3 top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10.5px] text-white/55">
+          One price observation; at least two are needed for a line
+        </div>
+      )}
+      {!loading && !waitingForPrice && !hasChartData && (
+        <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-[11px] text-white/45">
+          {noDataMessage}
         </div>
       )}
     </div>

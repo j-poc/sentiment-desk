@@ -1,10 +1,11 @@
 # Sentiment Desk completion plan
 
-Status: local implementation and keyless verification pass, including the
-latest isolated Compose live-data and persistence checks. This is ready for the
-scoped local workflow, but it is not a 10/10 release: live current-item Jev
-scoring, source-use terms, and labeled classifier evaluation remain unproven.
-Latest hardening changes are being checkpointed to `codex/real-data-rebuild`.
+Status: the local source-research workflow, isolated Compose recovery, and the
+latest chart/company-binding checks pass. This is not a 10/10 release: the
+current configured Jev path rejects TypeSafe's documented versioned response
+for the `jev-latest` alias, and source-use terms and labeled classifier
+evaluation remain unverified. Latest UI reliability fixes are being
+checkpointed to `codex/real-data-rebuild`.
 
 ## User and outcome
 
@@ -96,6 +97,88 @@ does not generate opportunity hypotheses or value-chain links.
    drawer interaction, SSE shutdown, and isolated Docker persistence smoke
    pass. The source-data contract records what these checks prove and what
    remains unavailable.
+8. Selecting a ticker from the tape, watchlist, or movers updates the selected
+   company and its chart without blanking the app. With no completed Jev
+   judgments, the UI shows price-only history and states that sentiment is
+   unavailable; with no valid chart data, it shows a clear empty state. Verify
+   multiple tickers in the running browser and inspect runtime errors and the
+   resulting company/chart request.
+
+   - User/job: the local researcher selects a company and inspects its recent
+     sentiment and price history.
+   - Constraint: preserve the selected time window, exact company identity,
+     current source timestamp, and stale/cache labels; never invent sentiment
+     values or extend a window silently.
+   - Assumption: a company with no completed Jev judgments is a supported
+     state; unscored source evidence must not prevent price history or
+     company navigation.
+   - Hard gates: ticker control updates the company header and requests the
+     matching `/series` and `/price`; no browser runtime error; empty Jev data
+     produces an explicit no-score state while valid price data remains
+     visible. No chart observations produces an explicit unavailable state.
+   - Measure/evidence: browser click across at least two companies, matching
+     API request/response and visible header, zero console errors, and chart
+     state matching the returned arrays. Proxy limit: this verifies UI wiring
+     and payload handling, not market-data accuracy or Jev quality.
+   - Failure cases: all-null sentiment, stale but valid price history, failed
+     chart request, and fewer than two drawable points.
+   - Subjective copy choice: explain missing sentiment as “No Jev scores in
+     this window” and retain source-age detail near the chart.
+   - Current-build hard-gate results (evidence:
+     `project-record/4-log/2026-09-27-stock-chart-selection-fix.md`):
+     - `PASS` — ADBE→NVDA selection returned matching 200 `/series` and
+       `/price` responses and displayed NVDA on the latest built asset.
+     - `PASS` — all-null sentiment with 97 valid NVDA price observations
+       rendered the price line, explicit no-score state, source-age label, and
+       zero runtime/console errors on a fresh browser reload.
+     - `PASS` — empty history, one-point history, 503 price failure, and
+       recovery each showed the expected state; recovery returned 200 from the
+       local API.
+     - `PASS` — a 390px viewport had no horizontal overflow.
+   - Boundary: the deliberate failure and empty-history cases use Playwright
+     response overrides to exercise UI recovery; normal selection and recovery
+     use the live local API. This does not verify price accuracy or live Jev
+     scoring.
+
+9. Every company-dependent result shown with the selected ticker stays bound
+   to that company's identity and relevant window. Selecting a new company or
+   window must not leave the prior company's outcome summary or mention cards
+   under the new header while data loads or after a request fails. Cached data
+   may appear only under its matching company/window; failed reads must be
+   labeled rather than presented as an empty result.
+
+   - User/job: the researcher moves between companies and trusts that the
+     visible mentions and forward-reaction panel belong to the selected name.
+   - Constraint: preserve per-company and per-window identity through pending,
+     success, failure, and out-of-order response states; retain the existing
+     per-company outcome refresh throttle without blocking a new company.
+   - Assumption: a matching result cached for the same company/window may be
+     shown while its refresh is pending; another company's result may not.
+   - Hard gates: after switching between two tickers, mentions and outcome
+     results match the selected company; a deliberately delayed earlier
+     response cannot replace current content; failed and pending mention reads
+     have distinct, truthful UI states.
+   - Measure/evidence: click two tickers in the live local browser, inspect
+     matching `/mentions` and `/reactions` API responses and visible labels,
+     then delay an earlier response and verify it cannot change the active
+     company's content. Proxy limit: proves client selection/data binding, not
+     correctness of the reaction calculations or source completeness.
+   - Failure cases: delayed prior-company response, a recent cached result
+     followed by a company/window change, and mention request failure.
+   - Subjective copy choice: pending/failure copy should explain missing data
+     without implying that the company has no evidence.
+   - Current-build hard-gate results (evidence:
+     `project-record/4-log/2026-09-27-stock-chart-selection-fix.md`):
+     - `PASS` — NVIDIA `/mentions` returned only `companyId=nvidia`,
+       `/reactions` identified ticker NVDA, and the visible outcome heading
+       matched NVDA.
+     - `PASS` — changing 24H→6H requested NVDA `/reactions?hours=6` and kept
+       the outcome heading bound to NVDA.
+     - `PASS` — delayed Adobe `/mentions` and `/reactions` responses did not
+       replace NVIDIA content; a delayed Adobe series carrying a distinctive
+       0.99 sentinel also left the NVDA no-score chart unchanged.
+     - `PASS` — a controlled mentions 503 showed the failure state, then a
+       retry through the live local API returned 200 and cleared the failure.
 
 ## Phase 2 acceptance criteria
 
@@ -137,13 +220,20 @@ automatically to avoid duplicate charges. Keep them quarantined until the
 provider outcome has been checked; do not present this as a live-verified Jev
 workflow.
 
-The current checkout has no Jev key configured. Offline provider-contract
-tests can prove validation and bounded retry behavior, but cannot prove that a
-current headline is scored by the live Jev service. A release-level 10/10 claim
-also requires a labeled accuracy/calibration evaluation, confirmation of
-provider 429 billing semantics and model/output compatibility, and review of
-source display/model-use/retention terms. Those external proofs are not
-available in this checkout.
+An earlier isolated keyless verification had no Jev key configured, and its
+offline provider-contract tests could not prove current live scoring. During
+the 2026-09-27 local dashboard run, the server reported that a key was resolved
+from its environment and new source rows surfaced this mismatch:
+`expected jev-latest, received jev-1.13.0`. TypeSafe's current official API
+reference says the alias resolves to a versioned model and that the response
+reports the version that served the request
+([Models](https://docs.typesafe.ai/models), [API reference](https://docs.typesafe.ai/api)).
+The client currently treats that documented response as an unknown-outcome
+failure and correctly avoids automatic replay. Repair and verify alias/model
+provenance compatibility before claiming live Jev operation. A release-level
+10/10 claim also requires labeled accuracy/calibration evaluation,
+confirmation of provider 429 billing semantics, and review of source
+display/model-use/retention terms.
 
 ## Grounded architecture
 

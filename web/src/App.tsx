@@ -69,14 +69,18 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [researchView, setResearchView] = useState<ResearchView>("desk");
   const [tape, setTape] = useState<Mention[]>([]);
-  const [mentions, setMentions] = useState<Mention[]>([]);
+  const [mentionsByCompany, setMentionsByCompany] = useState<Record<string, Mention[]>>({});
+  const [mentionsLoadedByCompany, setMentionsLoadedByCompany] = useState<Record<string, boolean>>({});
+  const [mentionsErrorByCompany, setMentionsErrorByCompany] = useState<Record<string, boolean>>({});
   const [series, setSeries] = useState<SeriesPoint[]>([]);
-  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [seriesKey, setSeriesKey] = useState<string | null>(null);
+  const [seriesLoadErrorKey, setSeriesLoadErrorKey] = useState<string | null>(null);
   const [sparks, setSparks] = useState<Record<string, SeriesPoint[]>>({});
   const [market, setMarket] = useState<MarketSnapshot | null>(null);
   const [price, setPrice] = useState<PricePoint[]>([]);
+  const [priceResultKey, setPriceResultKey] = useState<string | null>(null);
+  const [priceLoadErrorKey, setPriceLoadErrorKey] = useState<string | null>(null);
   const [priceSource, setPriceSource] = useState<PriceSeriesDTO | null>(null);
-  const [priceLoadError, setPriceLoadError] = useState(false);
   const [health, setHealth] = useState<HealthDTO | null>(null);
   const [connected, setConnected] = useState(false);
   const [demo, setDemo] = useState(false);
@@ -92,6 +96,7 @@ export default function App() {
   const selectedIdRef = useRef<string | null>(null);
   const windowRef = useRef(24);
   const chartModeRef = useRef<"sentiment" | "overlay">("overlay");
+  const seriesRequestSeq = useRef(0);
   const priceKeyRef = useRef<string | null>(null);
   const priceRequestSeq = useRef(0);
   useEffect(() => {
@@ -105,7 +110,8 @@ export default function App() {
     priceRequestSeq.current += 1;
     setPrice([]);
     setPriceSource(null);
-    setPriceLoadError(false);
+    setPriceResultKey(null);
+    setPriceLoadErrorKey(null);
   }, [selectedId, windowHours]);
   useEffect(() => {
     chartModeRef.current = chartMode;
@@ -115,17 +121,39 @@ export default function App() {
     () => companies.find((c) => c.id === selectedId) ?? null,
     [companies, selectedId],
   );
+  const selectedSeriesKey = selectedId == null ? null : `${selectedId}:${windowHours}`;
+  const selectedSeriesReady = selectedSeriesKey != null && seriesKey === selectedSeriesKey;
+  const selectedSeries = selectedSeriesReady ? series : [];
+  const selectedSeriesError = selectedSeriesKey != null && seriesLoadErrorKey === selectedSeriesKey;
+  const selectedSeriesHasSentiment = selectedSeries.some((point) => point.v != null && Number.isFinite(point.v));
+  const selectedPriceReady = selectedSeriesKey != null && priceResultKey === selectedSeriesKey;
+  const selectedPrice = selectedPriceReady ? price : [];
+  const selectedPriceSource = selectedPriceReady ? priceSource : null;
+  const selectedPriceError = selectedSeriesKey != null && priceLoadErrorKey === selectedSeriesKey;
+  const selectedPricePending = chartMode === "overlay" && selectedSeriesKey != null && !selectedPriceReady && !selectedPriceError;
+  const chartHasPrice = chartMode === "overlay" && selectedPrice.length >= 2;
+  const chartLoading = selectedSeriesKey != null && (
+    (!selectedSeriesReady && !selectedSeriesError)
+    || (selectedPricePending && !chartHasPrice && !selectedSeriesHasSentiment)
+  );
 
   const refreshSeries = useCallback(async (companyId?: string) => {
     const id = companyId ?? selectedIdRef.current;
     if (!id) return;
-    setSeriesLoading(true);
+    const hours = windowRef.current;
+    const requestKey = `${id}:${hours}`;
+    const requestSeq = ++seriesRequestSeq.current;
     try {
-      setSeries(await getJSON<SeriesPoint[]>(`/api/companies/${id}/series?hours=${windowRef.current}`));
+      const result = await getJSON<SeriesPoint[]>(`/api/companies/${id}/series?hours=${hours}`);
+      if (seriesRequestSeq.current === requestSeq && selectedIdRef.current === id && windowRef.current === hours) {
+        setSeries(result);
+        setSeriesKey(requestKey);
+        setSeriesLoadErrorKey(null);
+      }
     } catch {
-      /* keep last series */
-    } finally {
-      setSeriesLoading(false);
+      if (seriesRequestSeq.current === requestSeq && selectedIdRef.current === id && windowRef.current === hours) {
+        setSeriesLoadErrorKey(requestKey);
+      }
     }
   }, []);
 
@@ -140,21 +168,26 @@ export default function App() {
       priceKeyRef.current = requestKey;
       setPrice([]);
       setPriceSource(null);
-      setPriceLoadError(false);
+      setPriceResultKey(null);
+      setPriceLoadErrorKey(null);
     }
     try {
       const all = await getJSON<CompanySnapshot[]>("/api/companies");
       const c = all.find((x) => x.id === id);
-      if (!c) return;
+      if (!c) {
+        if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) setPriceLoadErrorKey(requestKey);
+        return;
+      }
       const result = await getJSON<PriceSeriesDTO>(
         `/api/companies/${id}/price?ticker=${encodeURIComponent(c.ticker)}&hours=${hours}`,
       );
       if (priceKeyRef.current !== requestKey || priceRequestSeq.current !== requestSeq) return;
       setPrice(result.points);
       setPriceSource(result);
-      setPriceLoadError(false);
+      setPriceResultKey(requestKey);
+      setPriceLoadErrorKey(null);
     } catch {
-      if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) setPriceLoadError(true);
+      if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) setPriceLoadErrorKey(requestKey);
     }
   }, []);
 
@@ -204,7 +237,12 @@ export default function App() {
       onMention: (m) => {
         setTape((prev) => (prev.some((x) => x.id === m.id) ? prev : [m, ...prev].slice(0, 60)));
         if (m.companyId === selectedIdRef.current) {
-          setMentions((prev) => (prev.some((x) => x.id === m.id) ? prev : [m, ...prev].slice(0, 100)));
+          setMentionsByCompany((prev) => {
+            const current = prev[m.companyId] ?? [];
+            return prev[m.companyId]?.some((x) => x.id === m.id)
+              ? prev
+              : { ...prev, [m.companyId]: [m, ...current].slice(0, 100) };
+          });
         }
         const now = Date.now();
         if (now - lastSeriesRefresh > 8_000) {
@@ -236,12 +274,21 @@ export default function App() {
   useEffect(() => {
     if (!selectedId) return;
     let alive = true;
+    setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: false }));
     (async () => {
       try {
         const ms = await getJSON<Mention[]>(`/api/companies/${selectedId}/mentions?hours=168&limit=100`);
-        if (alive) setMentions(ms);
+        if (alive) {
+          setMentionsByCompany((prev) => {
+            const live = prev[selectedId] ?? [];
+            const responseIds = new Set(ms.map((mention) => mention.id));
+            return { ...prev, [selectedId]: [...live.filter((mention) => !responseIds.has(mention.id)), ...ms].slice(0, 100) };
+          });
+          setMentionsLoadedByCompany((prev) => ({ ...prev, [selectedId]: true }));
+          setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: false }));
+        }
       } catch {
-        /* ignore */
+        if (alive) setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: true }));
       }
     })();
     return () => {
@@ -356,7 +403,12 @@ export default function App() {
     [companies],
   );
   const totalMentions = companies.reduce((acc, c) => acc + c.mentions24h, 0);
-  const filteredMentions = useMemo(() => applyFilter(mentions, feedFilter), [mentions, feedFilter]);
+  const selectedMentions = selectedId && mentionsLoadedByCompany[selectedId]
+    ? mentionsByCompany[selectedId] ?? []
+    : [];
+  const filteredMentions = useMemo(() => applyFilter(selectedMentions, feedFilter), [selectedMentions, feedFilter]);
+  const mentionsPending = selectedId != null && !mentionsLoadedByCompany[selectedId] && !mentionsErrorByCompany[selectedId];
+  const mentionsFailed = selectedId != null && mentionsErrorByCompany[selectedId];
 
   return (
     <>
@@ -514,11 +566,11 @@ export default function App() {
                     )}
                     {chartMode === "overlay" && (
                       <span
-                        className={priceLoadError ? "text-amber-300/80" : "text-white/30"}
-                        title={priceSource ? `Source point ${priceSource.sourceLatestAt == null ? "time unknown" : new Date(priceSource.sourceLatestAt).toISOString()}; served ${new Date(priceSource.servedAt).toISOString()}${priceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(priceSource.cacheAgeMs / 1000)}s`}; values are bucketed last observations.` : undefined}
+                        className={selectedPriceError ? "text-amber-300/80" : "text-white/30"}
+                        title={selectedPriceSource ? `Source point ${selectedPriceSource.sourceLatestAt == null ? "time unknown" : new Date(selectedPriceSource.sourceLatestAt).toISOString()}; served ${new Date(selectedPriceSource.servedAt).toISOString()}${selectedPriceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`}; values are bucketed last observations.` : undefined}
                       >
-                        {priceLoadError ? "refresh failed · keeping prior series" : priceSource
-                          ? `${priceSource.delivery.replaceAll("_", " ")}${priceSource.cacheAgeMs == null ? "" : ` ${Math.round(priceSource.cacheAgeMs / 1000)}s`} · source ${timeAgo(priceSource.sourceLatestAt)}`
+                        {selectedPriceError ? selectedPriceReady ? "refresh failed · keeping prior series" : "price history unavailable" : selectedPriceSource
+                          ? `${selectedPriceSource.delivery.replaceAll("_", " ")}${selectedPriceSource.cacheAgeMs == null ? "" : ` ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`} · source ${timeAgo(selectedPriceSource.sourceLatestAt)}`
                           : "price waiting"}
                       </span>
                     )}
@@ -533,11 +585,15 @@ export default function App() {
                 </div>
                 <div className="px-3 py-2">
                   <SeriesChart
-                    points={series}
+                    points={selectedSeries}
                     hours={windowHours}
-                    loading={seriesLoading && series.length === 0}
+                    loading={chartLoading}
                     mode={chartMode}
-                    price={price}
+                    price={selectedPrice}
+                    priceLoading={selectedPricePending}
+                    priceError={selectedPriceError}
+                    seriesError={selectedSeriesError}
+                    seriesReady={selectedSeriesReady}
                   />
                 </div>
               </div>
@@ -568,7 +624,10 @@ export default function App() {
               <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_330px] lg:overflow-hidden">
                 <div className="panel flex min-h-[45vh] max-h-[55vh] flex-col lg:min-h-0 lg:max-h-none">
                   <div className="panel-head mentions-panel-head shrink-0">
-                    <span className="micro">Mentions · {health?.health.jev.model ?? "jev"}</span>
+                    <span className="micro">
+                      Mentions · {health?.health.jev.model ?? "jev"}
+                      {mentionsFailed && <span className="ml-2 normal-case tracking-normal text-amber-300/80">refresh failed</span>}
+                    </span>
                     <div className="mentions-filters">
                       {FILTERS.map((f) => (
                         <button
@@ -591,16 +650,20 @@ export default function App() {
                       <MentionCard key={m.id} m={m} dense onOpen={setDrawerMention} />
                     ))}
                     {filteredMentions.length === 0 && (
-                      <div className="px-3 py-4 text-[12px] text-white/35">
-                        {mentions.length === 0
-                          ? "No mentions in this window yet. New mentions are scored within seconds of arrival."
-                          : "Nothing matches this filter."}
+                      <div className="px-3 py-4 text-[12px] text-white/35" role="status">
+                        {mentionsFailed
+                          ? "Mentions could not be loaded. Select another company and return to retry."
+                          : mentionsPending
+                            ? `Loading ${selected.ticker} mentions…`
+                            : selectedMentions.length === 0
+                              ? "No mentions in this window yet. New mentions are scored within seconds of arrival."
+                              : "Nothing matches this filter."}
                       </div>
                     )}
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-col gap-3 overflow-visible pb-2 pr-1 lg:overflow-y-auto lg:pb-0">
-                  <OutcomeCheck companyId={selected.id} hours={windowHours} refreshToken={tape.length} />
+                  <OutcomeCheck companyId={selected.id} ticker={selected.ticker} hours={windowHours} refreshToken={tape.length} />
                   <ValidationPanel />
                 </div>
               </div>

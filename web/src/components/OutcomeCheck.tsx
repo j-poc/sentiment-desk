@@ -38,35 +38,55 @@ function SummaryRow({ label, s, color }: { label: string; s: ReactionSummary; co
  */
 export function OutcomeCheck({
   companyId,
+  ticker,
   hours,
   refreshToken,
 }: {
   companyId: string;
+  ticker: string;
   hours: number;
   refreshToken: number;
 }) {
-  const [data, setData] = useState<ReactionsDTO | null>(null);
-  const lastFetch = useRef(0);
+  const [dataByKey, setDataByKey] = useState<Record<string, ReactionsDTO>>({});
+  const [errorByKey, setErrorByKey] = useState<Record<string, boolean>>({});
+  const lastFetch = useRef(new Map<string, number>());
+  const pending = useRef(new Map<string, Promise<ReactionsDTO>>());
+  const requestKey = `${companyId}:${hours}`;
+  const data = dataByKey[requestKey] ?? null;
+  const failed = errorByKey[requestKey] === true;
 
   useEffect(() => {
-    let alive = true;
+    const key = `${companyId}:${hours}`;
+    if (pending.current.has(key)) return;
     const now = Date.now();
-    if (now - lastFetch.current < 8_000) return;
-    lastFetch.current = now;
-    (async () => {
-      try {
-        const d = await getJSON<ReactionsDTO>(`/api/companies/${companyId}/reactions?hours=${hours}`);
-        if (alive) setData(d);
-      } catch {
-        /* keep last */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [companyId, hours, refreshToken]);
+    if (dataByKey[key] && now - (lastFetch.current.get(key) ?? 0) < 8_000) return;
+    const request = getJSON<ReactionsDTO>(`/api/companies/${companyId}/reactions?hours=${hours}`);
+    lastFetch.current.set(key, now);
+    pending.current.set(key, request);
+    setErrorByKey((prev) => ({ ...prev, [key]: false }));
+    void request.then((result) => {
+      setDataByKey((prev) => ({ ...prev, [key]: result }));
+    }).catch(() => {
+      lastFetch.current.delete(key);
+      setErrorByKey((prev) => ({ ...prev, [key]: true }));
+    }).finally(() => {
+      if (pending.current.get(key) === request) pending.current.delete(key);
+    });
+  }, [companyId, hours, refreshToken, dataByKey]);
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div className="panel mt-4">
+        <div className="panel-head">
+          <span className="micro">Outcome check · {ticker}</span>
+          <span className="text-[9px] text-white/30">forward reaction · reaction is not causation</span>
+        </div>
+        <div className="px-3 py-3 text-[10.5px] text-white/35" role="status">
+          {failed ? "Outcome data could not be loaded. Select another company and return to retry." : "Loading outcome data…"}
+        </div>
+      </div>
+    );
+  }
   const top = [...data.events]
     .filter((e) => e.r30 != null || e.r240 != null)
     .sort((a, b) => b.eventScore - a.eventScore)
@@ -75,7 +95,10 @@ export function OutcomeCheck({
   return (
     <div className="panel mt-4">
       <div className="panel-head">
-        <span className="micro">Outcome check · {data.ticker}</span>
+        <span className="micro">
+          Outcome check · {data.ticker}
+          {failed && <span className="ml-2 normal-case tracking-normal text-amber-300/80">refresh failed · showing prior data</span>}
+        </span>
         <span className="text-[9px] text-white/30">forward reaction · reaction is not causation</span>
       </div>
       <div className="pt-1">

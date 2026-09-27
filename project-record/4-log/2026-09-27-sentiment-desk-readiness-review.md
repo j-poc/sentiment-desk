@@ -84,3 +84,30 @@ operator requeue control; no unsafe automatic replay was added. Keep the
 credentialed live Jev path explicitly unverified until it can be tested with an
 authorized key. Do not claim release-level 10/10 while live behavior,
 classifier quality, provider terms, and billing semantics remain unresolved.
+
+## Follow-up: live alias compatibility and chart reliability
+
+The restarted local server later reported that a Jev key was resolved from its
+environment. The dashboard showed newly collected cards with this provider
+error: `expected jev-latest, received jev-1.13.0`; the records remain failed
+and no ambiguous result was replayed. The current client has an exact equality
+guard in `server/jev.ts` and an offline test that expects a different returned
+model to fail closed.
+
+The [official TypeSafe Models reference](https://docs.typesafe.ai/models),
+reviewed 2026-09-27, states that `jev-latest` resolves to `jev-1.13.0` and the
+response `model` field reports the versioned model that answered. The
+[official API reference](https://docs.typesafe.ai/api) shows this same
+versioned response shape. Therefore the observed mismatch is a confirmed
+client/provider contract defect, not evidence of an unexpected fallback. Keep
+the current fail-closed handling for unpinned/unknown versions, repair the
+alias-versus-resolved-version validation, and preserve the returned version as
+judgment provenance. No deliberate provider request or failed-record replay
+was made during this follow-up.
+
+The separate chart/selection patch passed current-build browser checks for
+ADBE→NVDA selection, delayed old-company chart/mention/outcome responses,
+company/window binding, empty and one-point chart histories, and controlled
+failure/recovery. That UI reliability work is independently checkpointable;
+it does not close Jev operation, terminal-failure recovery, source-use terms,
+or classifier quality/calibration. Overall readiness remains below 10/10.
