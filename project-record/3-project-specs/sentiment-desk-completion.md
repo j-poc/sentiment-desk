@@ -230,11 +230,11 @@ recovery gates passed.
 Three read-only reviewers completed a fresh pass after hardening. Their
 separate qualitative ratings were 8.5/10 for source operations and overall
 scoped readiness, 8.5/10 for local Jev implementation (7/10 for release
-readiness), and 9/10 for UI/Radar. These scores are judgments, not a composite
-product metric. They found strict-response validation, bounded transient
-retry scheduling, shutdown, snapshot, and mobile interaction defects addressed.
-The remaining terminal-failure operator-requeue gap is stated below. The
-current checks directly verify:
+readiness), and 9/10 for UI/Radar. A later fresh-context Jev review rated
+release readiness 7/10 after confirming the alias and synthetic integration
+path; it kept real-source rights/retention and representative classifier
+quality open. These are qualitative judgments, not a composite score or proof
+of quality. The current checks directly verify:
 
 1. Malformed Jev choice answers, invalid probabilities, and invalid token usage
    must fail closed; no default category or clamped probability may become a
@@ -249,26 +249,105 @@ current checks directly verify:
    mention drawer traps focus, isolates the background, and restores focus on
    close.
 
-One local operations gap remains: terminal Jev failures have no operator
-requeue action. Ambiguous provider outcomes are deliberately not retried
-automatically to avoid duplicate charges. Keep them quarantined until the
-provider outcome has been checked; do not present this as a live-verified Jev
-workflow.
+The baseline issue on 2026-09-27 was an alias/version mismatch:
+`jev-latest` was sent unchanged, TypeSafe returned `jev-1.13.0`, and the old
+client rejected it. That repair is complete: the resolved model is persisted
+and the isolated provider→SQLite→API→browser path passed. See
+`project-record/4-log/2026-09-27-jev-alias-version-compatibility.md` for the
+current evidence. This historical mismatch is not an open bug.
 
-An earlier isolated keyless verification had no Jev key configured, and its
-offline provider-contract tests could not prove current live scoring. During
-the 2026-09-27 local dashboard run, the server reported that a key was resolved
-from its environment and new source rows surfaced this mismatch:
-`expected jev-latest, received jev-1.13.0`. TypeSafe's current official API
-reference says the alias resolves to a versioned model and that the response
-reports the version that served the request
-([Models](https://docs.typesafe.ai/models), [API reference](https://docs.typesafe.ai/api)).
-The client currently treats that documented response as an unknown-outcome
-failure and correctly avoids automatic replay. Repair and verify alias/model
-provenance compatibility before claiming live Jev operation. A release-level
-10/10 claim also requires labeled accuracy/calibration evaluation,
-confirmation of provider 429 billing semantics, and review of source
-display/model-use/retention terms.
+The remaining local operations gap is terminal-failure recovery. A failed
+judgment must expose an operator-controlled retry that makes a new request only
+after a clear acknowledgement that provider usage may be charged. An
+outcome-unknown request is never automatically replayed; the UI must tell the
+operator to check provider usage before authorizing another attempt. A duplicate
+submission must not queue two requests. Do not retry corrupt stored judgments.
+
+The live synthetic Jev integration smoke proves protocol compatibility and
+storage/UI wiring only. A frozen, fictional case set will probe obvious
+sentiment/event categories and the existing namesake/sector/consumer boundaries.
+Retain every case result and report the exact resolved model, rubric hash,
+case-set digest, code revision, usage, cost, latency, and failure state. These
+synthetic cases are a sanity check, not representative real-source labels,
+accuracy/calibration evidence, or an investment-quality claim. No real
+publisher text is to be sent to Jev until its source rights and the account's
+retention terms are reviewed. Release readiness also remains gated on provider
+billing semantics and those source/account terms.
+
+## 2026-09-28 continuation acceptance
+
+### User, workflow, and constraints
+
+The local researcher opens a failed mention, understands whether the provider
+may have processed it, then decides whether to send one new Jev request. Jev
+remains the only authority for per-item sentiment and event category. Keep the
+rubric, post-rules, market-read-only behavior, no-license decision, and existing
+source evidence unchanged. The evaluator uses only fictional synthetic items
+in temporary SQLite and never reads or modifies `data/desk.db`.
+
+### Hard gates
+
+1. A retry is available only for a failed, non-corrupt judgment. It requires an
+   explicit operator confirmation that a new request may incur a charge; for
+   an outcome-unknown failure, the confirmation also says to check provider
+   usage first. No UI or server path automatically retries that unknown
+   outcome.
+2. The server performs a single atomic failed→pending transition. Duplicate or
+   stale retry requests cannot queue another call; retrying, scoring, scored,
+   off-target, and corrupt rows cannot be requeued.
+3. The normal persisted pipeline performs the authorized retry. Its resolved
+   response model and rubric provenance remain visible. Provider rejection,
+   unknown outcome, and recovery remain distinct after the request.
+4. The frozen synthetic evaluation runs through the actual Jev client and
+   persisted pipeline on a fresh temporary database. No case is silently
+   skipped or replaced. It records per-case output and terminal status, exact
+   response model, rubric SHA, source/case digest, code revision/dirty state,
+   request count, tokens, estimated cost, latency, and errors without secrets.
+5. Evaluation cases are all fictional and human-labeled before the first model
+   result is read. They cover seven unambiguous in-scope directional/event
+   cases plus three boundary cases: an ambiguous namesake, a sector-level item
+   mentioning the company only in passing, and non-investor consumer coverage.
+   Pass the synthetic sanity check only if all seven clear cases match both
+   expected sentiment and event type, both out-of-scope cases score `about <
+   0.5`, and the consumer item scores `investor_relevant < 0.5`. Report every
+   label and boundary result separately. This ten-case synthetic pilot is not
+   a production classifier-accuracy or calibration gate.
+6. `npm test`, typecheck, production build, and the browser retry workflow pass;
+   browser checks cover desktop and 390px, confirmation/cancel behavior,
+   repeated submission, explicit-rejection recovery, and outcome-unknown
+   quarantine. Record failures rather than narrowing cases.
+
+### Objective measures and limits
+
+- Hard-gate completion is independent per item; one failed recovery or case
+  cannot be hidden by an aggregate score.
+- Report exact sentiment/event matches on the seven clear cases and separate
+  pass/fail on the three boundary cases. The pilot informs whether a gross
+  rubric or serving defect is present; its small synthetic sample cannot
+  support claims about production accuracy, calibration, alpha, or real-world
+  value.
+- Record end-to-end latency and cost for the complete per-case run, including
+  bounded retries. Do not rerun unknown-outcome failures.
+
+### Representative failure/recovery cases
+
+- Retry confirmation cancelled: zero calls and the original failure remains.
+- Two retry submissions race: at most one persisted transition and one new
+  provider call.
+- A prior unknown-outcome failure: no automatic resubmission; a new request can
+  start only after the explicit usage-check acknowledgement.
+- A new explicit 429/529 rejection: existing bounded retry semantics remain;
+  terminal state and next operator action stay visible.
+- Invalid output or malformed persisted judgment: score is withheld and a
+  corrupt row has no retry control.
+- Off-target/namesake and sector-only synthetic items remain separate from
+  unambiguous sentiment/event cases; do not hide them in the aggregate.
+
+### Subjective review point
+
+Keep retry language calm and explicit in the current dark desk design. Show the
+source and failure reason next to the control; make the charge warning clear
+before the operator authorizes a new request.
 
 ## Grounded architecture
 
@@ -299,14 +378,20 @@ Phase 2 consumer.
 - [x] Record provider deliveries and expose delivery/freshness state.
 - [x] Add meaningful regression tests and update README/project records.
 - [x] Verify local keyless live data, Jev fixture behavior, desktop/mobile
-  browser UI, and an earlier isolated Docker persistence smoke. Live
-  source-to-real-Jev scoring stays pending when no key is supplied; the
-  controlled real Jev fixture returned a valid `off_target` classification
-  without exposing a key.
+  browser UI, and isolated Docker persistence. A later permitted synthetic
+  provider smoke resolved `jev-latest` to `jev-1.13.0` and verified persistence
+  and rendering; public-source-to-Jev remains unrun pending source/account
+  rights review.
 - [x] Freeze Phase 2 inputs and acceptance after the Phase 1 gate passed.
 - [x] Build and verify Opportunity Radar over persisted judgment records.
-- [x] Finish local hardening verification: 63 tests across 11 files,
+- [x] Finish local hardening verification: 74 tests across 11 files,
   typecheck, production build, fresh browser pass, and isolated Compose
   live/recovery smoke.
-- [x] Checkpoint the reviewed implementation and project records in commit
-  `b9b6528` and push to `origin/codex/real-data-rebuild`.
+- [x] Checkpoint the earlier Phase 1/2 reviewed implementation (`b9b6528`).
+- [x] Checkpoint later chart reliability and Jev alias repairs
+  (`a685c2a`, `4996759`) with evidence updates (`c4004cb`, `c636736`) to
+  `origin/codex/real-data-rebuild`.
+- [ ] Add and verify acknowledged operator retry for failed judgments, while
+  keeping outcome-unknown requests out of automatic retry.
+- [ ] Freeze and run the ten-case synthetic Jev pilot; report every case
+  without promoting it to real-source quality evidence.
