@@ -45,11 +45,11 @@ Jev has no scores.
 | Current-build 390px viewport | PASS | At 390×844, document width and scroll width were both 390px. The scripted run had zero page runtime errors. A fresh normal-path reload also had zero console/runtime errors; controlled 503 cases below intentionally produce browser network-error console entries. |
 | Final screenshot | PASS | `output/playwright/2026-09-27-stock-chart-selection.png`, 1280×900. Shows NVDA, visible price line, explicit no-score state, and source-age label. Contains live headline data; keep local and out of Git. |
 | Scripted latest-build end-to-end pass | PASS | One fresh Playwright CLI run rechecked selection, company/window binding, a delayed Adobe chart response carrying a 0.99 sentinel, a delayed Adobe mention response carrying a unique sentinel, empty and one-point chart histories, controlled AMD mention/price 503s and recovery, and 390px overflow. Every case passed; `pageErrors=[]`; final UI returned to NVIDIA. |
-| Git checkpoint | IN PROGRESS | User authorized regular checkpoints to `origin/codex/real-data-rebuild`; commit and push the scoped code/spec/log files after final diff review. Do not stage `output/`. |
+| Git checkpoint | PASS | Commit `09de2df` contains only the three chart/panel source files and the scoped completion/readiness/evidence records. Pushed to `origin/codex/real-data-rebuild`; the local screenshot in `output/` was excluded. |
 
 ## Recovery state
 
-- State: `latest-build end-to-end verification passed; checkpoint pending`
+- State: `latest-build end-to-end verification passed; checkpoint 09de2df is on origin/codex/real-data-rebuild`
 - Owner: primary task
 - Resume action: rerun `git diff --check`, review the staged diff, then commit
   and push only the scoped source and project-record files to
