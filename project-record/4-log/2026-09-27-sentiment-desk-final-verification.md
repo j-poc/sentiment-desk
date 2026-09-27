@@ -50,3 +50,11 @@ The first Radar release keeps the selected company shared between Desk and
 Radar, defaults to 24 hours, and groups only exact-normalized headline matches.
 Those interface choices remain easy to revise; they are not claims about
 researcher preference.
+
+## GitHub checkpoint
+
+The decision trail received an independent transcript cross-check with no
+material discrepancies. Commit `603932b` (`feat(sentiment-desk): complete desk
+and opportunity radar`) was pushed to `origin/codex/real-data-rebuild` on
+2026-09-27. No pull request was opened. The repository remains without a
+LICENSE, as requested.

@@ -1,7 +1,7 @@
 # Operational Sentiment Desk, then Opportunity Radar
 
-Status: Phase 1 and the first supported-data Radar release are implemented and
-verified; the authorized GitHub checkpoint is pending.
+Status: Phase 1 and the first supported-data Radar release are implemented,
+verified, and checkpointed at `603932b` on `codex/real-data-rebuild`.
 
 ## Intent
 

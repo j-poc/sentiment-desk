@@ -1,8 +1,8 @@
 # Sentiment Desk completion plan
 
 Status: implementation and verification complete; final isolated Compose
-live-data and persistence checks passed. The verified branch is ready for its
-authorized GitHub checkpoint.
+live-data and persistence checks passed. The authorized GitHub checkpoint was
+pushed as `603932b` to `codex/real-data-rebuild`.
 
 ## User and outcome
 
@@ -141,5 +141,5 @@ Phase 2 consumer.
 - [x] Build and verify Opportunity Radar over persisted judgment records.
 - [x] Finish final verification: 52 tests, typecheck, production build, fresh
   local/browser pass, and isolated Compose live/recovery pass.
-- [ ] Review the decision trail, commit, and push the checkpoint to the
+- [x] Review the decision trail, commit, and push the checkpoint to the
   existing GitHub branch.
