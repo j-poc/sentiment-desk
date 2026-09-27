@@ -96,13 +96,27 @@ hosting, provider enrollment, publication, or PR was added.
 
 ## Evaluation and handoff
 
-The ten-case run is not part of this commit's browser fixture. First checkpoint
-the frozen runner and current implementation to establish a revision; then run
-the synthetic evaluation on that clean source revision. Record the per-case
-ledger, request count, resolved model, rubric SHA, case digest, code revision,
-dirty state, reported tokens, estimated cost, latency, and terminal state. Do
-not retry an outcome-unknown failure or represent this small pilot as classifier
-accuracy/calibration, alpha, or release-readiness evidence.
+The ten-case run is separate from the browser fixture. Before dispatch, the
+frozen input file has 10 cases and SHA-256
+`733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97`; the
+checkpointed revision is `2f70bb1f8e48db1acbab0f77c82df1538bf402a7`, with no
+tracked source changes. A prior one-request synthetic provider smoke and the
+fictional retry browser workflow are the end-to-end smoke evidence; no
+publisher text is in scope.
+
+Stop conditions: the pipeline may automatically retry only explicit HTTP
+429/529 rejection within its bounded three-attempt policy; it does not replay
+transport, generic 5xx, malformed-output, or model-mismatch unknown outcomes.
+Each case has an eight-minute terminal budget. The runner stops dispatching
+after three errors with the same HTTP status and writes the fixed ten-case
+denominator, including cases not run after that stop. If interrupted, inspect
+the report and provider usage before any new dispatch; never silently restart
+or replay a case whose prior outcome is unknown. Record the per-case ledger,
+request count, resolved model, rubric SHA, case digest, code revision/dirty
+state, reported tokens, estimated cost, latency, and terminal state.
+
+Do not represent this small pilot as classifier accuracy/calibration, alpha,
+or release-readiness evidence.
 
 Local hardening is not equivalent to 10/10 release readiness. Rights,
 retention, rejected-request billing, real-source labeled quality, and the
