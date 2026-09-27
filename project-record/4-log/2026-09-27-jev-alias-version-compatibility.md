@@ -125,8 +125,10 @@ Official sources reviewed 2026-09-27:
   pendingObservationPreserved=true`; host API HTTP 200 on loopback port 32769.
   The script removed its isolated Compose volume/network at exit.
 
-Durable state: `verifying`. Owner: this task. Implementation, tests, live
-synthetic provider/UI smoke, and isolated Compose host/recovery smoke pass.
-Next action: create a linear checkpoint, push to
-`origin/codex/real-data-rebuild`, verify remote equality, and record the final
-hash. Release-readiness gaps remain visible and block any 10/10 claim.
+The verified implementation and evidence are checkpointed in commit
+`4996759` (`fix(jev): accept resolved alias model responses`), pushed to
+`origin/codex/real-data-rebuild`. After fetching `origin`,
+`git rev-list --left-right --count HEAD...origin/codex/real-data-rebuild`
+returned `0 0` at this code checkpoint. This documentation follow-up is being
+pushed separately; its final remote equality check will be recorded after the
+push. Release-readiness gaps remain visible and block any 10/10 claim.

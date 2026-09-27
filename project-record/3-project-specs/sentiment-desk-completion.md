@@ -4,11 +4,11 @@ Status: the local source-research workflow, isolated Compose recovery, and the
 latest chart/company-binding checks pass. The documented TypeSafe alias
 response is now accepted and preserved as `jev-1.13.0`; an isolated synthetic
 observation passed through the live provider, SQLite, local API, and visible
-detail drawer. This is not a 10/10 release: source-use/account-retention terms,
-labeled classifier evaluation, and operator recovery of terminal Jev failures
-remain open. The chart reliability checkpoint is on
-`origin/codex/real-data-rebuild`; the current Jev compatibility work is being
-checkpointed separately.
+detail drawer. The Jev compatibility fix is checkpointed at `4996759` on
+`origin/codex/real-data-rebuild`. This is not a 10/10 release:
+source-use/account-retention terms, labeled classifier evaluation, and
+operator recovery of terminal Jev failures remain open. The chart reliability
+checkpoint is also on `origin/codex/real-data-rebuild`.
 
 ## User and outcome
 
