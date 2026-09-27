@@ -83,7 +83,6 @@ research with pending Jev items and is not ready to claim 10/10.
 ## GitHub checkpoint
 
 The earlier checkpoint `603932b` (`feat(sentiment-desk): complete desk and
-opportunity radar`) was pushed to `origin/codex/real-data-rebuild` on
-2026-09-27. The hardening and final review updates are being checkpointed
-separately on the same branch. No pull request was opened. The repository
-remains without a LICENSE, as requested.
+opportunity radar`) was followed by hardening commit `b9b6528`, pushed to
+`origin/codex/real-data-rebuild` on 2026-09-27. No pull request was opened. The
+repository remains without a LICENSE, as requested.

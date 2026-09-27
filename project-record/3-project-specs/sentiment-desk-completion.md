@@ -183,5 +183,5 @@ Phase 2 consumer.
 - [x] Finish local hardening verification: 63 tests across 11 files,
   typecheck, production build, fresh browser pass, and isolated Compose
   live/recovery smoke.
-- [ ] Checkpoint the reviewed implementation and project records on the
-  existing GitHub branch.
+- [x] Checkpoint the reviewed implementation and project records in commit
+  `b9b6528` and push to `origin/codex/real-data-rebuild`.
