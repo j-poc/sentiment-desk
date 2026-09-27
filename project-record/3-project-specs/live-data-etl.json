@@ -68,25 +68,31 @@
       "command": "npm test",
       "covers": "Offline parsing and scoring fixtures, including RSS and SEC filing examples.",
       "status": "passed",
-      "evidence": "2026-09-27: npm test passed 63 tests across 11 files, including immutable observation/revision, delivery state, quote cache provenance, Jev response/model validation, bounded retry, pipeline replay, scheduler drain, active SSE shutdown, Radar aggregation, and paginated evidence routes. npm run typecheck and npm run build passed."
+      "evidence": "2026-09-27: npm test passed 74 tests across 11 files, including immutable observation/revision, delivery state, quote cache provenance, Jev alias-to-version provenance, exact pinning, malformed/wrong model rejection, bounded HTTP 429/529 retry, unknown-outcome handling, pipeline replay, scheduler drain, active SSE shutdown, Radar aggregation, and paginated evidence routes. npm run typecheck and npm run build passed."
     },
     "failure": {
       "command": "npm test",
-      "covers": "Offline failure behavior, including malformed RSS, source-time handling, Jev response validation, and bounded retry scheduling. Does not prove live provider rate-limit billing semantics or identity conflicts end to end.",
+      "covers": "Offline failure behavior, including malformed RSS, source-time handling, Jev response validation, persisted bounded HTTP 429/529 retries, and non-retry of generic 5xx and transport outcomes. Does not prove live provider rate-limit billing semantics or identity conflicts end to end.",
       "status": "passed",
-      "evidence": "2026-09-27: unit/API tests cover malformed RSS, missing source times, observation revisions, idempotent replay, failed/overdue/disabled delivery states, Jev output and configured-model contract fixtures, transient 429 retry scheduling, safe handling of unknown request outcomes, quote cache labeling, invalid Radar categories, and missing companies. Fresh live run showed GDELT HTTP 429 as failed while Google News, Yahoo Finance RSS, SEC, and Yahoo quotes continued independently."
+      "evidence": "2026-09-27: unit/API tests cover malformed RSS, missing source times, observation revisions, idempotent replay, failed/overdue/disabled delivery states, Jev alias/pinned model contract fixtures, transient 429 and documented 529 retry scheduling, generic 5xx and transport unknown outcomes, quote cache labeling, invalid Radar categories, and missing companies. Fresh live run showed GDELT HTTP 429 as failed while Google News, Yahoo Finance RSS, SEC, and Yahoo quotes continued independently. This test evidence does not establish provider billing semantics."
     },
     "replay": {
       "command": "./scripts/verify-live-compose.sh",
-      "covers": "Recreates a container over a retained SQLite volume. This is process recovery, not replay from retained raw provider responses.",
+      "covers": "Recreates the production container over a retained SQLite volume and verifies the published API remains available through a loopback-only host port. This is process recovery, not replay from retained raw provider responses.",
       "status": "passed",
-      "evidence": "2026-09-27: DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh rebuilt the hardened credential-free image, preserved a real pending observation across container recreation, and removed its own temporary Compose volume. Result: RECOVERY_SMOKE_RESULT companies=24 dbSizeBytes=2387968 pendingObservationPreserved=true."
+      "evidence": "2026-09-27: DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh rebuilt the hardened credential-free image, verified the API from the host through dynamic loopback-only published ports before and after container recreation, preserved a real pending observation across recreation, and removed its temporary Compose volume/network. Result: RECOVERY_SMOKE_RESULT companies=24 dbSizeBytes=2273280 pendingObservationPreserved=true; host API returned HTTP 200 at 127.0.0.1:32768 and 127.0.0.1:32769."
     },
     "live_smoke": {
       "command": "./scripts/verify-live-compose.sh",
       "covers": "Credential-free live quote and news/filing source success through the HTTP API, with DEMO and Jev scoring disabled.",
       "status": "passed",
-      "evidence": "2026-09-27: final isolated Compose API smoke returned LIVE_SMOKE_RESULT quotes=27 companies=24 dbSizeBytes=2215936 pendingId=nvidia:<redacted> collector=google_news_rss timeBasis=publisher_declared with Jev and optional credentials disabled."
+      "evidence": "2026-09-27: final isolated Compose API smoke returned LIVE_SMOKE_RESULT quotes=27 companies=24 dbSizeBytes=2220032 pendingId=chevron:<redacted> collector=google_news_rss timeBasis=publisher_declared with Jev and optional credentials disabled; host-published loopback API returned HTTP 200."
+    },
+    "jev_live_smoke": {
+      "command": "npm run verify:jev-live",
+      "covers": "One live TypeSafe request on a new synthetic observation, temporary SQLite persistence with resolved model/rubric provenance, local API readback, and visible browser detail. Does not send current public-source text or prove Jev accuracy/calibration.",
+      "status": "passed",
+      "evidence": "2026-09-27: isolated smoke made exactly one request using jev-latest; TypeSafe returned jev-1.13.0. Temporary SQLite stored status=off_target, rubricSha=a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e, inputTokens=1906, latencyMs=343, estimated input cost USD 0.000080052. Local mentions API returned the same resolved model; Playwright opened the visible detail drawer with score/model/rubric and observed zero browser console errors. Synthetic-only text, no external market-data request, no access to data/desk.db, and no pre-existing unknown-outcome rows to replay."
     },
     "fresh_start": {
       "command": "npm start with an isolated HOME, DB_PATH, empty Jev and optional provider credentials, and DEMO=0",
@@ -113,10 +119,10 @@
     "Yahoo quote retrieval time and source regularMarketTime are separate. A failed per-symbol refresh marks the retained quote as cached and exposes its original retrieval age. Market-closure and holiday correctness is not established by the app's weekday/session display.",
     "Price-series display buckets use last-observation carry-forward; those bucket timestamps are derived display coordinates, not new source price observations. The API retains sourceLatestAt and the resampling policy.",
     "Fresh local browser verification at 2026-09-27 14:13 EEST showed GDELT rate-limited with HTTP 429; Google News RSS, Yahoo Finance RSS, SEC EDGAR, and Yahoo quotes had successful current delivery. GDELT coverage is therefore a current limitation, not evidence of zero GDELT activity.",
-    "No Jev credential was supplied during fresh-start and Compose verification, so current real observations stayed pending. A separate bounded controlled Jev fixture previously returned a valid off_target judgment; the fresh live production run did not exercise scoring of a real headline.",
+    "No real publisher content was sent to Jev. The credentialed live smoke used one explicitly synthetic, off-target observation in a temporary database; this proves provider integration and provenance only, not classification quality or a current real-headline workflow.",
     "Optional X, Reddit, and Finnhub sources were disabled in final verification by explicit empty credentials. Their live coverage and rights are not verified.",
     "Provider terms, permitted model access, display, retention, and redistribution have not been reviewed. Public availability is not treated as a license to republish, and the UI is private and local.",
-    "Source collectors retry on the next scheduled poll rather than an immediate generic loop. Jev retries only explicit retryable responses such as HTTP 429 through persisted, bounded scheduling (maximum three attempts); transport failures, server errors, malformed output, and model mismatches are marked failed/outcome-unknown and never automatically resubmitted. Terminal Jev failures have no operator requeue control; verify provider request/usage outcome before any deliberate replay to avoid duplicate charges. Provider coverage and pagination completeness are not proven exhaustive.",
-    "No credentialed current-observation-to-Jev-to-persistence-to-UI run was performed. A real provider contract/model compatibility check, proof of 429 billing semantics, labeled accuracy/calibration evaluation, and source-use terms review remain external release gates."
+    "Source collectors retry on the next scheduled poll rather than an immediate generic loop. Jev retries only explicit retryable HTTP 429 or TypeSafe-documented HTTP 529 rejections through persisted, bounded scheduling (maximum three attempts); transport failures, generic server errors, malformed output, and model mismatches are marked failed/outcome-unknown and never automatically resubmitted. Terminal Jev failures have no operator requeue control; verify provider request/usage outcome before any deliberate replay to avoid duplicate charges. Provider coverage and pagination completeness are not proven exhaustive.",
+    "The synthetic live provider path passed, but no current public-source headline was sent through Jev. Publisher model-use terms and account retention configuration, labeled accuracy/calibration, live-source-to-Jev quality, and provider 429 billing semantics remain external release gates."
   ]
 }

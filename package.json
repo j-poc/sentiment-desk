@@ -15,6 +15,7 @@
     "build:web": "vite build",
     "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist/server/index.js --packages=external",
     "start": "node dist/server/index.js",
+    "verify:jev-live": "tsx scripts/verify-live-jev.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

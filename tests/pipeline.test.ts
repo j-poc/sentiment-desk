@@ -76,13 +76,13 @@ describe("Jev pipeline recovery", () => {
     expect(result.inputTokens).toBeGreaterThan(0);
   });
 
-  it("persists bounded retries after explicit 429 rejection and succeeds on the next attempt", async () => {
+  it.each([429, 529])("persists bounded retries after explicit HTTP %s rejection and succeeds on the next attempt", async (status) => {
     vi.useFakeTimers();
     let calls = 0;
     const { db, pipeline, source } = setup(async () => {
       calls += 1;
-      if (calls === 1) throw new JevError("rate limited", 429, true);
-      return { answers: fixtureAnswers(), model: "jev-latest", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
+      if (calls === 1) throw new JevError("overloaded", status, true);
+      return { answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
     });
     try {
       pipeline.ingest(source);
@@ -153,12 +153,33 @@ describe("Jev pipeline recovery", () => {
 
   it("rejects a second claim while the first attempt is in progress", () => {
     const { db, source } = setup(async () => ({
-      answers: fixtureAnswers(), model: "jev-latest", inputTokens: 1, outputTokens: 1, latencyMs: 1,
+      answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 1, outputTokens: 1, latencyMs: 1,
     }));
     try {
       const { observationId } = db.insertObservation(source);
       expect(db.claimForScoring(observationId, Date.now())?.status).toBe("scoring");
       expect(db.claimForScoring(observationId, Date.now())).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists the resolved Jev model ID with the new observation's judgment", async () => {
+    let calls = 0;
+    const { db, pipeline, source } = setup(async () => {
+      calls += 1;
+      return { answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 700, outputTokens: 20, latencyMs: 84 };
+    });
+    try {
+      expect(pipeline.ingest(source)).toBe(true);
+      await pipeline.waitForIdle();
+
+      const scored = db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(calls).toBe(1);
+      expect(scored.status).toBe("scored");
+      expect(scored.score).toMatchObject({ engine: "jev-1.13.0", sentiment: "positive", eventType: "product" });
+      expect(scored.score?.costUsd).toBeCloseTo(0.0000294, 10);
+      expect(pipeline.drainPending(10)).toBe(0);
     } finally {
       db.close();
     }

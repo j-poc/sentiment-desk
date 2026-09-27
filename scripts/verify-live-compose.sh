@@ -20,6 +20,7 @@ services:
     build:
       context: "$repo_root"
     environment:
+      HOST: "0.0.0.0"
       PORT: "8787"
       DB_PATH: /app/data/desk.db
       DEMO: "0"
@@ -29,6 +30,8 @@ services:
       REDDIT_CLIENT_SECRET: ""
       X_BEARER_TOKEN: ""
       ALERT_WEBHOOK_URL: ""
+    ports:
+      - "127.0.0.1::8787"
     volumes:
       - desk-data:/app/data
 volumes:
@@ -37,6 +40,22 @@ EOF
 
 compose() {
   docker compose --project-name "$project" --file "$compose_file" "$@"
+}
+
+run_host_api_check() {
+  host_port=$(compose port sentiment-desk 8787 | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p')
+  if [ -z "$host_port" ]; then
+    echo "Compose did not publish the service on a loopback-only host port." >&2
+    return 1
+  fi
+  SMOKE_HOST_PORT="$host_port" node --input-type=module - <<'NODE'
+const port = process.env.SMOKE_HOST_PORT;
+const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(5_000) });
+if (!response.ok) throw new Error(`host-published health endpoint returned HTTP ${response.status}`);
+const health = await response.json();
+if (health.demo !== false || health.dbSizeBytes <= 0) throw new Error("host-published API returned unexpected health state");
+console.log(`HOST_API_SMOKE_RESULT host=127.0.0.1:${port} health=200 dbSizeBytes=${health.dbSizeBytes}`);
+NODE
 }
 
 run_api_check() {
@@ -117,6 +136,7 @@ echo "Building an isolated live-data image with no provider credentials..."
 compose up -d --build
 live_result=$(run_api_check live 0)
 printf '%s\n' "$live_result"
+run_host_api_check
 db_size=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*dbSizeBytes=\([0-9][0-9]*\).*$/\1/p')
 observation_id=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*pendingId=\([^ ]*\).*$/\1/p')
 if [ -z "$db_size" ] || [ -z "$observation_id" ]; then
@@ -128,4 +148,5 @@ echo "Recreating the container while retaining its isolated database volume..."
 compose down
 compose up -d
 run_api_check recovery "$db_size" "$observation_id"
+run_host_api_check
 echo "Live Compose smoke and persistent-volume recovery passed."

@@ -6,6 +6,7 @@ services:
       - path: .env
         required: false
     environment:
+      HOST: "0.0.0.0"
       PORT: "8787"
       DB_PATH: /app/data/desk.db
     ports:

@@ -11,10 +11,15 @@ import { z } from "zod";
  *   -> { "model": "...", "answers": { <key>: {choice?, probabilities?,
  *        confidence?} | {noul} }, "usage": { "input_tokens", "output_tokens" } }
  *
- * A single request is sent per persisted pipeline attempt. Explicit 429
- * rejections may be retried by the persisted queue; 5xx and transport errors
- * have unknown execution outcomes and are never automatically resubmitted.
- * Other 4xx responses and invalid bodies fail closed.
+ * TypeSafe returns the resolved versioned model ID for aliases such as
+ * `jev-latest`. Preserve that response ID as score provenance while keeping
+ * exact matching for explicitly pinned model IDs.
+ *
+ * A single request is sent per persisted pipeline attempt. Explicit 429 and
+ * documented 529 overload rejections may be retried by the persisted queue;
+ * other 5xx and transport errors have unknown execution outcomes and are
+ * never automatically resubmitted. Other 4xx responses and invalid bodies
+ * fail closed.
  */
 
 const probabilitySchema = z.number().finite().min(0).max(1);
@@ -33,6 +38,13 @@ const noulAnswerSchema = z.object({
 
 const answerSchema = z.discriminatedUnion("type", [choiceAnswerSchema, noulAnswerSchema]);
 const tokenCountSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const aliasModels = new Set(["jev-latest", "jev-preview"]);
+const resolvedJevModelPattern = /^jev-(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
+
+function responseModelMatches(requested: string, returned: string): boolean {
+  if (aliasModels.has(requested)) return resolvedJevModelPattern.test(returned);
+  return returned === requested;
+}
 
 export const jevResponseSchema = z.object({
   model: z.string().min(1),
@@ -127,8 +139,8 @@ export class JevClient {
       );
     }
 
-    if (res.status === 429) {
-      throw new JevError("TypeSafe rejected the request with HTTP 429", 429, true);
+    if (res.status === 429 || res.status === 529) {
+      throw new JevError(`TypeSafe rejected the request with HTTP ${res.status}`, res.status, true);
     }
     if (res.status >= 500) {
       throw new JevError(`TypeSafe responded HTTP ${res.status}; request outcome is unknown`, res.status, false, true);
@@ -157,7 +169,7 @@ export class JevClient {
         true,
       );
     }
-    if (parsed.data.model !== this.opts.model) {
+    if (!responseModelMatches(this.opts.model, parsed.data.model)) {
       throw new JevError(
         `TypeSafe response model mismatch: expected ${this.opts.model}, received ${parsed.data.model}; request outcome is unknown`,
         res.status,

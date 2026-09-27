@@ -657,6 +657,8 @@ export default function App() {
                             ? `Loading ${selected.ticker} mentions…`
                             : selectedMentions.length === 0
                               ? "No mentions in this window yet. New mentions are scored within seconds of arrival."
+                              : feedFilter === "all" && selectedMentions.every((mention) => mention.status === "off_target")
+                                ? `No in-scope mentions yet. ${selectedMentions.length} off-target ${selectedMentions.length === 1 ? "item is" : "items are"} hidden; choose Off-target to review ${selectedMentions.length === 1 ? "it" : "them"}.`
                               : "Nothing matches this filter."}
                       </div>
                     )}

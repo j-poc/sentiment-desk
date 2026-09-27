@@ -46,6 +46,8 @@ export const apiKeySource = envKey ? "env" : apiKey ? "~/.newsjack/.env" : "miss
 export const VERSION = "0.2.0";
 
 export const config = {
+  /** Native runs stay loopback-only; container images override this for port publishing. */
+  host: process.env.HOST?.trim() || "127.0.0.1",
   port: int(process.env.PORT, 8787),
   dbPath: process.env.DB_PATH?.trim() || path.resolve("data/desk.db"),
   companiesPath: process.env.COMPANIES_PATH?.trim() || path.resolve("config/companies.json"),

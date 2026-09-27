@@ -111,3 +111,37 @@ company/window binding, empty and one-point chart histories, and controlled
 failure/recovery. That UI reliability work is independently checkpointable;
 it does not close Jev operation, terminal-failure recovery, source-use terms,
 or classifier quality/calibration. Overall readiness remains below 10/10.
+
+## Follow-up: alias repair and live synthetic path
+
+The client now accepts the documented `jev-latest` → versioned response,
+preserves the serving model as score provenance, keeps pinned versions exact,
+and routes explicit 429/529 rejection through bounded persisted retries.
+Unknown 5xx/transport outcomes remain quarantined. The expanded suite passes
+74 tests across 11 files; typecheck and production build pass.
+
+One live TypeSafe request used a newly inserted, explicitly synthetic
+off-target record in a temporary SQLite database. It returned
+`jev-1.13.0`, stored rubric `a88fad772230…`, and appeared through the local
+mentions API and detail drawer with the resolved engine visible. The request
+used 1,906 input tokens, took 343 ms, and had estimated input cost
+`$0.000080052`. No real publisher text or market data was sent; this is
+provider-wiring evidence, not accuracy or calibration evidence. The default
+feed's off-target-only empty state now tells the researcher to open the
+Off-target filter. Browser console errors: zero.
+
+A fresh-context reviewer passed alias validation, retry behavior, isolated
+live persistence/UI, and the local/container binding configuration. It rated
+overall release readiness 7/10, citing unresolved publisher model-use and
+account-retention terms, labeled Jev accuracy/calibration, and live public
+headline scoring. Its container check was initially unavailable because the
+dedicated verification VM was stopped; the primary task then started only
+`sentiment-desk-verify` and reran the isolated Compose workflow. The
+credential-free image passed both host-published loopback API checks and
+container recreation with a retained SQLite observation. The Citrini,
+Meridian, and Porch profiles were not used.
+
+Current terminal position: local Jev integration and chart selection are
+verified; product release readiness remains below 10/10. Preserve the open
+source-rights, account-retention, operator-recovery, provider-billing, and
+classifier-quality gates.

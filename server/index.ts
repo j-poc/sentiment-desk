@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     ],
   });
 
-  const server = serve({ fetch: app.fetch, port: config.port });
+  const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
 
   // Quotes run in every mode: they are read-only market context.
   const schedulers: SchedulerControl[] = [

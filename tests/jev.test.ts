@@ -6,18 +6,18 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
-function clientWith(fetchImpl: typeof fetch): JevClient {
+function clientWith(fetchImpl: typeof fetch, model = "jev-latest"): JevClient {
   return new JevClient({
     apiKey: "test-key",
     baseUrl: "https://api.test",
-    model: "jev-latest",
+    model,
     timeoutMs: 1_000,
     fetchImpl,
   });
 }
 
 const okBody = {
-  model: "jev-latest",
+  model: "jev-1.13.0",
   answers: {
     sentiment: { type: "choice", choice: "neutral", probabilities: { negative: 0.2, neutral: 0.6, positive: 0.2 }, confidence: 0.7 },
     about: { type: "noul", noul: 0.9 },
@@ -51,15 +51,38 @@ describe("JevClient", () => {
     const questions = seen[0]?.body.questions as Record<string, { type: string }>;
     expect(questions["sentiment"]?.type).toBe("choice");
     expect(questions["about"]?.type).toBe("noul");
+    expect(out.model).toBe("jev-1.13.0");
     expect(out.inputTokens).toBe(123);
     expect(out.answers.about).toEqual({ type: "noul", noul: 0.9 });
   });
 
-  it("returns explicit 429 rejection for persisted retry without resubmitting in the client", async () => {
-    const impl = vi.fn(async () => jsonResponse({ error: "slow down" }, 429)) as unknown as typeof fetch;
+  it.each(["jev-latest", "jev-preview"])("accepts a versioned response for the %s alias", async (alias) => {
+    const impl = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: alias });
+      return jsonResponse(okBody);
+    }) as unknown as typeof fetch;
+
+    const outcome = await clientWith(impl, alias).judge({}, RUBRIC);
+
+    expect(outcome.model).toBe("jev-1.13.0");
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts an exact versioned model response", async () => {
+    const impl = vi.fn(async () => jsonResponse(okBody)) as unknown as typeof fetch;
+
+    const outcome = await clientWith(impl, "jev-1.13.0").judge({}, RUBRIC);
+
+    expect(outcome.model).toBe("jev-1.13.0");
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([429, 529])("returns explicit HTTP %s rejection for persisted retry without resubmitting in the client", async (status) => {
+    const impl = vi.fn(async () => jsonResponse({ error: "overloaded" }, status)) as unknown as typeof fetch;
     const client = clientWith(impl);
     const error = await client.judge({}, RUBRIC).catch((value: unknown) => value);
     expect(error).toBeInstanceOf(JevError);
+    expect((error as JevError).status).toBe(status);
     expect((error as JevError).retryable).toBe(true);
     expect((error as JevError).outcomeUnknown).toBe(false);
     expect(impl).toHaveBeenCalledTimes(1);
@@ -104,9 +127,16 @@ describe("JevClient", () => {
     await expect(clientWith(notJson).judge({}, RUBRIC)).rejects.toBeInstanceOf(JevError);
   });
 
-  it("rejects a successful response from a different model without retrying", async () => {
-    const impl = vi.fn(async () => jsonResponse({ ...okBody, model: "jev-fallback" })) as unknown as typeof fetch;
-    const error = await clientWith(impl).judge({}, RUBRIC).catch((value: unknown) => value);
+  it.each([
+    { configured: "jev-latest", returned: "jev-latest" },
+    { configured: "jev-latest", returned: "jev-preview" },
+    { configured: "jev-latest", returned: "jev-fallback" },
+    { configured: "jev-latest", returned: "jev-1.13.0-beta" },
+    { configured: "jev-latest", returned: "jev-not-a-version" },
+    { configured: "jev-1.12.0", returned: "jev-1.13.0" },
+  ])("rejects unexpected response model $returned for configured $configured without retrying", async ({ configured, returned }) => {
+    const impl = vi.fn(async () => jsonResponse({ ...okBody, model: returned })) as unknown as typeof fetch;
+    const error = await clientWith(impl, configured).judge({}, RUBRIC).catch((value: unknown) => value);
 
     expect(error).toBeInstanceOf(JevError);
     expect((error as JevError).retryable).toBe(false);

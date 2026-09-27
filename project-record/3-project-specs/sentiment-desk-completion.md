@@ -1,11 +1,14 @@
 # Sentiment Desk completion plan
 
 Status: the local source-research workflow, isolated Compose recovery, and the
-latest chart/company-binding checks pass. This is not a 10/10 release: the
-current configured Jev path rejects TypeSafe's documented versioned response
-for the `jev-latest` alias, and source-use terms and labeled classifier
-evaluation remain unverified. Latest UI reliability fixes are being
-checkpointed to `codex/real-data-rebuild`.
+latest chart/company-binding checks pass. The documented TypeSafe alias
+response is now accepted and preserved as `jev-1.13.0`; an isolated synthetic
+observation passed through the live provider, SQLite, local API, and visible
+detail drawer. This is not a 10/10 release: source-use/account-retention terms,
+labeled classifier evaluation, and operator recovery of terminal Jev failures
+remain open. The chart reliability checkpoint is on
+`origin/codex/real-data-rebuild`; the current Jev compatibility work is being
+checkpointed separately.
 
 ## User and outcome
 
@@ -83,6 +86,38 @@ does not generate opportunity hypotheses or value-chain links.
 2. Keyless public collectors deliver real observations through the local API.
    With Jev disabled, those observations remain pending; with Jev configured,
    one valid judgment follows the unchanged rubric and appears in the drawer.
+
+   - Model identity hard gate: send the configured alias unchanged. For
+     `jev-latest` or `jev-preview`, accept only a successful response whose
+     `model` is a canonical versioned Jev ID (`jev-<major>.<minor>.<patch>`);
+     retain that returned ID as the persisted judgment engine. When a
+     versioned model ID is configured, require exact response equality.
+     Continue rejecting malformed IDs, unrelated models, invalid answers,
+     probabilities, or usage, and never automatically resubmit an
+     outcome-unknown request.
+   - Evidence: unit fixtures must prove alias request/response compatibility,
+     exact pinning, unrelated/malformed response rejection, and one request
+     per judgment. HTTP 429 and TypeSafe's documented HTTP 529 overload
+     rejection must use the existing bounded persisted retry path; generic
+     5xx and transport failures remain outcome-unknown. A permitted
+     new-observation smoke must prove successful provider response, persisted
+     resolved-model provenance, and visible judgment without replaying
+     existing outcome-unknown rows.
+   - Current repair gates (2026-09-27; evidence:
+     `project-record/4-log/2026-09-27-jev-alias-version-compatibility.md`):
+     - `PASS` — alias, pinned version, malformed/wrong model, 429/529 retry,
+       generic 5xx/transport failure, and persistence fixtures; `npm test`
+       passes 74 tests across 11 files.
+     - `PASS` — one live TypeSafe request on a newly inserted synthetic
+       observation resolved `jev-latest` to `jev-1.13.0`; a temporary SQLite
+       row retained that model and rubric, the local API returned it, and the
+       browser drawer displayed the score and exact resolved model.
+     - `PASS` — the isolated smoke used a temporary database and made no
+       public-source requests; no existing failed/outcome-unknown row was
+       loaded or replayed.
+     - `NOT RUN` — a current public-source headline through Jev. Publisher
+       model-use and account-retention rights remain unreviewed; the synthetic
+       smoke proves integration only, not classifier accuracy or calibration.
 3. A duplicate delivery does not create another Jev charge. Two independent
    source records with similar headlines remain separately attributable.
 4. Missing publication or observation time is never replaced by retrieval
@@ -92,7 +127,7 @@ does not generate opportunity hypotheses or value-chain links.
 6. Desktop and narrow-screen flows let the researcher select a company, read
    the score/index, inspect the source and Jev rubric, and understand data
    health without hidden overflow or dead controls.
-7. `npm test` (63 tests across 11 files), typecheck, production build, fresh
+7. `npm test` (74 tests across 11 files), typecheck, production build, fresh
    keyless local start, 390px and 1280px browser passes, accessible mention
    drawer interaction, SSE shutdown, and isolated Docker persistence smoke
    pass. The source-data contract records what these checks prove and what
