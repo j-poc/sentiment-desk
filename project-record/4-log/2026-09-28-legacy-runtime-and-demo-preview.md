@@ -60,3 +60,16 @@ not inspected or rewritten.
 - Source-use rights, TypeSafe retention, billing semantics, and labeled
   real-source Jev quality remain release gates. The synthetic Jev pilot does
   not close them.
+
+## Later read-only aggregate check
+
+A subsequent read-only audit of the default local database found migrated
+`legacy_unknown` observations with saved Jev judgments. It queried only
+collector/status/model aggregate fields; no source text, request bodies,
+provider logs, credentials, or billing records were inspected, and the
+database was not modified. The current default database's lineage to the
+previously stopped 8794 process is not confirmed. The saved judgments cannot
+be treated as evidence that a rights-cleared real-source evaluation occurred,
+nor can they establish whether publisher text was transmitted or what was
+billed. The current code quarantine is recorded in
+`2026-09-28-legacy-source-quarantine.md`.

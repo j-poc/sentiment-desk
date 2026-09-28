@@ -43,14 +43,17 @@ are recorded as complete for this iteration. The active attention state is
 `awaiting_authority`: the authorized TypeSafe account owner and applicable
 source-rights owners must establish permitted use, retention, telemetry,
 billing, and an approved request/cost ceiling; a valid SEC User-Agent contact
-and independent human reviewers are also required. No source/model requests
-are made while those facts are absent. Resume with the real, rights-cleared SEC
-cohort and blinded labels only after those gates and the available budget are
-documented. Then execute the frozen real-source evaluator, verify the live
-pending-to-scored UI path, and re-evaluate the remaining coverage/release gates.
-The exhaustive source-coverage review and historical TypeSafe usage
-reconciliation are still open. Opportunity Radar stays downstream until
-Sentiment Desk passes its operational gates.
+and independent human reviewers are also required. This goal will not issue
+new source/model requests while those facts are absent. A later read-only
+aggregate audit found legacy unknown-source rows with saved Jev judgments in
+the default local database; their original payloads and billing history remain
+unreviewed and they do not count as controlled quality evidence. Resume with
+the real, rights-cleared SEC cohort and blinded labels only after those gates
+and the available budget are documented. Then execute the frozen real-source
+evaluator, verify the live pending-to-scored UI path, and re-evaluate the
+remaining coverage/release gates. The exhaustive source-coverage review and
+historical TypeSafe usage reconciliation are still open. Opportunity Radar
+stays downstream until Sentiment Desk passes its operational gates.
 
 ## User and outcome
 
