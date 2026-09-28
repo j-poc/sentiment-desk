@@ -83,3 +83,24 @@ recorded rights, account, budget, and independent-label gates are resolved.
 The temporary server remains on `127.0.0.1:8794` with
 `EXTERNAL_REQUESTS_ENABLED=false`, bound to loopback and using the isolated
 copy above. It does not update or serve from the original local database.
+
+## Follow-up audit and record refresh — 2026-09-28
+
+- A fresh readiness review raised a possible Jev daily-cap default mismatch.
+  Code inspection verified `100` and `400_000` are validation maxima passed
+  into `boundedNonNegativeInt`, not fallbacks: an absent environment value
+  resolves to zero, and dispatch requires both limits to be positive. Added a
+  config regression for missing values, bounded values, and invalid limits;
+  no runtime cap behavior changed and no Jev request was made.
+- Corrected stale acceptance evidence that said the active process predated
+  the quarantine patch. The current record now points to the later controlled
+  offline run and keeps provenance status partial because the default database
+  still has legacy rows with unknown origin and model-use history. Wording now
+  accurately identifies the test DB as an isolated SQLite backup copy.
+- Current `/api/health` readback from the loopback offline process reported
+  `externalRequestsEnabled=false`, Jev disabled with zero successes/failures,
+  and source/quote pollers disabled. The network guard log remained empty.
+- Verification after the regression and record edits: **151 tests passed
+  across 24 files**, `npm run typecheck`, `npm run build`, JSON parsing, and
+  `git diff --check` passed. Vite retained its existing 531.60 kB chunk-size
+  advisory. No source, model, or external provider request was made.

@@ -16,10 +16,10 @@ const int = (v: string | undefined, fallback: number) => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 };
 
-const boundedNonNegativeInt = (v: string | undefined, maximum: number) => {
+export function boundedNonNegativeInt(v: string | undefined, maximum: number): number {
   const n = Number(v);
   return Number.isSafeInteger(n) && n >= 0 && n <= maximum ? n : 0;
-};
+}
 
 const scoreableCollectorSchema = z.enum([
   "google_news_rss",

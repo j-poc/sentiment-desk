@@ -33,7 +33,7 @@ document and body widths at 390px. Screenshots are kept locally in
 `output/playwright/2026-09-28-offline-drawer-chart.png`, and the earlier
 `2026-09-28-offline-saved-data-mobile.png`.
 
-The latest `npm test` passes 150 tests across 24 files; typecheck and production
+The latest `npm test` passes 151 tests across 24 files; typecheck and production
 build pass, with the existing Vite chunk-size advisory. The failed-row drawer
 now hides retry controls until both external requests and Jev are enabled, and
 its health-state helper has direct regression coverage. An independent
@@ -82,7 +82,7 @@ backup of the local database, with all external requests disabled. It is a
 saved-data inspection session, not a live collector or Jev runtime. Failed-row
 retry actions are hidden until health confirms both Jev and external requests
 are enabled. The original database was not changed. This checkpoint passes
-150 tests across 24 files, typecheck, production build, the named loopback-only
+151 tests across 24 files, typecheck, production build, the named loopback-only
 browser check, and an independent read-only retry-gating review.
 
 ## User and outcome
