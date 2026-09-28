@@ -12,6 +12,16 @@ export interface GdeltArticle {
   seenAt: number | null;
 }
 
+export class GdeltHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs?: number,
+  ) {
+    super(`GDELT HTTP ${status}`);
+    this.name = "GdeltHttpError";
+  }
+}
+
 interface GdeltResponse {
   articles?: Array<{
     url?: string;
@@ -38,6 +48,19 @@ function parseSeenDate(raw: string | undefined): number {
   return Number.isFinite(t) ? t : NaN;
 }
 
+function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  const header = value?.trim();
+  if (!header) return undefined;
+  if (/^\d+$/.test(header)) {
+    const delayMs = Number(header) * 1_000;
+    return Number.isSafeInteger(delayMs) ? delayMs : undefined;
+  }
+  const retryAt = Date.parse(header);
+  if (!Number.isFinite(retryAt)) return undefined;
+  const delayMs = Math.max(0, retryAt - now);
+  return Number.isSafeInteger(delayMs) ? delayMs : undefined;
+}
+
 export async function fetchGdeltArticles(
   query: string,
   timeoutMs = 15_000,
@@ -55,7 +78,10 @@ export async function fetchGdeltArticles(
     headers: { "user-agent": "Mozilla/5.0", accept: "application/json" },
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!res.ok) throw new Error(`GDELT HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 429) throw new GdeltHttpError(res.status, parseRetryAfter(res.headers.get("retry-after")));
+    throw new GdeltHttpError(res.status);
+  }
   const text = await res.text();
   // GDELT occasionally returns HTML error pages; fail loudly but safely.
   if (text.trim().startsWith("<")) throw new Error("GDELT returned non-JSON body");

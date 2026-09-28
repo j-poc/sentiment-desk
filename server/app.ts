@@ -97,6 +97,8 @@ export function createApp(deps: AppDeps): Hono {
         return c.json({ error: "mention_not_retryable" }, 409);
       case "jev_unavailable":
         return c.json({ error: "jev_not_configured" }, 503);
+      case "budget_exhausted":
+        return c.json({ error: "jev_daily_budget_exhausted" }, 429);
       default: {
         const exhaustive: never = result;
         return c.json({ error: String(exhaustive) }, 500);

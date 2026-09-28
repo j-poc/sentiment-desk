@@ -4,10 +4,10 @@ Sentiment Desk is a private, single-user research product that runs against live
 public sources. The repository is visible for inspection and is not a hosted
 multi-user data service.
 
-Every eligible headline or post that touches a watchlisted company is judged by
-**Jev** (TypeSafe AI System One) against one fixed, published rubric when a
-`TYPESAFE_API_KEY` is configured. Without that key, live collection continues
-and mentions stay unscored.
+**Jev** (TypeSafe AI System One) is the per-item sentiment and event judge and
+uses one fixed rubric. Live items stay pending by default. A key alone never
+starts scoring: dispatch also requires an explicit source-collector allowlist
+and finite daily request and request-body-byte limits.
 
 The core idea is the live "BS meter" pattern: the same structured Jev judgment
 for every item, with the source attached. It is a judgment, not a claim of
@@ -29,10 +29,11 @@ fact-checking.
   watchlist, and selected-company header. Price charts plot only actual
   provider observations inside the selected time window; missing periods are
   left empty and an out-of-window latest quote is never carried forward.
-- **Judgment**: Jev scoring starts when `TYPESAFE_API_KEY` is present. For a
-  local Node run, the app also checks `~/.newsjack/.env` unless the variable is
+- **Judgment**: Jev dispatch requires `TYPESAFE_API_KEY`, an explicit
+  `TYPESAFE_ALLOWED_COLLECTORS` value, and positive finite daily limits. Local
+  Node also checks `~/.newsjack/.env` for the key unless the variable is
   explicitly set empty; Docker Compose passes values from this project’s
-  `.env` only. Without a key, real observations are still collected and remain
+  `.env` only. A key without the remaining controls leaves every observation
   pending. Existing judgments are not re-scored on startup because the rubric
   changes.
 
@@ -75,9 +76,20 @@ permission from the copyright holder before doing so.
 
 ```bash
 npm install
-cp .env.example .env       # add TYPESAFE_API_KEY to go live on judgment
-npm run dev                # live sources + live quotes on :8787
+cp .env.example .env
 npm run dev:web            # Vite dev UI on :5173 (proxies /api)
+```
+
+To enable Jev only after confirming the exact source and account terms, set the
+key, allowed collector IDs, and both finite daily limits in `.env`. Supported
+collector IDs are `google_news_rss`, `yahoo_finance_rss`, `gdelt_doc_api`,
+`sec_edgar`, `finnhub`, `reddit`, and `x`. The request-byte cap conservatively
+bounds the serialized input volume; the stored cost estimate still uses
+provider-reported input tokens. Hard maxima are 100 request attempts and
+400,000 serialized bytes per UTC day. No source is allowed by default.
+
+```bash
+npm run dev                # live sources + live quotes on :8787
 ```
 
 Production:
@@ -91,9 +103,10 @@ npm start                  # one process serves API + UI on :8787
 
 Docker Compose builds the server and dashboard from source, starts the live
 news and market-data collectors, and stores SQLite history in a named volume.
-No API key is required to start. Add your own `TYPESAFE_API_KEY` to `.env` to
-enable Jev scoring; without it, real stories are collected but remain pending.
-Optional Finnhub, Reddit, and X keys enable those additional sources.
+No API key is required to start. Jev remains disabled unless its key, explicit
+collector allowlist, and finite daily budgets are configured. Optional
+Finnhub, Reddit, and X keys enable those additional collectors; their use and
+forwarding rights must be verified separately.
 
 ```bash
 docker compose up --build
@@ -127,11 +140,14 @@ its temporary volume.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | — | Jev scoring; local Node also checks `~/.newsjack/.env`. Set an explicit empty value to disable fallback and keep live items pending. |
+| `TYPESAFE_API_KEY` | — | Jev credentials; local Node also checks `~/.newsjack/.env`. A key alone does not enable scoring. Set an explicit empty value to disable fallback. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
+| `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated, source-specific Jev admission list; no collectors allowed by default |
+| `TYPESAFE_MAX_REQUESTS_PER_DAY` | `0` | hard cap on Jev request attempts per UTC day; `0` disables dispatch |
+| `TYPESAFE_MAX_REQUEST_BYTES_PER_DAY` | `0` | hard cap on serialized Jev input bytes reserved per UTC day; `0` disables dispatch |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |
-| `SEC_USER_AGENT` | generic research default | personalize (name + email) for long unattended runs |
+| `SEC_USER_AGENT` | empty (SEC disabled) | required descriptive SEC User-Agent with operator contact information |
 | `POLL_SEC_SECONDS` | `90` | EDGAR submissions poll cadence |
 | `POLL_GDELT_SECONDS` | `300` | GDELT breadth poll cadence |
 | `POLL_RSS_SECONDS` | `30` | news poll cadence |
@@ -142,7 +158,7 @@ its temporary volume.
 | `BACKFILL_DAYS` | `5` | Finnhub company-news backfill window |
 | `RSS_CONCURRENCY` | `4` | concurrent RSS requests |
 | `INDICES` | `SPY,QQQ,^VIX` | context rows on the tape (never scored) |
-| `SCORE_CONCURRENCY` | `6` | parallel Jev calls |
+| `SCORE_CONCURRENCY` | `6` | maximum concurrent Jev calls after source and budget admission |
 | `DB_PATH` | `./data/desk.db` | SQLite file |
 | `COMPANIES_PATH` | `./config/companies.json` | watchlist |
 

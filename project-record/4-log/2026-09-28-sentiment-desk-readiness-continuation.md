@@ -154,3 +154,83 @@ audited.
 Local hardening is not equivalent to 10/10 release readiness. Rights,
 retention, rejected-request billing, real-source labeled quality, and the
 source coverage gaps remain separate gates.
+
+## Autonomous continuation after checkpoint 13dd3b9
+
+### Completed local safeguards
+
+- `PASS` — GDELT stops its current company sweep on the first HTTP 429 and
+  persists a source-wide cooldown across restarts. It honors `Retry-After`,
+  otherwise uses bounded exponential backoff, creates no synthetic delivery
+  during cooldown, and clears the failure state after a successful resumed
+  request. Deterministic tests cover sweep termination, restart, expiry,
+  recovery, corrupt stored cooldown, and backoff limits.
+- `PASS` — Jev stays off unless a key, explicit per-source allowlist, and both
+  finite UTC-day budgets are configured. Ingestion, pending drains, retry
+  scheduling, and operator retry enforce admission. The maximum is 100
+  request attempts and 400,000 serialized input bytes per day. Budget
+  reservation and row claiming are atomic; exhausted or corrupt budgets fail
+  closed and keep real evidence pending. No provider request was made.
+- `PASS` — SEC EDGAR stays disabled unless `SEC_USER_AGENT` contains contact
+  information within the configured length bound; no generic fallback remains.
+- `PASS` — full local verification after these changes: 106 tests across 18
+  files, TypeScript typecheck, production build, and `git diff --check`.
+- `BLOCKED ON EXTERNAL AUTHORITY` — a narrow SEC-only evaluation is potentially
+  supportable under SEC's first-party reuse statement, after the operator
+  configures an identifying contact User-Agent and the authorized TypeSafe
+  account owner verifies the applicable usage limit, retention/telemetry
+  configuration, auto-refill, and billing behavior. TypeSafe's current MCA
+  states credits are consumed per submitted input and provides no reviewed
+  exception for 429/529; account-owner verification is still required.
+- `BLOCKED ON SOURCE RIGHTS` — Google News, Yahoo Finance, GDELT-linked
+  publisher content, Finnhub, Reddit, and X do not have documented permission
+  in the current records for this app's storage/display/model-forwarding path.
+  No publisher text will be sent to Jev while this remains unresolved.
+- `NOT RUN` — real-source classifier quality. The 96-case, two-reviewer,
+  development/holdout proposal from the current Jev audit is planning evidence
+  only; no real items were sampled or dispatched.
+- `DEFERRED` — no new Opportunity Radar work until the operational desk,
+  source admissions, and real-source Jev quality gates pass.
+
+### Findings and boundaries
+
+- `source_rights_audit` reviewed current official SEC, Google, Yahoo, GDELT,
+  Finnhub, Reddit, X, and TypeSafe sources. It found a conditional SEC reuse
+  basis for public filing content, but not for publisher news text. The current
+  rights, billing, and configured User-Agent conditions are recorded in
+  `project-record/3-project-specs/live-data-etl.json`.
+- `jev_readiness_audit` confirmed the app presently drains up to 5,000 pending
+  records at startup and drains again every 15 seconds when a TypeSafe key is
+  present, with a default concurrency of six. Do not set that key in the live
+  environment or invoke the real pipeline as a test. Existing tests and
+  isolated fictional fixtures remain available for code-path verification.
+- The expanded gates were added to
+  `project-record/3-project-specs/sentiment-desk-completion.md` before
+  implementation. The local GDELT cooldown and Jev admission implementation
+  gates now pass; real-source quality, source rights/account authorization,
+  and historical provider-usage reconciliation remain unrun or externally
+  blocked.
+
+## Current checkpoint result
+
+The implementation checkpoint is ready to push on the existing
+`codex/real-data-rebuild` branch. The UI/chart workflow and real-data-only
+runtime also passed a fresh production-build browser smoke at
+`http://127.0.0.1:8794/`. A SQLite backup of the verified real-only database
+was used so the existing application database stayed untouched. The UI showed
+real pending source rows, and selecting Adobe updated the company and drew its
+real Yahoo 7D price history. The weekend 24H window remained empty. The
+isolated database contained 2,281 source-backed observations (1,933
+`google_news_rss`, 347 `yahoo_finance_rss`, and 1 `sec_edgar`), zero
+`demo_simulation` observations, 2,281 pending judgments, and 1,604 real price
+points. GDELT reported HTTP 429 and its persisted cooldown remained visible;
+Google News RSS, Yahoo Finance RSS, and Yahoo quotes delivered during the
+smoke. The temporary server was stopped after verification to avoid continued
+polling. Jev was explicitly disabled, all model usage remained zero, and no
+real-source text was sent to Jev. Optional X, Reddit, Finnhub, and SEC
+collectors were disabled for this smoke. No demo or synthetic observations
+were introduced into the application.
+
+The targeted code tests made no provider calls. The separate browser smoke
+above intentionally exercised the live public-source UI path; its counts and
+outcomes are limited to that temporary database and date.

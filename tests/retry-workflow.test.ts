@@ -70,6 +70,8 @@ function setup(judge: (state: JevState) => Promise<{
     engineLabel: "jev-latest",
     inputPricePerMTok: 0.042,
     concurrency: 1,
+    allowedCollectors: new Set(["google_news_rss"]),
+    dailyBudget: { utcDay: () => "2026-09-28", maxRequests: 100, maxRequestBytes: 1_000_000 },
   });
   const market = new MarketData({ companies: [company], indices: [], hub, health, db });
   const app = createApp({

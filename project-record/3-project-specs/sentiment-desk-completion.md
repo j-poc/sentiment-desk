@@ -2,20 +2,22 @@
 
 Status (2026-09-28): the application runtime rejects synthetic inputs, excludes
 legacy simulation records from user-facing reads, aggregates, retries, and
-usage, and no longer contains a demo-data mode. A final post-build restart
-verified 1,496 real source-backed records and zero simulated observations or
-judgments in the isolated SQLite database; with Jev explicitly disabled, all
-1,496 remained pending and model usage/failures were zero. The live browser
-showed pending, source-attributed mentions and Adobe's varying 7D Yahoo chart;
-the 24-hour weekend window remained honestly empty, and Adobe→NVIDIA→Adobe
-selection had already passed in the fresh-start run. Quotes older than 15
+usage, and no longer contains a demo-data mode. A later production-build
+browser smoke used a backup of the verified real-only SQLite database and
+observed 2,281 real source-backed records, zero simulated observations, and
+2,281 pending judgments while Jev remained disabled with zero usage. The UI
+showed pending source-attributed mentions; selecting Adobe updated the
+selected company and drew its real Yahoo 7D chart, while the weekend 24H
+window remained honestly empty. GDELT HTTP 429 was surfaced as a source error;
+the temporary server was stopped after verification. Quotes older than 15
 minutes show source age in the tape, watchlist, and header. `npm test` passes
-93 tests across 15 files; typecheck and production build pass. Generated
+106 tests across 18 files; typecheck and production build pass. Generated
 examples stay isolated to tests and frozen evaluations; they are not
 application data or real-source model-quality evidence. This is not a 10/10
 release: publisher rights, TypeSafe retention/billing details, source coverage,
-and real-source classifier quality remain open. Final restart evidence:
-`project-record/4-log/2026-09-28-real-data-only-runtime.md`.
+and real-source classifier quality remain open. Evidence:
+`project-record/4-log/2026-09-28-real-data-only-runtime.md` and
+`project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`.
 
 ## User and outcome
 
@@ -148,10 +150,26 @@ does not generate opportunity hypotheses or value-chain links.
      error, HTTP 429 remains a rate-limit failure, and valid ArticleList JSON
      normalizes. The current live source state shows HTTP 429; no post-fix live
      HTTP-200 non-JSON response was observed.
+   - Cooldown result (2026-09-28): `PASS` — the poller stops the current
+     company sweep on its first HTTP 429, persists a source-wide retry time,
+     honors `Retry-After`, applies bounded exponential fallback, skips without
+     emitting fake deliveries, and resumes cleanly after expiry. Tests cover
+     restart persistence, corrupt cooldown state, recovery, and reset after
+     success. See `tests/gdelt-poller.test.ts` and
+     `project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`.
+   - Additional hard gate: a GDELT HTTP 429 stops the current company sweep,
+     persists one source-wide next-attempt time across process restarts,
+     honors a valid `Retry-After` value, and otherwise uses bounded exponential
+     cooldown no shorter than the configured poll interval. Cooldown skips do
+     not create empty/success deliveries or article rows. A successful resumed
+     request clears the consecutive-failure state. Deterministic tests must
+     prove sweep termination, bounded growth, restart persistence, cooldown
+     expiry, successful recovery, and continued operation of unrelated
+     collectors.
 6. Desktop and narrow-screen flows let the researcher select a company, read
    the score/index, inspect the source and Jev rubric, and understand data
    health without hidden overflow or dead controls.
-7. `npm test` (93 tests across 15 files), typecheck, production build, fresh
+7. `npm test` (106 tests across 18 files), typecheck, production build, fresh
    keyless local start, 390px and 1280px browser passes, accessible mention
    drawer interaction, SSE shutdown, and isolated Docker persistence smoke
    pass. The source-data contract records what these checks prove and what
@@ -344,6 +362,38 @@ does not generate opportunity hypotheses or value-chain links.
       deliveries continued. The null-judge regression verifies there is no
       score attempt or synthetic fallback. See
       `project-record/4-log/2026-09-28-real-data-only-runtime.md`.
+
+13. A configured Jev credential alone never authorizes forwarding every stored
+    publisher item. The runtime fails closed unless the operator explicitly
+    configures an allowed collector set and a finite request budget; new
+    observations, pending drains, retries, and recovery paths all enforce the
+    same admission policy. The default allowlist is empty. No pending backlog
+    drains on startup or by timer while no collector is admitted. Budget
+    exhaustion leaves source evidence pending and visible, without fabricated
+    failures. A source-specific admission setting is an operator assertion,
+    not proof of legal rights; record the exact source basis and account-use
+    authorization separately before a real-source Jev quality run.
+    - Current source finding (2026-09-28): the review found a first-party reuse
+      statement for public SEC EDGAR filing content, conditional on a
+      descriptive contact User-Agent, compliant request rate, and
+      owner-authorized TypeSafe account use. Google News RSS, Yahoo endpoints
+      and publisher snippets, GDELT-linked publisher text, and optional
+      X/Reddit/Finnhub content remain unapproved for Jev forwarding. TypeSafe
+      documentation does not establish that rejected 429/529 requests are
+      free; treat submitted requests as potentially billable.
+    - Current result: `NOT RUN` — no real source content was sent to Jev.
+      Real-source label quality, account billing behavior, TypeSafe retention
+      configuration, and non-SEC source rights remain unverified.
+    - Admission implementation result (2026-09-28): `PASS` — Jev dispatch is
+      off by default and requires a key, explicit collector allowlist, and
+      finite per-UTC-day request/body-byte caps. A SQLite transaction claims
+      the eligible real row and reserves its budget atomically; duplicate or
+      hidden rows cannot spend budget. Retry, scheduled drain, and ingestion
+      use the same admission rules. Hard maxima are 100 attempts and 400,000
+      serialized input bytes per day. Tests cover default-off behavior,
+      allowlist enforcement, concurrent claims, restart persistence, corrupt
+      counters, and exhausted budgets. This implementation does not clear
+      source rights or account authorization and no real source was sent.
 
 ## Phase 2 acceptance criteria
 

@@ -152,7 +152,7 @@ const retryRowSchema = z.object({
   score_usage_check_required: z.number(),
 });
 
-interface MentionRow {
+export interface MentionRow {
   id: string;
   company_id: string;
   source_name: string;
@@ -203,6 +203,11 @@ interface MentionRow {
   score_retry_at: number | null;
   score_usage_check_required: number;
 }
+
+export type BudgetedScoreClaim =
+  | { kind: "claimed"; row: MentionRow }
+  | { kind: "budget_exhausted" }
+  | { kind: "not_claimed" };
 
 export interface SourceDeliveryInput {
   collector: CollectorId;
@@ -553,6 +558,99 @@ export class Desk {
     }
   }
 
+  claimForScoringWithBudget(input: {
+    id: string;
+    now: number;
+    allowedCollectors: readonly CollectorId[];
+    utcDay: string;
+    requestBytes: number;
+    maxRequests: number;
+    maxRequestBytes: number;
+  }): BudgetedScoreClaim {
+    if (input.allowedCollectors.length === 0) return { kind: "not_claimed" };
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(input.utcDay) ||
+      !Number.isSafeInteger(input.requestBytes) || input.requestBytes <= 0 ||
+      !Number.isSafeInteger(input.maxRequests) || input.maxRequests <= 0 ||
+      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0
+    ) return { kind: "budget_exhausted" };
+
+    const collectorSlots = input.allowedCollectors.map(() => "?").join(", ");
+    const requestKey = `jev:budget:${input.utcDay}:requests`;
+    const bytesKey = `jev:budget:${input.utcDay}:request-bytes`;
+    const closedKey = `jev:budget:${input.utcDay}:closed`;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const candidate = this.db.prepare(`SELECT id FROM mentions
+        WHERE id = ? AND ${REAL_MENTION_FILTER}
+          AND collector IN (${collectorSlots})
+          AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`)
+        .get(input.id, ...input.allowedCollectors, input.now);
+      if (!candidate) {
+        this.db.exec("COMMIT");
+        return { kind: "not_claimed" };
+      }
+      const closed = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(closedKey) as
+        | { value: string }
+        | undefined;
+      if (closed && closed.value !== "0") {
+        this.db.exec("COMMIT");
+        return { kind: "budget_exhausted" };
+      }
+
+      const readCounter = (key: string): number | null => {
+        const row = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(key) as
+          | { value: string }
+          | undefined;
+        if (!row) return 0;
+        const value = Number(row.value);
+        return Number.isSafeInteger(value) && value >= 0 ? value : null;
+      };
+      const requests = readCounter(requestKey);
+      const requestBytes = readCounter(bytesKey);
+      if (requests == null || requestBytes == null || requests + 1 > input.maxRequests) {
+        this.db.exec("COMMIT");
+        return { kind: "budget_exhausted" };
+      }
+      if (requestBytes + input.requestBytes > input.maxRequestBytes) {
+        this.db.prepare(
+          "INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'",
+        ).run(closedKey);
+        this.db.exec("COMMIT");
+        return { kind: "budget_exhausted" };
+      }
+
+      const writeCounter = this.db.prepare(
+        "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      );
+      writeCounter.run(requestKey, String(requests + 1));
+      writeCounter.run(bytesKey, String(requestBytes + input.requestBytes));
+      const result = this.db.prepare(`UPDATE jev_judgments SET status = 'scoring',
+          score_attempts = score_attempts + 1, score_retry_at = NULL, score_error = NULL,
+          score_usage_check_required = 0
+        WHERE observation_id = ? AND observation_id IN (
+          SELECT id FROM mentions WHERE ${REAL_MENTION_FILTER}
+            AND collector IN (${collectorSlots})
+        ) AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`)
+        .run(input.id, ...input.allowedCollectors, input.now);
+      if (Number(result.changes) !== 1) {
+        this.db.exec("ROLLBACK");
+        return { kind: "not_claimed" };
+      }
+      const row = this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`)
+        .get(input.id) as MentionRow | undefined;
+      if (!row) {
+        this.db.exec("ROLLBACK");
+        return { kind: "not_claimed" };
+      }
+      this.db.exec("COMMIT");
+      return { kind: "claimed", row };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
   recordDelivery(delivery: SourceDeliveryInput): void {
     if (delivery.collector === "demo_simulation") throw new Error("Synthetic deliveries cannot be recorded by the application");
     this.db.prepare(
@@ -784,13 +882,16 @@ export class Desk {
       .all(ticker, sinceMs) as unknown as Array<{ t: number; price: number }>;
   }
 
-  pendingIds(limit: number): string[] {
+  pendingIds(limit: number, allowedCollectors: readonly CollectorId[]): string[] {
+    if (allowedCollectors.length === 0) return [];
+    const collectorSlots = allowedCollectors.map(() => "?").join(", ");
     return (
       this.db.prepare(`SELECT id FROM mentions
         WHERE ${REAL_MENTION_FILTER}
+          AND collector IN (${collectorSlots})
           AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))
         ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC LIMIT ?`)
-        .all(Date.now(), limit) as unknown as Array<{ id: string }>
+        .all(...allowedCollectors, Date.now(), limit) as unknown as Array<{ id: string }>
     ).map((r) => r.id);
   }
 
@@ -851,6 +952,26 @@ export class Desk {
         "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       )
       .run(key, value);
+  }
+
+  remainingJevRequests(input: { utcDay: string; maxRequests: number; maxRequestBytes: number }): number {
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(input.utcDay) ||
+      !Number.isSafeInteger(input.maxRequests) || input.maxRequests <= 0 ||
+      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0
+    ) return 0;
+    const closed = this.getKv(`jev:budget:${input.utcDay}:closed`);
+    if (closed !== undefined && closed !== "0") return 0;
+    const requests = this.getKv(`jev:budget:${input.utcDay}:requests`);
+    const requestBytes = this.getKv(`jev:budget:${input.utcDay}:request-bytes`);
+    const usedRequests = requests === undefined ? 0 : Number(requests);
+    const usedBytes = requestBytes === undefined ? 0 : Number(requestBytes);
+    if (
+      !Number.isSafeInteger(usedRequests) || usedRequests < 0 ||
+      !Number.isSafeInteger(usedBytes) || usedBytes < 0 ||
+      usedBytes >= input.maxRequestBytes
+    ) return 0;
+    return Math.max(0, input.maxRequests - usedRequests);
   }
 
   logEvent(level: "info" | "warn" | "error", source: string, message: string): void {

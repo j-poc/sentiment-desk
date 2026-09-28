@@ -2,7 +2,7 @@ import type { Company } from "./types.js";
 import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Pipeline } from "./pipeline.js";
-import { fetchGdeltArticles } from "./sources/gdelt.js";
+import { fetchGdeltArticles, GdeltHttpError, type GdeltArticle } from "./sources/gdelt.js";
 import { fetchEarningsHistory, fetchFinnhubNews, fetchUpcomingEarnings, latestSurprise } from "./sources/finnhub.js";
 import { getRedditToken, searchReddit, type RedditClient } from "./sources/reddit.js";
 import { tierForHost } from "./sources/tiers.js";
@@ -310,18 +310,38 @@ export function startGdeltPoller(deps: {
   db: Desk;
   health: HealthTracker;
   intervalSeconds: number;
+  fetchArticles?: (query: string) => Promise<GdeltArticle[]>;
+  now?: () => number;
+  pause?: (ms: number) => Promise<void>;
 }): SchedulerControl {
+  const intervalMs = deps.intervalSeconds * 1000;
+  const maxBackoffMs = 60 * 60 * 1000;
+  const retryAtKey = "gdelt:rate-limit:retry-at";
+  const failureCountKey = "gdelt:rate-limit:consecutive";
+  const now = deps.now ?? Date.now;
+  const fetchArticles = deps.fetchArticles ?? fetchGdeltArticles;
+  const pause = deps.pause ?? sleep;
   let running = false;
   const tick = async (): Promise<void> => {
     if (running) return;
     running = true;
     try {
+      const persistedRetryAt = deps.db.getKv(retryAtKey);
+      const retryAt = persistedRetryAt === undefined ? 0 : Number(persistedRetryAt);
+      if (persistedRetryAt !== undefined && (!Number.isSafeInteger(retryAt) || retryAt < 0)) {
+        const safeRetryAt = now() + maxBackoffMs;
+        deps.db.setKv(retryAtKey, String(safeRetryAt));
+        deps.db.logEvent("warn", "gdelt", "invalid persisted rate-limit cooldown; delaying requests for one hour");
+        return;
+      }
+      if (retryAt > now()) return;
+
       for (const company of deps.companies) {
-        const startedAt = Date.now();
+        const startedAt = now();
         let articles: Awaited<ReturnType<typeof fetchGdeltArticles>> = [];
         try {
           const query = `"${company.name}" OR "${company.ticker}"`;
-          articles = await fetchGdeltArticles(query);
+          articles = await fetchArticles(query);
           let added = 0;
           let dropped = 0;
           for (const a of articles) {
@@ -365,6 +385,8 @@ export function startGdeltPoller(deps: {
             normalizedItems: articles,
           });
           deps.health.recordRss(true);
+          deps.db.setKv(retryAtKey, "0");
+          deps.db.setKv(failureCountKey, "0");
           if (added > 0) deps.db.logEvent("info", "gdelt", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `gdelt ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
@@ -377,8 +399,24 @@ export function startGdeltPoller(deps: {
           });
           deps.health.recordRss(false, `gdelt ${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "gdelt", `${company.ticker}: ${message}`);
+          if (err instanceof GdeltHttpError && err.status === 429) {
+            const previousCount = Number(deps.db.getKv(failureCountKey) ?? "0");
+            const consecutive429 = Number.isSafeInteger(previousCount) && previousCount >= 0
+              ? previousCount + 1
+              : 1;
+            const fallbackMs = Math.min(maxBackoffMs, intervalMs * 2 ** Math.min(consecutive429 - 1, 16));
+            const requestedMs = err.retryAfterMs === undefined
+              ? fallbackMs
+              : Math.max(intervalMs, err.retryAfterMs);
+            const delayMs = Math.max(intervalMs, requestedMs);
+            deps.db.setKv(failureCountKey, String(consecutive429));
+            deps.db.setKv(retryAtKey, String(now() + delayMs));
+            // GDELT throttling is source-wide; further company requests in this
+            // sweep would repeat the same rejected call and worsen the limit.
+            break;
+          }
         }
-        await sleep(2_000);
+        await pause(2_000);
       }
     } finally {
       running = false;

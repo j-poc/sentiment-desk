@@ -8,7 +8,7 @@ import { Hub } from "../server/hub.js";
 import { JevError } from "../server/jev.js";
 import { Pipeline } from "../server/pipeline.js";
 import { EVENT_TYPES, TAKEAWAY_KEYS } from "../server/rubric.js";
-import type { Company, JevState, RawMention } from "../server/types.js";
+import type { CollectorId, Company, JevState, RawMention } from "../server/types.js";
 
 const directories: string[] = [];
 const company: Company = {
@@ -41,7 +41,13 @@ function fixtureAnswers(): Record<string, unknown> {
   };
 }
 
-function setup(judge: ((state: JevState) => Promise<{ answers: Record<string, unknown>; model: string; inputTokens: number; outputTokens: number; latencyMs: number }>) | null) {
+function setup(
+  judge: ((state: JevState) => Promise<{ answers: Record<string, unknown>; model: string; inputTokens: number; outputTokens: number; latencyMs: number }>) | null,
+  options: {
+    allowedCollectors?: ReadonlySet<CollectorId>;
+    dailyBudget?: { utcDay: () => string; maxRequests: number; maxRequestBytes: number };
+  } = {},
+) {
   const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-pipeline-"));
   directories.push(directory);
   const db = new Desk(join(directory, "desk.db"));
@@ -50,6 +56,10 @@ function setup(judge: ((state: JevState) => Promise<{ answers: Record<string, un
   const pipeline = new Pipeline({
     db, judge, hub: new Hub(), health,
     engineLabel: "jev-latest", inputPricePerMTok: 0.042, concurrency: 1,
+    allowedCollectors: options.allowedCollectors ?? new Set(["google_news_rss"]),
+    dailyBudget: options.dailyBudget ?? {
+      utcDay: () => "2026-09-28", maxRequests: 100, maxRequestBytes: 1_000_000,
+    },
   });
   const source: RawMention = {
     companyId: company.id, kind: "rss", sourceName: "Reuters", sourceUrl: "https://reuters.com/acme",
@@ -73,6 +83,65 @@ describe("Jev pipeline recovery", () => {
       expect(pending.error).toBeNull();
       expect(pipeline.drainPending(10)).toBe(0);
       expect(health.snapshot().jev).toMatchObject({ enabled: false, ok: 0, fail: 0, lastError: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps observations pending when their collector is outside the explicit Jev allowlist", async () => {
+    let calls = 0;
+    const { db, pipeline, source } = setup(async () => {
+      calls += 1;
+      return { answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
+    }, { allowedCollectors: new Set(["sec_edgar"]) });
+    try {
+      pipeline.ingest(source);
+      expect(pipeline.drainPending(10)).toBe(0);
+      await pipeline.waitForIdle();
+      expect(calls).toBe(0);
+      expect(db.getKv("jev:budget:2026-09-28:requests")).toBeUndefined();
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]).toMatchObject({
+        status: "pending",
+        score: null,
+        error: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not attempt to retry an ID hidden by the real-source view", async () => {
+    const { db, pipeline } = setup(async () => ({
+      answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }));
+    const requeue = vi.spyOn(db, "requeueFailed");
+    try {
+      expect(pipeline.retryFailed("hidden-legacy-row", true)).toBe("not_retryable");
+      expect(requeue).not.toHaveBeenCalled();
+      expect(db.getKv("jev:budget:2026-09-28:requests")).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("leaves an admitted observation pending when the finite request budget is exhausted", async () => {
+    let calls = 0;
+    const { db, pipeline, source } = setup(async () => {
+      calls += 1;
+      return { answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
+    }, {
+      dailyBudget: { utcDay: () => "2026-09-28", maxRequests: 0, maxRequestBytes: 0 },
+    });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      expect(calls).toBe(0);
+      expect(db.getKv("jev:budget:2026-09-28:requests")).toBeUndefined();
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]).toMatchObject({
+        status: "pending",
+        score: null,
+        error: null,
+      });
     } finally {
       db.close();
     }

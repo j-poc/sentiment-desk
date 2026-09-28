@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import type { Company } from "./types.js";
+import type { CollectorId, Company } from "./types.js";
 
 // Node's built-in .env loader. A missing .env is fine; the process env still applies.
 try {
@@ -15,6 +15,36 @@ const int = (v: string | undefined, fallback: number) => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 };
+
+const boundedNonNegativeInt = (v: string | undefined, maximum: number) => {
+  const n = Number(v);
+  return Number.isSafeInteger(n) && n >= 0 && n <= maximum ? n : 0;
+};
+
+const scoreableCollectorSchema = z.enum([
+  "google_news_rss",
+  "yahoo_finance_rss",
+  "gdelt_doc_api",
+  "sec_edgar",
+  "finnhub",
+  "reddit",
+  "x",
+]);
+const configuredJevCollectors = z.array(scoreableCollectorSchema).parse(
+  (process.env.TYPESAFE_ALLOWED_COLLECTORS ?? "")
+    .split(",")
+    .map((collector) => collector.trim())
+    .filter(Boolean),
+) satisfies CollectorId[];
+
+export function secContactUserAgent(raw: string | undefined): string {
+  const candidate = raw?.trim() ?? "";
+  if (!candidate || candidate.length > 256 || /[\u0000-\u001f\u007f]/.test(candidate)) return "";
+  const contact = candidate.match(/[^\s@]+@[^\s@]+\.[^\s@]+/);
+  if (!contact) return "";
+  const identifier = candidate.replace(contact[0], " ").trim();
+  return identifier.length >= 3 ? candidate : "";
+}
 
 /**
  * Credential resolution, mirroring the newsjack chain: process env (which the
@@ -57,6 +87,11 @@ export const config = {
     timeoutMs: 30_000,
     /** List price per million input tokens; output is free. */
     inputPricePerMTok: 0.042,
+    /** Empty by default: credentials do not imply source/model-use permission. */
+    allowedCollectors: new Set<CollectorId>(configuredJevCollectors),
+    /** Both positive limits are required before the app can dispatch Jev inputs. */
+    maxRequestsPerDay: boundedNonNegativeInt(process.env.TYPESAFE_MAX_REQUESTS_PER_DAY, 100),
+    maxRequestBytesPerDay: boundedNonNegativeInt(process.env.TYPESAFE_MAX_REQUEST_BYTES_PER_DAY, 400_000),
   },
   xBearer: process.env.X_BEARER_TOKEN?.trim() || "",
   /** Finnhub free tier: per-symbol news + EPS surprises + earnings calendar. */
@@ -70,10 +105,10 @@ export const config = {
   pollRedditSeconds: int(process.env.POLL_REDDIT_SECONDS, 180),
   /**
    * SEC fair-access policy wants a User-Agent that identifies the requester.
-   * A generic research-desk default is used when none is set; personalize it
-   * in .env (name + email) if this desk runs unattended for long.
+   * Do not send SEC requests until the operator supplies a descriptive
+   * identifier with contact information.
    */
-  secUserAgent: process.env.SEC_USER_AGENT?.trim() || "sentiment-desk/0.3 (personal research desk)",
+  secUserAgent: secContactUserAgent(process.env.SEC_USER_AGENT),
   pollSecSeconds: int(process.env.POLL_SEC_SECONDS, 90),
   pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 30),
   /** Webhook (Discord/Slack-style JSON) pinged on fresh, high-strength events. */

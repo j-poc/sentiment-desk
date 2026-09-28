@@ -68,7 +68,7 @@ describe("Desk observation and judgment storage", () => {
       expect(db.recentVisible(10)).toEqual([]);
       expect(db.radarEvidence(company.id, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
       expect(db.radarUncounted(company.id, 0, Number.MAX_SAFE_INTEGER)).toEqual({ untimedScored: 0, unjudged: 0 });
-      expect(db.pendingIds(10)).toEqual([]);
+      expect(db.pendingIds(10, ["google_news_rss"])).toEqual([]);
       expect(db.claimForScoring(engineOnlyId, Date.now())).toBeUndefined();
       expect(db.scoredMentions(0)).toEqual([]);
       expect(db.scoredMentionEvents(0)).toEqual([]);
@@ -101,7 +101,7 @@ describe("Desk observation and judgment storage", () => {
     try {
       expect(db.requeueFailed(observationId, true)).toBe("not_retryable");
       expect(db.mentionRow(observationId)).toBeUndefined();
-      expect(db.pendingIds(10)).toEqual([]);
+      expect(db.pendingIds(10, ["google_news_rss"])).toEqual([]);
     } finally {
       db.close();
     }
@@ -304,7 +304,7 @@ describe("Desk observation and judgment storage", () => {
       expect(recovered.status).toBe("failed");
       expect(recovered.score_error).toContain("outcome is unknown");
       expect(recovered.score_retry_at).toBeNull();
-      expect(db.pendingIds(10)).toEqual([]);
+      expect(db.pendingIds(10, ["google_news_rss"])).toEqual([]);
       expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("failed");
     } finally {
       db.close();

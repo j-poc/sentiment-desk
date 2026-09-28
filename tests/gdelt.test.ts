@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchGdeltArticles } from "../server/sources/gdelt.js";
+import { fetchGdeltArticles, GdeltHttpError } from "../server/sources/gdelt.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("GDELT response boundary", () => {
@@ -24,7 +25,31 @@ describe("GDELT response boundary", () => {
   it("preserves the provider HTTP status before attempting to parse a body", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("rate limited", { status: 429 })));
 
-    await expect(fetchGdeltArticles("Apple")).rejects.toThrow("GDELT HTTP 429");
+    await expect(fetchGdeltArticles("Apple")).rejects.toMatchObject({
+      name: "GdeltHttpError",
+      message: "GDELT HTTP 429",
+      status: 429,
+    });
+  });
+
+  it("retains Retry-After seconds and HTTP dates on a 429", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "120" },
+    })));
+
+    const error = await fetchGdeltArticles("Apple").catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(GdeltHttpError);
+    expect(error).toMatchObject({ status: 429, retryAfterMs: 120_000 });
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "Mon, 28 Sep 2026 12:03:00 GMT" },
+    })));
+    const datedError = await fetchGdeltArticles("Apple").catch((value: unknown) => value);
+    expect(datedError).toMatchObject({ status: 429, retryAfterMs: 180_000 });
   });
 
   it("normalizes valid ArticleList JSON with the provider-seen timestamp", async () => {

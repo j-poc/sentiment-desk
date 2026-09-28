@@ -1,10 +1,28 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "The application runtime admits only real source observations and provider-origin Jev judgments; demo generation and the demo mode are removed, and legacy simulation rows are excluded from consumer and retry paths. The final post-build restart (runtime 2735fb88-dd14-4f9d-ab08-1a1fd18c59e9) found 1,496 real source-backed records, zero simulation observations/judgments, and all 1,496 pending with Jev explicitly off and zero usage/failures. A fresh browser displayed the real pending source rows and Adobe 7D Yahoo chart; the weekend 24H window remained empty with its source timestamp. 93 tests across 15 files, typecheck, and production build pass. GDELT is currently HTTP 429; publisher/model-use rights, TypeSafe retention/billing, exhaustive source coverage, and labeled real-source Jev quality remain open, so this is not 10/10 release-ready.",
+  "operational_status": "The application runtime admits only real source observations and provider-origin Jev judgments; demo generation and demo mode are removed, and legacy simulation rows are excluded from consumer and retry paths. A later production-build browser smoke used a backup of the verified real-only database and found 2,281 source-backed observations, zero simulation observations, and all 2,281 judgments pending while Jev was explicitly off with zero usage. The browser showed real pending source rows and selecting Adobe drew the real Yahoo 7D chart; the weekend 24H window remained empty. Google News RSS, Yahoo Finance RSS, and Yahoo quotes delivered during this smoke; GDELT returned HTTP 429 and was surfaced as a source failure. The temporary server was stopped afterward. Current verification passes 106 tests across 18 files, typecheck, and production build. GDELT 429 cooldown and Jev admission/budget safeguards pass local tests. Publisher/model-use rights, TypeSafe retention/billing, exhaustive source coverage, and labeled real-source Jev quality remain open, so this is not 10/10 release-ready.",
   "rights_review": {
     "as_of": "2026-09-28",
     "status": "open; not a legal determination",
+    "current_followup": {
+      "reviewed_at": "2026-09-28",
+      "result": "SEC EDGAR public filing content has an explicit SEC reuse statement, conditionally supporting a narrow source-specific evaluation path. This is not blanket legal clearance or operator authorization.",
+      "sec_conditions": [
+        "Configure a descriptive SEC User-Agent that identifies the operator and includes contact information.",
+        "Keep SEC request traffic at or below its published fair-access limit.",
+        "Use a TypeSafe account authorized by its owner and verify account limits, retention/telemetry configuration, and rejected-request billing before dispatch.",
+        "Prefer only the public filing metadata needed for a single bounded evaluation item; do not forward third-party publisher material."
+      ],
+      "type_safe_billing": "The current MCA says each submitted Input consumes credits and does not document a 429/529 billing exception. Treat each attempted submission, including an explicit rejection, as potentially billable until the account owner verifies otherwise.",
+      "not_cleared": [
+        "Google News RSS third-party publisher titles/snippets",
+        "Yahoo Finance RSS/article content and the exact chart endpoint contract",
+        "GDELT-linked publisher article titles/content",
+        "Finnhub, Reddit, and X content"
+      ],
+      "evidence": "Read-only official-source review by source_rights_audit agent; no files, credentials, databases, provider requests, or real content were accessed or transmitted."
+    },
     "findings": [
       {
         "source": "Google News RSS",
@@ -26,9 +44,9 @@
       },
       {
         "source": "SEC EDGAR",
-        "evidence": "SEC public API access has a fair-access policy and asks clients to identify themselves. This does not settle this product's text retention, display, or external model-processing policy; the configured application fallback User-Agent is generic.",
+        "evidence": "SEC public API access has a fair-access policy and asks clients to identify themselves. The app now disables SEC requests unless SEC_USER_AGENT contains both a non-empty operator/project identifier and contact email within the length bound. This guard does not settle project-specific retention, display, or external model-processing policy.",
         "reference": "https://www.sec.gov/about/developer-resources",
-        "action": "Use an identified User-Agent for unattended access and keep text/model-use review open."
+        "action": "Configure an identifying User-Agent with contact information; keep text-use and model-processing review open."
       },
       {
         "source": "TypeSafe Jev",
@@ -179,13 +197,13 @@
       "command": "npm run verify:jev-sanity",
       "covers": "Historical ten-case fictional sanity pilot using isolated test databases; reports only test-fixture agreement and is not real-source quality, classifier calibration, or release evidence.",
       "status": "PASS",
-      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234\u2013370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     },
     "no_synthetic_runtime": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run build; live-only browser and API readback at http://127.0.0.1:8794/",
       "covers": "No synthetic runtime admission, no legacy simulation rows in user-facing queries/aggregates/retries/usage, and real source provenance in the actual Desk UI.",
       "status": "PASS",
-      "evidence": "2026-09-28 final post-build runtime evidence in project-record/4-log/2026-09-28-real-data-only-runtime.md: read-only SQLite inspection found 1,248 google_news_rss + 247 yahoo_finance_rss + 1 sec_edgar = 1,496 source-backed records, zero demo_simulation observations, zero demo-sim judgments, and all 1,496 judgments pending. Live Adobe mentions were source-attributed RSS rows with publisher/source URL and pending status. Jev was explicitly disabled; API returned 0 usage and 0 Jev health failures. The browser showed real source rows and the real Yahoo 7D chart."
+      "evidence": "The final restart evidence in project-record/4-log/2026-09-28-real-data-only-runtime.md established real-only runtime behavior. A later browser smoke, recorded in project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md, read-only inspected the smoke database and found 1,933 google_news_rss + 347 yahoo_finance_rss + 1 sec_edgar = 2,281 source-backed observations, zero demo_simulation observations, all 2,281 judgments pending, and 1,604 real price points. Jev was explicitly disabled with zero usage; no real-source text was sent to the model. Google News RSS, Yahoo Finance RSS, and Yahoo quotes delivered during the smoke; GDELT returned HTTP 429. Adobe selection updated the header and rendered its real Yahoo 7D history. The temporary server was stopped after the smoke."
     },
     "chart_source_integrity": {
       "command": "Live API source history readback plus Codex in-app browser selection at http://127.0.0.1:8794/",
@@ -234,6 +252,24 @@
       "covers": "No unsupported claim about historical source text transmission or charges.",
       "status": "BLOCKED",
       "evidence": "The former process database, request payloads, credentials, and billing history were not inspected. The earlier aggregate showed many failures but cannot establish submitted contents or charges; see project-record/4-log/2026-09-28-legacy-runtime-and-demo-preview.md."
+    },
+    "gdelt_429_cooldown": {
+      "command": "npm test -- --reporter=dot tests/gdelt-poller.test.ts tests/gdelt.test.ts",
+      "covers": "A GDELT 429 stops the company sweep, persists a source-wide cooldown, honors Retry-After or bounded exponential fallback, creates no cooldown receipts, and recovers after expiry without affecting other collectors.",
+      "status": "PASS",
+      "evidence": "2026-09-28 current code verification: tests cover first-429 sweep stop, persisted retry time across restart, cooldown expiry and successful recovery, consecutive-failure reset, capped fallback growth, Retry-After, and corrupt persisted state failing closed. Independent readiness review found no reproducible defect. In the separate production-build browser smoke, GDELT returned HTTP 429 and the source failure was visible; cooldown/recovery behavior is established by local tests, not asserted from that live response."
+    },
+    "jev_admission_budget": {
+      "command": "npm test -- --reporter=dot tests/jev-budget.test.ts tests/pipeline.test.ts tests/retry-workflow.test.ts tests/db.test.ts",
+      "covers": "Jev dispatch requires a key, explicit source allowlist, and finite daily request and serialized input-byte budgets; reservations and claims are atomic; failed, hidden, or disallowed rows cannot bypass admission.",
+      "status": "PASS",
+      "evidence": "2026-09-28 current code verification: hard maxima are 100 attempts and 400,000 serialized input bytes per UTC day; both default to zero. Tests cover allowlist enforcement, default-off behavior, request/byte exhaustion, SQLite restart persistence, corrupt counters, concurrent duplicate claims, and protected retries. The separate browser smoke ran with Jev disabled and did not transmit source content or make model requests."
+    },
+    "sec_user_agent": {
+      "command": "npm test -- --reporter=dot tests/config.test.ts",
+      "covers": "SEC collection remains disabled unless a bounded User-Agent contains both an identifier and contact email.",
+      "status": "PASS",
+      "evidence": "2026-09-28 current code verification: missing, generic, contact-only, overlong, or ASCII-control-containing User-Agents are rejected; a descriptive identifier plus contact address is accepted. SEC was explicitly disabled for the separate browser smoke, so no SEC request was made there."
     }
   },
   "known_gaps": [

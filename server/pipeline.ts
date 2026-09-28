@@ -3,7 +3,7 @@ import { rowToDTO } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { JevError } from "./jev.js";
-import { RUBRIC_SHA } from "./rubric.js";
+import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
 import {
   applyPostRules,
   bucketMsFor,
@@ -19,6 +19,7 @@ import { TIER_WEIGHT } from "./sources/tiers.js";
 import type {
   Company,
   CompanySnapshot,
+  CollectorId,
   EarningsSurprise,
   JevState,
   MentionScore,
@@ -52,10 +53,21 @@ export interface PipelineDeps {
   engineLabel: string;
   inputPricePerMTok: number;
   concurrency: number;
+  allowedCollectors: ReadonlySet<CollectorId>;
+  dailyBudget: {
+    utcDay: () => string;
+    maxRequests: number;
+    maxRequestBytes: number;
+  };
   alert?: { webhookUrl: string; eventScore: number; impact: number; freshMinutes: number };
 }
 
-export type OperatorRetryResult = "queued" | "usage_review_required" | "not_retryable" | "jev_unavailable";
+export type OperatorRetryResult =
+  | "queued"
+  | "usage_review_required"
+  | "not_retryable"
+  | "jev_unavailable"
+  | "budget_exhausted";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CURRENT_WINDOW_MS = 3 * 60 * 60 * 1000;
@@ -79,20 +91,31 @@ export class Pipeline {
   /** Insert a normalized source observation; exact replays do not reach Jev. */
   ingest(m: RawMentionInput): boolean {
     const stored = this.deps.db.insertObservation(m);
-    if (stored.inserted && this.deps.judge) this.enqueue(stored.observationId);
+    const collector = m.collector ?? "legacy_unknown";
+    if (stored.inserted && this.deps.judge && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
+      this.enqueue(stored.observationId);
+    }
     return stored.inserted;
   }
 
   /** Re-queue existing pending mentions (used after rubric migrations). */
   drainPending(limit = 1_000): number {
-    if (!this.deps.judge) return 0;
-    const ids = this.deps.db.pendingIds(limit);
+    if (!this.deps.judge || this.deps.allowedCollectors.size === 0) return 0;
+    const remaining = this.remainingDailyRequests();
+    if (remaining <= 0) return 0;
+    const ids = this.deps.db.pendingIds(Math.min(limit, remaining), [...this.deps.allowedCollectors]);
     for (const id of ids) this.enqueue(id);
     return ids.length;
   }
 
   retryFailed(id: string, reviewedProviderUsage: boolean): OperatorRetryResult {
     if (!this.deps.judge) return "jev_unavailable";
+    const current = this.deps.db.mentionRow(id);
+    if (!current) return "not_retryable";
+    if (![...this.deps.allowedCollectors].some((collector) => collector === current.collector)) {
+      return "jev_unavailable";
+    }
+    if (!this.hasDailyBudgetCapacity()) return "budget_exhausted";
     const result = this.deps.db.requeueFailed(id, reviewedProviderUsage);
     if (result !== "queued") return result;
     this.deps.db.logEvent(
@@ -109,6 +132,18 @@ export class Pipeline {
     this.queued.add(id);
     this.queue.push(id);
     this.pump();
+  }
+
+  private remainingDailyRequests(): number {
+    return this.deps.db.remainingJevRequests({
+      utcDay: this.deps.dailyBudget.utcDay(),
+      maxRequests: this.deps.dailyBudget.maxRequests,
+      maxRequestBytes: this.deps.dailyBudget.maxRequestBytes,
+    });
+  }
+
+  private hasDailyBudgetCapacity(): boolean {
+    return this.remainingDailyRequests() > 0;
   }
 
   private pump(): void {
@@ -140,49 +175,65 @@ export class Pipeline {
     const db = this.deps.db;
     const queuedRow = db.mentionRow(id);
     if (!queuedRow || (queuedRow.status !== "pending" && queuedRow.status !== "retrying")) return;
+    if (![...this.deps.allowedCollectors].some((collector) => collector === queuedRow.collector)) return;
 
     if (!this.deps.judge) {
       // No engine configured: leave the real observation pending. An
       // intentionally absent provider is not a failed provider request.
       return;
     }
+    if (!this.hasDailyBudgetCapacity()) return;
 
-    const row = db.claimForScoring(id, Date.now());
-    if (!row) return;
-    this.deps.hub.broadcast("mention", rowToDTO(row));
-
-    const meta = this.companyMeta(row.company_id);
+    const meta = this.companyMeta(queuedRow.company_id);
     // Lexically ambiguous names matched by text alone (Google News, GDELT)
     // must clear a much higher about bar: "apple sauce" is not Apple Inc.
     const strongIdentity = hasStrongIdentity({
       company: { name: meta.name, ticker: meta.ticker, aliases: meta.aliases, ambiguous: meta.ambiguous },
-      title: row.title,
-      snippet: row.snippet,
-      scoped: row.scoped === 1,
+      title: queuedRow.title,
+      snippet: queuedRow.snippet,
+      scoped: queuedRow.scoped === 1,
     });
     const strictAbout = meta.ambiguous === true && !strongIdentity;
-    const deskMemory = this.memoryFor(row.company_id, meta.ticker);
+    const deskMemory = this.memoryFor(queuedRow.company_id, meta.ticker);
     const state: JevState = {
       company: {
-        id: row.company_id,
+        id: queuedRow.company_id,
         name: meta.name,
         ticker: meta.ticker,
         sector: meta.sector,
       },
       mention: {
-        title: row.title,
-        snippet: row.snippet,
+        title: queuedRow.title,
+        snippet: queuedRow.snippet,
         source: {
-          name: row.source_name,
-          url: row.source_url,
-          tier: row.source_tier as SourceTier,
+          name: queuedRow.source_name,
+          url: queuedRow.source_url,
+          tier: queuedRow.source_tier as SourceTier,
         },
-        publishedAt: row.published_at == null
+        publishedAt: queuedRow.published_at == null
           ? "Unknown (publisher did not provide a timestamp)"
-          : new Date(row.published_at).toISOString(),
+          : new Date(queuedRow.published_at).toISOString(),
       },
       deskMemory,
     };
+
+    const requestBytes = Buffer.byteLength(JSON.stringify({
+      model: this.deps.engineLabel,
+      state,
+      questions: RUBRIC,
+    }), "utf8");
+    const claim = db.claimForScoringWithBudget({
+      id,
+      now: Date.now(),
+      allowedCollectors: [...this.deps.allowedCollectors],
+      utcDay: this.deps.dailyBudget.utcDay(),
+      requestBytes,
+      maxRequests: this.deps.dailyBudget.maxRequests,
+      maxRequestBytes: this.deps.dailyBudget.maxRequestBytes,
+    });
+    if (claim.kind !== "claimed") return;
+    const row = claim.row;
+    this.deps.hub.broadcast("mention", rowToDTO(row));
 
     let judgeResponseReceived = false;
     try {

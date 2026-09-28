@@ -159,6 +159,8 @@ describe("Opportunity Radar evidence comparison", () => {
     const health = new HealthTracker(false, false, "jev-latest");
     const pipeline = new Pipeline({
       db, judge: null, hub, health, engineLabel: "unconfigured", inputPricePerMTok: 0, concurrency: 1,
+      allowedCollectors: new Set(),
+      dailyBudget: { utcDay: () => "2026-09-28", maxRequests: 0, maxRequestBytes: 0 },
     });
     const market = new MarketData({ companies: [company], indices: [], hub, health, db });
     const app = createApp({

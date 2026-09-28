@@ -31,11 +31,15 @@ async function main(): Promise<void> {
   const companies = loadCompanies();
   const db = new Desk(config.dbPath);
   db.seedCompanies(companies);
+  const jevDispatchEnabled = config.jev.apiKey !== "" &&
+    config.jev.allowedCollectors.size > 0 &&
+    config.jev.maxRequestsPerDay > 0 &&
+    config.jev.maxRequestBytesPerDay > 0;
 
   const hub = new Hub();
   const health = new HealthTracker(
     config.xBearer !== "",
-    config.jev.apiKey !== "",
+    jevDispatchEnabled,
     config.jev.model,
     config.secUserAgent !== "",
     config.finnhubKey !== "",
@@ -51,6 +55,8 @@ async function main(): Promise<void> {
     } catch (err) {
       console.warn(`[desk] sec edgar disabled: ${err instanceof Error ? err.message : String(err)}`);
     }
+  } else {
+    console.log("[desk] sec edgar disabled: set SEC_USER_AGENT with contact information");
   }
 
   const jevClient = new JevClient({
@@ -62,12 +68,15 @@ async function main(): Promise<void> {
 
   let judge: JudgeFn | null;
   let engineLabel: string;
-  if (jevClient.configured) {
+  if (jevClient.configured && jevDispatchEnabled) {
     judge = (state) => jevClient.judge(state, RUBRIC);
     engineLabel = config.jev.model;
   } else {
     judge = null;
     engineLabel = "unconfigured";
+    if (config.jev.apiKey && !jevDispatchEnabled) {
+      console.log("[desk] Jev dispatch disabled: configure an explicit source allowlist and finite daily limits");
+    }
   }
 
   const pipeline = new Pipeline({
@@ -78,6 +87,12 @@ async function main(): Promise<void> {
     engineLabel,
     inputPricePerMTok: config.jev.inputPricePerMTok,
     concurrency: config.scoreConcurrency,
+    allowedCollectors: config.jev.allowedCollectors,
+    dailyBudget: {
+      utcDay: () => new Date().toISOString().slice(0, 10),
+      maxRequests: config.jev.maxRequestsPerDay,
+      maxRequestBytes: config.jev.maxRequestBytesPerDay,
+    },
     alert: config.alertWebhookUrl
       ? {
           webhookUrl: config.alertWebhookUrl,

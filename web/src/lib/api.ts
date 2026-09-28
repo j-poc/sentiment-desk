@@ -304,6 +304,7 @@ const retryErrorCopy: Record<string, string> = {
   provider_usage_review_required: "Check TypeSafe usage before authorizing another attempt.",
   mention_not_retryable: "This item changed state. Refresh its details before retrying.",
   jev_not_configured: "Jev is not configured in the running desk.",
+  jev_daily_budget_exhausted: "The daily Jev input budget is exhausted. The item remains pending until the next UTC day.",
   retry_confirmation_required: "Confirm the new request and provider-usage review before retrying.",
 };
 
