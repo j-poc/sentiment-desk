@@ -22,6 +22,7 @@ import { ValidationPanel } from "./components/ValidationPanel.js";
 import { MentionDrawer } from "./components/MentionDrawer.js";
 import { Tape } from "./components/Tape.js";
 import { HealthPanel } from "./components/HealthPanel.js";
+import { SourceCoverageDisclosure } from "./components/SourceCoverageDisclosure.js";
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
@@ -539,6 +540,7 @@ export default function App() {
               </button>
             ))}
           </div>
+          {researchView === "desk" && <SourceCoverageDisclosure />}
           {selected ? (
             researchView === "radar" ? (
               <OpportunityRadar

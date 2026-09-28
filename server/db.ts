@@ -18,9 +18,12 @@ import type {
 } from "./types.js";
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 
-// Rows written by the removed simulation mode stay in place for auditability,
-// but must never enter current views, aggregates, retries, or provider costs.
-const REAL_MENTION_FILTER = "collector <> 'demo_simulation' AND COALESCE(engine, '') <> 'demo-sim'";
+// Historical simulation and unverified legacy rows stay in place for audit,
+// but only observations with an identified collector can enter live research.
+const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
+// Keep saved non-demo usage estimates visible even when the source collector
+// is unknown; they are still recorded provider-usage history.
+const SAVED_USAGE_FILTER = "collector <> 'demo_simulation' AND COALESCE(engine, '') <> 'demo-sim'";
 
 /**
  * Source observations, Jev judgments, and delivery attempts have separate
@@ -401,6 +404,7 @@ export class Desk {
   insertObservation(m: RawMentionInput): { inserted: boolean; observationId: string } {
     const collector = m.collector ?? legacyCollectorFor(m.kind);
     if (collector === "demo_simulation") throw new Error("Synthetic mentions cannot be ingested by the application");
+    if (collector === "legacy_unknown") throw new Error("Source collector provenance is required before ingesting an observation");
     const sourceItemId = m.sourceItemId ?? null;
     const identityMaterial = `${m.companyId}\u0000${collector}\u0000${sourceItemId ?? canonicalUrl(m.sourceUrl)}`;
     const identityKey = createHash("sha256").update(identityMaterial).digest("hex");
@@ -653,6 +657,7 @@ export class Desk {
 
   recordDelivery(delivery: SourceDeliveryInput): void {
     if (delivery.collector === "demo_simulation") throw new Error("Synthetic deliveries cannot be recorded by the application");
+    if (delivery.collector === "legacy_unknown") throw new Error("Source collector provenance is required before recording a delivery");
     this.db.prepare(
       `INSERT OR IGNORE INTO source_deliveries
        (id, collector, company_id, request_key_hash, started_at, completed_at, result,
@@ -674,7 +679,7 @@ export class Desk {
     return this.db.prepare(
       `SELECT collector, company_id AS companyId, result, completed_at AS completedAt,
         parsed_item_count AS parsedItemCount, adapter_version AS adapterVersion, error
-       FROM source_deliveries WHERE collector <> 'demo_simulation' ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
+       FROM source_deliveries WHERE collector NOT IN ('demo_simulation', 'legacy_unknown') ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
     ).all() as unknown as Array<{
       collector: CollectorId; companyId: string | null; result: string; completedAt: number;
       parsedItemCount: number; adapterVersion: string; error: string | null;
@@ -712,7 +717,7 @@ export class Desk {
           parsed_item_count AS parsedItemCount, error, adapter_version AS adapterVersion,
           ROW_NUMBER() OVER (PARTITION BY collector, COALESCE(company_id, '')
             ORDER BY completed_at DESC, started_at DESC, rowid DESC) AS rn
-        FROM source_deliveries WHERE collector <> 'demo_simulation'
+        FROM source_deliveries WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')
       )
       SELECT collector, companyId, completedAt, result, parsedItemCount, error, adapterVersion
       FROM ranked WHERE rn = 1`,
@@ -732,7 +737,7 @@ export class Desk {
         SELECT collector, publisher_published_at AS publisherPublishedAt,
           provider_observed_at AS providerObservedAt, retrieved_at AS retrievedAt, time_basis AS timeBasis,
           ROW_NUMBER() OVER (PARTITION BY collector ORDER BY ingested_at DESC) AS rn
-        FROM source_observations WHERE collector <> 'demo_simulation'
+        FROM source_observations WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')
       )
       SELECT collector, publisherPublishedAt, providerObservedAt, retrievedAt, timeBasis
       FROM ranked WHERE rn = 1`,
@@ -913,7 +918,7 @@ export class Desk {
                 m.sentiment AS sentiment, m.event_score AS eventScore,
                 COALESCE(m.event_type, 'other') AS eventType, m.title AS title
          FROM mentions m JOIN companies c ON c.id = m.company_id
-         WHERE m.collector <> 'demo_simulation' AND COALESCE(m.engine, '') <> 'demo-sim'
+         WHERE m.collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(m.engine, '') <> 'demo-sim'
            AND m.status = 'scored' AND m.published_at IS NOT NULL
            AND m.time_basis = 'publisher_declared' AND m.published_at >= ? AND m.impact IS NOT NULL
          ORDER BY m.published_at`,
@@ -1004,7 +1009,7 @@ export class Desk {
          FROM mentions
          WHERE scored_at >= ?
            AND status IN ('scored', 'off_target')
-           AND ${REAL_MENTION_FILTER}`,
+           AND ${SAVED_USAGE_FILTER}`,
       )
       .get(sinceMs) as {
         judged_items: number;

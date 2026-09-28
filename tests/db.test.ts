@@ -36,6 +36,73 @@ function mention(overrides: Partial<RawMention> = {}): RawMention {
 }
 
 describe("Desk observation and judgment storage", () => {
+  it("requires a known collector before storing new source observations", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-provenance-required-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    try {
+      db.seedCompanies([company]);
+      expect(() => db.insertObservation(mention({ collector: "legacy_unknown" })))
+        .toThrow(/Source collector provenance is required/);
+      expect(() => db.insertObservation(mention({ collector: undefined })))
+        .toThrow(/Source collector provenance is required/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("quarantines migrated unverified observations while preserving usage estimates", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-unverified-legacy-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    db.seedCompanies([company]);
+    const scoredId = db.insertObservation(mention({ sourceItemId: "unverified-scored" })).observationId;
+    db.markScored(scoredId, score("results"), false);
+    const failedId = db.insertObservation(mention({ sourceItemId: "unverified-failed" })).observationId;
+    db.markFailed(failedId, "old source provenance unavailable", true);
+    const pendingId = db.insertObservation(mention({ sourceItemId: "unverified-pending" })).observationId;
+    db.close();
+
+    const oldRuntime = new DatabaseSync(path);
+    oldRuntime.exec("DROP TRIGGER source_observations_no_update");
+    for (const id of [scoredId, failedId, pendingId]) {
+      oldRuntime.prepare("UPDATE source_observations SET collector = 'legacy_unknown' WHERE id = ?").run(id);
+    }
+    oldRuntime.prepare(
+      `INSERT INTO source_deliveries
+       (id, collector, company_id, request_key_hash, started_at, completed_at, result,
+        parsed_item_count, response_digest, adapter_version, error)
+       VALUES ('legacy-delivery', 'legacy_unknown', NULL, 'digest', 1, 2, 'success', 1, NULL, 'legacy-v1', NULL)`,
+    ).run();
+    oldRuntime.close();
+
+    db = new Desk(path);
+    try {
+      expect(db.mentionRow(scoredId)).toBeUndefined();
+      expect(db.mentionsForCompany(company.id, 0, 10)).toEqual([]);
+      expect(db.recentVisible(10)).toEqual([]);
+      expect(db.radarEvidence(company.id, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
+      expect(db.radarUncounted(company.id, 0, Number.MAX_SAFE_INTEGER)).toEqual({ untimedScored: 0, unjudged: 0 });
+      expect(db.pendingIds(10, ["google_news_rss"])).toEqual([]);
+      expect(db.claimForScoring(pendingId, Date.now())).toBeUndefined();
+      expect(db.requeueFailed(failedId, true)).toBe("not_retryable");
+      expect(db.scoredMentions(0)).toEqual([]);
+      expect(db.scoredMentionEvents(0)).toEqual([]);
+      expect(db.counts24h(0).size).toBe(0);
+      expect(db.usageSince(0)).toEqual({
+        judgedItems: 1, inputTokens: 10, outputTokens: 8, estimatedInputCostUsd: 0.00001,
+      });
+      expect(db.deliverySummary()).toEqual([]);
+      expect(() => db.recordDelivery({
+        collector: "legacy_unknown", companyId: null, requestKey: "unknown", startedAt: 1,
+        completedAt: 2, result: "success", parsedItemCount: 1, adapterVersion: "legacy-v1",
+      })).toThrow(/Source collector provenance is required/);
+    } finally {
+      db.close();
+    }
+  });
+
   it("rejects new synthetic input and keeps previously stored simulation rows out of every research view", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-real-only-"));
     directories.push(directory);
@@ -221,7 +288,7 @@ describe("Desk observation and judgment storage", () => {
     }
   });
 
-  it("migrates v1 scores once, preserves the old table, and marks uncertain dates honestly", () => {
+  it("quarantines migrated RSS rows until their source collector is verified", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-migration-"));
     directories.push(directory);
     const path = join(directory, "desk.db");
@@ -247,30 +314,32 @@ describe("Desk observation and judgment storage", () => {
 
     let db = new Desk(path);
     try {
-      const migrated = db.mentionRow("acme:old")!;
-      expect(migrated.status).toBe("scored");
-      expect(migrated.cost_usd).toBe(0.0001);
-      expect(migrated.rubric_sha).toBe("old-rubric");
-      expect(migrated.scored_at).toBe(1700000000200);
-      expect(migrated.published_at).toBeNull();
-      expect(migrated.time_basis).toBe("legacy_unknown");
-      expect(db.mentionRow("acme:broken")?.status).toBe("corrupt");
-      const dto = db.mentionsForCompany("acme", 0, 10).find((row) => row.id === "acme:broken");
-      expect(dto?.score).toBeNull();
-      expect(dto?.status).toBe("corrupt");
+      expect(db.mentionRow("acme:old")).toBeUndefined();
+      expect(db.mentionRow("acme:broken")).toBeUndefined();
+      expect(db.mentionsForCompany("acme", 0, 10)).toEqual([]);
     } finally {
       db.close();
     }
     const migratedFile = new DatabaseSync(path);
     try {
       expect((migratedFile.prepare("SELECT COUNT(*) AS n FROM mentions_legacy_v1").get() as { n: number }).n).toBe(2);
+      expect(migratedFile.prepare(
+        "SELECT collector, time_basis FROM source_observations WHERE id = 'acme:old'",
+      ).get()).toEqual({ collector: "legacy_unknown", time_basis: "legacy_unknown" });
+      expect(migratedFile.prepare(
+        "SELECT status, cost_usd, rubric_sha, scored_at FROM jev_judgments WHERE observation_id = 'acme:old'",
+      ).get()).toEqual({ status: "scored", cost_usd: 0.0001, rubric_sha: "old-rubric", scored_at: 1700000000200 });
+      expect((migratedFile.prepare(
+        "SELECT status FROM jev_judgments WHERE observation_id = 'acme:broken'",
+      ).get() as { status: string }).status).toBe("corrupt");
     } finally {
       migratedFile.close();
     }
 
     db = new Desk(path);
     try {
-      expect(db.mentionsForCompany("acme", 0, 10)).toHaveLength(2);
+      expect(db.mentionsForCompany("acme", 0, 10)).toEqual([]);
+      expect(db.usageSince(0).judgedItems).toBe(1);
     } finally {
       db.close();
     }

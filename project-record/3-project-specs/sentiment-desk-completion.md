@@ -1,28 +1,37 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-28): the application runtime rejects synthetic inputs, excludes
-legacy simulation records from user-facing reads, aggregates, retries, and
-usage, and no longer contains a demo-data mode. A later production-build
-browser smoke used a backup of the verified real-only SQLite database and
-observed 2,281 real source-backed records, zero simulated observations, and
-2,281 pending judgments while Jev remained disabled with zero usage. The UI
-showed pending source-attributed mentions; selecting Adobe updated the
-selected company and drew its real Yahoo 7D chart, while the weekend 24H
-window remained honestly empty. GDELT HTTP 429 was surfaced as a source error;
-the temporary server was stopped after verification. Quotes older than 15
-minutes show source age in the tape, watchlist, and header. `npm test` passes
-143 tests across 22 files; typecheck and production build pass. An accepted
-operator retry now emits its persisted pending state even when the exact
-request cannot fit the remaining byte budget. Default public
-collectors now pace request starts and persist provider-wide 429 cooldowns;
-Yahoo chart cache misses are coalesced. Generated
-examples stay isolated to tests and frozen evaluations; they are not
-application data or real-source model-quality evidence. This is not a 10/10
-release: non-SEC publisher rights, TypeSafe account/telemetry/billing terms,
-source coverage, and real-source classifier quality remain open. Evidence:
-`project-record/4-log/2026-09-28-real-data-only-runtime.md` and
-`project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`.
-The offline evaluation gates and their current limitations are recorded in
+Status (2026-09-28): the isolated production-build smoke remains valid: its
+backup database contained 2,281 real source-backed observations, zero
+simulation observations, and 2,281 pending judgments with Jev disabled; the
+browser selected Adobe and drew its real Yahoo 7D chart. That smoke does not
+establish the provenance of the separate default local database. A read-only
+aggregate audit of that database found migrated `legacy_unknown` observations
+with saved Jev judgments. The explicit simulation markers were absent, but
+unknown provenance is not proof of real source data. The latest code now
+rejects new observations or deliveries without a known collector, quarantines
+legacy unknown rows from research reads, Jev dispatch/retry, source health,
+aggregates, and Radar, and preserves their saved non-demo usage estimates in
+the usage summary. Historical rows remain untouched.
+
+The long-running local server on port 8787 predates this change and remains on
+its in-memory version. I did not restart it because that could resume source
+collection or Jev requests before account and source-use gates are resolved;
+until a controlled restart, its UI may still expose legacy rows. A browser
+preview briefly reached that existing server through Vite's configured API
+proxy; it was closed, no retry or write action was performed, and that page is
+excluded from verification evidence. A separate static-only browser check
+confirmed the new Desk coverage notice is visible at desktop and 390px width;
+the 390px document width remained 390px with no horizontal overflow. `npm test` passes 146 tests across 23 files;
+typecheck and production build pass, with the existing Vite chunk-size
+advisory. Generated examples remain isolated to tests and frozen evaluations;
+they are not application data or real-source model-quality evidence. This is
+not a 10/10 release: non-SEC publisher rights, TypeSafe account/telemetry/
+billing terms, exhaustive source coverage, legacy provider-use reconciliation,
+and real-source classifier quality remain open. Evidence:
+`project-record/4-log/2026-09-28-real-data-only-runtime.md`,
+`project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`, and
+`project-record/4-log/2026-09-28-legacy-source-quarantine.md`. The offline
+evaluation gates and their current limitations are recorded in
 `project-record/4-log/2026-09-28-jev-evaluator-hardening.md`.
 
 ## Durable goal state (2026-09-28)
