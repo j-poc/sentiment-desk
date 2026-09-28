@@ -17,6 +17,7 @@
     "verify:jev-live": "tsx scripts/verify-live-jev.ts",
     "verify:retry-browser": "tsx scripts/verify-retry-browser.ts",
     "verify:jev-sanity": "tsx scripts/verify-jev-sanity.ts",
+    "evaluate:jev-labels": "tsx scripts/evaluate-jev-labels.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

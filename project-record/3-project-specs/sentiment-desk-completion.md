@@ -11,7 +11,7 @@ selected company and drew its real Yahoo 7D chart, while the weekend 24H
 window remained honestly empty. GDELT HTTP 429 was surfaced as a source error;
 the temporary server was stopped after verification. Quotes older than 15
 minutes show source age in the tape, watchlist, and header. `npm test` passes
-124 tests across 21 files; typecheck and production build pass. An accepted
+143 tests across 22 files; typecheck and production build pass. An accepted
 operator retry now emits its persisted pending state even when the exact
 request cannot fit the remaining byte budget. Default public
 collectors now pace request starts and persist provider-wide 429 cooldowns;
@@ -22,6 +22,8 @@ release: non-SEC publisher rights, TypeSafe account/telemetry/billing terms,
 source coverage, and real-source classifier quality remain open. Evidence:
 `project-record/4-log/2026-09-28-real-data-only-runtime.md` and
 `project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`.
+The offline evaluation gates and their current limitations are recorded in
+`project-record/4-log/2026-09-28-jev-evaluator-hardening.md`.
 
 ## User and outcome
 
@@ -451,12 +453,15 @@ enter this evaluation and cannot satisfy any of its gates.
   source text to a second model or hosted grader.
 - **Population and sampling:** Freeze a timestamped snapshot of eligible,
   source-backed SEC observations with source IDs, accession numbers, company,
-  filing type, filing/acceptance times, collector/parser version, and excerpt
-  digest. Deduplicate to the filing/company unit, group related observations
-  by accession and issuer for sampling and uncertainty estimates, and document
-  exclusions before model output is visible. Randomly sample across the
-  evaluation time window and eligible filing types without using Jev scores to
-  select items. Run a blinded label-only pilot to estimate prevalence and
+  filing type, separate filing and acceptance times, collector/parser version,
+  excerpt digest, and SHA-256 of the exact normalized Jev request body
+  (`{model,state,questions}`). Deduplicate to the filing/company unit, group
+  related observations by accession and issuer for sampling and uncertainty
+  estimates, and document exclusions before model output is visible. Preserve
+  provenance for every eligible filing plus the eligible and selected counts
+  for each filing-type/calendar-quarter stratum. The evaluator verifies a
+  deterministic SHA-256 rank sample within every declared stratum, using the
+  frozen seed and no Jev scores. Run a blinded label-only pilot to estimate prevalence and
   reviewer disagreement. Then calculate the final sample size from the frozen
   decision, observed prevalence/variance, issuer-level dependence, class
   coverage, and the approved cost ceiling. Target 95% interval half-widths of
@@ -475,14 +480,18 @@ enter this evaluation and cannot satisfy any of its gates.
   disagreements without deleting either original label. Report
   pre-adjudication reviewer agreement so weak or ambiguous ground truth is
   visible. Attach each label to the observation ID, accession, source URL,
-  company, item/excerpt digest, source time, labeler, and adjudication record.
+  company, item/excerpt digest, exact request-body digest, separate filing and
+  acceptance times, production `strictAbout` identity decision, labeler, and
+  adjudication record.
 - **Measures:** For sentiment and event type, report the complete confusion
   matrices, per-class precision/recall/F1, macro-F1, exact agreement, and
   comparison with a source-cohort majority baseline. Estimate intervals with
   resampling clustered by issuer/filing rather than treating syndicated or
   same-filing items as independent. For `about` and `investor_relevant`, report
   false-inclusion and false-exclusion rates at the unchanged production
-  cutoffs. For sentiment probabilities, report multiclass Brier score and
+  cutoffs, per item: `about >= 0.50` and `investor_relevant >= 0.35`, or
+  `about >= 0.80` and `investor_relevant >= 0.50` for the strict ambiguous-
+  identity path. For sentiment probabilities, report multiclass Brier score and
   reliability by confidence band; call calibration `UNVERIFIED` if support is
   too sparse. Report eligible-item completion, all terminal failures and
   unknown outcomes, request count, provider-reported tokens, latency, estimated
@@ -492,8 +501,9 @@ enter this evaluation and cannot satisfy any of its gates.
 - **Decision rule:** Pass the scoped cohort only when both primary tasks have
   macro-F1 of at least 0.80 with a cluster-aware 95% lower confidence bound of
   at least 0.70; every claimed class has at least 0.70 precision and recall
-  point estimates and enough support to meet its interval-width target; and
-  performance exceeds the majority baseline with a confidence interval that
+  point estimates and enough support to meet its interval-width target; the
+  cohort has at least 30 issuer clusters and each claimed class appears across
+  at least 10 issuer clusters; and performance exceeds the majority baseline with a confidence interval that
   excludes no improvement. `about` and `investor_relevant` must each achieve
   at least 0.90 precision at the current production cutoff, with recall and
   class support reported. Any unrepresented class, failed privacy/rights gate,
@@ -514,6 +524,61 @@ enter this evaluation and cannot satisfy any of its gates.
   text has been sent to Jev and no independent real-source labels exist.
   Current blockers and evidence are tracked in
   `project-record/3-project-specs/live-data-etl.json`.
+
+### Offline evaluator implementation (2026-09-28)
+
+`npm run evaluate:jev-labels -- --labels <local-json>` produces a blinded,
+label-only pilot report. Add `--run <local-json>` only for a frozen `stage=final`
+label set. The CLI reads local JSON only and makes no network, source, database,
+or model calls. Its strict schemas reject raw source text and unrecognized
+fields. A final run must join the exact label-artifact digest, sorted
+provenance-manifest digest, rubric SHA, frozen code revision, item IDs, each
+exact request-body digest, and analyzed model-run artifact digest. The label
+set carries and hashes the complete provenance-only eligible population frame,
+the sampling window, and per-stratum
+counts; parsing checks that selected labels are a deterministic seeded sample
+from that frame and cover every declared eligible filing-type/time stratum.
+The manifest binds SEC CIK/accession/URL, filing and acceptance times,
+collector/parser versions, excerpt digest, exact request digest, and the row's
+strict-identity setting. The tool reports two-reviewer agreement before
+adjudication, class prevalence, complete confusion matrices, missing outputs as misses, boundary precision and
+recall, provider usage, costs as estimates, latency, and a per-case terminal
+status ledger without copying rationales or source excerpts into the report.
+
+Final labels must freeze an account-owner budget attestation before the sample
+freeze: a maximum request count, maximum estimated USD cost, exact input/output
+unit rates, approval time, and a digest of the approval record. The run must
+match those rates; missing token usage leaves cost compliance `UNVERIFIED`, and
+request or estimated-cost overruns fail. The local tool can validate the
+attestation's shape and timing but cannot verify the underlying account-owner
+approval or provider invoice. Each sampled observation permits at most one
+submitted Jev request, so a second call after a response or rejection is
+rejected during input validation.
+
+The model-run digest identifies the exact analyzed JSON but does not
+authenticate a TypeSafe receipt or independently verify the caller-supplied
+scores and token counts. Preserve separately auditable provider records before
+treating a classifier `PASS` as evidence about live Jev performance.
+
+`about` and `investor_relevant` report the mixed-cohort results for context,
+but the standard and strict-identity paths each have their own precision gate.
+Each path needs at least 10 positive human labels across 10 issuer clusters;
+otherwise that path stays `UNVERIFIED`. This prevents a strong standard-path
+aggregate from hiding errors on ambiguous identities.
+
+The final report uses 2,000 deterministic percentile-bootstrap replicates,
+resampling issuer CIK clusters. Overall agreement needs a 95% interval no wider
+than 0.10; class precision and recall intervals need widths no wider than
+0.20. The 30-issuer overall and 10-issuer-per-class floors prevent degenerate
+bootstrap samples from being presented as verified precision. The frame is a
+provenance artifact, not proof that upstream SEC collection was complete; that
+limit remains explicit in the report. The tool does
+not auto-select a final sample size from the pilot: the issuer design effect,
+eligible class coverage, account-owner-approved request/cost ceiling, and
+available corpus must be documented and frozen before model output is opened.
+Calibration remains descriptive because no calibrated-probability acceptance
+threshold has been frozen. Even a scoped classifier `PASS` cannot clear rights,
+account, retention, billing, User-Agent, source-coverage, or release gates.
 
 ## Phase 2 acceptance criteria
 
