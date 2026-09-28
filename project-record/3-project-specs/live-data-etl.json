@@ -1,7 +1,7 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "The application runtime admits only real source observations and provider-origin Jev judgments; demo generation and demo mode are removed, and legacy simulation rows are excluded from consumer and retry paths. A later production-build browser smoke used a backup of the verified real-only database and found 2,281 source-backed observations, zero simulation observations, and all 2,281 judgments pending while Jev was explicitly off with zero usage. The browser showed real pending source rows and selecting Adobe drew the real Yahoo 7D chart; the weekend 24H window remained empty. Google News RSS, Yahoo Finance RSS, and Yahoo quotes delivered during this smoke; GDELT returned HTTP 429 and was surfaced as a source failure. The temporary server was stopped afterward. Current verification passes 123 tests across 21 files, typecheck, and production build. GDELT and cross-collector 429 cooldown, request pacing, and Jev admission/budget safeguards pass local tests. Official SEC policy supports reuse of public EDGAR filing content, but the local SEC User-Agent is absent and other publisher rights remain unresolved. TypeSafe account authorization/telemetry/retention/billing, exhaustive source coverage, and labeled real-source Jev quality remain open, so this is not 10/10 release-ready.",
+  "operational_status": "The application runtime admits only real source observations and provider-origin Jev judgments; demo generation and demo mode are removed, and legacy simulation rows are excluded from consumer and retry paths. A later production-build browser smoke used a backup of the verified real-only database and found 2,281 source-backed observations, zero simulation observations, and all 2,281 judgments pending while Jev was explicitly off with zero usage. The browser showed real pending source rows and selecting Adobe drew the real Yahoo 7D chart; the weekend 24H window remained empty. Google News RSS, Yahoo Finance RSS, and Yahoo quotes delivered during this smoke; GDELT returned HTTP 429 and was surfaced as a source failure. The temporary server was stopped afterward. Current verification passes 124 tests across 21 files, typecheck, and production build. GDELT and cross-collector 429 cooldown, request pacing, and Jev admission/budget safeguards pass local tests. Official SEC policy supports reuse of public EDGAR filing content, but the local SEC User-Agent is absent and other publisher rights remain unresolved. TypeSafe account authorization/telemetry/retention/billing, exhaustive source coverage, and labeled real-source Jev quality remain open, so this is not 10/10 release-ready. A byte-budget-blocked operator retry now broadcasts its persisted pending state without making another Jev call.",
   "rights_review": {
     "as_of": "2026-09-28",
     "status": "open; not a legal determination",
@@ -188,9 +188,9 @@
     },
     "readiness_continuation": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run build",
-      "covers": "Full current 93-test suite across 15 files, TypeScript contracts, and production client/server build after source-only data guards, quote age, GDELT error handling, and keyless pending behavior.",
+      "covers": "Full current 124-test suite across 21 files, TypeScript contracts, and production client/server build after the latest source-time integrity and Jev retry-state fixes.",
       "status": "PASS",
-      "evidence": "2026-09-28: npm test passed 93 tests across 15 files; npm run typecheck passed; npm run build passed. Vite reports the existing 529.50 kB main chunk above its 500 kB advisory threshold; it is not a build failure."
+      "evidence": "2026-09-28: on the current working tree, npm test passed 124 tests across 21 files; npm run typecheck and npm run build passed. The exact-byte-budget retry regression confirms pending state reaches the SSE client without a second Jev call. Vite retains its existing 529.62 kB main chunk advisory; it is not a build failure."
     },
     "jev_retry_browser": {
       "command": "npm run verify:retry-browser with a loopback browser",
@@ -294,6 +294,12 @@
       "covers": "Provider request starts are paced; HTTP 429 Retry-After/reset values cause a persistent source-wide cooldown; the affected poll sweep stops; Yahoo quote/chart requests do not retry a rejected request; duplicate chart misses are coalesced.",
       "status": "PASS",
       "evidence": "2026-09-28 full suite: 123 tests across 21 files, typecheck, production build, and git diff --check pass. Mocked regressions cover persisted cooldown across a SQLite reopen, bounded fallback/corrupt-state fail-closed behavior, longest active deadline under overlapping 429 responses, Google News sweep stopping while Yahoo continues, SEC/Finnhub/Reddit/X source sweep stopping, Yahoo quote/chart shared cooldown, honoring Retry-After without immediate repeat, and in-flight chart request coalescing. Defaults are RSS every 180 seconds with concurrency 2 and per-provider request starts at least one second apart; quotes poll every 90 seconds with one Yahoo request start per 500ms. These are application pacing safeguards, not proof of any provider quota or permission. No live request was made for this audit or these tests."
+    },
+    "jev_retry_budget_pending_state": {
+      "command": "npm test -- --reporter=dot tests/retry-workflow.test.ts",
+      "covers": "A manually accepted retry that cannot fit the remaining exact serialized-byte budget remains pending, is not sent to Jev, and broadcasts the persisted current state to desk event listeners.",
+      "status": "PASS",
+      "evidence": "2026-09-28: an isolated route/pipeline/SQLite regression reproduced a stale failed drawer after an accepted retry hit the byte cap. Pipeline.retryFailed now broadcasts the pending DTO immediately after the atomic transition. The test confirms one total judge call, a pending persisted row, and a registered Hub listener receiving the mention payload with status=pending. No provider or application database was used."
     }
   },
   "known_gaps": [

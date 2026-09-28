@@ -48,13 +48,22 @@ function answers(): Record<string, unknown> {
   };
 }
 
-function setup(judge: (state: JevState) => Promise<{
-  answers: Record<string, unknown>;
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-  latencyMs: number;
-}>) {
+function setup(
+  judge: (state: JevState) => Promise<{
+    answers: Record<string, unknown>;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    latencyMs: number;
+  }>,
+  options: {
+    dailyBudget?: {
+      utcDay: () => string;
+      maxRequests: number;
+      maxRequestBytes: number;
+    };
+  } = {},
+) {
   const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-retry-"));
   directories.push(directory);
   const dbPath = join(directory, "desk.db");
@@ -62,6 +71,11 @@ function setup(judge: (state: JevState) => Promise<{
   db.seedCompanies([company]);
   const hub = new Hub();
   const health = new HealthTracker(false, true, "jev-latest");
+  const dailyBudget = options.dailyBudget ?? {
+    utcDay: () => "2026-09-28",
+    maxRequests: 100,
+    maxRequestBytes: 1_000_000,
+  };
   const pipeline = new Pipeline({
     db,
     judge,
@@ -71,7 +85,7 @@ function setup(judge: (state: JevState) => Promise<{
     inputPricePerMTok: 0.042,
     concurrency: 1,
     allowedCollectors: new Set(["google_news_rss"]),
-    dailyBudget: { utcDay: () => "2026-09-28", maxRequests: 100, maxRequestBytes: 1_000_000 },
+    dailyBudget,
   });
   const market = new MarketData({ companies: [company], indices: [], hub, health, db });
   const app = createApp({
@@ -103,7 +117,7 @@ function setup(judge: (state: JevState) => Promise<{
     `http://127.0.0.1/api/mentions/${id}/retry`,
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
   ));
-  return { db, pipeline, app, source, postRetry };
+  return { db, pipeline, app, source, hub, postRetry };
 }
 
 describe("operator Jev retry API", () => {
@@ -206,6 +220,44 @@ describe("operator Jev retry API", () => {
       await pipeline.waitForIdle();
       expect(calls).toBe(2);
       expect(db.mentionsForCompany(company.id, 0, 5)[0]?.status).toBe("scored");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("broadcasts the pending state when a confirmed retry cannot fit the remaining byte budget", async () => {
+    let calls = 0;
+    const dailyBudget = {
+      utcDay: () => "2026-09-28",
+      maxRequests: 100,
+      maxRequestBytes: 1_000_000,
+    };
+    const { db, pipeline, source, postRetry, hub } = setup(async () => {
+      calls += 1;
+      throw new JevError("HTTP 503; provider outcome is unknown", 503, false, true);
+    }, { dailyBudget });
+    const mentionEvents: unknown[] = [];
+    hub.add((event, data) => {
+      if (event === "mention") {
+        const payload: unknown = JSON.parse(data);
+        mentionEvents.push(payload);
+      }
+    });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      const failed = db.mentionsForCompany(company.id, 0, 5)[0]!;
+      const bytesUsed = Number(db.getKv("jev:budget:2026-09-28:request-bytes"));
+      dailyBudget.maxRequestBytes = bytesUsed + 1;
+      mentionEvents.length = 0;
+
+      const accepted = await postRetry(failed.id, { confirmNewCharge: true, reviewedProviderUsage: true });
+      expect(accepted.status).toBe(202);
+      await pipeline.waitForIdle();
+
+      expect(calls).toBe(1);
+      expect(db.mentionsForCompany(company.id, 0, 5)[0]?.status).toBe("pending");
+      expect(mentionEvents).toContainEqual(expect.objectContaining({ id: failed.id, status: "pending" }));
     } finally {
       db.close();
     }

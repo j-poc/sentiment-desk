@@ -118,6 +118,8 @@ export class Pipeline {
     if (!this.hasDailyBudgetCapacity()) return "budget_exhausted";
     const result = this.deps.db.requeueFailed(id, reviewedProviderUsage);
     if (result !== "queued") return result;
+    const requeued = this.deps.db.mentionRow(id);
+    if (requeued) this.deps.hub.broadcast("mention", rowToDTO(requeued));
     this.deps.db.logEvent(
       "info",
       "jev",

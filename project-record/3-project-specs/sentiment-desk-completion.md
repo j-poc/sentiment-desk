@@ -11,7 +11,9 @@ selected company and drew its real Yahoo 7D chart, while the weekend 24H
 window remained honestly empty. GDELT HTTP 429 was surfaced as a source error;
 the temporary server was stopped after verification. Quotes older than 15
 minutes show source age in the tape, watchlist, and header. `npm test` passes
-123 tests across 21 files; typecheck and production build pass. Default public
+124 tests across 21 files; typecheck and production build pass. An accepted
+operator retry now emits its persisted pending state even when the exact
+request cannot fit the remaining byte budget. Default public
 collectors now pace request starts and persist provider-wide 429 cooldowns;
 Yahoo chart cache misses are coalesced. Generated
 examples stay isolated to tests and frozen evaluations; they are not
@@ -646,6 +648,9 @@ in temporary SQLite and never reads or modifies `data/desk.db`.
   retry while billing semantics remain unverified.
 - A new explicit 429/529 rejection: existing bounded retry semantics remain;
   terminal state and next operator action stay visible.
+- A manually accepted retry that reaches the byte budget before dispatch stays
+  pending and emits that persisted state to the desk's event listeners; no
+  provider call is made for the over-budget input.
 - A valid `Retry-After` delay: the persisted retry is not scheduled earlier
   than the provider's requested time; absent or malformed headers fall back to
   bounded exponential backoff.
@@ -673,6 +678,11 @@ before the operator authorizes a new request.
 - `PASS` — valid integer and HTTP-date `Retry-After` values are parsed;
   malformed values fall back to exponential backoff, and the persisted retry
   is not scheduled early.
+- `PASS` — an isolated SQLite/API regression reproduces a manual retry whose
+  exact serialized input no longer fits the remaining byte budget. The row
+  stays pending, no additional Jev call is sent, and the SSE stream receives
+  the persisted pending state so an open drawer does not retain its old failed
+  view. A registered Hub listener receives the exact mention payload.
 - `PASS` — loopback browser workflow used a temporary SQLite database and an
   in-process synthetic judge. Cancel left the failed item intact; after the
   two required acknowledgements, one request changed it to scored. The open

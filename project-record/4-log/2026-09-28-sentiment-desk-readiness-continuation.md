@@ -381,3 +381,28 @@ poller preserves that null in the observation. The regression passes without
 calling Reddit or Jev. Final verification passes 123 tests across 21 files,
 typecheck, production build, JSON parsing, and `git diff --check`. The build
 retains its existing Vite advisory for the 529.62 kB main chunk.
+
+## Retry byte-budget state propagation
+
+The independent Jev safety audit at the pushed checkpoint confirmed bounded
+request and byte admission, fail-closed behavior, and explicit operator
+acknowledgements. It also identified an untested UI edge: when a deliberate
+retry passed the remaining-request precheck but its exact serialized payload
+did not fit the remaining byte budget, the persisted row correctly stayed
+`pending` and no second judge call was made, but the open desk received no SSE
+event and could continue showing the old `failed` state.
+
+A focused regression reproduced that divergence against the HTTP retry route,
+pipeline, and isolated SQLite database. `Pipeline.retryFailed` now broadcasts
+the persisted pending mention after the atomic failed-to-pending transition,
+before queue processing. The regression verifies the row is pending, the fake
+judge was called only once, and a registered Hub listener receives the current
+pending state. It makes
+no provider request and uses no application database.
+
+Verification on the resulting working tree: `npm test -- --reporter=dot`
+passed 124 tests across 21 files; `npm run typecheck`, `npm run build`, and
+`git diff --check` passed. Vite retains its existing 529.62 kB main-chunk
+advisory. The actual provider charge terms, account/source rights, real-source
+Jev evaluation, exhaustive provider coverage, and historical usage audit
+remain open and are not cleared by this local fix.
