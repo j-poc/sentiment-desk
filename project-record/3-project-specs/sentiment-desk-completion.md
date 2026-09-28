@@ -86,11 +86,13 @@ gates and their limits are recorded in
 
 The native ultragoal remains `active`. The saved-data-only UI, retry-gating,
 and explicit external-request opt-in checkpoints are pushed to
-`origin/codex/real-data-rebuild`; the latest previous checkpoint was
-`34a015d06ad7a33abc9f6324853aac17d48a321a`. A fresh-process verifier now
-proves credentials alone do not activate source or Jev traffic when the
-opt-in variable is absent. Local implementation and verification are recorded
-as complete for this iteration. The active attention state is
+`origin/codex/real-data-rebuild`; the latest implementation checkpoint is
+`549ad800174bbb221c17bb3b6b8b33456d503ee0` (`feat(config): require per-source
+request allowlist`). A fresh-process verifier proves the absent-variable
+saved-data default makes no external requests, then checks each of the nine
+individual source allowlists behind a global-fetch interceptor. Local
+implementation and verification are recorded as complete for this iteration.
+The active attention state is
 `awaiting_authority`: the authorized TypeSafe account owner and applicable
 source-rights owners must establish permitted use, retention, telemetry,
 billing, and an approved request/cost ceiling; a valid SEC User-Agent contact
