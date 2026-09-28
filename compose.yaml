@@ -9,6 +9,7 @@ services:
       HOST: "0.0.0.0"
       PORT: "8787"
       DB_PATH: /app/data/desk.db
+      EXTERNAL_REQUESTS_ENABLED: "${EXTERNAL_REQUESTS_ENABLED:-false}"
     ports:
       - "127.0.0.1:8787:8787"
     volumes:

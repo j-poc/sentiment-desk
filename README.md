@@ -109,7 +109,14 @@ from TypeSafe may be needed. A source allowlist is a technical control, not
 proof of rights.
 
 ```bash
-npm run dev                # live sources + live quotes on :8787
+npm run dev                # saved real data only by default on :8787
+```
+
+After applicable source and account terms are confirmed, explicitly opt in to
+live provider traffic:
+
+```bash
+EXTERNAL_REQUESTS_ENABLED=true npm run dev
 ```
 
 Production:
@@ -121,15 +128,22 @@ npm start                  # one process serves API + UI on :8787
 
 ## Rebuild and run with real data
 
-Docker Compose builds the server and dashboard from source, starts the live
-news and market-data collectors, and stores SQLite history in a named volume.
-No API key is required to start. Jev remains disabled unless its key, explicit
-collector allowlist, and finite daily budgets are configured. Optional
-Finnhub, Reddit, and X keys enable those additional collectors; their use and
-forwarding rights must be verified separately.
+Docker Compose builds the server and dashboard from source and stores SQLite
+history in a named volume. It defaults to saved-data-only mode. After applicable
+source and account terms are confirmed, set `EXTERNAL_REQUESTS_ENABLED=true`
+to start news and market-data collectors. Jev remains disabled unless its key,
+explicit collector allowlist, and finite daily budgets are configured.
+Optional Finnhub, Reddit, and X keys enable those additional collectors; their
+use and forwarding rights must be verified separately.
 
 ```bash
 docker compose up --build
+```
+
+To explicitly enable live source polling:
+
+```bash
+EXTERNAL_REQUESTS_ENABLED=true docker compose up --build
 ```
 
 Docker Compose 2.24 or newer is required for optional `.env` loading ([Compose
@@ -164,7 +178,7 @@ its temporary volume.
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | — | Jev credentials; local Node also checks `~/.newsjack/.env`. A key alone does not enable scoring. Set an explicit empty value to disable fallback. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
-| `EXTERNAL_REQUESTS_ENABLED` | `true` | Set `false` to pause all provider and Jev requests and serve saved local data only. |
+| `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and Jev requests; the default serves saved local data only. |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
 | `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated, source-specific Jev admission list; no collectors allowed by default |
 | `TYPESAFE_MAX_REQUESTS_PER_DAY` | `0` | hard cap on Jev request attempts per UTC day; `0` disables dispatch |

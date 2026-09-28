@@ -104,3 +104,43 @@ copy above. It does not update or serve from the original local database.
   across 24 files**, `npm run typecheck`, `npm run build`, JSON parsing, and
   `git diff --check` passed. Vite retained its existing 531.60 kB chunk-size
   advisory. No source, model, or external provider request was made.
+
+## Current source and account terms check — 2026-09-28
+
+- Current SEC primary pages confirm public EDGAR filing content is free to
+  access and reuse, SEC site content may be copied/further distributed subject
+  to stated exceptions, and EDGAR access expects a declared User-Agent with a
+  maximum rate of 10 requests/second. This supports a narrowly scoped SEC-only
+  real-source evaluation once the app has a descriptive contact User-Agent;
+  none is configured now.
+- The official TypeSafe MCA currently published as of 2026-09-23 says each
+  submitted input consumes a credit, permits perpetual telemetry processing
+  including hashes, summary statistics, and classifications, and places
+  responsibility for input rights on the customer. Its similar/competing
+  product restriction and the active account's accepted order, settings,
+  retention, billing, and refill configuration still need account-owner
+  review. No source text was sent to TypeSafe.
+- Yahoo terms reviewed do not establish the exact rights for the app's
+  RSS/quote/chart endpoints. Google publisher documentation does not address
+  this app's storage or model-forwarding rights for publisher content. These
+  feeds remain excluded from Jev quality work until exact permission is
+  documented. Direct URLs are recorded in
+  `project-record/3-project-specs/live-data-etl.json`.
+
+## Explicit opt-in for external requests — 2026-09-28
+
+- Changed the absent `EXTERNAL_REQUESTS_ENABLED` default to `false`. The
+  TypeScript config test and a clean-working-directory config import both
+  verify the default. A read-only code-path review confirmed this disables
+  CIK/source/quote/Jev polling, leaves the judge null, rejects Jev retry as
+  unavailable, and serves saved chart points from SQLite.
+- Compose now passes the same `false` default and allows an explicit shell or
+  `.env` opt-in. The dedicated live Compose smoke script sets `true` because
+  its purpose is a keyless real-source check; it now states that it performs
+  public-source HTTP reads and was not executed while rights are unresolved.
+  README startup instructions and `.env.example` describe the paused default.
+- Verification: **151 tests passed across 24 files**, typecheck, production
+  build, `docker compose config -q`, `sh -n scripts/verify-live-compose.sh`,
+  JSON parsing, and `git diff --check` passed. The existing Vite chunk-size
+  advisory remains. The existing loopback process remains in offline mode and
+  its network-guard log stayed empty; no provider/model requests were made.

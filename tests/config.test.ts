@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { boundedNonNegativeInt, parseExternalRequestsEnabled, secContactUserAgent } from "../server/config.js";
 
 describe("external request mode", () => {
-  it("defaults to enabled and rejects malformed values", () => {
-    expect(parseExternalRequestsEnabled(undefined)).toBe(true);
+  it("defaults to paused and rejects malformed values", () => {
+    expect(parseExternalRequestsEnabled(undefined)).toBe(false);
+    expect(parseExternalRequestsEnabled("true")).toBe(true);
     expect(parseExternalRequestsEnabled("false")).toBe(false);
     expect(parseExternalRequestsEnabled(" TRUE ")).toBe(true);
     expect(() => parseExternalRequestsEnabled("off")).toThrow();

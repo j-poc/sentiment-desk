@@ -12,8 +12,9 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-# This isolated Compose file never reads the developer's .env. The check uses
-# only keyless live sources and cannot spend Jev credits or call optional APIs.
+# This isolated Compose file never reads the developer's .env. It deliberately
+# opts into keyless live-source HTTP reads; run only when those source uses are
+# authorized. It cannot spend Jev credits or call optional APIs.
 cat >"$compose_file" <<EOF
 services:
   sentiment-desk:
@@ -23,6 +24,7 @@ services:
       HOST: "0.0.0.0"
       PORT: "8787"
       DB_PATH: /app/data/desk.db
+      EXTERNAL_REQUESTS_ENABLED: "true"
       TYPESAFE_API_KEY: ""
       FINNHUB_API_KEY: ""
       REDDIT_CLIENT_ID: ""

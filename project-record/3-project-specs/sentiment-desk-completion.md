@@ -85,6 +85,13 @@ are enabled. The original database was not changed. This checkpoint passes
 151 tests across 24 files, typecheck, production build, the named loopback-only
 browser check, and an independent read-only retry-gating review.
 
+Fresh application launches now default to saved-data-only mode. The Compose
+configuration follows the same default, and live provider traffic requires
+`EXTERNAL_REQUESTS_ENABLED=true`; the live Compose smoke script opts in because
+its purpose is to verify public-source delivery. Source permissions, account
+authorization, spending, and independent real-source labels remain separate
+gates before that opt-in is appropriate.
+
 ## User and outcome
 
 The user is a single researcher running a private local desk. They select a
