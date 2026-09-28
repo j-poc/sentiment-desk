@@ -253,6 +253,7 @@ export interface HealthDTO {
   health: {
     externalRequestsEnabled: boolean;
     rss: SourceHealth;
+    gdelt: SourceHealth;
     x: SourceHealth;
     quotes: SourceHealth;
     sec: SourceHealth;

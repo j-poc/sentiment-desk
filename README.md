@@ -31,7 +31,8 @@ fact-checking.
   provider observations inside the selected time window; missing periods are
   left empty and an out-of-window latest quote is never carried forward.
 - **Judgment**: Jev dispatch requires `TYPESAFE_API_KEY`, an explicit
-  `TYPESAFE_ALLOWED_COLLECTORS` value, and positive finite daily limits. Local
+  `TYPESAFE_ALLOWED_COLLECTORS` value, the same collector in
+  `EXTERNAL_SOURCE_COLLECTORS`, and positive finite daily limits. Local
   Node also checks `~/.newsjack/.env` for the key unless the variable is
   explicitly set empty; Docker Compose passes values from this project’s
   `.env` only. A key without the remaining controls leaves every observation
@@ -95,7 +96,9 @@ policies and fair-access limits. This is the only currently documented narrow
 source path for a first real-source Jev evaluation; configure a descriptive
 `SEC_USER_AGENT`, set `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` to collect only
 EDGAR filings, and separately set `TYPESAFE_ALLOWED_COLLECTORS=sec_edgar` to
-allow those filings to be sent to Jev for that evaluation.
+allow those filings to be sent to Jev for that evaluation. Jev's effective
+allowlist is the intersection of both lists, so a Jev-only collector setting
+cannot forward retained records from a source that is currently disabled.
 Real-source Jev accuracy has not been evaluated: all current live observations
 remain pending, and synthetic checks establish integration only. The frozen
 labeling, sampling, metrics, and pass/fail rules are in
@@ -123,6 +126,8 @@ EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar npm run dev
 ```
 
 Set a descriptive `SEC_USER_AGENT` in `.env` before using the SEC-only example.
+SEC ticker-directory lookup runs after the local API is available; transient
+failures are recorded in delivery health and retried on the SEC polling cadence.
 The global opt-in pauses every external request by default; even after it is
 enabled, only collectors listed in `EXTERNAL_SOURCE_COLLECTORS` can poll or
 fetch charts. Credentials alone do not enable a collector. Keep publisher feeds
@@ -143,9 +148,10 @@ history in a named volume. It defaults to saved-data-only mode. After applicable
 source and account terms are confirmed, set `EXTERNAL_REQUESTS_ENABLED=true`
 and a source-by-source `EXTERNAL_SOURCE_COLLECTORS` allowlist. For example,
 `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` enables SEC filings only; Jev remains
-separately disabled unless its key, `TYPESAFE_ALLOWED_COLLECTORS`, and finite
-daily budgets are configured. Optional Finnhub, Reddit, and X credentials do
-not enable those sources unless they are also allowlisted.
+separately disabled unless its key, `TYPESAFE_ALLOWED_COLLECTORS` also includes
+`sec_edgar`, and finite daily budgets are configured. Jev can only process a
+collector present in both allowlists. Optional Finnhub, Reddit, and X
+credentials do not enable those sources unless they are also allowlisted.
 
 ```bash
 docker compose up --build
@@ -192,7 +198,7 @@ its temporary volume.
 | `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and Jev requests; the default serves saved local data only. |
 | `EXTERNAL_SOURCE_COLLECTORS` | empty | Comma-separated real collectors permitted to make network requests; examples include `sec_edgar`, `google_news_rss`, `yahoo_quote`, and `yahoo_chart`. Empty means no source polling or remote chart requests. |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
-| `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated, source-specific Jev admission list; no collectors allowed by default |
+| `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated Jev admission list, intersected with `EXTERNAL_SOURCE_COLLECTORS`; no collectors allowed by default |
 | `TYPESAFE_MAX_REQUESTS_PER_DAY` | `0` | hard cap on Jev request attempts per UTC day; `0` disables dispatch |
 | `TYPESAFE_MAX_REQUEST_BYTES_PER_DAY` | `0` | hard cap on serialized Jev input bytes reserved per UTC day; `0` disables dispatch |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |

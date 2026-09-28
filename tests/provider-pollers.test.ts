@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Desk } from "../server/db.js";
 import { HealthTracker } from "../server/health.js";
 import { providerCoolingDown } from "../server/provider-cooldown.js";
-import { startFinnhubPoller, startRedditPoller, startSecPoller, startXPoller } from "../server/schedule.js";
+import { startFinnhubPoller, startRedditPoller, startSecCollector, startSecPoller, startXPoller } from "../server/schedule.js";
 import type { Pipeline } from "../server/pipeline.js";
 import type { Company } from "../server/types.js";
 
@@ -14,10 +14,54 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("optional provider rate limits", () => {
+  it("retries a failed SEC ticker-directory bootstrap and starts the poller after recovery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const health = new HealthTracker(false, false, "unconfigured", true);
+    const resolveTickerCiks = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary SEC directory failure"))
+      .mockResolvedValueOnce(new Map([["ALPH", "0000000001"]]));
+    const fetchFilings = vi.fn().mockResolvedValue([]);
+    const control = startSecCollector({
+      companies: [companies[0]!],
+      userAgent: "Sentiment Desk test@example.com",
+      pipeline: {} as Pipeline,
+      db,
+      health,
+      intervalSeconds: 1,
+      resolveTickerCiks,
+      fetchFilings,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolveTickerCiks).toHaveBeenCalledTimes(1);
+      expect(db.deliverySummary().find((row) => row.collector === "sec_edgar"))
+        .toMatchObject({ result: "failed", companyId: null, error: "temporary SEC directory failure" });
+      expect(health.snapshot().sec).toMatchObject({ fail: 1, lastError: "SEC ticker directory: temporary SEC directory failure" });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(resolveTickerCiks).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(150);
+      expect(db.deliverySummary().filter((row) => row.collector === "sec_edgar").map((row) => row.result))
+        .toEqual(["empty", "success", "failed"]);
+      expect(fetchFilings).toHaveBeenCalledWith(expect.objectContaining({ cik: "0000000001", ticker: "ALPH" }));
+      expect(db.deliverySummary().find((row) => row.companyId === "alpha" && row.collector === "sec_edgar"))
+        .toMatchObject({ result: "empty", companyId: "alpha" });
+      expect(health.snapshot().sec).toMatchObject({ ok: 2, fail: 1, lastError: "SEC ticker directory: temporary SEC directory failure" });
+    } finally {
+      await control.stop();
+      db.close();
+    }
+  });
+
   it("stops SEC's company sweep and persists Retry-After", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies(companies);

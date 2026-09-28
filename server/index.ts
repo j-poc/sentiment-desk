@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { VERSION, config, apiKeySource, loadCompanies } from "./config.js";
+import { intersectJevSourceAllowlist } from "./collector-policy.js";
 import { Desk } from "./db.js";
 import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
@@ -14,11 +15,11 @@ import {
   startJevRetryPoller,
   startRedditPoller,
   startRssPoller,
+  startSecCollector,
   startSecPoller,
   startXPoller,
 } from "./schedule.js";
 import type { SchedulerControl } from "./scheduler.js";
-import { fetchTickerCikMap } from "./sources/sec.js";
 import type { CollectorId } from "./types.js";
 
 /**
@@ -34,8 +35,12 @@ async function main(): Promise<void> {
   db.seedCompanies(companies);
   const collectorEnabled = (collector: CollectorId) =>
     config.externalRequestsEnabled && config.externalSourceCollectors.has(collector);
+  const jevAllowedCollectors = intersectJevSourceAllowlist(
+    config.jev.allowedCollectors,
+    config.externalSourceCollectors,
+  );
   const jevDispatchEnabled = config.externalRequestsEnabled && config.jev.apiKey !== "" &&
-    config.jev.allowedCollectors.size > 0 &&
+    jevAllowedCollectors.size > 0 &&
     config.jev.maxRequestsPerDay > 0 &&
     config.jev.maxRequestBytesPerDay > 0;
 
@@ -50,23 +55,6 @@ async function main(): Promise<void> {
     config.externalRequestsEnabled,
     config.externalSourceCollectors,
   );
-
-  // Resolve CIKs once at boot; SEC source degrades gracefully if this fails.
-  let cikByTicker = new Map<string, string>();
-  if (!config.externalRequestsEnabled) {
-    console.log("[desk] sec edgar paused: external requests are disabled");
-  } else if (!config.externalSourceCollectors.has("sec_edgar")) {
-    console.log("[desk] sec edgar paused: add sec_edgar to EXTERNAL_SOURCE_COLLECTORS to allow this source");
-  } else if (config.secUserAgent) {
-    try {
-      cikByTicker = await fetchTickerCikMap(config.secUserAgent);
-      console.log(`[desk] sec edgar: ${cikByTicker.size} tickers resolved`);
-    } catch (err) {
-      console.warn(`[desk] sec edgar disabled: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  } else {
-    console.log("[desk] sec edgar disabled: set SEC_USER_AGENT with contact information");
-  }
 
   const jevClient = new JevClient({
     apiKey: config.jev.apiKey,
@@ -96,7 +84,7 @@ async function main(): Promise<void> {
     engineLabel,
     inputPricePerMTok: config.jev.inputPricePerMTok,
     concurrency: config.scoreConcurrency,
-    allowedCollectors: config.jev.allowedCollectors,
+    allowedCollectors: jevAllowedCollectors,
     dailyBudget: {
       utcDay: () => new Date().toISOString().slice(0, 10),
       maxRequests: config.jev.maxRequestsPerDay,
@@ -122,8 +110,6 @@ async function main(): Promise<void> {
     quoteRequestsEnabled: collectorEnabled("yahoo_quote"),
     chartRequestsEnabled: collectorEnabled("yahoo_chart"),
   });
-  const secWatchlistCount = companies.filter((company) => cikByTicker.has(company.ticker)).length;
-
   // Pending work drains on boot only when Jev is configured. Without a key,
   // real observations remain pending and create no scoring failure attempts.
   // Existing completed scores remain untouched when the current rubric changes.
@@ -142,7 +128,7 @@ async function main(): Promise<void> {
       { collector: "google_news_rss", enabled: collectorEnabled("google_news_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "yahoo_finance_rss", enabled: collectorEnabled("yahoo_finance_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "gdelt_doc_api", enabled: collectorEnabled("gdelt_doc_api"), intervalSeconds: config.pollGdeltSeconds, targetCount: companies.length },
-      { collector: "sec_edgar", enabled: collectorEnabled("sec_edgar") && secWatchlistCount > 0, intervalSeconds: config.pollSecSeconds, targetCount: secWatchlistCount },
+      { collector: "sec_edgar", enabled: collectorEnabled("sec_edgar") && config.secUserAgent !== "", intervalSeconds: config.pollSecSeconds, targetCount: companies.length },
       { collector: "finnhub", enabled: collectorEnabled("finnhub") && config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length },
       { collector: "reddit", enabled: collectorEnabled("reddit") && config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
       { collector: "x", enabled: collectorEnabled("x") && config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },
@@ -171,18 +157,15 @@ async function main(): Promise<void> {
         enabledCollectors: config.externalSourceCollectors,
       }));
     }
-    if (collectorEnabled("sec_edgar") && config.secUserAgent && cikByTicker.size > 0) {
-      schedulers.push(
-        startSecPoller({
-          companies,
-          cikByTicker,
-          userAgent: config.secUserAgent,
-          pipeline,
-          db,
-          health,
-          intervalSeconds: config.pollSecSeconds,
-        }),
-      );
+    if (collectorEnabled("sec_edgar") && config.secUserAgent) {
+      schedulers.push(startSecCollector({
+        companies,
+        userAgent: config.secUserAgent,
+        pipeline,
+        db,
+        health,
+        intervalSeconds: config.pollSecSeconds,
+      }));
     }
     if (collectorEnabled("gdelt_doc_api")) {
       schedulers.push(startGdeltPoller({ companies, pipeline, db, health, intervalSeconds: config.pollGdeltSeconds }));

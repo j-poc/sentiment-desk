@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { intersectJevSourceAllowlist } from "../server/collector-policy.js";
 
 // Config resolution must not inspect the real shared-machine credential file
 // while these tests exercise explicit or empty environment values.
@@ -43,6 +44,17 @@ describe("external request mode", () => {
     );
     expect(() => parseExternalSourceCollectors("demo_simulation")).toThrow();
     expect(() => parseExternalSourceCollectors("not_a_source")).toThrow();
+  });
+
+  it("intersects Jev forwarding permission with the active source allowlist", () => {
+    expect(intersectJevSourceAllowlist(
+      new Set(["google_news_rss", "sec_edgar"]),
+      new Set(["sec_edgar"]),
+    )).toEqual(new Set(["sec_edgar"]));
+    expect(intersectJevSourceAllowlist(
+      new Set(["google_news_rss"]),
+      new Set(["sec_edgar"]),
+    )).toEqual(new Set());
   });
 });
 

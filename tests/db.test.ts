@@ -379,4 +379,49 @@ describe("Desk observation and judgment storage", () => {
       db.close();
     }
   });
+
+  it("does not count a global bootstrap receipt as company delivery coverage", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-delivery-coverage-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    const beta: Company = {
+      id: "beta", name: "Beta", ticker: "BETA", sector: "Technology", aliases: ["Beta"], color: "#654321",
+    };
+    const startedAt = Date.now() - 100;
+    const source = { collector: "sec_edgar" as const, intervalSeconds: 60, targetCount: 2, enabled: true };
+    try {
+      db.seedCompanies([company, beta]);
+      db.recordDelivery({
+        collector: "sec_edgar", companyId: null, requestKey: "ticker-directory", startedAt,
+        completedAt: startedAt + 1, result: "success", parsedItemCount: 2,
+        adapterVersion: "sec-company-tickers/1",
+      });
+      db.recordDelivery({
+        collector: "sec_edgar", companyId: company.id, requestKey: "acme-submissions", startedAt,
+        completedAt: startedAt + 2, result: "empty", parsedItemCount: 0,
+        adapterVersion: "sec-submissions/1",
+      });
+
+      expect(db.deliveryHealth([source], startedAt + 50)[0])
+        .toMatchObject({ state: "partial", coverageCount: 1, targetCount: 2 });
+
+      db.recordDelivery({
+        collector: "sec_edgar", companyId: company.id, requestKey: "acme-submissions-repeat", startedAt,
+        completedAt: startedAt + 3, result: "empty", parsedItemCount: 0,
+        adapterVersion: "sec-submissions/1",
+      });
+      expect(db.deliveryHealth([source], startedAt + 50)[0])
+        .toMatchObject({ state: "partial", coverageCount: 1, targetCount: 2 });
+
+      db.recordDelivery({
+        collector: "sec_edgar", companyId: beta.id, requestKey: "beta-submissions", startedAt,
+        completedAt: startedAt + 4, result: "empty", parsedItemCount: 0,
+        adapterVersion: "sec-submissions/1",
+      });
+      expect(db.deliveryHealth([source], startedAt + 50)[0])
+        .toMatchObject({ state: "current", coverageCount: 2, targetCount: 2 });
+    } finally {
+      db.close();
+    }
+  });
 });

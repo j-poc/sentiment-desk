@@ -83,7 +83,12 @@ function matchesCollectorRequest(collector: typeof sourceCollectors[number], att
   }
 }
 
-async function verifyCollectorGate(repo: string, companiesPath: string, collector: typeof sourceCollectors[number]): Promise<void> {
+async function verifyCollectorGate(
+  repo: string,
+  companiesPath: string,
+  collector: typeof sourceCollectors[number],
+  jevConfig?: { apiKey: string; allowedCollectors: string; expectedEnabled: boolean },
+): Promise<void> {
   const directory = mkdtempSync(path.join(tmpdir(), `sentiment-desk-allowlist-${collector}-`));
   const dbPath = path.join(directory, "desk.db");
   const guardLog = path.join(directory, "external-fetch-attempts.jsonl");
@@ -107,10 +112,10 @@ async function verifyCollectorGate(repo: string, companiesPath: string, collecto
       NETWORK_GUARD_LOG: guardLog,
       EXTERNAL_REQUESTS_ENABLED: "true",
       EXTERNAL_SOURCE_COLLECTORS: collector,
-      TYPESAFE_API_KEY: "",
-      TYPESAFE_ALLOWED_COLLECTORS: "",
-      TYPESAFE_MAX_REQUESTS_PER_DAY: "0",
-      TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: "0",
+      TYPESAFE_API_KEY: jevConfig?.apiKey ?? "",
+      TYPESAFE_ALLOWED_COLLECTORS: jevConfig?.allowedCollectors ?? "",
+      TYPESAFE_MAX_REQUESTS_PER_DAY: jevConfig ? "10" : "0",
+      TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: jevConfig ? "100000" : "0",
       SEC_USER_AGENT: "Offline verifier verifier@example.invalid",
       FINNHUB_API_KEY: "offline-verifier-unused",
       REDDIT_CLIENT_ID: "offline-verifier-unused",
@@ -155,12 +160,11 @@ async function verifyCollectorGate(repo: string, companiesPath: string, collecto
     for (const source of sourceCollectors) {
       const delivery = deliveryHealth.find((row) => row.collector === source);
       assert.ok(delivery, `${source} must appear in delivery health`);
-      // SEC's source schedule stays disabled until the separately gated ticker/CIK lookup succeeds.
-      assert.equal(delivery.enabled, source === collector && source !== "sec_edgar", `${source} delivery gate must match the one-source allowlist`);
+      assert.equal(delivery.enabled, source === collector, `${source} delivery gate must match the one-source allowlist`);
     }
     const counters = (health.health ?? {}) as Record<string, { enabled?: boolean }>;
     const expectedCounter: Record<string, string> = {
-      google_news_rss: "rss", yahoo_finance_rss: "rss", yahoo_quote: "quotes",
+      google_news_rss: "rss", yahoo_finance_rss: "rss", gdelt_doc_api: "gdelt", yahoo_quote: "quotes",
       sec_edgar: "sec", finnhub: "finnhub", reddit: "reddit", x: "x",
     };
     for (const [source, counter] of Object.entries(expectedCounter)) {
@@ -169,7 +173,8 @@ async function verifyCollectorGate(repo: string, companiesPath: string, collecto
         : source === collector;
       assert.equal(counters[counter]?.enabled, enabled, `${counter} health counter must reflect ${source} allowlist state`);
     }
-    assert.equal(counters.jev?.enabled, false, "empty Jev key and allowlist must prevent model dispatch");
+    assert.equal(counters.jev?.enabled, jevConfig?.expectedEnabled ?? false,
+      "Jev dispatch must match key, budget, and intersection of source allowlists");
 
     if (collector === "yahoo_chart") {
       const response = await fetch(`http://127.0.0.1:${port}/api/companies/apple/price?ticker=AAPL&hours=24`);
@@ -284,7 +289,7 @@ async function main(): Promise<void> {
     assert.equal(health.externalRequestsEnabled, false);
 
     const counters = (health.health ?? {}) as Record<string, { enabled?: boolean; ok?: number; fail?: number }>;
-    for (const source of ["rss", "x", "quotes", "sec", "finnhub", "reddit", "jev"]) {
+    for (const source of ["rss", "gdelt", "x", "quotes", "sec", "finnhub", "reddit", "jev"]) {
       assert.equal(counters[source]?.enabled, false, `${source} must remain disabled without explicit opt-in`);
       assert.equal(counters[source]?.ok, 0, `${source} must not report startup traffic`);
       assert.equal(counters[source]?.fail, 0, `${source} must not attempt startup traffic`);
@@ -311,7 +316,12 @@ async function main(): Promise<void> {
     const singleCompanyPath = path.join(directory, "one-real-company.json");
     writeFileSync(singleCompanyPath, JSON.stringify({ companies: [apple] }));
     for (const collector of sourceCollectors) await verifyCollectorGate(repo, singleCompanyPath, collector);
-    console.log(`PASS: fresh default startup served ${companies.length} configured companies; sources and Jev stayed paused, retry returned 503, and zero fetches were attempted. Separate fresh processes proved all ${sourceCollectors.length} source allowlists activate only their own guarded request path and health state; all outbound fetches were intercepted before network access.`);
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", {
+      apiKey: "unused-offline-verification-key",
+      allowedCollectors: "google_news_rss",
+      expectedEnabled: false,
+    });
+    console.log(`PASS: fresh default startup served ${companies.length} configured companies; sources and Jev stayed paused, retry returned 503, and zero fetches were attempted. Separate fresh processes proved all ${sourceCollectors.length} source allowlists activate only their own guarded request path and health state. A mismatched Jev/source allowlist stayed disabled with an API key present. All outbound fetches were intercepted before network access.`);
   } finally {
     try {
       if (child && exitResult == null) {

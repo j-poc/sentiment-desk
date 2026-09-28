@@ -9,7 +9,7 @@ import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent } from "./sources/x.js";
 import { isFinanceRelevant } from "./scoring.js";
-import { fetchPrimaryDocText, fetchRecent8Ks, titleForItems } from "./sources/sec.js";
+import { fetchPrimaryDocText, fetchRecent8Ks, fetchTickerCikMap, titleForItems } from "./sources/sec.js";
 import { classifyDeliveryError, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 import {
@@ -278,7 +278,9 @@ export function startSecPoller(deps: {
   db: Desk;
   health: HealthTracker;
   intervalSeconds: number;
+  fetchFilings?: typeof fetchRecent8Ks;
 }): SchedulerControl {
+  const fetchFilings = deps.fetchFilings ?? fetchRecent8Ks;
   let running = false;
   const tick = async (): Promise<void> => {
     if (providerCoolingDown(deps.db, "sec")) return;
@@ -292,7 +294,7 @@ export function startSecPoller(deps: {
         const startedAt = Date.now();
         let filings: Awaited<ReturnType<typeof fetchRecent8Ks>> = [];
         try {
-          filings = await fetchRecent8Ks({ cik, ticker: company.ticker, sinceMs: since, userAgent: deps.userAgent });
+          filings = await fetchFilings({ cik, ticker: company.ticker, sinceMs: since, userAgent: deps.userAgent });
           let added = 0;
           let unavailableDocuments = 0;
           for (const f of filings) {
@@ -367,6 +369,84 @@ export function startSecPoller(deps: {
     }
   };
   return scheduleTask(tick, deps.intervalSeconds * 1000);
+}
+
+/** Resolve the SEC ticker directory in the background and retry failed bootstrap attempts. */
+export function startSecCollector(deps: {
+  companies: Company[];
+  userAgent: string;
+  pipeline: Pipeline;
+  db: Desk;
+  health: HealthTracker;
+  intervalSeconds: number;
+  resolveTickerCiks?: typeof fetchTickerCikMap;
+  fetchFilings?: typeof fetchRecent8Ks;
+}): SchedulerControl {
+  const resolveTickerCiks = deps.resolveTickerCiks ?? fetchTickerCikMap;
+  let poller: SchedulerControl | null = null;
+  const bootstrap = scheduleTask(async () => {
+    if (poller || providerCoolingDown(deps.db, "sec")) return;
+    const startedAt = Date.now();
+    const requestKey = `sec:ticker-directory:${startedAt}`;
+    try {
+      const cikByTicker = await resolveTickerCiks(deps.userAgent);
+      if (cikByTicker.size === 0) throw new Error("SEC ticker directory returned no ticker mappings");
+      recordDelivery({
+        db: deps.db,
+        collector: "sec_edgar",
+        companyId: null,
+        requestKey,
+        startedAt,
+        adapterVersion: "sec-company-tickers/1",
+        result: "success",
+        parsedItemCount: cikByTicker.size,
+        normalizedItems: { tickerCount: cikByTicker.size },
+      });
+      clearProviderRateLimit(deps.db, "sec", startedAt);
+      deps.health.recordSec(true);
+      deps.db.logEvent("info", "sec", `${cikByTicker.size} ticker CIKs resolved`);
+      poller = startSecPoller({
+        companies: deps.companies,
+        cikByTicker,
+        userAgent: deps.userAgent,
+        pipeline: deps.pipeline,
+        db: deps.db,
+        health: deps.health,
+        intervalSeconds: deps.intervalSeconds,
+        fetchFilings: deps.fetchFilings,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      recordDelivery({
+        db: deps.db,
+        collector: "sec_edgar",
+        companyId: null,
+        requestKey,
+        startedAt,
+        adapterVersion: "sec-company-tickers/1",
+        result: classifyDeliveryError(err),
+        parsedItemCount: 0,
+        error: err,
+      });
+      deps.health.recordSec(false, `SEC ticker directory: ${message}`);
+      deps.db.logEvent("warn", "sec", `ticker directory: ${message}`);
+      if (err instanceof ProviderRateLimitError) {
+        recordProviderRateLimit({
+          db: deps.db,
+          provider: "sec",
+          minDelayMs: deps.intervalSeconds * 1_000,
+          retryAfterMs: err.retryAfterMs,
+        });
+      }
+    }
+  }, deps.intervalSeconds * 1_000);
+
+  return {
+    async stop() {
+      await bootstrap.stop();
+      await poller?.stop();
+    },
+  };
 }
 
 /**
@@ -453,7 +533,7 @@ export function startGdeltPoller(deps: {
             result: articles.length === 0 ? "empty" : "success", parsedItemCount: articles.length,
             normalizedItems: articles,
           });
-          deps.health.recordRss(true);
+          deps.health.recordGdelt(true);
           deps.db.setKv(retryAtKey, "0");
           deps.db.setKv(failureCountKey, "0");
           if (added > 0) deps.db.logEvent("info", "gdelt", `${company.ticker}: ${added} new`);
@@ -466,7 +546,7 @@ export function startGdeltPoller(deps: {
             result: articles.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: articles.length,
             normalizedItems: articles, error: err,
           });
-          deps.health.recordRss(false, `gdelt ${company.ticker}: ${message}`);
+          deps.health.recordGdelt(false, `gdelt ${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "gdelt", `${company.ticker}: ${message}`);
           if (err instanceof GdeltHttpError && err.status === 429) {
             const previousCount = Number(deps.db.getKv(failureCountKey) ?? "0");

@@ -749,7 +749,9 @@ export class Desk {
       const latest = [...rows].sort((a, b) => b.completedAt - a.completedAt)[0] ?? null;
       const dueAfterMs = Math.max(source.intervalSeconds * 3_000, 180_000);
       const recent = rows.filter((row) => now - row.completedAt <= dueAfterMs);
-      const coverageCount = recent.filter((row) => row.result === "success" || row.result === "empty").length;
+      const coverageCount = new Set(recent.filter((row) =>
+        row.companyId !== null && (row.result === "success" || row.result === "empty")
+      ).map((row) => row.companyId)).size;
       const recentFailureCount = recent.filter((row) => ["failed", "rate_limited", "invalid"].includes(row.result)).length;
       const recentPartialCount = recent.filter((row) => row.result === "partial").length;
       const observation = observationByCollector.get(source.collector);

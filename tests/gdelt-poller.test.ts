@@ -34,7 +34,7 @@ function setup() {
   databases.push(db);
   const companies = [company("acme", "ACME"), company("bravo", "BRAV")];
   db.seedCompanies(companies);
-  const health = new HealthTracker(false, false, "jev-latest");
+  const health = new HealthTracker(false, false, "jev-latest", false, false, false, true, new Set(["gdelt_doc_api"]));
   const pipeline = new Pipeline({
     db,
     judge: null,
@@ -73,6 +73,8 @@ describe("GDELT source-wide 429 cooldown", () => {
       pause: async () => {},
     });
     expect(firstFetch).toHaveBeenCalledTimes(1);
+    expect(health.snapshot().gdelt).toMatchObject({ enabled: true, ok: 0, fail: 1 });
+    expect(health.snapshot().rss).toMatchObject({ enabled: false, ok: 0, fail: 0 });
     expect(db.getKv("gdelt:rate-limit:consecutive")).toBe("1");
     const retryAt = Number(db.getKv("gdelt:rate-limit:retry-at"));
     expect(retryAt).toBe(Date.now() + 60_000);
@@ -102,6 +104,8 @@ describe("GDELT source-wide 429 cooldown", () => {
       pause: async () => {},
     });
     expect(restartedFetch).toHaveBeenCalledTimes(2);
+    expect(health.snapshot().gdelt).toMatchObject({ ok: 2, fail: 1 });
+    expect(health.snapshot().rss).toMatchObject({ ok: 0, fail: 0 });
     expect(db.getKv("gdelt:rate-limit:consecutive")).toBe("0");
     expect(db.getKv("gdelt:rate-limit:retry-at")).toBe("0");
   });

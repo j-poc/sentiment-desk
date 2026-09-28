@@ -12,7 +12,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export function HealthPanel({ health }: { health: HealthDTO | null }) {
   if (!health) return null;
-  const { jev, rss, x } = health.health;
+  const { jev, rss, gdelt, x } = health.health;
 
   return (
     <div className="px-4 py-3.5 text-[11px]">
@@ -28,6 +28,10 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
 
       <div className="mt-3 border-t border-white/[0.05] pt-2.5">
         <Row label="rss news" value={!health.externalRequestsEnabled ? "paused (offline mode)" : `${rss.ok} ok / ${rss.fail} fail · ${timeAgo(rss.lastOkAt)}`} />
+        <Row
+          label="gdelt news"
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : gdelt.enabled ? `${gdelt.ok} ok / ${gdelt.fail} fail · ${timeAgo(gdelt.lastOkAt)}` : "disabled (source allowlist)"}
+        />
         <Row
           label="x api"
           value={!health.externalRequestsEnabled ? "paused (offline mode)" : x.enabled ? `${x.ok} ok / ${x.fail} fail · ${timeAgo(x.lastOkAt)}` : "disabled (no token)"}

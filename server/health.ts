@@ -17,6 +17,7 @@ export interface SourceCounters {
 export interface HealthSnapshot {
   externalRequestsEnabled: boolean;
   rss: SourceCounters;
+  gdelt: SourceCounters;
   x: SourceCounters;
   quotes: SourceCounters;
   sec: SourceCounters;
@@ -27,6 +28,7 @@ export interface HealthSnapshot {
 
 export class HealthTracker {
   private readonly rss: SourceCounters;
+  private readonly gdelt: SourceCounters;
   private readonly x: SourceCounters;
   private readonly jev: SourceCounters & { model: string };
 
@@ -50,6 +52,7 @@ export class HealthTracker {
       externalRequestsEnabled && (externalCollectors == null || externalCollectors.has(collector));
     this.externalRequestsEnabled = externalRequestsEnabled;
     this.rss = fresh(collectorEnabled("google_news_rss") || collectorEnabled("yahoo_finance_rss"));
+    this.gdelt = fresh(collectorEnabled("gdelt_doc_api"));
     this.x = fresh(collectorEnabled("x") && xEnabled);
     this.quotes = fresh(collectorEnabled("yahoo_quote"));
     this.sec = fresh(collectorEnabled("sec_edgar") && secEnabled);
@@ -64,6 +67,10 @@ export class HealthTracker {
 
   recordRss(ok: boolean, error?: string): void {
     this.record(this.rss, ok, error);
+  }
+
+  recordGdelt(ok: boolean, error?: string): void {
+    this.record(this.gdelt, ok, error);
   }
 
   recordX(ok: boolean, error?: string): void {
@@ -90,6 +97,7 @@ export class HealthTracker {
     return {
       externalRequestsEnabled: this.externalRequestsEnabled,
       rss: { ...this.rss },
+      gdelt: { ...this.gdelt },
       x: { ...this.x },
       quotes: { ...this.quotes },
       sec: { ...this.sec },

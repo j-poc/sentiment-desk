@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Desk } from "../server/db.js";
+import { intersectJevSourceAllowlist } from "../server/collector-policy.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { JevError } from "../server/jev.js";
@@ -100,6 +101,29 @@ describe("Jev pipeline recovery", () => {
       await pipeline.waitForIdle();
       expect(calls).toBe(0);
       expect(db.getKv("jev:budget:2026-09-28:requests")).toBeUndefined();
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]).toMatchObject({
+        status: "pending",
+        score: null,
+        error: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not drain retained publishers outside the active source allowlist", async () => {
+    let calls = 0;
+    const jevAllowlist = new Set<CollectorId>(["google_news_rss", "sec_edgar"]);
+    const externalAllowlist = new Set<CollectorId>(["sec_edgar"]);
+    const { db, pipeline, source } = setup(async () => {
+      calls += 1;
+      return { answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
+    }, { allowedCollectors: intersectJevSourceAllowlist(jevAllowlist, externalAllowlist) });
+    try {
+      pipeline.ingest(source);
+      expect(pipeline.drainPending(10)).toBe(0);
+      await pipeline.waitForIdle();
+      expect(calls).toBe(0);
       expect(db.mentionsForCompany(company.id, 0, 10)[0]).toMatchObject({
         status: "pending",
         score: null,
