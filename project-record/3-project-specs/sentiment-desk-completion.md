@@ -464,12 +464,13 @@ enter this evaluation and cannot satisfy any of its gates.
   If the available corpus or budget cannot meet those precision targets, report
   the affected claims as `UNVERIFIED`, not as a pass. The blinded pilot may be
   included only if it follows the same sampling and labeling protocol.
-- **Independent labels:** Two qualified reviewers independently label each
-  selected item while blind to Jev output. They use the fixed product rubric
-  and the source material permitted for this study to label company relevance,
-  investor relevance, directional business implication, and dominant event
-  type. Preserve both raw labels and short evidence-grounded rationales;
-  adjudicate disagreements without deleting either original label. Report
+- **Independent labels:** Two independent qualified human reviewers label
+  each selected item while blind to Jev output. They use the fixed product
+  rubric and the source material permitted for this study to label company
+  relevance, investor relevance, directional business implication, and
+  dominant event type. Do not use Jev or another model as a reviewer. Preserve
+  both raw labels and short evidence-grounded rationales; adjudicate
+  disagreements without deleting either original label. Report
   pre-adjudication reviewer agreement so weak or ambiguous ground truth is
   visible. Attach each label to the observation ID, accession, source URL,
   company, item/excerpt digest, source time, labeler, and adjudication record.

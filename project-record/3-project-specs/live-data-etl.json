@@ -238,7 +238,7 @@
       "command": "Run the frozen real-source evaluation in project-record/3-project-specs/sentiment-desk-completion.md after all external gates clear",
       "covers": "Independent, provenance-backed labels and source-scoped Jev sentiment/event-type quality on representative authorized real observations; separate company/investor relevance and calibration evidence.",
       "status": "BLOCKED",
-      "protocol_status": "PREPARED; sample IDs and final sample size must be frozen after a blinded label-only pilot and before any Jev output is opened",
+      "protocol_status": "PREPARED; two independent qualified human reviewers must complete a blinded label-only pilot; sample IDs and final sample size are frozen before any Jev output is opened",
       "evidence": "No real-source text was sent to Jev and no independent real-source labels exist. The current key was explicitly empty and the product left real judgments pending. Synthetic integration/sanity runs do not establish live-source quality. Execution requires SEC User-Agent configuration, authorized TypeSafe account-owner confirmation of permitted use/telemetry/retention/limits/auto-refill/billing and similar-product terms, source-scoped request/spend approval, and enough eligible real EDGAR cases to meet the predeclared clustered confidence-interval precision. Even a passing EDGAR result does not generalize to publisher or social feeds."
     },
     "source_rights_review": {
