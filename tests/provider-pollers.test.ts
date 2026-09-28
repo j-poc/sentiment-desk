@@ -142,6 +142,46 @@ describe("optional provider rate limits", () => {
     db.close();
   });
 
+  it("preserves a missing Reddit source timestamp as unknown", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const request = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: { children: [{ data: {
+          id: "post-1",
+          title: "$ALPH revenue report",
+          selftext: "Alpha Inc reports revenue growth.",
+          subreddit: "stocks",
+          author: "researcher",
+          permalink: "/r/stocks/comments/post-1/alpha_revenue_report/",
+          score: 3,
+          num_comments: 1,
+        } }] },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    globalThis.fetch = request;
+    const ingest = vi.fn(() => true);
+    const control = startRedditPoller({
+      companies: [companies[0]!],
+      creds: { clientId: "test-id", clientSecret: "test-secret" },
+      pipeline: { ingest } as unknown as Pipeline,
+      db,
+      health: new HealthTracker(false, false, "unconfigured", false, false, true),
+      intervalSeconds: 180,
+    });
+
+    try {
+      await control.stop();
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(ingest).toHaveBeenCalledWith(expect.objectContaining({ publishedAt: null }));
+    } finally {
+      db.close();
+    }
+  });
+
   it("persists X's reset time and does not retry until the provider reset", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies(companies);

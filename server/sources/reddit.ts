@@ -14,7 +14,7 @@ export interface RedditPost {
   subreddit: string;
   author: string;
   permalink: string;
-  createdAt: number;
+  createdAt: number | null;
   score: number;
   numComments: number;
 }
@@ -104,7 +104,10 @@ export async function searchReddit(
       subreddit: d.subreddit ?? "unknown",
       author: d.author ?? "unknown",
       permalink: `https://www.reddit.com${d.permalink}`,
-      createdAt: (d.created_utc ?? 0) * 1000,
+      createdAt: typeof d.created_utc === "number" && Number.isFinite(d.created_utc) && d.created_utc > 0
+        && Number.isFinite(d.created_utc * 1000)
+        ? d.created_utc * 1000
+        : null,
       score: d.score ?? 0,
       numComments: d.num_comments ?? 0,
     });

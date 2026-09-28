@@ -369,3 +369,15 @@ enters the pipeline, while the delivery remains visibly partial.
 database and mocked SEC responses; it makes no live source or Jev request.
 The complete suite passes 122 tests across 21 files, and the production build
 passes with the existing Vite advisory that the main chunk is above 500 kB.
+
+## Reddit source-time integrity repair
+
+The collector audit found that Reddit's optional `created_utc` field defaulted
+to numeric zero. The poller treated that finite value as a real publication
+time and ingested it as Unix epoch 1970. A poller-level red test confirmed the
+incorrect `publishedAt=0`. The adapter now accepts only finite positive provider
+seconds that convert to finite milliseconds and returns `null` otherwise; the
+poller preserves that null in the observation. The regression passes without
+calling Reddit or Jev. Final verification passes 123 tests across 21 files,
+typecheck, production build, JSON parsing, and `git diff --check`. The build
+retains its existing Vite advisory for the 529.62 kB main chunk.

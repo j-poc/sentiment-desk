@@ -811,7 +811,7 @@ export function startRedditPoller(deps: {
               tier: "social",
               title: p.title,
               snippet: p.selftext,
-              publishedAt: Number.isFinite(p.createdAt) ? p.createdAt : null,
+              publishedAt: p.createdAt,
               collector: "reddit",
               sourceItemId: p.id,
               publisherName: `r/${p.subreddit}`,

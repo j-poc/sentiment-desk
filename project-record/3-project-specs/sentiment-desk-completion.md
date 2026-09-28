@@ -11,7 +11,7 @@ selected company and drew its real Yahoo 7D chart, while the weekend 24H
 window remained honestly empty. GDELT HTTP 429 was surfaced as a source error;
 the temporary server was stopped after verification. Quotes older than 15
 minutes show source age in the tape, watchlist, and header. `npm test` passes
-122 tests across 21 files; typecheck and production build pass. Default public
+123 tests across 21 files; typecheck and production build pass. Default public
 collectors now pace request starts and persist provider-wide 429 cooldowns;
 Yahoo chart cache misses are coalesced. Generated
 examples stay isolated to tests and frozen evaluations; they are not
@@ -142,6 +142,9 @@ does not generate opportunity hypotheses or value-chain links.
    source records with similar headlines remain separately attributable.
 4. Missing publication or observation time is never replaced by retrieval
    time. The API and UI show source time separately from collection time.
+   - Current source-time regression (2026-09-28): Reddit `created_utc` is
+     optional in the provider response; an absent or invalid value remains
+     `null` through poller ingestion rather than becoming Unix epoch zero.
 5. Provider failure, malformed data, restart, and stale-but-successful
    delivery leave prior evidence intact and visibly degraded.
    - Current-source finding (2026-09-28): GDELT returned plain-text content
@@ -187,7 +190,7 @@ does not generate opportunity hypotheses or value-chain links.
 6. Desktop and narrow-screen flows let the researcher select a company, read
    the score/index, inspect the source and Jev rubric, and understand data
    health without hidden overflow or dead controls.
-7. `npm test` (122 tests across 21 files), typecheck, production build, fresh
+7. `npm test` (123 tests across 21 files), typecheck, production build, fresh
    keyless local start, 390px and 1280px browser passes, accessible mention
    drawer interaction, SSE shutdown, and isolated Docker persistence smoke
    pass. The source-data contract records what these checks prove and what
