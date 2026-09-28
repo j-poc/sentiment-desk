@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -9,7 +10,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { bucketMsFor, forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
+import { forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 
 /**
@@ -25,7 +26,6 @@ export interface AppDeps {
   market: MarketData;
   hub: Hub;
   health: HealthTracker;
-  demo: boolean;
   version: string;
   webRoot?: string;
   deliverySources: DeliverySourceSchedule[];
@@ -39,6 +39,7 @@ const retryConfirmationSchema = z.object({
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
+  const runtimeId = randomUUID();
 
   app.onError((err, c) => {
     console.error(`[http] ${c.req.path}:`, err);
@@ -54,14 +55,15 @@ export function createApp(deps: AppDeps): Hono {
     } catch {
       /* db file not yet created */
     }
+    const healthSnapshot = deps.health.snapshot();
     return c.json({
       ok: true,
       version: deps.version,
-      demo: deps.demo,
+      runtimeId,
       uptimeSec: Math.floor(process.uptime()),
       sseClients: deps.hub.size,
       dbSizeBytes,
-      health: deps.health.snapshot(),
+      health: healthSnapshot,
       deliveries: deps.db.deliverySummary(),
       deliveryHealth: deps.db.deliveryHealth(deps.deliverySources),
       usage: deps.db.usageSince(startOfDayUtc.getTime()),
@@ -82,7 +84,6 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.post("/api/mentions/:id/retry", async (c) => {
-    if (deps.demo) return c.json({ error: "demo_retry_unavailable" }, 409);
     const input = retryConfirmationSchema.safeParse(await c.req.json().catch(() => null));
     if (!input.success) return c.json({ error: "retry_confirmation_required" }, 400);
 
@@ -216,8 +217,12 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.get("/api/companies/:id/price", async (c) => {
+    const id = c.req.param("id");
     const ticker = (c.req.query("ticker") ?? "").toUpperCase();
     if (!/^[A-Z^.\-=]{1,12}$/.test(ticker)) return c.json({ error: "bad ticker" }, 400);
+    const company = deps.db.companies().find((candidate) => candidate.id === id);
+    if (!company) return c.json({ error: "unknown company" }, 404);
+    if (company.ticker !== ticker) return c.json({ error: "company_ticker_mismatch" }, 409);
     const hours = clampNumber(c.req.query("hours"), 1, 720, 24);
     const now = Date.now();
     const since = now - hours * 60 * 60 * 1000;
@@ -241,29 +246,21 @@ export function createApp(deps: AppDeps): Hono {
         return c.json({ error: message }, 502);
       }
     }
-    // Resample onto the exact bucket grid the sentiment series uses, carrying
-    // the last known price forward: both series then share one uniform x axis,
-    // and closed periods render flat instead of as artifacts.
-    const bucketMs = bucketMsFor(hours);
-    const first = Math.floor(since / bucketMs) * bucketMs;
-    const out: Array<{ t: number; price: number }> = [];
-    let pi = 0;
-    let last: number | null = null;
-    for (let t = first; t <= now; t += bucketMs) {
-      const end = t + bucketMs;
-      while (pi < pts.length && pts[pi]!.t < end) {
-        last = pts[pi]!.price;
-        pi += 1;
-      }
-      if (last != null) out.push({ t, price: last });
-    }
+    // Price values and timestamps are provider observations. Do not carry a
+    // stale close into later buckets or relabel it as an observation at a
+    // generated display timestamp; closed-market windows can be empty.
+    const observed = pts
+      .filter((point) => Number.isFinite(point.t) && Number.isFinite(point.price) && point.price > 0 && point.t > 0 && point.t <= now)
+      .sort((a, b) => a.t - b.t);
+    const inWindow = observed.filter((point) => point.t >= since);
+    sourceLatestAt = observed.at(-1)?.t ?? null;
     return c.json({
-      points: out,
+      points: inWindow,
       delivery: seriesDelivery,
       servedAt: seriesServedAt,
       sourceLatestAt,
       cacheAgeMs,
-      resampling: "bucketed_last_observation",
+      resampling: "source_observations_in_window",
     });
   });
 
@@ -326,7 +323,7 @@ export function createApp(deps: AppDeps): Hono {
       };
       deps.hub.add(send, cleanup);
       stream.onAbort(cleanup);
-      await send("hello", JSON.stringify({ demo: deps.demo, now: Date.now() }));
+      await send("hello", JSON.stringify({ now: Date.now(), runtimeId }));
       if (open) hb = setInterval(() => void send("ping", String(Date.now())), 15_000);
       await closed;
     }),

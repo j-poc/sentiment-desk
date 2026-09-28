@@ -11,7 +11,6 @@ try {
   /* no .env file */
 }
 
-const bool = (v: string | undefined) => v === "1" || v?.toLowerCase() === "true";
 const int = (v: string | undefined, fallback: number) => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
@@ -39,9 +38,9 @@ function readEnvFile(filePath: string): Map<string, string> {
 }
 
 const newsjackEnv = readEnvFile(path.join(os.homedir(), ".newsjack", ".env"));
-const envKey = process.env.TYPESAFE_API_KEY?.trim() || "";
-const apiKey = envKey || newsjackEnv.get("TYPESAFE_API_KEY")?.trim() || "";
-export const apiKeySource = envKey ? "env" : apiKey ? "~/.newsjack/.env" : "missing";
+const envKey = process.env.TYPESAFE_API_KEY;
+const apiKey = envKey !== undefined ? envKey.trim() : newsjackEnv.get("TYPESAFE_API_KEY")?.trim() || "";
+export const apiKeySource = envKey !== undefined ? (apiKey ? "env" : "disabled by env") : apiKey ? "~/.newsjack/.env" : "missing";
 
 export const VERSION = "0.2.0";
 
@@ -87,7 +86,6 @@ export const config = {
   pollQuotesSeconds: int(process.env.POLL_QUOTES_SECONDS, 45),
   scoreConcurrency: int(process.env.SCORE_CONCURRENCY, 6),
   rssConcurrency: int(process.env.RSS_CONCURRENCY, 4),
-  demo: bool(process.env.DEMO),
   /** Market context rows shown on the tape; never scored, never in the watchlist. */
   indices: (process.env.INDICES?.split(",") ?? ["SPY", "QQQ", "^VIX"])
     .map((s) => s.trim())

@@ -59,7 +59,18 @@ export async function fetchGdeltArticles(
   const text = await res.text();
   // GDELT occasionally returns HTML error pages; fail loudly but safely.
   if (text.trim().startsWith("<")) throw new Error("GDELT returned non-JSON body");
-  const body = JSON.parse(text) as GdeltResponse;
+  let body: GdeltResponse;
+  try {
+    body = JSON.parse(text) as GdeltResponse;
+  } catch {
+    // Do not echo provider response text into health/events or mistake a
+    // plain-text error response for source content.
+    throw new Error("GDELT response was not valid JSON");
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)
+    || (body.articles != null && !Array.isArray(body.articles))) {
+    throw new Error("GDELT response had an invalid shape");
+  }
   const out: GdeltArticle[] = [];
   for (const a of body.articles ?? []) {
     if (!a.url || !a.title) continue;

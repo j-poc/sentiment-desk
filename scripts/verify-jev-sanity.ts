@@ -156,7 +156,7 @@ async function runCase(item: EvalCase, jev: JevClient): Promise<Record<string, u
         rubricSha: score.rubricSha,
         inputTokens: score.inputTokens,
         outputTokens: score.outputTokens,
-        estimatedInputCostUsd: score.costUsd,
+        estimatedInputCostUsd: score.estimatedInputCostUsd,
         responseLatencyMs: score.latencyMs,
       } : null,
       terminalStatus,

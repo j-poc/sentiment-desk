@@ -9,7 +9,6 @@
   },
   "scripts": {
     "dev": "tsx server/index.ts",
-    "demo": "DEMO=1 tsx server/index.ts",
     "dev:web": "vite",
     "build": "npm run build:web && npm run build:server",
     "build:web": "vite build",

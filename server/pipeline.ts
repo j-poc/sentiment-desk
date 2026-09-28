@@ -79,12 +79,13 @@ export class Pipeline {
   /** Insert a normalized source observation; exact replays do not reach Jev. */
   ingest(m: RawMentionInput): boolean {
     const stored = this.deps.db.insertObservation(m);
-    if (stored.inserted) this.enqueue(stored.observationId);
+    if (stored.inserted && this.deps.judge) this.enqueue(stored.observationId);
     return stored.inserted;
   }
 
   /** Re-queue existing pending mentions (used after rubric migrations). */
   drainPending(limit = 1_000): number {
+    if (!this.deps.judge) return 0;
     const ids = this.deps.db.pendingIds(limit);
     for (const id of ids) this.enqueue(id);
     return ids.length;
@@ -141,9 +142,8 @@ export class Pipeline {
     if (!queuedRow || (queuedRow.status !== "pending" && queuedRow.status !== "retrying")) return;
 
     if (!this.deps.judge) {
-      // No engine configured and not demo: the mention stays pending and the
-      // gap is visible in health. Nothing is ever scored by default.
-      this.deps.health.recordJev(false, "no scoring engine configured");
+      // No engine configured: leave the real observation pending. An
+      // intentionally absent provider is not a failed provider request.
       return;
     }
 
@@ -219,7 +219,7 @@ export class Pipeline {
         engine: out.model,
         inputTokens,
         outputTokens: out.outputTokens,
-        costUsd: (inputTokens / 1_000_000) * this.deps.inputPricePerMTok,
+        estimatedInputCostUsd: (inputTokens / 1_000_000) * this.deps.inputPricePerMTok,
         latencyMs: out.latencyMs,
         rubricSha: RUBRIC_SHA,
         scoredAt: Date.now(),

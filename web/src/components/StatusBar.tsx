@@ -46,11 +46,9 @@ export function StatusBar({
   tape: Mention[];
 }) {
   const engine = health
-    ? health.demo
-      ? "demo-sim"
-      : health.health.jev.enabled
-        ? health.health.jev.model
-        : "awaiting key"
+    ? health.health.jev.enabled
+      ? health.health.jev.model
+      : "awaiting key"
     : "…";
 
   return (

@@ -165,8 +165,8 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
                   </div>
                 </div>
                 <div className="ml-auto text-right text-[10px] text-white/35">
-                  <div className="tabnum">{s.latencyMs}ms judge</div>
-                  <div className="tabnum">${s.costUsd.toFixed(5)}</div>
+                  <div className="tabnum">{s.latencyMs}ms Jev response</div>
+                  <div className="tabnum">est. input ${s.estimatedInputCostUsd.toFixed(5)}</div>
                 </div>
               </div>
 

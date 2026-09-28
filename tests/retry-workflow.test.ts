@@ -79,7 +79,6 @@ function setup(judge: (state: JevState) => Promise<{
     market,
     hub,
     health,
-    demo: false,
     version: "retry-test",
     deliverySources: [],
   });

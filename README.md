@@ -23,14 +23,18 @@ fact-checking.
   retrieval, and ingestion clocks separately. Missing source time stays
   unknown.
 - **Market data**: Yahoo Finance chart endpoints supply quotes and historical
-  price context. Quote currency, provider source time, retrieval time, and
-  cache/network state are exposed. Historical series retain provider times and
-  disclose when display buckets use last-observation carry-forward.
+  price context. Quote currency, provider observation time, retrieval time,
+  and cache/network state stay separate. Quotes older than 15 minutes, or
+  quotes without an observation time, are visibly marked in the tape,
+  watchlist, and selected-company header. Price charts plot only actual
+  provider observations inside the selected time window; missing periods are
+  left empty and an out-of-window latest quote is never carried forward.
 - **Judgment**: Jev scoring starts when `TYPESAFE_API_KEY` is present. For a
-  local Node run, the app also checks `~/.newsjack/.env`; Docker Compose passes
-  values from this project’s `.env` only. Without a key, real observations are
-  still collected and remain pending. Existing judgments are not re-scored on
-  startup because the rubric changes.
+  local Node run, the app also checks `~/.newsjack/.env` unless the variable is
+  explicitly set empty; Docker Compose passes values from this project’s
+  `.env` only. Without a key, real observations are still collected and remain
+  pending. Existing judgments are not re-scored on startup because the rubric
+  changes.
 
 ## The terminal
 
@@ -38,10 +42,10 @@ Data-dense, dark-only, monospace numerics — the shared language of the
 Bloomberg-style open-source terminals (OpenBB, Neuberg, the React terminal
 clones), applied to sentiment.
 
-- **Ticker tape**: indices then every watched ticker, live price, session
-  change, sentiment dot. Click to select.
-- **Watchlist**: sparkline, quote, change, index, delta; sortable by movement
-  or alphabet. `j`/`k` or arrow keys to walk it.
+- **Ticker tape**: indices then every watched ticker, provider price, session
+  change, sentiment dot, and visible age for delayed quotes. Click to select.
+- **Watchlist**: sparkline, quote and source age, index, delta; sortable by
+  movement or alphabet. `j`/`k` or arrow keys to walk it.
 - **Company panel**: sentiment index and comparison windows.
 - **Chart**: sentiment area with honest gaps (no interpolation) and an optional
   normalized price overlay (`c`) so divergence between narrative and price is
@@ -74,7 +78,6 @@ npm install
 cp .env.example .env       # add TYPESAFE_API_KEY to go live on judgment
 npm run dev                # live sources + live quotes on :8787
 npm run dev:web            # Vite dev UI on :5173 (proxies /api)
-npm run demo               # optional synthetic-sentiment interface exercise
 ```
 
 Production:
@@ -107,10 +110,12 @@ The database survives container rebuilds and `docker compose down`; `docker
 compose down -v` removes the saved database. To inspect the running service,
 use `docker compose logs -f sentiment-desk`.
 
-The default rebuild never enables demo mode. `npm run demo` or `DEMO=1` is an
-optional interface exercise with synthetic sentiment; it disables news
-collectors and still fetches real market quotes. It does not replace the live
-data path.
+The application has no synthetic-data runtime. All displayed mentions must
+come from configured source collectors, and all sentiment/event judgments
+must come from Jev. Unconfigured judgments stay pending; generated fixtures
+are confined to automated tests and frozen evaluations. Existing simulation
+rows from older versions remain stored for auditability but are excluded from
+the UI, aggregates, retry queue, and usage totals.
 
 To verify a live, credential-free Compose rebuild and persistent-volume
 recovery, run `./scripts/verify-live-compose.sh`. It uses a temporary Compose
@@ -122,7 +127,7 @@ its temporary volume.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | — | Jev scoring; local Node also checks `~/.newsjack/.env` |
+| `TYPESAFE_API_KEY` | — | Jev scoring; local Node also checks `~/.newsjack/.env`. Set an explicit empty value to disable fallback and keep live items pending. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |
@@ -140,7 +145,6 @@ its temporary volume.
 | `SCORE_CONCURRENCY` | `6` | parallel Jev calls |
 | `DB_PATH` | `./data/desk.db` | SQLite file |
 | `COMPANIES_PATH` | `./config/companies.json` | watchlist |
-| `DEMO` | off | synthetic mentions + deterministic stub judge |
 
 The watchlist (`config/companies.json`) is plain data: id, name, ticker,
 sector, aliases (used by the match guard; feed queries use name + ticker), and
@@ -184,10 +188,9 @@ server/
   pipeline.ts   queue, Jev judgments, state building, snapshots, broadcasts
   radar.ts      deterministic headline/publisher and window aggregation
   delivery.ts   persisted source delivery health and freshness projections
-  schedule.ts   RSS + X pollers, match guards, demo loop
+  schedule.ts   RSS + X pollers and company match guards
   market.ts     quote store, poll loop, price-series cache
   sources/      Google/Yahoo RSS, SEC EDGAR, GDELT, Finnhub, Reddit, X, Yahoo quotes
-  demo.ts       synthetic mentions + stub judge for keyless runs
 web/
   src/          React + Tailwind 4 terminal (SSE live updates)
 tests/          vitest: wire contract, post-rules, RSS parsing

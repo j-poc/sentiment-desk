@@ -1,5 +1,5 @@
 import type { CompanySnapshot, Quote, SeriesPoint } from "../lib/api.js";
-import { NEU, fmtDelta, fmtIndex, sentimentColor, timeAgo } from "../lib/format.js";
+import { NEU, fmtDelta, fmtIndex, quoteSourceAgeLabel, sentimentColor, timeAgo } from "../lib/format.js";
 
 export function Sparkline({ points, width = 76, height = 24 }: { points?: SeriesPoint[]; width?: number; height?: number }) {
   const vals = (points ?? []).map((p) => p.v).filter((v): v is number => v != null);
@@ -52,6 +52,8 @@ export function Watchlist({
         const color = sentimentColor(c.index == null ? "neutral" : c.index > 3 ? "positive" : c.index < -3 ? "negative" : "neutral");
         const q = quotes[c.ticker];
         const change = q?.changePct;
+        const sourceAge = q ? quoteSourceAgeLabel(q.at) : null;
+        const freshness = sourceAge ?? (q?.delivery === "cache" ? `cached ${timeAgo(q.retrievedAt)}` : null);
         const changeColor = change == null ? NEU : change > 0.001 ? "#34d399" : change < -0.001 ? "#f87171" : NEU;
         return (
           <button
@@ -76,8 +78,8 @@ export function Watchlist({
               <span className={`tabnum block text-[11.5px] ${q?.delivery === "cache" ? "text-amber-300/80" : "text-white/85"}`} title={q ? `${q.currency}; source time ${q.at == null ? "unknown" : new Date(q.at).toISOString()}; retrieved ${timeAgo(q.retrievedAt)}` : undefined}>
                 {q ? `${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}` : "--"}
               </span>
-              <span className="tabnum block truncate text-[9.5px]" style={{ color: q?.delivery === "cache" ? "#fbbf24" : changeColor }}>
-                {q?.delivery === "cache" ? `cached ${timeAgo(q.retrievedAt)}` : change != null ? `${fmtDelta(change)}%` : "--"}
+              <span className="tabnum block truncate text-[9.5px]" style={{ color: freshness ? "#fbbf24" : changeColor }}>
+                {freshness ?? (change != null ? `${fmtDelta(change)}%` : "--")}
               </span>
             </span>
 

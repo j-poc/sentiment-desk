@@ -51,13 +51,11 @@ export function OpportunityRadar({
   ticker,
   hours,
   onHours,
-  demo,
 }: {
   companyId: string;
   ticker: string;
   hours: number;
   onHours: (hours: number) => void;
-  demo: boolean;
 }) {
   const [loaded, setLoaded] = useState<{ key: string; data: RadarDTO } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -113,12 +111,10 @@ export function OpportunityRadar({
       <div className="panel shrink-0 px-3 py-3 sm:px-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="micro">{demo ? "DEMO · SYNTHETIC EVIDENCE" : "JEV · PUBLISHED EVIDENCE"}</div>
+            <div className="micro">JEV · PUBLISHED EVIDENCE</div>
             <h1 id="radar-title" className="mt-1 text-[17px] font-semibold text-white/90">Opportunity Radar <span className="text-white/40">· {ticker}</span></h1>
             <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-white/45">
-              {demo
-                ? "Demo judgments are deterministic synthetic examples, not Jev or live evidence. Counts compare event categories across equal windows."
-                : "Jev classifies each item. Counts compare its event categories across equal publication-time windows; exact headline matches group coverage, not real-world events."}
+              Jev classifies each item. Counts compare its event categories across equal publication-time windows; exact headline matches group coverage, not real-world events.
             </p>
           </div>
           <div className="flex shrink-0 gap-1 rounded-md border border-white/[0.08] bg-black/20 p-1" aria-label="Comparison window">
@@ -151,7 +147,7 @@ export function OpportunityRadar({
       </div>
 
       {loading && !data ? (
-        <div className="panel px-4 py-6 text-[12px] text-white/45">{demo ? "Loading synthetic demo evidence…" : "Loading Jev-scored evidence…"}</div>
+        <div className="panel px-4 py-6 text-[12px] text-white/45">Loading Jev-scored evidence…</div>
       ) : data ? (
         <>
           <div className="grid shrink-0 grid-cols-2 gap-2 xl:grid-cols-4">
@@ -189,7 +185,7 @@ export function OpportunityRadar({
 
           {data.current.headlineGroups === 0 && data.previous.headlineGroups === 0 && (
             <div className="panel shrink-0 border border-amber-300/10 px-3 py-2.5 text-[11px] leading-relaxed text-white/55">
-            No eligible {demo ? "demo-judged" : "Jev-scored"} items with publisher-declared time in these windows. Untimed items and pending or failed judgments are shown separately; this is not evidence that no activity occurred.
+            No eligible Jev-scored items with publisher-declared time in these windows. Untimed items and pending or failed judgments are shown separately; this is not evidence that no activity occurred.
             </div>
           )}
 

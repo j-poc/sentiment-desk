@@ -9,7 +9,6 @@ import { RUBRIC } from "./rubric.js";
 import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import {
-  startDemoLoop,
   startFinnhubPoller,
   startGdeltPoller,
   startJevRetryPoller,
@@ -20,7 +19,6 @@ import {
 } from "./schedule.js";
 import type { SchedulerControl } from "./scheduler.js";
 import { fetchTickerCikMap } from "./sources/sec.js";
-import { demoJudge } from "./demo.js";
 
 /**
  * Boot order matters: DB first (schema + seed), then pipeline, then HTTP, then
@@ -37,16 +35,16 @@ async function main(): Promise<void> {
   const hub = new Hub();
   const health = new HealthTracker(
     config.xBearer !== "",
-    config.jev.apiKey !== "" || config.demo,
+    config.jev.apiKey !== "",
     config.jev.model,
-    !config.demo && config.secUserAgent !== "",
-    config.finnhubKey !== "" && !config.demo,
-    config.redditClientId !== "" && config.redditClientSecret !== "" && !config.demo,
+    config.secUserAgent !== "",
+    config.finnhubKey !== "",
+    config.redditClientId !== "" && config.redditClientSecret !== "",
   );
 
   // Resolve CIKs once at boot; SEC source degrades gracefully if this fails.
   let cikByTicker = new Map<string, string>();
-  if (!config.demo && config.secUserAgent) {
+  if (config.secUserAgent) {
     try {
       cikByTicker = await fetchTickerCikMap(config.secUserAgent);
       console.log(`[desk] sec edgar: ${cikByTicker.size} tickers resolved`);
@@ -64,10 +62,7 @@ async function main(): Promise<void> {
 
   let judge: JudgeFn | null;
   let engineLabel: string;
-  if (config.demo) {
-    judge = demoJudge;
-    engineLabel = "demo-sim";
-  } else if (jevClient.configured) {
+  if (jevClient.configured) {
     judge = (state) => jevClient.judge(state, RUBRIC);
     engineLabel = config.jev.model;
   } else {
@@ -96,9 +91,9 @@ async function main(): Promise<void> {
   const market = new MarketData({ companies, indices: config.indices, hub, health, db });
   const secWatchlistCount = companies.filter((company) => cikByTicker.has(company.ticker)).length;
 
-  // Pending work always drains on boot, whether it came from an earlier crash
-  // or scoring that was interrupted by a missing key. Existing completed
-  // scores remain untouched when the current rubric changes.
+  // Pending work drains on boot only when Jev is configured. Without a key,
+  // real observations remain pending and create no scoring failure attempts.
+  // Existing completed scores remain untouched when the current rubric changes.
   const drained = pipeline.drainPending(5_000);
   if (drained > 0) console.log(`[desk] re-queued ${drained} pending mentions`);
 
@@ -109,16 +104,15 @@ async function main(): Promise<void> {
     market,
     hub,
     health,
-    demo: config.demo,
     version: VERSION,
     deliverySources: [
-      { collector: "google_news_rss", enabled: !config.demo, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
-      { collector: "yahoo_finance_rss", enabled: !config.demo, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
-      { collector: "gdelt_doc_api", enabled: !config.demo, intervalSeconds: config.pollGdeltSeconds, targetCount: companies.length },
-      { collector: "sec_edgar", enabled: !config.demo && secWatchlistCount > 0, intervalSeconds: config.pollSecSeconds, targetCount: secWatchlistCount },
-      { collector: "finnhub", enabled: !config.demo && config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length },
-      { collector: "reddit", enabled: !config.demo && config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
-      { collector: "x", enabled: !config.demo && config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },
+      { collector: "google_news_rss", enabled: true, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
+      { collector: "yahoo_finance_rss", enabled: true, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
+      { collector: "gdelt_doc_api", enabled: true, intervalSeconds: config.pollGdeltSeconds, targetCount: companies.length },
+      { collector: "sec_edgar", enabled: secWatchlistCount > 0, intervalSeconds: config.pollSecSeconds, targetCount: secWatchlistCount },
+      { collector: "finnhub", enabled: config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length },
+      { collector: "reddit", enabled: config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
+      { collector: "x", enabled: config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },
       { collector: "yahoo_quote", enabled: true, intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length },
     ],
   });
@@ -130,10 +124,8 @@ async function main(): Promise<void> {
     startQuotesPoller({ market, db, intervalSeconds: config.pollQuotesSeconds }),
   ];
   if (judge) schedulers.push(startJevRetryPoller(pipeline));
-  // Demo mode is fully synthetic on the sentiment side: no real sources mixed in.
-  if (!config.demo) {
-    schedulers.push(
-      startRssPoller({
+  schedulers.push(
+    startRssPoller({
       companies,
       pipeline,
       db,
@@ -141,9 +133,8 @@ async function main(): Promise<void> {
       intervalSeconds: config.pollRssSeconds,
       concurrency: config.rssConcurrency,
     }),
-    );
-  }
-  if (!config.demo && config.secUserAgent && cikByTicker.size > 0) {
+  );
+  if (config.secUserAgent && cikByTicker.size > 0) {
     schedulers.push(
       startSecPoller({
         companies,
@@ -156,12 +147,8 @@ async function main(): Promise<void> {
       }),
     );
   }
-  if (!config.demo) {
-    schedulers.push(
-      startGdeltPoller({ companies, pipeline, db, health, intervalSeconds: config.pollGdeltSeconds }),
-    );
-  }
-  if (!config.demo && config.finnhubKey) {
+  schedulers.push(startGdeltPoller({ companies, pipeline, db, health, intervalSeconds: config.pollGdeltSeconds }));
+  if (config.finnhubKey) {
     schedulers.push(
       startFinnhubPoller({
         companies,
@@ -174,7 +161,7 @@ async function main(): Promise<void> {
       }),
     );
   }
-  if (!config.demo && config.redditClientId && config.redditClientSecret) {
+  if (config.redditClientId && config.redditClientSecret) {
     schedulers.push(
       startRedditPoller({
         companies,
@@ -186,7 +173,7 @@ async function main(): Promise<void> {
       }),
     );
   }
-  if (!config.demo && config.xBearer) {
+  if (config.xBearer) {
     schedulers.push(
       startXPoller({
         bearer: config.xBearer,
@@ -198,27 +185,21 @@ async function main(): Promise<void> {
       }),
     );
   }
-  if (config.demo) {
-    schedulers.push(startDemoLoop({ companies, pipeline }));
-  }
-
-  const mode = config.demo ? "DEMO" : judge ? "LIVE" : "AWAITING KEY (mentions stay pending)";
+  const mode = judge ? "LIVE" : "AWAITING KEY (mentions stay pending)";
   console.log(`[desk] sentiment desk v${VERSION} ${mode} on http://localhost:${config.port}`);
   if (config.secUserAgent.includes("personal research desk")) {
     console.warn("[desk] SEC_USER_AGENT is the generic default; personalize it in .env (name + email) for long unattended runs.");
   }
   console.log(`[desk] watchlist: ${companies.length} companies | db: ${config.dbPath}`);
-  if (!config.demo) {
-    console.log(
-      jevClient.configured
-        ? `[desk] jev key resolved from ${apiKeySource}`
-        : "[desk] TYPESAFE_API_KEY not found (env or ~/.newsjack/.env). Add it to .env to start scoring.",
-    );
-    if (!config.finnhubKey)
-      console.log("[desk] finnhub: no key — free tier adds news, EPS surprises, earnings dates");
-    if (!(config.redditClientId && config.redditClientSecret))
-      console.log("[desk] reddit: no app credentials — free tier adds the social tier");
-  }
+  console.log(jevClient.configured
+    ? `[desk] jev key resolved from ${apiKeySource}`
+    : apiKeySource === "disabled by env"
+      ? "[desk] Jev disabled by explicit empty TYPESAFE_API_KEY; live observations stay pending."
+      : "[desk] TYPESAFE_API_KEY not found (env or ~/.newsjack/.env). Add it to .env to start scoring.");
+  if (!config.finnhubKey)
+    console.log("[desk] finnhub: no key — free tier adds news, EPS surprises, earnings dates");
+  if (!(config.redditClientId && config.redditClientSecret))
+    console.log("[desk] reddit: no app credentials — free tier adds the social tier");
 
   let stopping = false;
   const shutdown = (signal: string) => {

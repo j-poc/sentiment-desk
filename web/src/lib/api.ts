@@ -27,7 +27,7 @@ export interface CompanySnapshot {
 export type Sentiment = "negative" | "neutral" | "positive";
 export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off_target" | "failed" | "corrupt";
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
-export type CollectorId = "legacy_unknown" | "demo_simulation" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
+export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
 
 export interface MentionScore {
   sentiment: Sentiment;
@@ -49,7 +49,7 @@ export interface MentionScore {
   engine: string;
   inputTokens: number;
   outputTokens: number;
-  costUsd: number;
+  estimatedInputCostUsd: number;
   latencyMs: number;
   rubricSha: string;
   scoredAt: number;
@@ -230,7 +230,7 @@ export interface PriceSeriesDTO {
   servedAt: number;
   sourceLatestAt: number | null;
   cacheAgeMs: number | null;
-  resampling: "bucketed_last_observation";
+  resampling: "source_observations_in_window";
 }
 
 export interface SourceHealth {
@@ -245,7 +245,7 @@ export interface SourceHealth {
 export interface HealthDTO {
   ok: boolean;
   version: string;
-  demo: boolean;
+  runtimeId: string;
   uptimeSec: number;
   sseClients: number;
   dbSizeBytes: number | null;
@@ -283,7 +283,13 @@ export interface HealthDTO {
     latestObservationBasis: "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown" | null;
     latestObservationRetrievedAt: number | null;
   }>;
-  usage: { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
+  /** Saved provider judgments only; failed and retried requests are excluded. */
+  usage: {
+    judgedItems: number;
+    inputTokens: number;
+    outputTokens: number;
+    estimatedInputCostUsd: number;
+  };
   events: Array<{ at: number; level: string; source: string; message: string }>;
 }
 
@@ -298,7 +304,6 @@ const retryErrorCopy: Record<string, string> = {
   provider_usage_review_required: "Check TypeSafe usage before authorizing another attempt.",
   mention_not_retryable: "This item changed state. Refresh its details before retrying.",
   jev_not_configured: "Jev is not configured in the running desk.",
-  demo_retry_unavailable: "Retries are disabled in demo mode.",
   retry_confirmation_required: "Confirm the new request and provider-usage review before retrying.",
 };
 
@@ -322,7 +327,7 @@ export async function retryMention(
 }
 
 export interface StreamHandlers {
-  onHello?: (data: { demo: boolean; now: number }) => void;
+  onHello?: (data: { now: number; runtimeId: string }) => void;
   onMention?: (m: Mention) => void;
   onCompany?: (s: CompanySnapshot) => void;
   onQuotes?: (s: MarketSnapshot) => void;

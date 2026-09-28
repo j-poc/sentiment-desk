@@ -49,7 +49,7 @@ function score(sentiment: MentionScore["sentiment"], eventType: string): Mention
     novel: 0.8, credible: 0.9, investorRelevant: 0.9, eventType,
     takeaway: "product_win", magnitude: 0.5, surprise: 0.5, eventScore: 75,
     weight: 0.8, engine: "jev-test-fixture", inputTokens: 10, outputTokens: 8,
-    costUsd: 0.00001, latencyMs: 10, rubricSha: "test-rubric", scoredAt: Date.now(),
+    estimatedInputCostUsd: 0.00001, latencyMs: 10, rubricSha: "test-rubric", scoredAt: Date.now(),
   };
 }
 
@@ -163,7 +163,7 @@ describe("Opportunity Radar evidence comparison", () => {
     const market = new MarketData({ companies: [company], indices: [], hub, health, db });
     const app = createApp({
       db, dbPath: join(directory, "desk.db"), pipeline, market, hub, health,
-      demo: false, version: "test",
+      version: "test",
       deliverySources: [{ collector: "google_news_rss", enabled: true, intervalSeconds: 30, targetCount: 1 }],
     });
 

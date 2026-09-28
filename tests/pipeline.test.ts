@@ -7,9 +7,7 @@ import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { JevError } from "../server/jev.js";
 import { Pipeline } from "../server/pipeline.js";
-import { demoJudge } from "../server/demo.js";
 import { EVENT_TYPES, TAKEAWAY_KEYS } from "../server/rubric.js";
-import { parseJudgment } from "../server/scoring.js";
 import type { Company, JevState, RawMention } from "../server/types.js";
 
 const directories: string[] = [];
@@ -43,13 +41,14 @@ function fixtureAnswers(): Record<string, unknown> {
   };
 }
 
-function setup(judge: (state: JevState) => Promise<{ answers: Record<string, unknown>; model: string; inputTokens: number; outputTokens: number; latencyMs: number }>) {
+function setup(judge: ((state: JevState) => Promise<{ answers: Record<string, unknown>; model: string; inputTokens: number; outputTokens: number; latencyMs: number }>) | null) {
   const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-pipeline-"));
   directories.push(directory);
   const db = new Desk(join(directory, "desk.db"));
   db.seedCompanies([company]);
+  const health = new HealthTracker(true, judge !== null, "jev-latest");
   const pipeline = new Pipeline({
-    db, judge, hub: new Hub(), health: new HealthTracker(true, false, "jev-latest"),
+    db, judge, hub: new Hub(), health,
     engineLabel: "jev-latest", inputPricePerMTok: 0.042, concurrency: 1,
   });
   const source: RawMention = {
@@ -58,22 +57,25 @@ function setup(judge: (state: JevState) => Promise<{ answers: Record<string, unk
     publishedAt: Date.now() - 5_000, retrievedAt: Date.now(), collector: "google_news_rss",
     sourceItemId: "reuters-acme-product", publisherName: "Reuters", publisherDomain: "reuters.com",
   };
-  return { db, pipeline, source };
+  return { db, pipeline, source, health };
 }
 
 describe("Jev pipeline recovery", () => {
-  it("keeps the synthetic demo generator valid under the same strict rubric parser", async () => {
-    const result = await demoJudge({
-      company: { id: company.id, name: company.name, ticker: company.ticker, sector: company.sector },
-      mention: {
-        title: "Acme announces a product launch",
-        snippet: "A new product is available.",
-        source: { name: "Reuters", url: "https://reuters.com/acme", tier: "wire" },
-        publishedAt: new Date().toISOString(),
-      },
-    });
-    expect(parseJudgment(result.answers).eventType).toBe("product");
-    expect(result.inputTokens).toBeGreaterThan(0);
+  it("keeps real observations pending without treating disabled Jev as a failure", async () => {
+    const { db, pipeline, source, health } = setup(null);
+    try {
+      expect(pipeline.ingest(source)).toBe(true);
+      await pipeline.waitForIdle();
+
+      const pending = db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(pending.status).toBe("pending");
+      expect(pending.score).toBeNull();
+      expect(pending.error).toBeNull();
+      expect(pipeline.drainPending(10)).toBe(0);
+      expect(health.snapshot().jev).toMatchObject({ enabled: false, ok: 0, fail: 0, lastError: null });
+    } finally {
+      db.close();
+    }
   });
 
   it.each([429, 529])("persists bounded retries after explicit HTTP %s rejection and succeeds on the next attempt", async (status) => {
@@ -195,7 +197,7 @@ describe("Jev pipeline recovery", () => {
       expect(calls).toBe(1);
       expect(scored.status).toBe("scored");
       expect(scored.score).toMatchObject({ engine: "jev-1.13.0", sentiment: "positive", eventType: "product" });
-      expect(scored.score?.costUsd).toBeCloseTo(0.0000294, 10);
+      expect(scored.score?.estimatedInputCostUsd).toBeCloseTo(0.0000294, 10);
       expect(pipeline.drainPending(10)).toBe(0);
     } finally {
       db.close();

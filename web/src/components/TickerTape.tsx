@@ -1,5 +1,5 @@
 import type { CompanySnapshot, MarketSnapshot, Quote } from "../lib/api.js";
-import { fmtDelta, sentimentColor, timeAgo } from "../lib/format.js";
+import { fmtDelta, quoteSourceAgeLabel, sentimentColor, timeAgo } from "../lib/format.js";
 
 /**
  * Top tape: market indices first (context, never scored), then every watched
@@ -24,6 +24,7 @@ export function TickerTape({
   const cell = (key: string, ticker: string, quote?: Quote, sentiment?: number | null, company?: CompanySnapshot) => {
     const price = quote?.price;
     const changePct = quote?.changePct;
+    const sourceAge = quote ? quoteSourceAgeLabel(quote.at) : null;
     const color = changePct != null ? (changePct > 0.001 ? "#34d399" : changePct < -0.001 ? "#f87171" : "#94a3b8") : "#64748b";
     const selected = company != null && company.id === selectedId;
     const contents = (
@@ -40,6 +41,7 @@ export function TickerTape({
           </span>
         )}
         {quote?.delivery === "cache" && <span className="text-[8px] text-amber-300/80">cached {timeAgo(quote.retrievedAt)}</span>}
+        {sourceAge && <span className="text-[8px] text-amber-300/80">{sourceAge}</span>}
         {sentiment != null && company && (
           <span
             className="mb-[3px] inline-block h-1.5 w-1.5 rounded-full"

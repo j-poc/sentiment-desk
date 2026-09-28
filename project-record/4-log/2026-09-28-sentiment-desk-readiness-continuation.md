@@ -26,7 +26,11 @@ hosting, provider enrollment, publication, or PR was added.
   for stored/displayed snippets and external model processing, applicability
   of Yahoo API terms to the exact endpoints, SEC text-use policy, optional-feed
   plan rights, TypeSafe retention configuration, and rejected-request billing
-  remain open. No real publisher text was sent to Jev.
+  remain open. The controlled synthetic smoke and frozen pilot used fictional
+  inputs only. A separate legacy process was later found with 3,339 Jev
+  failures; its historical request payloads and provider usage were not
+  inspected, so their contents and billing outcome are unknown. See
+  `2026-09-28-legacy-runtime-and-demo-preview.md`.
 
 ## Changes
 
@@ -134,8 +138,10 @@ or release-readiness evidence.
 - Each successful response identified `jev-1.13.0` and rubric SHA
   `a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e`.
   The case-file digest matched the frozen SHA above; the report identifies
-  code revision `f523e51ac12b85493d8f95e22f41c972c5a24586`, with no tracked
-  source changes.
+code revision `f523e51ac12b85493d8f95e22f41c972c5a24586`, with no tracked
+source changes. This describes the frozen synthetic pilot only; a separate
+legacy process was later discovered and its submitted payloads were not
+audited.
 - Provider-reported usage was 19,253 input and 3,835 output tokens. At the
   configured input rate the estimated input cost is USD 0.000808626; this is
   not an invoice or confirmation of provider billing. Successful responses

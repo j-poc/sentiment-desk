@@ -89,7 +89,10 @@ export async function fetchQuote(ticker: string, timeoutMs = 10_000): Promise<Qu
   const meta = body.chart?.result?.[0]?.meta;
   const price = meta?.regularMarketPrice;
   const prev = meta?.chartPreviousClose ?? meta?.previousClose;
-  if (price == null || prev == null || prev === 0) throw new Error(`quote incomplete for ${ticker}`);
+  if (price == null || !Number.isFinite(price) || price <= 0
+    || prev == null || !Number.isFinite(prev) || prev <= 0) {
+    throw new Error(`quote incomplete for ${ticker}`);
+  }
   return {
     ticker,
     price,
@@ -125,7 +128,7 @@ export async function fetchPriceSeries(
   for (let i = 0; i < ts.length; i++) {
     const c = closes[i];
     const t = (ts[i] ?? 0) * 1000;
-    if (c != null && Number.isFinite(c) && t > 0) out.push({ t, price: c });
+    if (c != null && Number.isFinite(c) && c > 0 && Number.isFinite(t) && t > 0) out.push({ t, price: c });
   }
   return out;
 }

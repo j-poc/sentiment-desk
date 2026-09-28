@@ -5,17 +5,9 @@ import { clockTime, fmtCost } from "../lib/format.js";
  * Engine chip states, so the desk never pretends:
  *  - JEV LIVE: real scoring active
  *  - ADD API KEY: real ingestion, no scoring until TYPESAFE_API_KEY lands in .env
- *  - DEMO SENTIMENT: synthetic generator through the same pipeline
  */
 function engineChip(health: HealthDTO | null) {
   if (!health) return null;
-  if (health.demo) {
-    return (
-      <span className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-amber-300">
-        DEMO SENTIMENT
-      </span>
-    );
-  }
   if (health.health.jev.enabled) {
     return (
       <span className="flex items-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-emerald-300">
@@ -61,14 +53,19 @@ export function Header({
 
       <div className="ml-auto flex items-center gap-5 text-[11px] text-white/45">
         {usage && (
-          <span className="tabnum hidden md:inline">
-            {fmtCost(usage.costUsd)} · {usage.calls} calls today
+          <span
+            className="tabnum hidden md:inline"
+            title="Estimate from saved provider judgments; excludes failed or retried requests and is not an invoice."
+          >
+            est. input {fmtCost(usage.estimatedInputCostUsd)} · {usage.judgedItems} judged today
           </span>
         )}
-        <span className="tabnum hidden sm:inline">{totalMentions} mentions/24h</span>
+        <span className="tabnum hidden sm:inline">
+          {totalMentions} mentions/24h
+        </span>
         <span className="flex items-center gap-1.5 font-medium tracking-wider">
           <span className={`h-1.5 w-1.5 rounded-full ${connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
-          {connected ? "LIVE" : "OFFLINE"}
+          {connected ? "CONNECTED" : "OFFLINE"}
         </span>
         <span className="tabnum w-16 text-right">{clockTime(clock)}</span>
       </div>

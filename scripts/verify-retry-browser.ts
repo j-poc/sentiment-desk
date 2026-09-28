@@ -101,7 +101,6 @@ async function main(): Promise<void> {
       market,
       hub,
       health,
-      demo: false,
       version: "retry-browser-fixture",
       webRoot: path.resolve("dist/web"),
       deliverySources: [],

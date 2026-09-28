@@ -111,7 +111,7 @@ export interface MentionScore {
   engine: string;
   inputTokens: number;
   outputTokens: number;
-  costUsd: number;
+  estimatedInputCostUsd: number;
   latencyMs: number;
   rubricSha: string;
   scoredAt: number;

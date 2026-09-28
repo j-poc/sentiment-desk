@@ -17,8 +17,8 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
   return (
     <div className="px-4 py-3.5 text-[11px]">
       <Row label="engine" value={`${jev.model} · ${jev.enabled ? "live" : "off"}`} />
-      <Row label="calls today" value={String(health.usage.calls)} />
-      <Row label="cost today" value={fmtCost(health.usage.costUsd)} />
+      <Row label="judged today" value={String(health.usage.judgedItems)} />
+      <Row label="est. input cost" value={fmtCost(health.usage.estimatedInputCostUsd)} />
       {jev.lastError && (
         <div className="mt-1 clamp-2 text-red-400/80" title={jev.lastError}>
           {jev.lastError}

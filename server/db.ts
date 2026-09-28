@@ -18,6 +18,10 @@ import type {
 } from "./types.js";
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 
+// Rows written by the removed simulation mode stay in place for auditability,
+// but must never enter current views, aggregates, retries, or provider costs.
+const REAL_MENTION_FILTER = "collector <> 'demo_simulation' AND COALESCE(engine, '') <> 'demo-sim'";
+
 /**
  * Source observations, Jev judgments, and delivery attempts have separate
  * persistence. The mentions view is a read-only compatibility projection for
@@ -391,6 +395,7 @@ export class Desk {
   /** Exact same-collector source revisions are idempotent; similar headlines survive. */
   insertObservation(m: RawMentionInput): { inserted: boolean; observationId: string } {
     const collector = m.collector ?? legacyCollectorFor(m.kind);
+    if (collector === "demo_simulation") throw new Error("Synthetic mentions cannot be ingested by the application");
     const sourceItemId = m.sourceItemId ?? null;
     const identityMaterial = `${m.companyId}\u0000${collector}\u0000${sourceItemId ?? canonicalUrl(m.sourceUrl)}`;
     const identityKey = createHash("sha256").update(identityMaterial).digest("hex");
@@ -434,13 +439,13 @@ export class Desk {
     }
   }
 
-  /** Compatibility wrapper used by older fixtures and demo data. */
+  /** Compatibility wrapper for source adapter fixtures. */
   insertMention(m: RawMentionInput): boolean {
     return this.insertObservation(m).inserted;
   }
 
   mentionRow(id: string): MentionRow | undefined {
-    return this.db.prepare("SELECT * FROM mentions WHERE id = ?").get(id) as MentionRow | undefined;
+    return this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined;
   }
 
   markScored(id: string, s: MentionScore, exclude: boolean): void {
@@ -478,7 +483,7 @@ export class Desk {
         s.engine,
         s.inputTokens,
         s.outputTokens,
-        s.costUsd,
+        s.estimatedInputCostUsd,
         s.latencyMs,
         s.rubricSha,
         s.scoredAt,
@@ -502,7 +507,8 @@ export class Desk {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const row = retryRowSchema.safeParse(this.db.prepare(
-        "SELECT status, score_usage_check_required FROM jev_judgments WHERE observation_id = ?",
+        `SELECT status, score_usage_check_required FROM mentions
+         WHERE id = ? AND ${REAL_MENTION_FILTER}`,
       ).get(id));
       if (!row.success || row.data.status !== "failed") {
         this.db.exec("COMMIT");
@@ -515,7 +521,8 @@ export class Desk {
       const result = this.db.prepare(
         `UPDATE jev_judgments SET status = 'pending', score_error = NULL,
            score_retry_at = NULL, score_usage_check_required = 0
-         WHERE observation_id = ? AND status = 'failed'`,
+         WHERE observation_id = ? AND status = 'failed'
+           AND observation_id IN (SELECT id FROM mentions WHERE ${REAL_MENTION_FILTER})`,
       ).run(id);
       this.db.exec("COMMIT");
       return Number(result.changes) === 1 ? "queued" : "not_retryable";
@@ -531,10 +538,12 @@ export class Desk {
       const result = this.db.prepare(
         `UPDATE jev_judgments SET status = 'scoring', score_attempts = score_attempts + 1,
            score_retry_at = NULL, score_error = NULL, score_usage_check_required = 0
-         WHERE observation_id = ? AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`,
+         WHERE observation_id = ? AND observation_id IN (
+           SELECT id FROM mentions WHERE ${REAL_MENTION_FILTER}
+         ) AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`,
       ).run(id, now);
       const row = Number(result.changes) === 1
-        ? this.db.prepare("SELECT * FROM mentions WHERE id = ?").get(id) as MentionRow | undefined
+        ? this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined
         : undefined;
       this.db.exec("COMMIT");
       return row;
@@ -545,6 +554,7 @@ export class Desk {
   }
 
   recordDelivery(delivery: SourceDeliveryInput): void {
+    if (delivery.collector === "demo_simulation") throw new Error("Synthetic deliveries cannot be recorded by the application");
     this.db.prepare(
       `INSERT OR IGNORE INTO source_deliveries
        (id, collector, company_id, request_key_hash, started_at, completed_at, result,
@@ -566,7 +576,7 @@ export class Desk {
     return this.db.prepare(
       `SELECT collector, company_id AS companyId, result, completed_at AS completedAt,
         parsed_item_count AS parsedItemCount, adapter_version AS adapterVersion, error
-       FROM source_deliveries ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
+       FROM source_deliveries WHERE collector <> 'demo_simulation' ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
     ).all() as unknown as Array<{
       collector: CollectorId; companyId: string | null; result: string; completedAt: number;
       parsedItemCount: number; adapterVersion: string; error: string | null;
@@ -604,7 +614,7 @@ export class Desk {
           parsed_item_count AS parsedItemCount, error, adapter_version AS adapterVersion,
           ROW_NUMBER() OVER (PARTITION BY collector, COALESCE(company_id, '')
             ORDER BY completed_at DESC, started_at DESC, rowid DESC) AS rn
-        FROM source_deliveries
+        FROM source_deliveries WHERE collector <> 'demo_simulation'
       )
       SELECT collector, companyId, completedAt, result, parsedItemCount, error, adapterVersion
       FROM ranked WHERE rn = 1`,
@@ -624,7 +634,7 @@ export class Desk {
         SELECT collector, publisher_published_at AS publisherPublishedAt,
           provider_observed_at AS providerObservedAt, retrieved_at AS retrievedAt, time_basis AS timeBasis,
           ROW_NUMBER() OVER (PARTITION BY collector ORDER BY ingested_at DESC) AS rn
-        FROM source_observations
+        FROM source_observations WHERE collector <> 'demo_simulation'
       )
       SELECT collector, publisherPublishedAt, providerObservedAt, retrievedAt, timeBasis
       FROM ranked WHERE rn = 1`,
@@ -673,7 +683,7 @@ export class Desk {
   mentionsForCompany(companyId: string, sinceMs: number, limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE company_id = ?
+        `SELECT * FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
            AND COALESCE(published_at, provider_observed_at, retrieved_at) >= ?
          ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
       )
@@ -688,7 +698,7 @@ export class Desk {
         retrieved_at AS retrievedAt, collector, event_type AS eventType,
         sentiment, takeaway
        FROM mentions
-       WHERE company_id = ? AND status = 'scored' AND impact IS NOT NULL
+       WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored' AND impact IS NOT NULL
          AND time_basis = 'publisher_declared' AND publisher_published_at >= ?
          AND publisher_published_at < ? AND ingested_at <= ? AND scored_at <= ?
        ORDER BY publisher_published_at DESC, ingested_at DESC`,
@@ -705,7 +715,7 @@ export class Desk {
           AND (time_basis != 'publisher_declared' OR publisher_published_at IS NULL) THEN 1 ELSE 0 END) AS untimedScored,
         SUM(CASE WHEN status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt')
           OR (status IN ('scored', 'off_target') AND scored_at > ?) THEN 1 ELSE 0 END) AS unjudged
-       FROM mentions WHERE company_id = ? AND retrieved_at >= ? AND retrieved_at <= ? AND ingested_at <= ?`,
+       FROM mentions WHERE ${REAL_MENTION_FILTER} AND company_id = ? AND retrieved_at >= ? AND retrieved_at <= ? AND ingested_at <= ?`,
     ).get(asOf, asOf, companyId, retrievedFromMs, retrievedToMs, asOf) as {
       untimedScored: number | null;
       unjudged: number | null;
@@ -722,7 +732,7 @@ export class Desk {
   recentVisible(limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE status IN ('scored', 'pending', 'retrying', 'scoring', 'failed', 'corrupt')
+        `SELECT * FROM mentions WHERE ${REAL_MENTION_FILTER} AND status IN ('scored', 'pending', 'retrying', 'scoring', 'failed', 'corrupt')
          ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as MentionRow[];
@@ -741,7 +751,7 @@ export class Desk {
     const rows = this.db
       .prepare(
         `SELECT company_id, published_at, impact, weight, event_type, takeaway FROM mentions
-         WHERE status = 'scored' AND published_at IS NOT NULL AND time_basis = 'publisher_declared'
+         WHERE ${REAL_MENTION_FILTER} AND status = 'scored' AND published_at IS NOT NULL AND time_basis = 'publisher_declared'
            AND published_at >= ? AND impact IS NOT NULL`,
       )
       .all(sinceMs) as unknown as Array<{
@@ -777,7 +787,8 @@ export class Desk {
   pendingIds(limit: number): string[] {
     return (
       this.db.prepare(`SELECT id FROM mentions
-        WHERE status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?)
+        WHERE ${REAL_MENTION_FILTER}
+          AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))
         ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC LIMIT ?`)
         .all(Date.now(), limit) as unknown as Array<{ id: string }>
     ).map((r) => r.id);
@@ -801,7 +812,8 @@ export class Desk {
                 m.sentiment AS sentiment, m.event_score AS eventScore,
                 COALESCE(m.event_type, 'other') AS eventType, m.title AS title
          FROM mentions m JOIN companies c ON c.id = m.company_id
-         WHERE m.status = 'scored' AND m.published_at IS NOT NULL
+         WHERE m.collector <> 'demo_simulation' AND COALESCE(m.engine, '') <> 'demo-sim'
+           AND m.status = 'scored' AND m.published_at IS NOT NULL
            AND m.time_basis = 'publisher_declared' AND m.published_at >= ? AND m.impact IS NOT NULL
          ORDER BY m.published_at`,
       )
@@ -820,7 +832,7 @@ export class Desk {
     const rows = this.db
       .prepare(
         `SELECT company_id, COUNT(*) AS n, MAX(retrieved_at) AS last_at
-         FROM mentions WHERE retrieved_at >= ? GROUP BY company_id`,
+         FROM mentions WHERE ${REAL_MENTION_FILTER} AND retrieved_at >= ? GROUP BY company_id`,
       )
       .all(sinceMs) as Array<{ company_id: string; n: number; last_at: number | null }>;
     return new Map(rows.map((r) => [r.company_id, { count: r.n, lastAt: r.last_at }]));
@@ -856,21 +868,34 @@ export class Desk {
       .all(limit) as Array<{ at: number; level: string; source: string; message: string }>;
   }
 
-  usageSince(sinceMs: number): { calls: number; inputTokens: number; outputTokens: number; costUsd: number } {
+  usageSince(sinceMs: number): {
+    judgedItems: number;
+    inputTokens: number;
+    outputTokens: number;
+    estimatedInputCostUsd: number;
+  } {
     const row = this.db
       .prepare(
-        `SELECT COUNT(*) AS calls,
+        `SELECT COUNT(*) AS judged_items,
                 COALESCE(SUM(input_tokens), 0) AS in_tok,
                 COALESCE(SUM(output_tokens), 0) AS out_tok,
-                COALESCE(SUM(cost_usd), 0) AS cost
-         FROM mentions WHERE scored_at >= ? AND status IN ('scored', 'off_target')`,
+                COALESCE(SUM(cost_usd), 0) AS estimated_input_cost_usd
+         FROM mentions
+         WHERE scored_at >= ?
+           AND status IN ('scored', 'off_target')
+           AND ${REAL_MENTION_FILTER}`,
       )
-      .get(sinceMs) as { calls: number; in_tok: number; out_tok: number; cost: number };
+      .get(sinceMs) as {
+        judged_items: number;
+        in_tok: number;
+        out_tok: number;
+        estimated_input_cost_usd: number;
+      };
     return {
-      calls: row.calls,
+      judgedItems: row.judged_items,
       inputTokens: row.in_tok,
       outputTokens: row.out_tok,
-      costUsd: row.cost,
+      estimatedInputCostUsd: row.estimated_input_cost_usd,
     };
   }
 
@@ -897,8 +922,11 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     about: r.about!, material: r.material!, novel: r.novel!, credible: r.credible!,
     investorRelevant: r.investor_relevant!, eventType: r.event_type!, takeaway: r.takeaway!,
     magnitude: r.magnitude!, surprise: r.surprise!, eventScore: r.event_score!, impact: r.impact!,
-    weight: r.weight!, engine: r.engine!, inputTokens: r.input_tokens!, outputTokens: r.output_tokens!,
-    costUsd: r.cost_usd!, latencyMs: r.latency_ms!, rubricSha: r.rubric_sha!, scoredAt: r.scored_at!,
+    weight: r.weight!, engine: r.engine!,
+    inputTokens: r.input_tokens!,
+    outputTokens: r.output_tokens!,
+    estimatedInputCostUsd: r.cost_usd!,
+    latencyMs: r.latency_ms!, rubricSha: r.rubric_sha!, scoredAt: r.scored_at!,
   } : null;
   return {
     id: r.id,

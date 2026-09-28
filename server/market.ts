@@ -94,10 +94,10 @@ export class MarketData {
       quotes: { ...this.snapshot.quotes, ...quotes },
       updatedAt: ok > 0 ? Date.now() : this.snapshot.updatedAt,
     };
-    // Persist our own price history: the poller appends a point per successful
-    // company quote at FETCH time (exchange-reported regularMarketTime freezes
-    // when the market is closed, which would starve the series). Company
-    // tickers only; indices are context.
+    // Persist source observations only. While markets are closed, repeated
+    // successful fetches keep the exchange-reported timestamp and INSERT OR
+    // IGNORE prevents them becoming new time-series points. Company tickers
+    // only; indices are context.
     for (const company of this.deps.companies) {
       const q = quotes[company.ticker];
       if (q?.at != null) this.deps.db.upsertPricePoint(company.ticker, q.at, q.price);

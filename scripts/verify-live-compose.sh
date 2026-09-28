@@ -23,7 +23,6 @@ services:
       HOST: "0.0.0.0"
       PORT: "8787"
       DB_PATH: /app/data/desk.db
-      DEMO: "0"
       TYPESAFE_API_KEY: ""
       FINNHUB_API_KEY: ""
       REDDIT_CLIENT_ID: ""
@@ -53,7 +52,7 @@ const port = process.env.SMOKE_HOST_PORT;
 const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(5_000) });
 if (!response.ok) throw new Error(`host-published health endpoint returned HTTP ${response.status}`);
 const health = await response.json();
-if (health.demo !== false || health.dbSizeBytes <= 0) throw new Error("host-published API returned unexpected health state");
+if (Object.hasOwn(health, "demo") || health.dbSizeBytes <= 0) throw new Error("host-published API returned unexpected health state");
 console.log(`HOST_API_SMOKE_RESULT host=127.0.0.1:${port} health=200 dbSizeBytes=${health.dbSizeBytes}`);
 NODE
 }
@@ -90,7 +89,7 @@ while (Date.now() < deadline) {
       companiesResponse.json(),
       tapeResponse.json(),
     ]);
-    if (health.demo !== false) throw new Error("DEMO mode is enabled");
+    if (Object.hasOwn(health, "demo")) throw new Error("Synthetic-mode health leaked into the live API");
     if (health.health?.jev?.enabled !== false) throw new Error("Jev should be disabled in this credential-free smoke check");
 
     if (mode === "live") {

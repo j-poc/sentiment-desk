@@ -16,21 +16,24 @@ import type { PricePoint, SeriesPoint } from "../lib/api.js";
  * Sentiment index chart with an optional price overlay, built on TradingView
  * lightweight-charts (Apache-2.0; attribution satisfied via attributionLogo).
  *
- * Both series share one uniform time grid: the server resamples prices onto
- * the exact bucket grid the sentiment index uses (carry-forward through closed
- * periods). The sentiment series is a smoothed leaky-integrator index drawn as
- * a green area around the zero baseline; the price overlay lives on its own
- * right price scale. Crosshair, tooltips, session handling, and resize are the
- * library's job — that is why it was adopted over the hand-rolled SVG chart.
+ * The sentiment index uses its own bucket grid; prices retain their actual
+ * provider timestamps and are never carried into closed or empty periods. The
+ * sentiment series is a smoothed leaky-integrator index drawn as a green area
+ * around the zero baseline; the price overlay lives on its own right price
+ * scale. Crosshair, tooltips, and resize are the library's job — that is why it
+ * was adopted over the hand-rolled SVG chart.
  */
 
 const toSec = (ms: number): UTCTimestamp => Math.floor(ms / 1000) as UTCTimestamp;
 
 export function SeriesChart({
   points,
+  hours,
   loading,
   mode,
   price,
+  latestPriceAt,
+  onViewHistory,
   priceLoading = false,
   priceError = false,
   seriesError = false,
@@ -41,6 +44,8 @@ export function SeriesChart({
   loading: boolean;
   mode: "sentiment" | "overlay";
   price?: PricePoint[];
+  latestPriceAt: number | null;
+  onViewHistory?: () => void;
   priceLoading?: boolean;
   priceError?: boolean;
   seriesError?: boolean;
@@ -188,10 +193,12 @@ export function SeriesChart({
       ? "No Jev scores in this window."
       : insufficientPrice
         ? "One price observation is not enough to draw a line; no Jev scores in this window."
-      : "No price observations or Jev scores in this window.";
+      : "No source price observations or Jev scores in this window.";
   const noScoreMessage = seriesError
     ? "Sentiment history could not be loaded. Check the source status above."
     : "No Jev scores in this window";
+  const hasOlderPriceHistory = latestPriceAt != null
+    && latestPriceAt < Date.now() - hours * 60 * 60 * 1000;
 
   return (
     <div className="relative">
@@ -216,8 +223,16 @@ export function SeriesChart({
         </div>
       )}
       {!loading && !waitingForPrice && !hasChartData && (
-        <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-[11px] text-white/45">
-          {noDataMessage}
+        <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-[11px] text-white/45">
+          <span>{noDataMessage}</span>
+          {!requestError && hours < 168 && hasOlderPriceHistory && onViewHistory && (
+            <button
+              onClick={onViewHistory}
+              className="rounded border border-white/10 px-2 py-1 text-white/65 hover:bg-white/[0.05]"
+            >
+              View 7D source history
+            </button>
+          )}
         </div>
       )}
     </div>

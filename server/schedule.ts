@@ -10,7 +10,6 @@ import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent } from "./sources/x.js";
 import { isFinanceRelevant } from "./scoring.js";
 import { fetchPrimaryDocText, fetchRecent8Ks, titleForItems } from "./sources/sec.js";
-import { generateDemoMention } from "./demo.js";
 import { classifyDeliveryError, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 
@@ -689,14 +688,6 @@ export function startRedditPoller(deps: {
     }
   };
   return scheduleTask(tick, deps.intervalSeconds * 1000);
-}
-
-export function startDemoLoop(deps: { companies: Company[]; pipeline: Pipeline }): SchedulerControl {
-  return scheduleTask(() => {
-    if (Math.random() < 0.72) {
-      void deps.pipeline.ingest(generateDemoMention(deps.companies));
-    }
-  }, 5_000, { immediate: false });
 }
 
 export function startJevRetryPoller(pipeline: Pipeline): SchedulerControl {

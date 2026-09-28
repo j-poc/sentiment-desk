@@ -1,16 +1,21 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-28): prior source workflow, isolated Compose recovery, chart
-selection, and company binding checks pass. Jev alias identity remains
-resolved and persisted as `jev-1.13.0`. This continuation adds an acknowledged
-operator retry, provider `Retry-After` handling, and SSE updates for existing
-mentions. An isolated fictional browser workflow persisted one score, updated
-the open drawer, company list, and tape after deliberately delayed stale
-snapshots arrived. The retry flow passed at 390px. `npm test` passes 82 tests
-across 12 files; typecheck and production build pass. The ten fictional cases
-and runner are frozen; their 2026-09-28 Jev run passed its synthetic checks.
-This is not a 10/10 release: publisher rights, TypeSafe retention/billing
-details, and real-source classifier quality remain open.
+Status (2026-09-28): the application runtime rejects synthetic inputs, excludes
+legacy simulation records from user-facing reads, aggregates, retries, and
+usage, and no longer contains a demo-data mode. A final post-build restart
+verified 1,496 real source-backed records and zero simulated observations or
+judgments in the isolated SQLite database; with Jev explicitly disabled, all
+1,496 remained pending and model usage/failures were zero. The live browser
+showed pending, source-attributed mentions and Adobe's varying 7D Yahoo chart;
+the 24-hour weekend window remained honestly empty, and Adobe→NVIDIA→Adobe
+selection had already passed in the fresh-start run. Quotes older than 15
+minutes show source age in the tape, watchlist, and header. `npm test` passes
+93 tests across 15 files; typecheck and production build pass. Generated
+examples stay isolated to tests and frozen evaluations; they are not
+application data or real-source model-quality evidence. This is not a 10/10
+release: publisher rights, TypeSafe retention/billing details, source coverage,
+and real-source classifier quality remain open. Final restart evidence:
+`project-record/4-log/2026-09-28-real-data-only-runtime.md`.
 
 ## User and outcome
 
@@ -30,7 +35,7 @@ does not generate opportunity hypotheses or value-chain links.
 ## Phase 1: make Sentiment Desk operational
 
 - Keep the product local, single-user, read-only toward markets, and
-  live-data-first. Demo remains an explicit interface exercise.
+  live-data-first. The application runtime has no demo or synthetic-data mode.
 - Retain the existing public news, GDELT, SEC, quote, and optional Finnhub,
   Reddit, and X paths. Add configurable RSS/Atom feeds only if needed to make
   the live research workflow useful without arbitrary page scraping.
@@ -87,8 +92,8 @@ does not generate opportunity hypotheses or value-chain links.
 
 ## Phase 1 acceptance criteria and evidence
 
-1. Docker Compose builds and starts the checked-out application with synthetic
-   mode off, and SQLite survives container recreation.
+1. Docker Compose builds and starts the checked-out application with real
+   source collectors, and SQLite survives container recreation.
 2. Keyless public collectors deliver real observations through the local API.
    With Jev disabled, those observations remain pending; with Jev configured,
    one valid judgment follows the unchanged rubric and appears in the drawer.
@@ -121,19 +126,32 @@ does not generate opportunity hypotheses or value-chain links.
      - `PASS` — the isolated smoke used a temporary database and made no
        public-source requests; no existing failed/outcome-unknown row was
        loaded or replayed.
-     - `NOT RUN` — a current public-source headline through Jev. Publisher
-       model-use and account-retention rights remain unreviewed; the synthetic
-       smoke proves integration only, not classifier accuracy or calibration.
+     - `NOT RUN` — a controlled, rights-reviewed public-source-to-Jev
+       evaluation with labeled quality review. An older loopback runtime later
+       reported many failed Jev attempts, but its submitted payloads and
+       provider usage were not audited; see the 2026-09-28 runtime follow-up.
+       Publisher model-use and account-retention rights remain unreviewed; the
+       synthetic smoke proves integration only, not classifier accuracy or
+       calibration.
 3. A duplicate delivery does not create another Jev charge. Two independent
    source records with similar headlines remain separately attributable.
 4. Missing publication or observation time is never replaced by retrieval
    time. The API and UI show source time separately from collection time.
 5. Provider failure, malformed data, restart, and stale-but-successful
    delivery leave prior evidence intact and visibly degraded.
+   - Current-source finding (2026-09-28): GDELT returned plain-text content
+     for some HTTP-200 requests and HTTP 429 for others. The adapter must
+     reject non-JSON bodies without turning them into article records, report
+     a bounded error, and preserve prior source evidence. Regression tests
+     cover non-JSON bodies, provider rate limits, and valid ArticleList JSON.
+   - Current result: `PASS` — GDELT non-JSON input is rejected with a bounded
+     error, HTTP 429 remains a rate-limit failure, and valid ArticleList JSON
+     normalizes. The current live source state shows HTTP 429; no post-fix live
+     HTTP-200 non-JSON response was observed.
 6. Desktop and narrow-screen flows let the researcher select a company, read
    the score/index, inspect the source and Jev rubric, and understand data
    health without hidden overflow or dead controls.
-7. `npm test` (82 tests across 12 files), typecheck, production build, fresh
+7. `npm test` (93 tests across 15 files), typecheck, production build, fresh
    keyless local start, 390px and 1280px browser passes, accessible mention
    drawer interaction, SSE shutdown, and isolated Docker persistence smoke
    pass. The source-data contract records what these checks prove and what
@@ -148,24 +166,37 @@ does not generate opportunity hypotheses or value-chain links.
    - User/job: the local researcher selects a company and inspects its recent
      sentiment and price history.
    - Constraint: preserve the selected time window, exact company identity,
-     current source timestamp, and stale/cache labels; never invent sentiment
-     values or extend a window silently.
+     provider timestamps, and stale/cache labels; never invent sentiment or
+     price observations, carry a quote into a later time bucket, or extend a
+     window silently.
    - Assumption: a company with no completed Jev judgments is a supported
      state; unscored source evidence must not prevent price history or
      company navigation.
    - Hard gates: ticker control updates the company header and requests the
-     matching `/series` and `/price`; no browser runtime error; empty Jev data
+     matching `/series` and `/price`; the price API rejects a ticker that does
+     not belong to the requested company; no previous company's chart remains
+     visible under the new header while loading; no browser runtime error;
+     empty Jev data
      produces an explicit no-score state while valid price data remains
-     visible. No chart observations produces an explicit unavailable state.
+     visible. The price API returns only real provider observations whose
+     source timestamps fall inside the selected window, unchanged and in
+     order. A stale-only response has no drawable values but retains its real
+     latest-source timestamp for the stale label. No chart observations
+     produces an explicit unavailable state.
    - Measure/evidence: browser click across at least two companies, matching
-     API request/response and visible header, zero console errors, and chart
-     state matching the returned arrays. Proxy limit: this verifies UI wiring
-     and payload handling, not market-data accuracy or Jev quality.
-   - Failure cases: all-null sentiment, stale but valid price history, failed
-     chart request, and fewer than two drawable points.
+     API request/response and visible header, a negative mismatched-ticker API
+     request, zero console errors, and chart state matching the returned source
+     observations. Proxy limit: this verifies UI wiring and payload handling,
+     not market-data accuracy or Jev quality.
+   - Failure cases: all-null sentiment, stale but valid price history, stale
+     observations outside the selected window, failed chart request, and
+     fewer than two drawable points.
    - Subjective copy choice: explain missing sentiment as “No Jev scores in
      this window” and retain source-age detail near the chart.
-   - Current-build hard-gate results (evidence:
+   - Subjective interaction choice: when the selected window contains no
+     source price observation but an older real quote exists, keep the range
+     unchanged and offer an explicit action to view 7D history.
+   - Prior-build hard-gate results (evidence:
      `project-record/4-log/2026-09-27-stock-chart-selection-fix.md`):
      - `PASS` — ADBE→NVDA selection returned matching 200 `/series` and
        `/price` responses and displayed NVDA on the latest built asset.
@@ -181,7 +212,54 @@ does not generate opportunity hypotheses or value-chain links.
      use the live local API. This does not verify price accuracy or live Jev
      scoring.
 
-9. Every company-dependent result shown with the selected ticker stays bound
+   - Newly discovered issue and current pass (2026-09-28; evidence:
+     `project-record/4-log/2026-09-28-real-data-only-runtime.md`):
+     - `PASS` — the old price endpoint repeated 97 Friday-close values in a
+       weekend 24-hour window. The corrected API returns only source-timestamped
+       observations inside the requested window and preserves the actual
+       out-of-window source timestamp as metadata.
+     - `PASS` — on the fresh real-source run, ADBE 24H returned zero points
+       with latest source time 2026-09-25 20:00 UTC; the browser showed an
+       honest empty state and an explicit “View 7D source history” action.
+     - `PASS` — selecting that action and selecting ADBE updated the window
+       and company. ADBE 7D returned 67 source points, 67 distinct prices,
+       spanning 2026-09-21 13:30 UTC through 2026-09-25 20:00:01 UTC; the
+       browser drew the matching Yahoo series and showed “No Jev scores in
+       this window.”
+     - `PASS` — a mismatched AAPL ticker on Adobe's company ID returned HTTP
+       409; no previous company's line remained under the new company header.
+     - `PASS` — fresh browser console had no errors or warnings.
+
+9. The application runtime admits and displays only source-collected company
+   observations and provider-origin Jev judgments. No synthetic generator or
+   simulated judge is available to the app. Legacy simulation rows remain
+   preserved in SQLite but are excluded from consumer APIs, aggregates,
+   retry scheduling, and usage. Real source items without an authorized Jev
+   judgment remain pending with their provenance and timing intact.
+   - User/job: the researcher investigates actual, attributable observations
+     without fabricated stories, fabricated sentiment, or synthetic counts.
+   - Hard gates: the application has no demo/synthetic runtime or UI mode;
+     ingestion rejects the reserved simulation collector; persisted legacy
+     simulation rows cannot enter the tape, company views, Radar, counts,
+     automatic or operator retry path, or provider usage; test fixtures never
+     leave isolated test databases; the live UI displays real source URLs and
+     quote provenance.
+   - Evidence: focused database/API regression tests, live API readback from a
+     fresh isolated database with Jev and optional credentials explicitly
+     disabled, and browser selection of ADBE with Yahoo quote/chart provenance
+     and real RSS/SEC mention rows; no runtime errors.
+   - Proxy limit: this proves origin/provenance boundaries for the tested
+     path. It does not resolve source/model-use rights, data completeness,
+     quote accuracy, or Jev classification quality.
+   - Current result: `PASS` — the post-restart isolated database held 1,361
+     real observations (1,119 Google News RSS, 241 Yahoo Finance RSS, and 1
+     SEC EDGAR), zero simulation observations, zero simulated judgments, and
+     1,361 pending source-backed judgments. ADBE API rows retained real URLs;
+     browser rows showed “awaiting judgment.” Jev was disabled with zero
+     health failures and zero usage. See
+     `project-record/4-log/2026-09-28-real-data-only-runtime.md`.
+
+10. Every company-dependent result shown with the selected ticker stays bound
    to that company's identity and relevant window. Selecting a new company or
    window must not leave the prior company's outcome summary or mention cards
    under the new header while data loads or after a request fails. Cached data
@@ -220,6 +298,52 @@ does not generate opportunity hypotheses or value-chain links.
        0.99 sentinel also left the NVDA no-score chart unchanged.
      - `PASS` — a controlled mentions 503 showed the failure state, then a
        retry through the live local API returned 200 and cleared the failure.
+
+11. A newly retrieved quote is never presented as current when its exchange
+    observation time is materially old or unknown.
+    - User/job: the researcher compares companies using prices with visible
+      timing and provenance.
+    - Constraint: retrieval time and exchange observation time remain
+      separate; a successful network fetch does not refresh an older market
+      observation.
+    - Assumption: with quotes polled every 45 seconds, an observation older
+      than 15 minutes is visibly aged; a missing observation timestamp is
+      visibly unknown.
+    - Hard gates: aged or unknown quotes show source age or unknown timing in
+      the ticker tape, watchlist, and selected-company header. A cached delivery
+      retains both its last retrieval age and its original source time.
+    - Measure/evidence: fresh-start browser with actual provider data, selected
+      company state, the quote API payload and UI labels. `quote-age.test.ts`
+      verifies the 15-minute boundary and unknown-time copy. Proxy limit: the
+      age label does not prove the provider's market-price accuracy or rights.
+    - Current result: `PASS` — the live API returned an exchange observation
+      at 2026-09-25 20:00:01 UTC and a retrieval on 2026-09-28; the rebuilt
+      browser visibly showed “source 2d ago” for ADBE in ticker tape, watchlist,
+      and selected-company header.
+
+12. With no configured Jev key, newly collected real observations stay
+    pending without a failed judgment, a fabricated default score, or repeated
+    health failures. The desk still reports that scoring is disabled and
+    source delivery continues independently.
+    - User/job: the researcher can collect real evidence before configuring
+      Jev, without confusing unavailable scoring with rejected or failed work.
+    - Constraint: an absent scoring engine must never make a provider request,
+      update a score-attempt status, or increment Jev failure counters.
+    - Hard gates: real collector rows remain `pending` with no score/error;
+      explicit disabled status remains visible; Jev request and usage counts
+      stay zero; repeated delivery does not generate scoring attempts.
+    - Measure/evidence: null-judge unit/API regression plus live keyless
+      browser/API readback and health snapshot after a clean backend restart.
+      Proxy limit: proves only the unconfigured-engine path, not Jev model
+      quality or provider access rights.
+    - Failure case: fresh pending items repeatedly cycle through a failed state
+      or appear as Jev errors while the engine is disabled.
+    - Current result: `PASS` — after the fix, the post-restart source database
+      held 1,361 pending real judgments, Jev health was disabled with 0
+      successes, 0 failures, and no last error, usage was zero, and real source
+      deliveries continued. The null-judge regression verifies there is no
+      score attempt or synthetic fallback. See
+      `project-record/4-log/2026-09-28-real-data-only-runtime.md`.
 
 ## Phase 2 acceptance criteria
 

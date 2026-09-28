@@ -14,7 +14,6 @@ describe("SSE shutdown", () => {
       market: {} as AppDeps["market"],
       hub,
       health: {} as AppDeps["health"],
-      demo: false,
       version: "test",
       webRoot: "/nonexistent/web",
       deliverySources: [],

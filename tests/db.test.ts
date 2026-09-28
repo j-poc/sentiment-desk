@@ -21,7 +21,7 @@ function score(eventType: string): MentionScore {
     about: 1, material: 0.8, novel: 0.8, credible: 0.9, investorRelevant: 0.9,
     eventType, takeaway: "positive update", magnitude: 0.5, surprise: 0.2,
     eventScore: 70, impact: 56, weight: 0.8, engine: "test", inputTokens: 10,
-    outputTokens: 8, costUsd: 0.00001, latencyMs: 1, rubricSha: "test-rubric", scoredAt: Date.now(),
+    outputTokens: 8, estimatedInputCostUsd: 0.00001, latencyMs: 1, rubricSha: "test-rubric", scoredAt: Date.now(),
   };
 }
 
@@ -36,6 +36,85 @@ function mention(overrides: Partial<RawMention> = {}): RawMention {
 }
 
 describe("Desk observation and judgment storage", () => {
+  it("rejects new synthetic input and keeps previously stored simulation rows out of every research view", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-real-only-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    db.seedCompanies([company]);
+    const source = mention();
+    const { observationId } = db.insertObservation(source);
+    db.markScored(observationId, score("results"), false);
+    const { observationId: engineOnlyId } = db.insertObservation(mention({
+      title: "Legacy simulated judgment with a source collector",
+      sourceUrl: "https://reuters.com/acme/legacy-sim-judgment",
+      sourceItemId: "legacy-sim-judgment",
+    }));
+    expect(() => db.insertObservation(mention({ collector: "demo_simulation" }))).toThrow(/Synthetic mentions/);
+    db.close();
+
+    const oldRuntime = new DatabaseSync(path);
+    oldRuntime.exec("DROP TRIGGER source_observations_no_update");
+    oldRuntime.prepare("UPDATE source_observations SET collector = 'demo_simulation' WHERE id = ?").run(observationId);
+    oldRuntime.prepare("UPDATE jev_judgments SET engine = 'demo-sim' WHERE observation_id = ?").run(observationId);
+    oldRuntime.prepare("UPDATE jev_judgments SET engine = 'demo-sim' WHERE observation_id = ?").run(engineOnlyId);
+    oldRuntime.close();
+
+    db = new Desk(path);
+    try {
+      expect(db.mentionRow(observationId)).toBeUndefined();
+      expect(db.mentionRow(engineOnlyId)).toBeUndefined();
+      expect(db.mentionsForCompany(company.id, 0, 10)).toEqual([]);
+      expect(db.recentVisible(10)).toEqual([]);
+      expect(db.radarEvidence(company.id, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
+      expect(db.radarUncounted(company.id, 0, Number.MAX_SAFE_INTEGER)).toEqual({ untimedScored: 0, unjudged: 0 });
+      expect(db.pendingIds(10)).toEqual([]);
+      expect(db.claimForScoring(engineOnlyId, Date.now())).toBeUndefined();
+      expect(db.scoredMentions(0)).toEqual([]);
+      expect(db.scoredMentionEvents(0)).toEqual([]);
+      expect(db.counts24h(0).size).toBe(0);
+      expect(db.usageSince(0)).toEqual({
+        judgedItems: 0, inputTokens: 0, outputTokens: 0, estimatedInputCostUsd: 0,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not allow an operator retry to mutate a hidden legacy simulation row", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-hidden-retry-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    db.seedCompanies([company]);
+    const { observationId } = db.insertObservation(mention());
+    db.markFailed(observationId, "fixture failure", true);
+    db.close();
+
+    const oldRuntime = new DatabaseSync(path);
+    oldRuntime.exec("DROP TRIGGER source_observations_no_update");
+    oldRuntime.prepare("UPDATE source_observations SET collector = 'demo_simulation' WHERE id = ?").run(observationId);
+    oldRuntime.prepare("UPDATE jev_judgments SET engine = 'demo-sim' WHERE observation_id = ?").run(observationId);
+    oldRuntime.close();
+
+    db = new Desk(path);
+    try {
+      expect(db.requeueFailed(observationId, true)).toBe("not_retryable");
+      expect(db.mentionRow(observationId)).toBeUndefined();
+      expect(db.pendingIds(10)).toEqual([]);
+    } finally {
+      db.close();
+    }
+
+    const verify = new DatabaseSync(path);
+    try {
+      const status = verify.prepare("SELECT status FROM jev_judgments WHERE observation_id = ?").get(observationId) as { status: string };
+      expect(status.status).toBe("failed");
+    } finally {
+      verify.close();
+    }
+  });
+
   it("keeps collector-specific records, dedupes exact replays, and only indexes known source times", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-db-"));
     directories.push(directory);

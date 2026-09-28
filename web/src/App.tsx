@@ -25,7 +25,7 @@ import { HealthPanel } from "./components/HealthPanel.js";
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
-import { timeAgo } from "./lib/format.js";
+import { quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 
 const WINDOWS = [
   { h: 6, label: "6H" },
@@ -83,7 +83,7 @@ export default function App() {
   const [priceSource, setPriceSource] = useState<PriceSeriesDTO | null>(null);
   const [health, setHealth] = useState<HealthDTO | null>(null);
   const [connected, setConnected] = useState(false);
-  const [demo, setDemo] = useState(false);
+  const [snapshotRevision, setSnapshotRevision] = useState(0);
   const [windowHours, setWindowHours] = useState(24);
   const [chartMode, setChartMode] = useState<"sentiment" | "overlay">("overlay");
   const [feedFilter, setFeedFilter] = useState<FilterKey>("all");
@@ -101,6 +101,9 @@ export default function App() {
   const priceRequestSeq = useRef(0);
   const mentionStreamSequence = useRef(0);
   const latestStreamedMention = useRef(new Map<string, { sequence: number; mention: Mention }>());
+  const runtimeIdRef = useRef<string | null>(null);
+  const healthRef = useRef<HealthDTO | null>(null);
+  const snapshotRequestSeq = useRef(0);
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
@@ -193,51 +196,109 @@ export default function App() {
     }
   }, []);
 
+  const applyHealth = useCallback((snapshot: HealthDTO) => {
+    if (runtimeIdRef.current && runtimeIdRef.current !== snapshot.runtimeId) return;
+    runtimeIdRef.current = snapshot.runtimeId;
+    healthRef.current = snapshot;
+    setHealth(snapshot);
+  }, []);
+
+  const refreshBackendSnapshot = useCallback(async (reset = false, expectedRuntimeId?: string) => {
+    const requestSeq = ++snapshotRequestSeq.current;
+    const streamSequenceAtStart = mentionStreamSequence.current;
+    const [cs, tapeSnapshot, quoteSnapshot, healthSnapshot] = await Promise.all([
+      getJSON<CompanySnapshot[]>("/api/companies").catch(() => null),
+      getJSON<Mention[]>("/api/tape?limit=60").catch(() => null),
+      getJSON<MarketSnapshot>("/api/quotes").catch(() => null),
+      getJSON<HealthDTO>("/api/health").catch(() => null),
+    ]);
+    if (requestSeq !== snapshotRequestSeq.current || !healthSnapshot) return;
+    if (expectedRuntimeId && healthSnapshot.runtimeId !== expectedRuntimeId) return;
+    if (runtimeIdRef.current && healthSnapshot.runtimeId !== runtimeIdRef.current) return;
+    runtimeIdRef.current = healthSnapshot.runtimeId;
+    healthRef.current = healthSnapshot;
+    setHealth(healthSnapshot);
+
+    if (cs) {
+      setCompanies(cs);
+      setSelectedId((current) => current && cs.some((company) => company.id === current)
+        ? current
+        : cs[0]?.id ?? null);
+    }
+    if (tapeSnapshot) {
+      const realTape = tapeSnapshot.filter(isApplicationMention);
+      setTape((current) => mergeSnapshotWithLive(
+        realTape,
+        current,
+        latestStreamedMention.current,
+        streamSequenceAtStart,
+        60,
+        !reset,
+      ));
+      setDrawerMention((current) => {
+        if (!current) return null;
+        return realTape.find((mention) => mention.id === current.id) ?? null;
+      });
+    }
+    if (quoteSnapshot) setMarket(quoteSnapshot);
+    if (cs && tapeSnapshot) {
+      setMentionsByCompany({});
+      setMentionsLoadedByCompany({});
+      setMentionsErrorByCompany({});
+      setSnapshotRevision((revision) => revision + 1);
+    }
+    setSparks({});
+    void refreshSeries();
+    void refreshPrice();
+  }, [refreshPrice, refreshSeries]);
+
   useEffect(() => {
     if (chartMode === "overlay") void refreshPrice();
   }, [chartMode, refreshPrice]);
 
-  // Initial load: watchlist, tape, quotes, health snapshot.
+  // Initial load: refresh authoritative server snapshots.
   useEffect(() => {
-    let alive = true;
-    const streamSequenceAtStart = mentionStreamSequence.current;
-    (async () => {
-      try {
-        const cs = await getJSON<CompanySnapshot[]>("/api/companies");
-        if (!alive) return;
-        setCompanies(cs);
-        setSelectedId((prev) => prev ?? cs[0]?.id ?? null);
-      } catch {
-        /* health poll retries */
-      }
-      try {
-        const t = await getJSON<Mention[]>("/api/tape?limit=60");
-        if (alive) setTape((prev) => mergeSnapshotWithLive(t, prev, latestStreamedMention.current, streamSequenceAtStart, 60));
-      } catch {
-        /* ignore */
-      }
-      try {
-        const m = await getJSON<MarketSnapshot>("/api/quotes");
-        if (alive) setMarket(m);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    void refreshBackendSnapshot();
+  }, [refreshBackendSnapshot]);
 
   // Live stream: one EventSource, native reconnect.
   useEffect(() => {
     let lastSeriesRefresh = 0;
     const close = openStream({
       onHello: (d) => {
-        setDemo(d.demo);
+        const previousRuntimeId = runtimeIdRef.current ?? healthRef.current?.runtimeId ?? null;
+        const runtimeChanged = previousRuntimeId != null && previousRuntimeId !== d.runtimeId;
+        runtimeIdRef.current = d.runtimeId;
+        if (runtimeChanged) {
+          snapshotRequestSeq.current += 1;
+          mentionStreamSequence.current += 1;
+          latestStreamedMention.current.clear();
+        setCompanies([]);
+          setTape([]);
+          setMarket(null);
+          setSparks({});
+          setMentionsByCompany({});
+          setMentionsLoadedByCompany({});
+          setMentionsErrorByCompany({});
+          setDrawerMention(null);
+          setHealth(null);
+          healthRef.current = null;
+          seriesRequestSeq.current += 1;
+          priceRequestSeq.current += 1;
+          setSeries([]);
+          setSeriesKey(null);
+          setSeriesLoadErrorKey(null);
+          setPrice([]);
+          setPriceSource(null);
+          setPriceResultKey(null);
+          setPriceLoadErrorKey(null);
+        }
+        void refreshBackendSnapshot(runtimeChanged, d.runtimeId);
         setConnected(true);
       },
       onState: setConnected,
       onMention: (m) => {
+        if (!isApplicationMention(m)) return;
         const sequence = ++mentionStreamSequence.current;
         latestStreamedMention.current.delete(m.id);
         latestStreamedMention.current.set(m.id, { sequence, mention: m });
@@ -265,7 +326,7 @@ export default function App() {
         setMarket((prev) => ({ quotes: { ...prev?.quotes, ...s.quotes }, updatedAt: s.updatedAt })),
     });
     return close;
-  }, [refreshSeries, refreshPrice]);
+  }, [refreshBackendSnapshot, refreshSeries, refreshPrice]);
 
   // Series + price for the selected company: on select/window change and on timers.
   useEffect(() => {
@@ -293,7 +354,13 @@ export default function App() {
             const live = prev[selectedId] ?? [];
             return {
               ...prev,
-              [selectedId]: mergeSnapshotWithLive(ms, live, latestStreamedMention.current, streamSequenceAtStart, 100),
+            [selectedId]: mergeSnapshotWithLive(
+              ms.filter(isApplicationMention),
+              live,
+              latestStreamedMention.current,
+              streamSequenceAtStart,
+              100,
+            ),
             };
           });
           setMentionsLoadedByCompany((prev) => ({ ...prev, [selectedId]: true }));
@@ -306,15 +373,14 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, [selectedId]);
+  }, [selectedId, snapshotRevision]);
 
   // Health poll.
   useEffect(() => {
     const load = async () => {
       try {
         const h = await getJSON<HealthDTO>("/api/health");
-        setHealth(h);
-        setDemo(h.demo);
+        applyHealth(h);
       } catch {
         /* ignore */
       }
@@ -322,7 +388,7 @@ export default function App() {
     void load();
     const t = setInterval(load, 20_000);
     return () => clearInterval(t);
-  }, []);
+  }, [applyHealth]);
 
   // Sparklines for every watchlist row.
   const companyCount = companies.length;
@@ -350,7 +416,7 @@ export default function App() {
       alive = false;
       clearInterval(t);
     };
-  }, [companyCount]);
+  }, [companyCount, snapshotRevision]);
 
   // Clock + market session.
   useEffect(() => {
@@ -481,7 +547,6 @@ export default function App() {
                 ticker={selected.ticker}
                 hours={windowHours}
                 onHours={setWindowHours}
-                demo={demo}
               />
             ) : (
             <>
@@ -498,17 +563,27 @@ export default function App() {
                       if (!q) return null;
                       const c = q.changePct;
                       return (
-                        <span
-                          className="tabnum rounded px-1.5 py-0.5 text-[10.5px] font-medium"
-                          title={`${q.delivery === "cache" ? "Last-known cached quote" : "Yahoo Finance quote"}; ${q.currency}; source time ${q.at == null ? "unknown" : new Date(q.at).toISOString()}; retrieved ${timeAgo(q.retrievedAt)}`}
-                          style={{
-                            color: q.delivery === "cache" ? "#fbbf24" : c > 0.001 ? "#34d399" : c < -0.001 ? "#f87171" : "#94a3b8",
-                            background: "rgba(255,255,255,0.04)",
-                          }}
-                        >
-                          {q.currency} {q.price.toFixed(2)} {c > 0 ? "+" : ""}{c.toFixed(2)}%
-                          {q.delivery === "cache" ? ` · cached ${timeAgo(q.retrievedAt)}` : ""}
-                        </span>
+                        <>
+                          <span
+                            className="tabnum rounded px-1.5 py-0.5 text-[10.5px] font-medium"
+                            title={`${q.delivery === "cache" ? "Last-known cached quote" : "Yahoo Finance quote"}; ${q.currency}; source time ${q.at == null ? "unknown" : new Date(q.at).toISOString()}; retrieved ${timeAgo(q.retrievedAt)}`}
+                            style={{
+                              color: q.delivery === "cache" ? "#fbbf24" : c > 0.001 ? "#34d399" : c < -0.001 ? "#f87171" : "#94a3b8",
+                              background: "rgba(255,255,255,0.04)",
+                            }}
+                          >
+                            {q.currency} {q.price.toFixed(2)} {c > 0 ? "+" : ""}{c.toFixed(2)}%
+                            {q.delivery === "cache" ? ` · cached ${timeAgo(q.retrievedAt)}` : ""}
+                          </span>
+                          {quoteSourceAgeLabel(q.at) && (
+                            <span
+                              className="text-[9px] text-amber-300/80"
+                              title={`Exchange observation time; retrieved ${timeAgo(q.retrievedAt)}`}
+                            >
+                              {quoteSourceAgeLabel(q.at)}
+                            </span>
+                          )}
+                        </>
                       );
                     })()}
                   </div>
@@ -579,7 +654,7 @@ export default function App() {
                     {chartMode === "overlay" && (
                       <span
                         className={selectedPriceError ? "text-amber-300/80" : "text-white/30"}
-                        title={selectedPriceSource ? `Source point ${selectedPriceSource.sourceLatestAt == null ? "time unknown" : new Date(selectedPriceSource.sourceLatestAt).toISOString()}; served ${new Date(selectedPriceSource.servedAt).toISOString()}${selectedPriceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`}; values are bucketed last observations.` : undefined}
+                        title={selectedPriceSource ? `Latest provider observation ${selectedPriceSource.sourceLatestAt == null ? "time unknown" : new Date(selectedPriceSource.sourceLatestAt).toISOString()}; served ${new Date(selectedPriceSource.servedAt).toISOString()}${selectedPriceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`}; only provider timestamps within this window are plotted.` : undefined}
                       >
                         {selectedPriceError ? selectedPriceReady ? "refresh failed · keeping prior series" : "price history unavailable" : selectedPriceSource
                           ? `${selectedPriceSource.delivery.replaceAll("_", " ")}${selectedPriceSource.cacheAgeMs == null ? "" : ` ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`} · source ${timeAgo(selectedPriceSource.sourceLatestAt)}`
@@ -597,11 +672,14 @@ export default function App() {
                 </div>
                 <div className="px-3 py-2">
                   <SeriesChart
+                    key={selectedSeriesKey ?? "no-selection"}
                     points={selectedSeries}
                     hours={windowHours}
                     loading={chartLoading}
                     mode={chartMode}
                     price={selectedPrice}
+                    latestPriceAt={selectedPriceSource?.sourceLatestAt ?? null}
+                    onViewHistory={() => setWindowHours(168)}
                     priceLoading={selectedPricePending}
                     priceError={selectedPriceError}
                     seriesError={selectedSeriesError}
@@ -718,7 +796,12 @@ export default function App() {
   );
 }
 
+function isApplicationMention(mention: Mention): boolean {
+  return String(mention.collector) !== "demo_simulation" && mention.score?.engine !== "demo-sim";
+}
+
 function upsertMention(mentions: Mention[], mention: Mention, limit: number): Mention[] {
+  if (!isApplicationMention(mention)) return mentions;
   const existingIndex = mentions.findIndex((item) => item.id === mention.id);
   if (existingIndex < 0) return [mention, ...mentions].slice(0, limit);
   const updated = mentions.slice();
@@ -732,11 +815,17 @@ function mergeSnapshotWithLive(
   latestStreamed: Map<string, { sequence: number; mention: Mention }>,
   sequenceAtStart: number,
   limit: number,
+  preserveUnseenCurrent = true,
 ): Mention[] {
   const snapshotIds = new Set(snapshot.map((mention) => mention.id));
   const responseRows = snapshot.map((mention) => {
     const streamed = latestStreamed.get(mention.id);
     return streamed && streamed.sequence > sequenceAtStart ? streamed.mention : mention;
   });
-  return [...current.filter((mention) => !snapshotIds.has(mention.id)), ...responseRows].slice(0, limit);
+  const unseenCurrent = preserveUnseenCurrent
+    ? current.filter((mention) => !snapshotIds.has(mention.id) && isApplicationMention(mention))
+    : [...latestStreamed.values()]
+      .filter((streamed) => streamed.sequence > sequenceAtStart && !snapshotIds.has(streamed.mention.id))
+      .map((streamed) => streamed.mention);
+  return [...unseenCurrent, ...responseRows].slice(0, limit);
 }

@@ -25,9 +25,9 @@ export function fmtCost(usd: number): string {
   return "$0";
 }
 
-export function timeAgo(ms: number | null | undefined): string {
+export function timeAgo(ms: number | null | undefined, now = Date.now()): string {
   if (ms == null) return "never";
-  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  const s = Math.max(0, Math.floor((now - ms) / 1000));
   if (s < 10) return "now";
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -35,6 +35,12 @@ export function timeAgo(ms: number | null | undefined): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+export function quoteSourceAgeLabel(at: number | null, now = Date.now()): string | null {
+  if (at == null) return "source time unknown";
+  if (now - at <= 15 * 60_000) return null;
+  return `source ${timeAgo(at, now)}`;
 }
 
 export function clockTime(ms: number): string {
