@@ -18,8 +18,8 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
     <div className="px-4 py-3.5 text-[11px]">
       <Row label="external requests" value={health.externalRequestsEnabled ? "enabled" : "paused · saved data only"} />
       <Row label="engine" value={`${jev.model} · ${health.externalRequestsEnabled ? jev.enabled ? "live" : "off" : "paused"}`} />
-      <Row label="judged today" value={String(health.usage.judgedItems)} />
-      <Row label="est. input cost" value={fmtCost(health.usage.estimatedInputCostUsd)} />
+      <Row label="source-identified judged today" value={String(health.usage.judgedItems)} />
+      <Row label="est. input cost · identified sources" value={fmtCost(health.usage.estimatedInputCostUsd)} />
       {jev.lastError && (
         <div className="mt-1 clamp-2 text-red-400/80" title={jev.lastError}>
           {jev.lastError}

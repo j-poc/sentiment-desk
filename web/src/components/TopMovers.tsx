@@ -18,7 +18,11 @@ export function TopMovers({
 
   return (
     <div>
-      {movers.length === 0 && <div className="px-4 py-4 text-[11px] text-white/30">No scored movement yet.</div>}
+      {movers.length === 0 && (
+        <div className="px-4 py-4 text-[11px] text-white/30">
+          Current scores are available; no prior 24h comparison yet.
+        </div>
+      )}
       {movers.map((c) => {
         const d = c.delta ?? 0;
         const color = sentimentColor(d > 0.5 ? "positive" : d < -0.5 ? "negative" : "neutral");

@@ -62,17 +62,20 @@ export function Header({
         {usage && (
           <span
             className="tabnum hidden md:inline"
-            title="Estimate from saved provider judgments; excludes failed or retried requests and is not an invoice."
+            title="Input-cost estimate for judgments with identified source provenance; excludes unknown-source history and failed or retried requests. Not an invoice."
           >
-            est. input {fmtCost(usage.estimatedInputCostUsd)} · {usage.judgedItems} judged today
+            est. input {fmtCost(usage.estimatedInputCostUsd)} · {usage.judgedItems} source-identified judgments today
           </span>
         )}
         <span className="tabnum hidden sm:inline">
           {totalMentions} mentions/24h
         </span>
-        <span className="flex items-center gap-1.5 font-medium tracking-wider">
+        <span
+          className="flex items-center gap-1.5 font-medium tracking-wider"
+          title="The local desk app is connected; source collection status is shown separately."
+        >
           <span className={`h-1.5 w-1.5 rounded-full ${connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
-          {connected ? "CONNECTED" : "OFFLINE"}
+          {connected ? "APP CONNECTED" : "APP DISCONNECTED"}
         </span>
         <span className="tabnum w-16 text-right">{clockTime(clock)}</span>
       </div>

@@ -19,11 +19,9 @@ import type {
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 
 // Historical simulation and unverified legacy rows stay in place for audit,
-// but only observations with an identified collector can enter live research.
+// but only observations with an identified collector can enter live research
+// or current operational usage totals.
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
-// Keep saved non-demo usage estimates visible even when the source collector
-// is unknown; they are still recorded provider-usage history.
-const SAVED_USAGE_FILTER = "collector <> 'demo_simulation' AND COALESCE(engine, '') <> 'demo-sim'";
 
 /**
  * Source observations, Jev judgments, and delivery attempts have separate
@@ -1084,7 +1082,7 @@ export class Desk {
          FROM mentions
          WHERE scored_at >= ?
            AND status IN ('scored', 'off_target')
-           AND ${SAVED_USAGE_FILTER}`,
+           AND ${REAL_MENTION_FILTER}`,
       )
       .get(sinceMs) as {
         judged_items: number;

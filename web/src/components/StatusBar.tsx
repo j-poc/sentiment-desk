@@ -56,9 +56,12 @@ export function StatusBar({
   return (
     <footer className="flex h-[26px] shrink-0 items-center gap-2 whitespace-nowrap border-t border-desk-line bg-black/60 px-2 text-[9px] text-white/40 sm:gap-4 sm:px-4 sm:text-[10px]">
       <span className="tabnum">v{health?.version ?? "0.2.0"}</span>
-      <span className="flex items-center gap-1.5">
+      <span
+        className="flex items-center gap-1.5"
+        title="The local desk app is connected; source collection status is shown separately."
+      >
         <span className={`h-1.5 w-1.5 rounded-full ${connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
-        {connected ? "stream live" : "stream offline"}
+        {connected ? "app connected" : "app disconnected"}
       </span>
       <span className="hidden sm:inline">
         engine <span className="text-white/60">{engine}</span>

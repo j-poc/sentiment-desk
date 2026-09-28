@@ -51,7 +51,7 @@ describe("Desk observation and judgment storage", () => {
     }
   });
 
-  it("quarantines migrated unverified observations while preserving usage estimates", () => {
+  it("quarantines migrated unverified observations from operational usage totals", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-unverified-legacy-"));
     directories.push(directory);
     const path = join(directory, "desk.db");
@@ -90,6 +90,8 @@ describe("Desk observation and judgment storage", () => {
       expect(db.scoredMentions(0)).toEqual([]);
       expect(db.scoredMentionEvents(0)).toEqual([]);
       expect(db.counts24h(0).size).toBe(0);
+      const identifiedId = db.insertObservation(mention({ sourceItemId: "identified-source" })).observationId;
+      db.markScored(identifiedId, score("results"), false);
       expect(db.usageSince(0)).toEqual({
         judgedItems: 1, inputTokens: 10, outputTokens: 8, estimatedInputCostUsd: 0.00001,
       });
@@ -339,7 +341,7 @@ describe("Desk observation and judgment storage", () => {
     db = new Desk(path);
     try {
       expect(db.mentionsForCompany("acme", 0, 10)).toEqual([]);
-      expect(db.usageSince(0).judgedItems).toBe(1);
+      expect(db.usageSince(0).judgedItems).toBe(0);
     } finally {
       db.close();
     }
