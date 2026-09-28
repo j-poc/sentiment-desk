@@ -1,17 +1,16 @@
 # Operational Sentiment Desk, then Opportunity Radar
 
-Status (2026-09-29): the repository contains the earlier local Desk and Radar
-implementations, but Sentiment Desk is not yet externally operational or
-release-ready. Local hardening is checkpointed at
-`485490d` on `origin/codex/real-data-rebuild`. X and Reddit pagination resumes
-from persisted query-matched cursors; X advances its committed post ID after
-the page chain completes. GDELT raw-cap saturation is visible as partial
-coverage, and Finnhub news/Yahoo index receipts are isolated from unrelated
-company health. Verification passed 175 tests, typecheck, production build,
-and the fresh-process no-network/collector-allowlist probes. Source/account
-authority, real label quality, legacy-use reconciliation, and exhaustive
-coverage remain open.
-Do not expand or promote Opportunity Radar until the Sentiment Desk gates pass.
+Status (2026-09-29): Sentiment Desk local provider-integrity hardening is
+checkpointed at `e86960b` on `origin/codex/real-data-rebuild`. Collectors now
+preserve raw provider row counts and surface malformed responses; repeated X
+pagination, missing SEC CIK mappings, malformed Yahoo chart responses, stale
+Finnhub history retries, and health disclosure have regression coverage.
+Verification passed 196 tests, typecheck, production build, and the offline
+startup/request-gate probes. The saved-data browser check showed AMD's persisted
+sentiment/price chart with external requests paused. This remains a local
+checkpoint, not live-source, account-authority, rights, or real-source Jev
+quality proof. Those gates remain open. Do not expand or promote Opportunity
+Radar until the Sentiment Desk gates pass.
 
 ## Intent
 

@@ -1,20 +1,18 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): X and Reddit pagination now resume from persisted,
-query-matched cursors; X commits its `since_id` only after a complete page
-chain. GDELT requests up to 250 articles and reports raw-cap saturation as
-partial even when malformed rows are discarded. Finnhub earnings/calendar and
-Yahoo index receipts no longer distort company news/quote health; Yahoo index
-warning/recovery transitions persist atomically across restarts. Code was
-pushed to `origin/codex/real-data-rebuild` at `485490d`. Verification passed
-175 tests across 24 files, typecheck, production build, and fresh-process
-default/per-collector request probes with network interception. Independent
-read-only reviewers confirmed the scoped pagination, cap-reporting, and health
-findings are closed. The chart/UI evidence below is a saved-data-only browser
-run against an isolated database copy; this checkpoint does not establish live
+Status (2026-09-29): the latest local provider-integrity checkpoint is pushed
+at `e86960b` to `origin/codex/real-data-rebuild`. RSS, GDELT, Reddit, and
+Finnhub preserve raw provider row counts and distinguish clean empties, mixed
+malformed rows, and wholly unusable responses. X rejects non-advancing
+pagination; SEC reports unmapped tickers and validates response shapes; Yahoo
+chart payloads are checked before caching. Finnhub history retry state survives
+SQLite restarts, stale earnings cache entries are replaced atomically, and
+source-health details are visible in the UI. Verification passed 196 tests
+across 24 files, typecheck, production build, the offline startup/request-gate
+verifier, and the saved-data-only browser check. This does not establish live
 collection, provider/model rights, account authority, or real-source Jev
 quality. See
-`project-record/4-log/2026-09-29-feed-pagination-and-health-isolation.md`.
+`project-record/4-log/2026-09-29-provider-row-integrity-and-health-disclosure.md`.
 
 Saved-data UI verification snapshot (2026-09-28): the isolated production-build
 smoke remains valid: its backup database contained 2,281 real source-backed observations, zero
@@ -101,38 +99,35 @@ gates and their limits are recorded in
 ## Durable goal state (2026-09-29)
 
 The native ultragoal remains `active`. The latest code checkpoint is pushed to
-`origin/codex/real-data-rebuild` at `485490d`. X and Reddit pages persist
-query-matched continuations; X commits the newest post ID only after its page
-chain drains. GDELT preserves raw result counts and marks cap saturation
-partial, including when malformed rows are discarded. Finnhub company-news
-health excludes earnings/calendar receipts, and Yahoo index quote failures do
-not degrade company quote health. Index warning/recovery events transition
-atomically with their persisted markers. The checkpoint passed 175 tests
-across 24 files, typecheck, production build, the fresh-process offline startup
-verifier, all nine guarded collector path probes, and a positive-budget
-mismatched-source Jev probe. Follow-up independent read-only reviews confirmed
-the scoped pagination, raw-cap, and quote-health findings are closed.
+`origin/codex/real-data-rebuild` at `e86960b`. Raw provider counts and malformed
+rows are represented in delivery health for RSS, GDELT, Reddit, and Finnhub;
+repeated X pagination tokens fail without advancing the committed cursor;
+missing SEC ticker/CIK mappings are visible invalid deliveries; Yahoo chart
+responses are validated before caching; Finnhub history retry state is durable
+and its earnings cache replacement is atomic. The Health panel discloses recent
+coverage, provider row counts, degraded errors, and configuration-off state.
 
-The loopback UI at `127.0.0.1:8794` remains in saved-data-only mode on an
-isolated copy of the local database. The same-day browser pass selected Adobe
-and rendered the persisted sentiment/price chart and source-health panel. It
-made only loopback requests; the browser console had zero errors. The copy had
-no `demo_simulation` observations, and `legacy_unknown` rows are excluded from
-research reads. This proves saved-data presentation, not current provider
-delivery or Jev quality.
+The checkpoint passed 196 tests across 24 files, TypeScript typecheck,
+production build, `git diff --check`, and `npm run verify:offline-startup`.
+The verifier served 24 configured companies with all sources and Jev paused,
+returned 503 for a retry attempt, observed zero outbound fetches, passed all
+nine isolated source-allowlist probes, and rejected a mismatched Jev/source
+allowlist. A production browser check selected AMD and showed the saved
+sentiment/price chart from an isolated SQLite copy with requests paused; it
+made loopback requests and had zero console errors. Screenshot:
+`output/playwright/2026-09-29-final-saved-data-amd.png`. This proves the saved
+data presentation only, not current provider delivery. Synthetic examples
+remain confined to tests/evaluations and are not product data.
 
-The saved-data chart/UI screenshot remains available at
-`output/playwright/2026-09-29-real-saved-data-adobe-chart.png`; it is an
-isolated-copy browser run and makes no claim about current provider delivery.
-The goal remains incomplete and must not be reported as 10/10. No new source
-or Jev requests were sent. Remaining gates are account-owner confirmation of
-TypeSafe use/telemetry/retention/rejected-request billing and an approved
-request/cost ceiling; a valid SEC contact in `SEC_USER_AGENT`; rights for each
-non-SEC publisher source; independent blinded real-source labels and a passed
-frozen Jev evaluation; audit of historical `legacy_unknown` provider/model
-use and billing; and exhaustive source-coverage review. Opportunity Radar
-expansion remains downstream until these Sentiment Desk gates pass. See the
-dated verification trace for the exact evidence and next actions.
+The goal remains incomplete and must not be reported as 10/10 or externally
+operational. No provider or Jev request was sent for this checkpoint. Remaining
+gates are TypeSafe account-owner authority and applicable use/telemetry/
+retention/rejected-request billing terms plus an approved request/cost ceiling;
+a valid `SEC_USER_AGENT` contact; rights for each non-SEC publisher source;
+independent blinded real-source labels and a passing frozen Jev evaluation;
+audit of historical `legacy_unknown` provider/model use and billing; and
+exhaustive source-coverage review. Opportunity Radar remains downstream until
+these Sentiment Desk gates pass. See the dated verification trace for details.
 
 ## Prior durable goal state (2026-09-28)
 
