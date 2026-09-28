@@ -148,7 +148,9 @@ come from configured source collectors, and all sentiment/event judgments
 must come from Jev. Unconfigured judgments stay pending; generated fixtures
 are confined to automated tests and frozen evaluations. Existing simulation
 rows from older versions remain stored for auditability but are excluded from
-the UI, aggregates, retry queue, and usage totals.
+the UI, aggregates, retry queue, and usage totals. EDGAR filings without
+retrievable document text are reported as partial delivery and never scored
+from locally constructed replacement text.
 
 To verify a live, credential-free Compose rebuild and persistent-volume
 recovery, run `./scripts/verify-live-compose.sh`. It uses a temporary Compose

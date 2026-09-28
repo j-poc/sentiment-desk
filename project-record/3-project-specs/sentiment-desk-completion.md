@@ -11,7 +11,7 @@ selected company and drew its real Yahoo 7D chart, while the weekend 24H
 window remained honestly empty. GDELT HTTP 429 was surfaced as a source error;
 the temporary server was stopped after verification. Quotes older than 15
 minutes show source age in the tape, watchlist, and header. `npm test` passes
-121 tests across 21 files; typecheck and production build pass. Default public
+122 tests across 21 files; typecheck and production build pass. Default public
 collectors now pace request starts and persist provider-wide 429 cooldowns;
 Yahoo chart cache misses are coalesced. Generated
 examples stay isolated to tests and frozen evaluations; they are not
@@ -168,6 +168,13 @@ does not generate opportunity hypotheses or value-chain links.
      quote cadence and RSS concurrency were reduced, with provider request
      starts paced. Tests use mocked responses and do not call providers. See
      `project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`.
+   - SEC text-integrity result (2026-09-28): `PASS` — when an EDGAR filing has
+     no primary-document URL or its document cannot be fetched, no
+     metadata-derived fallback sentence is sent to Jev. The filing is omitted
+     from scoring, the delivery is recorded as `partial` with a generic
+     explanation, and the regular poll can retry. A poller-level regression
+     proves both missing-text cases create no Jev inputs while an actual
+     fetched excerpt still enters the normal pipeline.
    - Additional hard gate: a GDELT HTTP 429 stops the current company sweep,
      persists one source-wide next-attempt time across process restarts,
      honors a valid `Retry-After` value, and otherwise uses bounded exponential
@@ -180,7 +187,7 @@ does not generate opportunity hypotheses or value-chain links.
 6. Desktop and narrow-screen flows let the researcher select a company, read
    the score/index, inspect the source and Jev rubric, and understand data
    health without hidden overflow or dead controls.
-7. `npm test` (121 tests across 21 files), typecheck, production build, fresh
+7. `npm test` (122 tests across 21 files), typecheck, production build, fresh
    keyless local start, 390px and 1280px browser passes, accessible mention
    drawer interaction, SSE shutdown, and isolated Docker persistence smoke
    pass. The source-data contract records what these checks prove and what

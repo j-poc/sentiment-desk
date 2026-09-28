@@ -350,3 +350,22 @@ finalized until a label-only pilot estimates real class prevalence and reviewer
 disagreement; final sample IDs and size must then be frozen before Jev output is
 seen. A successful EDGAR cohort would not clear publisher/social-source rights,
 source coverage, or historical usage reconciliation.
+
+## SEC source-text integrity repair
+
+A new poller-level regression reproduced a real-only violation: when an EDGAR
+8-K primary document returned HTTP 503, or its URL was absent, the collector
+constructed `Form 8-K, items … Accepted …` text and submitted it to the Jev
+pipeline. The repair omits every filing whose source text is empty or
+unavailable, records the delivery as `partial` with a generic explanation,
+surfaces degraded SEC health, and lets the next scheduled sweep retry. The
+regression verifies the broken behavior before the fix (two pipeline inputs)
+and the repaired behavior. Its final three-item case set includes two missing
+documents and one fetched filing body; only the item with actual response text
+enters the pipeline, while the delivery remains visibly partial.
+
+`npm test -- --reporter=dot tests/provider-pollers.test.ts` passes 5 tests;
+`npm run typecheck` and `git diff --check` pass. The test uses a fresh in-memory
+database and mocked SEC responses; it makes no live source or Jev request.
+The complete suite passes 122 tests across 21 files, and the production build
+passes with the existing Vite advisory that the main chunk is above 500 kB.

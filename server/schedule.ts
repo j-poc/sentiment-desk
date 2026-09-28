@@ -289,13 +289,17 @@ export function startSecPoller(deps: {
         try {
           filings = await fetchRecent8Ks({ cik, ticker: company.ticker, sinceMs: since, userAgent: deps.userAgent });
           let added = 0;
+          let unavailableDocuments = 0;
           for (const f of filings) {
             let snippet = "";
             try {
               snippet = await fetchPrimaryDocText(f.primaryDocUrl, deps.userAgent);
             } catch (err) {
               if (err instanceof ProviderRateLimitError) throw err;
-              /* scoring proceeds on the item-typed title if the doc fails */
+            }
+            if (!snippet) {
+              unavailableDocuments += 1;
+              continue;
             }
             const url = f.primaryDocUrl || `https://www.sec.gov/Archives/edgar/data/${Number(f.cik)}/${f.accessionNo.replace(/-/g, "")}/`;
             const inserted = deps.pipeline.ingest({
@@ -306,7 +310,7 @@ export function startSecPoller(deps: {
               sourceUrl: url,
               tier: "filing",
               title: titleForItems(f.formType, f.items),
-              snippet: snippet || `Form ${f.formType}, items ${(f.items.join(", ") || "none")}. Accepted ${new Date(f.acceptanceAt).toISOString()}.`,
+              snippet,
               publishedAt: f.acceptanceAt,
               collector: "sec_edgar",
               sourceItemId: f.accessionNo,
@@ -318,15 +322,19 @@ export function startSecPoller(deps: {
             });
             if (inserted) added += 1;
           }
+          const partialError = unavailableDocuments > 0
+            ? `${unavailableDocuments} SEC filing document(s) unavailable; omitted from Jev input`
+            : undefined;
           recordDelivery({
             db: deps.db, collector: "sec_edgar", companyId: company.id,
             requestKey: `sec:${cik}:8-k:${since}`, startedAt, adapterVersion: "sec-submissions/1",
-            result: filings.length === 0 ? "empty" : "success", parsedItemCount: filings.length,
-            normalizedItems: filings,
+            result: filings.length === 0 ? "empty" : unavailableDocuments > 0 ? "partial" : "success",
+            parsedItemCount: filings.length, normalizedItems: filings, error: partialError,
           });
-          deps.health.recordSec(true);
+          deps.health.recordSec(unavailableDocuments === 0, partialError);
           clearProviderRateLimit(deps.db, "sec", startedAt);
           if (added > 0) deps.db.logEvent("info", "sec", `${company.ticker}: ${added} new 8-K filings`);
+          if (partialError) deps.db.logEvent("warn", "sec", `${company.ticker}: ${partialError}`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           recordDelivery({

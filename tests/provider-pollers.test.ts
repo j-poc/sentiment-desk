@@ -42,6 +42,54 @@ describe("optional provider rate limits", () => {
     db.close();
   });
 
+  it("scores SEC filings only when source document text is available", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const acceptedAt = new Date().toISOString();
+    const request = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/submissions/")) {
+        return new Response(JSON.stringify({
+          filings: { recent: {
+            form: ["8-K", "8-K", "8-K"],
+            filingDate: ["2026-09-28", "2026-09-28", "2026-09-28"],
+            acceptanceDateTime: [acceptedAt, acceptedAt, acceptedAt],
+            accessionNumber: ["0000000001-26-000001", "0000000001-26-000002", "0000000001-26-000003"],
+            primaryDocument: ["unavailable.htm", "", "available.htm"],
+            items: ["2.02", "5.02", "2.02"],
+          } },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/available.htm")) return new Response("Actual SEC filing text", { status: 200 });
+      return new Response("document unavailable", { status: 503 });
+    });
+    globalThis.fetch = request;
+    const ingest = vi.fn(() => true);
+    const control = startSecPoller({
+      companies: [companies[0]!],
+      cikByTicker: new Map([["ALPH", "0000000001"]]),
+      userAgent: "Sentiment Desk test@example.com",
+      pipeline: { ingest } as unknown as Pipeline,
+      db,
+      health: new HealthTracker(false, false, "unconfigured", true),
+      intervalSeconds: 90,
+    });
+
+    try {
+      await control.stop();
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(ingest).toHaveBeenCalledTimes(1);
+      expect(ingest).toHaveBeenCalledWith(expect.objectContaining({
+        sourceItemId: "0000000001-26-000003",
+        snippet: "Actual SEC filing text",
+      }));
+      expect(db.deliverySummary().find((row) => row.collector === "sec_edgar"))
+        .toMatchObject({ result: "partial", parsedItemCount: 3, error: "2 SEC filing document(s) unavailable; omitted from Jev input" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("stops Finnhub backfill, earnings, and recent calls after the first 429", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies(companies);
