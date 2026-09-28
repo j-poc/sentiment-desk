@@ -1,17 +1,18 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): collector recovery and source-admission hardening passed
-local verification and was pushed as `4fe03a2b2ca6df7e77dd0aa658c4d2b55882f61e`.
-Jev's effective source allowlist is now the intersection of model permission
-and active collection permission; SEC directory lookup retries after HTTP
-startup and company coverage counts distinct companies rather than receipts.
-GDELT has its own health counter. Verification passed 160 tests across 24
-files, typecheck, production build, and fresh-process default/per-collector
-request probes with network interception. The chart/UI evidence below is a
-saved-data-only browser run against an isolated database copy; this checkpoint
-does not establish live collection, provider/model rights, account authority,
-or real-source Jev quality. See
-`project-record/4-log/2026-09-29-collector-operations-hardening.md`.
+Status (2026-09-29): X recent-search pagination now resumes one page per cycle
+and commits its `since_id` only after a complete page chain. Query changes,
+legacy or malformed cursors, rejected continuation tokens, and malformed
+pagination metadata fail closed and replay from the last verified point.
+Finnhub news health excludes its earnings/calendar adapter receipts. Code was
+pushed to `origin/codex/real-data-rebuild` at `7c996d3`. Verification passed
+167 tests across 24 files, typecheck, production build, and fresh-process
+default/per-collector request probes with network interception. Independent
+read-only review closed the concrete cursor, pagination, and feed-health
+findings. The chart/UI evidence below is a saved-data-only browser run against
+an isolated database copy; this checkpoint does not establish live collection,
+provider/model rights, account authority, or real-source Jev quality. See
+`project-record/4-log/2026-09-29-feed-pagination-and-health-isolation.md`.
 
 Saved-data UI verification snapshot (2026-09-28): the isolated production-build
 smoke remains valid: its backup database contained 2,281 real source-backed observations, zero
@@ -97,15 +98,15 @@ gates and their limits are recorded in
 
 ## Durable goal state (2026-09-29)
 
-The native ultragoal remains `active`. Local collector hardening is verified
-and pushed to `origin/codex/real-data-rebuild` at
-`4fe03a2b2ca6df7e77dd0aa658c4d2b55882f61e`. SEC bootstrap retries no longer
-block HTTP startup, Jev dispatch uses the intersection of Jev and active
-source allowlists, GDELT health is separately visible, and delivery coverage
-counts distinct companies while excluding global bootstrap receipts. The
-current checkpoint passed 160 tests across 24 files, typecheck, production
-build, the fresh-process offline startup verifier, and all nine guarded
-collector path probes plus a positive-budget mismatched-source Jev probe.
+The native ultragoal remains `active`. The feed-integrity checkpoint is pushed
+to `origin/codex/real-data-rebuild` at `7c996d3`. X pages now persist a
+query-matched continuation and only advance the committed post ID after the
+page chain drains. Finnhub company-news health is scoped to its news adapter.
+The checkpoint passed 167 tests across 24 files, typecheck, production build,
+the fresh-process offline startup verifier, all nine guarded collector path
+probes, and a positive-budget mismatched-source Jev probe. The final
+independent read-only review closed the actionable pagination, cursor-state,
+and feed-health findings.
 
 The loopback UI at `127.0.0.1:8794` remains in saved-data-only mode on an
 isolated copy of the local database. The same-day browser pass selected Adobe
@@ -115,6 +116,9 @@ no `demo_simulation` observations, and `legacy_unknown` rows are excluded from
 research reads. This proves saved-data presentation, not current provider
 delivery or Jev quality.
 
+The saved-data chart/UI screenshot remains available at
+`output/playwright/2026-09-29-real-saved-data-adobe-chart.png`; it is an
+isolated-copy browser run and makes no claim about current provider delivery.
 The goal remains incomplete and must not be reported as 10/10. No new source
 or Jev requests were sent. Remaining gates are account-owner confirmation of
 TypeSafe use/telemetry/retention/rejected-request billing and an approved
