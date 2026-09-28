@@ -216,3 +216,15 @@ copy above. It does not update or serve from the original local database.
   actionable defect. The review independently confirmed the README, Compose,
   and smoke-script defaults are consistent. Its conclusion remains bounded to
   these guarded fetch paths and does not clear live data or release gates.
+
+## Post-checkpoint saved-data UI readback — 2026-09-28
+
+After the source-allowlist commits were pushed, a read-only loopback API check
+against the existing production process at `127.0.0.1:8794` returned health
+with `externalRequestsEnabled=false` and Jev disabled. The companies endpoint
+returned all 24 configured companies including Adobe. Adobe's 24-hour price
+endpoint reported `delivery=local_store` with 323 persisted points, and its
+sentiment series returned 97 persisted points. This confirms the saved-data
+UI backing APIs remain available after the request-gating changes; it does not
+verify current provider delivery or Jev classification quality. No write or
+external request was made.
