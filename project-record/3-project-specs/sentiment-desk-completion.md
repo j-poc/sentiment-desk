@@ -1,17 +1,19 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): X recent-search pagination now resumes one page per cycle
-and commits its `since_id` only after a complete page chain. Query changes,
-legacy or malformed cursors, rejected continuation tokens, and malformed
-pagination metadata fail closed and replay from the last verified point.
-Finnhub news health excludes its earnings/calendar adapter receipts. Code was
-pushed to `origin/codex/real-data-rebuild` at `7c996d3`. Verification passed
-167 tests across 24 files, typecheck, production build, and fresh-process
+Status (2026-09-29): X and Reddit pagination now resume from persisted,
+query-matched cursors; X commits its `since_id` only after a complete page
+chain. GDELT requests up to 250 articles and reports raw-cap saturation as
+partial even when malformed rows are discarded. Finnhub earnings/calendar and
+Yahoo index receipts no longer distort company news/quote health; Yahoo index
+warning/recovery transitions persist atomically across restarts. Code was
+pushed to `origin/codex/real-data-rebuild` at `485490d`. Verification passed
+175 tests across 24 files, typecheck, production build, and fresh-process
 default/per-collector request probes with network interception. Independent
-read-only review closed the concrete cursor, pagination, and feed-health
-findings. The chart/UI evidence below is a saved-data-only browser run against
-an isolated database copy; this checkpoint does not establish live collection,
-provider/model rights, account authority, or real-source Jev quality. See
+read-only reviewers confirmed the scoped pagination, cap-reporting, and health
+findings are closed. The chart/UI evidence below is a saved-data-only browser
+run against an isolated database copy; this checkpoint does not establish live
+collection, provider/model rights, account authority, or real-source Jev
+quality. See
 `project-record/4-log/2026-09-29-feed-pagination-and-health-isolation.md`.
 
 Saved-data UI verification snapshot (2026-09-28): the isolated production-build
@@ -75,11 +77,11 @@ The Jev forwarding allowlist remains separate. This permits a later SEC-only
 collection/evaluation path without starting publisher feeds or Yahoo market
 requests whose endpoint-specific rights remain open.
 
-The latest `npm test` passes 156 tests across 24 files; typecheck and production
-build pass, with the existing Vite chunk-size advisory. The failed-row drawer
-now hides retry controls until both external requests and Jev are enabled, and
-its health-state helper has direct regression coverage. An independent
-read-only review found no actionable defect. The original database
+The prior offline UI checkpoint passed 156 tests across 24 files; typecheck and
+production build passed, with the existing Vite chunk-size advisory. The
+failed-row drawer now hides retry controls until both external requests and Jev
+are enabled, and its health-state helper has direct regression coverage. An
+independent read-only review found no actionable defect. The original database
 still has migrated `legacy_unknown` rows whose provider and model-use history
 are unaudited; the latest code filters them from research views. Generated
 examples remain isolated to tests and frozen evaluations; they are not product
@@ -98,15 +100,18 @@ gates and their limits are recorded in
 
 ## Durable goal state (2026-09-29)
 
-The native ultragoal remains `active`. The feed-integrity checkpoint is pushed
-to `origin/codex/real-data-rebuild` at `7c996d3`. X pages now persist a
-query-matched continuation and only advance the committed post ID after the
-page chain drains. Finnhub company-news health is scoped to its news adapter.
-The checkpoint passed 167 tests across 24 files, typecheck, production build,
-the fresh-process offline startup verifier, all nine guarded collector path
-probes, and a positive-budget mismatched-source Jev probe. The final
-independent read-only review closed the actionable pagination, cursor-state,
-and feed-health findings.
+The native ultragoal remains `active`. The latest code checkpoint is pushed to
+`origin/codex/real-data-rebuild` at `485490d`. X and Reddit pages persist
+query-matched continuations; X commits the newest post ID only after its page
+chain drains. GDELT preserves raw result counts and marks cap saturation
+partial, including when malformed rows are discarded. Finnhub company-news
+health excludes earnings/calendar receipts, and Yahoo index quote failures do
+not degrade company quote health. Index warning/recovery events transition
+atomically with their persisted markers. The checkpoint passed 175 tests
+across 24 files, typecheck, production build, the fresh-process offline startup
+verifier, all nine guarded collector path probes, and a positive-budget
+mismatched-source Jev probe. Follow-up independent read-only reviews confirmed
+the scoped pagination, raw-cap, and quote-health findings are closed.
 
 The loopback UI at `127.0.0.1:8794` remains in saved-data-only mode on an
 isolated copy of the local database. The same-day browser pass selected Adobe

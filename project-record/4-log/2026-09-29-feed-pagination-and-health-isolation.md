@@ -2,17 +2,17 @@
 
 Trace ID: `TRACE-20260929-feed-pagination-and-health-isolation`
 
-Implementation checkpoint: `7c996d3` (`fix(ops): preserve paginated source coverage`),
+Implementation checkpoint: `485490d` (`fix(collectors): preserve provider coverage and isolate quote health`),
 pushed to `origin/codex/real-data-rebuild`.
 
 ## Request and acceptance
 
 Continue the Sentiment Desk operational build while keeping source requests and
-Jev dispatch disabled. Fix data loss when an X recent-search query returns more
-than one page, prevent unrelated Finnhub earnings/calendar deliveries from
-misstating news-feed health, preserve truthful progress and recovery state, and
-checkpoint only after offline verification. Live product data remains
-real-source-only; test fixtures stay isolated in automated tests.
+Jev dispatch disabled. Preserve paginated X and Reddit coverage, prevent
+unrelated Finnhub/index receipts from misstating company-feed health, report
+GDELT cap saturation truthfully, and keep progress/recovery durable. Live
+product data remains real-source-only; test fixtures stay isolated in automated
+tests.
 
 ## Findings and changes
 
@@ -44,10 +44,30 @@ real-source-only; test fixtures stay isolated in automated tests.
   current health after the final page. A separate recovery test rejects a
   continuation and verifies replay from the prior committed `since_id`.
 - README now describes bounded, resumable X pagination.
+- Reddit now follows its listing `after` cursor one page per company per
+  scheduled cycle, persists the cursor and exact query/page-size fingerprint,
+  resumes after a SQLite restart, and clears/replays when a cursor is rejected
+  or does not advance. Each non-terminal page is recorded as partial until a
+  terminal page succeeds. The provider's `after` pagination contract is
+  documented in the [official Reddit API reference](https://www.reddit.com/dev/api/).
+- GDELT now asks for its documented 250-row maximum. The adapter preserves the
+  raw provider row count before discarding malformed rows; reaching the
+  requested cap, including with null or otherwise unusable rows, records a
+  partial delivery with a truncation notice. This does not add provider-side
+  pagination or prove complete coverage. The provider cap is documented in
+  [GDELT's DOC API guide](https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/).
+- Yahoo index quote receipts no longer affect company quote health or company
+  quote counters. An index failure emits one warning; recovery survives a
+  database close/reopen, and the warning/recovery event and durable state
+  transition are written atomically.
+- Regression coverage includes GDELT raw-cap saturation with malformed rows,
+  Yahoo index-health isolation and restart recovery, plus the Reddit page-chain
+  restart and rejected-cursor paths.
 
 The code changes are in `README.md`, `server/db.ts`, `server/index.ts`,
-`server/schedule.ts`, `server/sources/x.ts`, `tests/db.test.ts`, and
-`tests/provider-pollers.test.ts`.
+`server/market.ts`, `server/schedule.ts`, `server/sources/gdelt.ts`,
+`server/sources/reddit.ts`, `server/sources/x.ts` (in the preceding code
+checkpoint), and the database, market, GDELT, and provider-poller tests.
 
 ## Source and side-effect boundaries
 
@@ -63,14 +83,15 @@ continuation does not make the feed exhaustive if the process is inactive past
 that window, provider access is restricted, or the query omits relevant posts.
 The adapter's query and `next_token` usage follow the [official X Recent Search
 guide](https://github.com/xdevplatform/docs/blob/main/docs/x-api/posts/search/quickstart/recent-search.mdx).
-Code review also reconfirmed other bounded queries: Google News asks for two
-days; Finnhub's default backfill is five days; Reddit requests 25 newest link
-posts from a week; GDELT requests at most 25 English-language results from two
-days; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one
-provider feed response per ticker. These have no completeness claim. “Current”
-delivery health means the configured request completed for its watchlist, not
-that all public activity was observed. Provider access, rights, and feed
-completeness remain open.
+Other bounded queries are: Google News asks for two days; Finnhub's default
+backfill is five days; Reddit requests 25 newest link posts from a one-week
+search and follows returned listing cursors; GDELT requests up to 250
+English-language results from two days, but a response at that cap is still
+partial; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is
+one provider feed response per ticker. These have no completeness claim.
+“Current” delivery health means the configured request completed for its
+watchlist, not that all public activity was observed. Provider access, rights,
+and feed completeness remain open.
 
 An aggregate read-only audit of the isolated local database copy found 4,700
 saved Jev judgments on `legacy_unknown` observations (3,958 scored and 742
@@ -85,7 +106,7 @@ records.
 
 ## Verification
 
-- `npm test -- --reporter=dot` — **PASS**, 167 tests across 24 files.
+- `npm test -- --reporter=dot` — **PASS**, 175 tests across 24 files.
 - `npm run typecheck` — **PASS**.
 - `npm run verify:offline-startup` — **PASS**; default startup served all 24
   configured companies with every provider paused and zero attempted fetches.
@@ -96,11 +117,16 @@ records.
   531.79 kB; the build succeeds.
 - `git diff --check` — **PASS**.
 - Independent read-only review found and drove fixes for cross-adapter Finnhub
-  health, rejected continuation tokens, query changes and legacy cursor replay,
-  malformed pagination metadata, and corrupt nonnumeric committed IDs. The
-  final review confirmed those findings are closed. Post-drain health is
+  health, rejected X/Reddit continuation tokens, query changes and legacy
+  cursor replay, malformed pagination metadata, corrupt committed IDs, GDELT
+  raw-row saturation with malformed rows, Yahoo index/company health
+  isolation, and durable warning/recovery transitions. Follow-up reviews
+  confirmed these scoped findings are closed. Post-drain page-chain health is
   `current`: `deliveryHealth` selects the latest receipt per company and
-  adapter, so a completed page chain supersedes its earlier partial page.
+  adapter, so a terminal page supersedes its earlier partial page.
+  The index recovery regression uses an orderly file-backed SQLite close/reopen;
+  crash atomicity follows from the transaction boundary and was not tested by
+  killing a process mid-transaction.
 
 ## Remaining gates
 

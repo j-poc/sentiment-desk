@@ -3,13 +3,14 @@
 Status (2026-09-29): the repository contains the earlier local Desk and Radar
 implementations, but Sentiment Desk is not yet externally operational or
 release-ready. Local hardening is checkpointed at
-`7c996d3` on `origin/codex/real-data-rebuild`. X recent-search pages now resume
-with a query-matched SQLite cursor and only advance the committed post ID after
-the page chain completes; Finnhub news health excludes earnings/calendar
-receipts. Verification passed 167 tests, typecheck, production build, and the
-fresh-process no-network/collector-allowlist probes. Source/account authority,
-real label quality, legacy-use reconciliation, and exhaustive coverage remain
-open.
+`485490d` on `origin/codex/real-data-rebuild`. X and Reddit pagination resumes
+from persisted query-matched cursors; X advances its committed post ID after
+the page chain completes. GDELT raw-cap saturation is visible as partial
+coverage, and Finnhub news/Yahoo index receipts are isolated from unrelated
+company health. Verification passed 175 tests, typecheck, production build,
+and the fresh-process no-network/collector-allowlist probes. Source/account
+authority, real label quality, legacy-use reconciliation, and exhaustive
+coverage remain open.
 Do not expand or promote Opportunity Radar until the Sentiment Desk gates pass.
 
 ## Intent
