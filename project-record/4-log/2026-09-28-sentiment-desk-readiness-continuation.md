@@ -175,13 +175,21 @@ source coverage gaps remain separate gates.
   information within the configured length bound; no generic fallback remains.
 - `PASS` — full local verification after these changes: 106 tests across 18
   files, TypeScript typecheck, production build, and `git diff --check`.
-- `BLOCKED ON EXTERNAL AUTHORITY` — a narrow SEC-only evaluation is potentially
-  supportable under SEC's first-party reuse statement, after the operator
-  configures an identifying contact User-Agent and the authorized TypeSafe
-  account owner verifies the applicable usage limit, retention/telemetry
-  configuration, auto-refill, and billing behavior. TypeSafe's current MCA
-  states credits are consumed per submitted input and provides no reviewed
-  exception for 429/529; account-owner verification is still required.
+- `ADVANCED, STILL GATED` — the SEC Webmaster FAQ explicitly says EDGAR public
+  filing content is free to access and reuse; SEC website terms also permit
+  copying/further distribution without SEC permission. This gives the desk a
+  narrow source basis for a public-EDGAR evaluation, with filing-content
+  exceptions, marks, User-Agent, fair-access, and non-endorsement limits still
+  observed. The SEC allows no more than 10 requests/sec across machines; this
+  app paces each process at 8 requests/sec, while cross-process coordination
+  remains unproven.
+- `BLOCKED ON EXTERNAL AUTHORITY` — before sending even eligible public EDGAR
+  text to Jev, the authorized TypeSafe account owner must review the MCA updated
+  2026-09-23, account limits/auto-refill, telemetry scope, retention, and
+  rejected-request billing. The MCA says each submitted Input consumes credits
+  and permits broad perpetual use of telemetry, including classifications and
+  summary statistics, to improve TypeSafe products; the privacy policy's
+  no-input-training statement does not remove those separate terms.
 - `BLOCKED ON SOURCE RIGHTS` — Google News, Yahoo Finance, GDELT-linked
   publisher content, Finnhub, Reddit, and X do not have documented permission
   in the current records for this app's storage/display/model-forwarding path.
@@ -194,10 +202,12 @@ source coverage gaps remain separate gates.
 
 ### Findings and boundaries
 
-- `source_rights_audit` reviewed current official SEC, Google, Yahoo, GDELT,
-  Finnhub, Reddit, X, and TypeSafe sources. It found a conditional SEC reuse
-  basis for public filing content, but not for publisher news text. The current
-  rights, billing, and configured User-Agent conditions are recorded in
+- `source_rights_audit` and a fresh official-page review confirm the SEC's
+  public-EDGAR reuse basis and 10 requests/sec aggregate fair-access cap.
+  The TypeSafe MCA currently posted as of 2026-09-23 adds a broad perpetual
+  telemetry grant and says each submitted Input consumes credits. No real
+  source text was sent. The source-by-source terms, account questions, and
+  permitted SEC-only path are recorded in
   `project-record/3-project-specs/live-data-etl.json`.
 - `jev_readiness_audit` confirmed the app presently drains up to 5,000 pending
   records at startup and drains again every 15 seconds when a TypeSafe key is
@@ -285,3 +295,58 @@ found no remaining actionable defects in the audited collector changes. The
 focused reviewer reran the cooldown, poller, RSS, market/coalescing tests,
 typecheck, and diff check successfully. No external provider or model was
 called for this review.
+
+## Fresh rights-policy evidence and next gate
+
+A direct read-only review of current official pages refined the source gate:
+
+- The SEC Webmaster FAQ says EDGAR public filing content is free to access and
+  reuse. SEC website dissemination terms also permit copying/further
+  distribution of sec.gov information without SEC permission, subject to the
+  stated exclusions and SEC mark/non-endorsement restrictions. The SEC fair
+  access page sets a 10 requests/second aggregate cap across machines; this
+  app spaces starts by 125ms (8 per second) within each process. It does not
+  coordinate across multiple processes.
+- `SEC_USER_AGENT` is absent from the current local environment, so no live SEC
+  request was made. SEC collection stays disabled until the operator configures
+  a descriptive identifier and contact email.
+- TypeSafe's current MCA is marked updated 2026-09-23. It says each submitted
+  Input consumes credits; account settings control consumption and automatic
+  refills. It grants TypeSafe service-processing rights during the term and
+  perpetual processing of Customer Data to derive Telemetry, defined to
+  include hashes, summary statistics, classifications, metrics, and learnings
+  that TypeSafe may use without restriction to improve its services. The
+  privacy policy says Inputs are not used for model training/fine-tuning, while
+  describing reasonably necessary retention and U.S. hosting. The MCA also
+  restricts using Services or Output to develop a similar or competing product
+  or service; whether the intended private Sentiment Desk use fits the account
+  terms requires confirmation. API docs describe 429/529 retries but do not
+  establish free rejected requests.
+- This narrows the potential evaluation source to public EDGAR content but
+  does not authorize use of a TypeSafe account. Before the first real Jev
+  request, the authorized account owner must confirm the current agreement,
+  account/credit and auto-refill settings, telemetry acceptability, retention,
+  rejected-request billing, and whether the app's intended use is within the
+  similar/competing-product restriction. Other publisher feeds remain
+  unapproved for model forwarding. No real content was transmitted.
+
+Primary sources: SEC [EDGAR reuse FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions), [website dissemination policy](https://www.sec.gov/about/privacy-information), and [developer fair-access guidance](https://www.sec.gov/about/developer-resources); TypeSafe [MCA](https://typesafe.ai/legal/mca), [privacy policy](https://typesafe.ai/legal/privacy-policy), and [API errors](https://docs.typesafe.ai/api). Detailed source-by-source findings remain in `project-record/3-project-specs/live-data-etl.json`.
+
+## Real-source Jev evaluation protocol prepared
+
+The completion spec now contains a frozen SEC-only evaluation design covering
+the sampling frame, filing/issuer clustering, blinded two-reviewer labels,
+provenance, sample-size precision targets, quality and calibration measures,
+release thresholds, cost limits, stop conditions, and scope limitations. The
+plan evaluates the fixed product rubric only on authorized real EDGAR inputs;
+no generated fixtures enter its label set and no additional model or hosted
+grader receives source text. Its target is honest source-scoped research triage,
+not investment performance.
+
+The evaluation remains `BLOCKED`, not passed: no real content or labels exist,
+`SEC_USER_AGENT` is absent, and the TypeSafe account owner has not verified the
+current account/use terms or approved the spend ceiling. The manifest cannot be
+finalized until a label-only pilot estimates real class prevalence and reviewer
+disagreement; final sample IDs and size must then be frozen before Jev output is
+seen. A successful EDGAR cohort would not clear publisher/social-source rights,
+source coverage, or historical usage reconciliation.

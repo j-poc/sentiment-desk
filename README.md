@@ -88,6 +88,26 @@ bounds the serialized input volume; the stored cost estimate still uses
 provider-reported input tokens. Hard maxima are 100 request attempts and
 400,000 serialized bytes per UTC day. No source is allowed by default.
 
+The SEC's [EDGAR reuse FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions)
+states public filing content is free to access and reuse, subject to SEC
+policies and fair-access limits. This is the only currently documented narrow
+source path for a first real-source Jev evaluation; configure a descriptive
+`SEC_USER_AGENT` and use only `sec_edgar` in the allowlist for that evaluation.
+Real-source Jev accuracy has not been evaluated: all current live observations
+remain pending, and synthetic checks establish integration only. The frozen
+labeling, sampling, metrics, and pass/fail rules are in
+[`sentiment-desk-completion.md`](project-record/3-project-specs/sentiment-desk-completion.md).
+The TypeSafe [current agreement](https://typesafe.ai/legal/mca) says each
+submitted input consumes credits, grants broad perpetual use of derived
+telemetry including classifications, and restricts using Services or Output
+to develop a similar or competing product. Its [privacy policy](https://typesafe.ai/legal/privacy-policy)
+disclaims model training on Inputs but does not remove the separate telemetry
+terms. The authorized account owner must confirm the current account,
+telemetry, billing, and intended Sentiment Desk use are acceptable under the
+similar/competing-product restriction before enabling Jev; written clarification
+from TypeSafe may be needed. A source allowlist is a technical control, not
+proof of rights.
+
 ```bash
 npm run dev                # live sources + live quotes on :8787
 ```

@@ -16,8 +16,8 @@ collectors now pace request starts and persist provider-wide 429 cooldowns;
 Yahoo chart cache misses are coalesced. Generated
 examples stay isolated to tests and frozen evaluations; they are not
 application data or real-source model-quality evidence. This is not a 10/10
-release: publisher rights, TypeSafe retention/billing details, source coverage,
-and real-source classifier quality remain open. Evidence:
+release: non-SEC publisher rights, TypeSafe account/telemetry/billing terms,
+source coverage, and real-source classifier quality remain open. Evidence:
 `project-record/4-log/2026-09-28-real-data-only-runtime.md` and
 `project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`.
 
@@ -134,9 +134,10 @@ does not generate opportunity hypotheses or value-chain links.
        evaluation with labeled quality review. An older loopback runtime later
        reported many failed Jev attempts, but its submitted payloads and
        provider usage were not audited; see the 2026-09-28 runtime follow-up.
-       Publisher model-use and account-retention rights remain unreviewed; the
-       synthetic smoke proves integration only, not classifier accuracy or
-       calibration.
+       SEC's public-filing reuse basis is now documented, but SEC_USER_AGENT
+       is not configured and TypeSafe account authorization, telemetry,
+       retention, and permitted-use terms remain unreviewed. The synthetic
+       smoke proves integration only, not classifier accuracy or calibration.
 3. A duplicate delivery does not create another Jev charge. Two independent
    source records with similar headlines remain separately attributable.
 4. Missing publication or observation time is never replaced by retrieval
@@ -383,17 +384,25 @@ does not generate opportunity hypotheses or value-chain links.
     failures. A source-specific admission setting is an operator assertion,
     not proof of legal rights; record the exact source basis and account-use
     authorization separately before a real-source Jev quality run.
-    - Current source finding (2026-09-28): the review found a first-party reuse
-      statement for public SEC EDGAR filing content, conditional on a
-      descriptive contact User-Agent, compliant request rate, and
-      owner-authorized TypeSafe account use. Google News RSS, Yahoo endpoints
-      and publisher snippets, GDELT-linked publisher text, and optional
-      X/Reddit/Finnhub content remain unapproved for Jev forwarding. TypeSafe
-      documentation does not establish that rejected 429/529 requests are
-      free; treat submitted requests as potentially billable.
+    - Current source finding (2026-09-28): the SEC Webmaster FAQ states that
+      public EDGAR filing content is free to access and reuse, and SEC website
+      policy permits copying/further distribution without SEC permission.
+      SEC fair access caps traffic at 10 requests/second across machines; the
+      app paces one process at 8 starts/second. `SEC_USER_AGENT` is not
+      configured in this checkout, so live SEC collection remains off. Google
+      News RSS, Yahoo endpoints/publisher snippets, GDELT-linked publisher
+      text, and optional X/Reddit/Finnhub content remain unapproved for Jev
+      forwarding. TypeSafe's current MCA permits broad perpetual use of
+      derived telemetry, including classifications, consumes credits per
+      submitted input, and restricts using its service/output to develop a
+      similar or competing service. The account owner must confirm that the
+      intended app use, telemetry terms, and rejected-request billing are
+      acceptable. Details are recorded in
+      `project-record/3-project-specs/live-data-etl.json`.
     - Current result: `NOT RUN` — no real source content was sent to Jev.
-      Real-source label quality, account billing behavior, TypeSafe retention
-      configuration, and non-SEC source rights remain unverified.
+      Real-source label quality, TypeSafe account authorization, telemetry
+      acceptability, retention and billing, SEC User-Agent configuration, and
+      non-SEC source rights remain unverified.
     - Admission implementation result (2026-09-28): `PASS` — Jev dispatch is
       off by default and requires a key, explicit collector allowlist, and
       finite per-UTC-day request/body-byte caps. A SQLite transaction claims
@@ -404,6 +413,94 @@ does not generate opportunity hypotheses or value-chain links.
       allowlist enforcement, concurrent claims, restart persistence, corrupt
       counters, and exhausted budgets. This implementation does not clear
       source rights or account authorization and no real source was sent.
+
+### Real-source Jev evaluation contract (prepared; blocked before execution)
+
+This is the frozen evaluation design for determining whether Jev's existing
+per-item labels are reliable enough for the desk. Synthetic fixtures do not
+enter this evaluation and cannot satisfy any of its gates.
+
+- **Scope:** The first cohort is actual public SEC EDGAR filing observations
+  from `sec_edgar`, limited to content covered by the documented EDGAR reuse
+  policy and the application’s actual normalized Jev input. It evaluates
+  company-specific `sentiment` and `event_type`, plus the existing `about` and
+  `investor_relevant` inclusion boundaries. The result does not generalize to
+  Google/Yahoo/GDELT publisher text, social feeds, other media, market impact,
+  or investment performance. Add another source only after its exact rights
+  and retention/model-processing path are documented and cleared.
+- **Pre-run gates:** No source text is sent until the authorized account owner
+  confirms the current TypeSafe agreement, permitted Sentiment Desk use,
+  telemetry, retention, account limits/auto-refill, and rejected-request
+  billing; any ambiguous similar/competing-product restriction is resolved.
+  Configure a descriptive SEC User-Agent and keep the evaluation allowlist to
+  `sec_edgar`. Confirm a request and spending ceiling against the account's
+  current pricing/settings. The application's request/byte maxima are safety
+  limits, not spending authorization. Keep label creation local; do not send
+  source text to a second model or hosted grader.
+- **Population and sampling:** Freeze a timestamped snapshot of eligible,
+  source-backed SEC observations with source IDs, accession numbers, company,
+  filing type, filing/acceptance times, collector/parser version, and excerpt
+  digest. Deduplicate to the filing/company unit, group related observations
+  by accession and issuer for sampling and uncertainty estimates, and document
+  exclusions before model output is visible. Randomly sample across the
+  evaluation time window and eligible filing types without using Jev scores to
+  select items. Run a blinded label-only pilot to estimate prevalence and
+  reviewer disagreement. Then calculate the final sample size from the frozen
+  decision, observed prevalence/variance, issuer-level dependence, class
+  coverage, and the approved cost ceiling. Target 95% interval half-widths of
+  at most 5 percentage points for overall exact agreement and 10 points for
+  each class the release claim covers. Freeze sample IDs, random seed, rubric
+  hash, analysis code, thresholds, and budget before any Jev output is opened.
+  If the available corpus or budget cannot meet those precision targets, report
+  the affected claims as `UNVERIFIED`, not as a pass. The blinded pilot may be
+  included only if it follows the same sampling and labeling protocol.
+- **Independent labels:** Two qualified reviewers independently label each
+  selected item while blind to Jev output. They use the fixed product rubric
+  and the source material permitted for this study to label company relevance,
+  investor relevance, directional business implication, and dominant event
+  type. Preserve both raw labels and short evidence-grounded rationales;
+  adjudicate disagreements without deleting either original label. Report
+  pre-adjudication reviewer agreement so weak or ambiguous ground truth is
+  visible. Attach each label to the observation ID, accession, source URL,
+  company, item/excerpt digest, source time, labeler, and adjudication record.
+- **Measures:** For sentiment and event type, report the complete confusion
+  matrices, per-class precision/recall/F1, macro-F1, exact agreement, and
+  comparison with a source-cohort majority baseline. Estimate intervals with
+  resampling clustered by issuer/filing rather than treating syndicated or
+  same-filing items as independent. For `about` and `investor_relevant`, report
+  false-inclusion and false-exclusion rates at the unchanged production
+  cutoffs. For sentiment probabilities, report multiclass Brier score and
+  reliability by confidence band; call calibration `UNVERIFIED` if support is
+  too sparse. Report eligible-item completion, all terminal failures and
+  unknown outcomes, request count, provider-reported tokens, latency, estimated
+  cost, and the exact model/rubric/code/data digests. Provider token estimates
+  are not an invoice. No aggregate may conceal a weak class or a missing
+  source/time slice.
+- **Decision rule:** Pass the scoped cohort only when both primary tasks have
+  macro-F1 of at least 0.80 with a cluster-aware 95% lower confidence bound of
+  at least 0.70; every claimed class has at least 0.70 precision and recall
+  point estimates and enough support to meet its interval-width target; and
+  performance exceeds the majority baseline with a confidence interval that
+  excludes no improvement. `about` and `investor_relevant` must each achieve
+  at least 0.90 precision at the current production cutoff, with recall and
+  class support reported. Any unrepresented class, failed privacy/rights gate,
+  unexplained missing case, model/rubric mismatch, duplicate request, or
+  unknown-outcome request without provider-usage reconciliation fails the
+  release gate. Calibration is a separate claim and must not be called
+  verified from accuracy alone. These thresholds evaluate a research-triage
+  label, not a trading signal.
+- **Stop and reporting:** Stop on unexpected data egress, a rights/account
+  ambiguity, budget exhaustion, repeated provider errors, model/rubric drift,
+  or an outcome-unknown request. Do not automatically replay unknown outcomes.
+  Store a redacted, access-limited report in the project record with the frozen
+  manifest digest and per-case terminal status; do not commit source excerpts,
+  credentials, or account identifiers. A passing EDGAR cohort is a scoped
+  result, not general Jev certification or completion of other source rights,
+  coverage, or historical usage gates.
+- **Current state:** `BLOCKED` — this design is prepared, but no real source
+  text has been sent to Jev and no independent real-source labels exist.
+  Current blockers and evidence are tracked in
+  `project-record/3-project-specs/live-data-etl.json`.
 
 ## Phase 2 acceptance criteria
 
@@ -587,9 +684,10 @@ before the operator authorizes a new request.
   the frozen rubric hash. The ledger is
   `project-record/4-log/2026-09-28-jev-synthetic-sanity.json`; this is not
   production accuracy, calibration, alpha, or release-readiness evidence.
-- `OPEN` — publisher rights for retention/display/model processing, TypeSafe
-  retention configuration and rejected-request billing semantics, and
-  representative real-source Jev quality are external release gates.
+- `OPEN` — non-SEC publisher rights for retention/display/model processing,
+  TypeSafe account authorization/telemetry/retention and rejected-request
+  billing semantics, configured SEC User-Agent, and representative
+  real-source Jev quality are external release gates.
 
 ## Grounded architecture
 

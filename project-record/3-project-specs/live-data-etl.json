@@ -1,27 +1,28 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "The application runtime admits only real source observations and provider-origin Jev judgments; demo generation and demo mode are removed, and legacy simulation rows are excluded from consumer and retry paths. A later production-build browser smoke used a backup of the verified real-only database and found 2,281 source-backed observations, zero simulation observations, and all 2,281 judgments pending while Jev was explicitly off with zero usage. The browser showed real pending source rows and selecting Adobe drew the real Yahoo 7D chart; the weekend 24H window remained empty. Google News RSS, Yahoo Finance RSS, and Yahoo quotes delivered during this smoke; GDELT returned HTTP 429 and was surfaced as a source failure. The temporary server was stopped afterward. Current verification passes 121 tests across 21 files, typecheck, and production build. GDELT and cross-collector 429 cooldown, request pacing, and Jev admission/budget safeguards pass local tests. Publisher/model-use rights, TypeSafe retention/billing, exhaustive source coverage, and labeled real-source Jev quality remain open, so this is not 10/10 release-ready.",
+  "operational_status": "The application runtime admits only real source observations and provider-origin Jev judgments; demo generation and demo mode are removed, and legacy simulation rows are excluded from consumer and retry paths. A later production-build browser smoke used a backup of the verified real-only database and found 2,281 source-backed observations, zero simulation observations, and all 2,281 judgments pending while Jev was explicitly off with zero usage. The browser showed real pending source rows and selecting Adobe drew the real Yahoo 7D chart; the weekend 24H window remained empty. Google News RSS, Yahoo Finance RSS, and Yahoo quotes delivered during this smoke; GDELT returned HTTP 429 and was surfaced as a source failure. The temporary server was stopped afterward. Current verification passes 121 tests across 21 files, typecheck, and production build. GDELT and cross-collector 429 cooldown, request pacing, and Jev admission/budget safeguards pass local tests. Official SEC policy supports reuse of public EDGAR filing content, but the local SEC User-Agent is absent and other publisher rights remain unresolved. TypeSafe account authorization/telemetry/retention/billing, exhaustive source coverage, and labeled real-source Jev quality remain open, so this is not 10/10 release-ready.",
   "rights_review": {
     "as_of": "2026-09-28",
     "status": "open; not a legal determination",
     "current_followup": {
       "reviewed_at": "2026-09-28",
-      "result": "SEC EDGAR public filing content has an explicit SEC reuse statement, conditionally supporting a narrow source-specific evaluation path. This is not blanket legal clearance or operator authorization.",
+      "result": "The SEC's current Webmaster FAQ says EDGAR public filing content is free to access and reuse, and its Website Dissemination policy says sec.gov information may be copied or further distributed without SEC permission. This supports a narrow evaluation path using public EDGAR filing content. It is not blanket rights clearance for non-EDGAR publisher text, an SEC endorsement, or authorization to use a TypeSafe account.",
       "sec_conditions": [
-        "Configure a descriptive SEC User-Agent that identifies the operator and includes contact information.",
-        "Keep SEC request traffic at or below its published fair-access limit.",
-        "Use a TypeSafe account authorized by its owner and verify account limits, retention/telemetry configuration, and rejected-request billing before dispatch.",
-        "Prefer only the public filing metadata needed for a single bounded evaluation item; do not forward third-party publisher material."
+        "For the initial path, use public EDGAR filing content only; omit SEC marks/artwork and avoid any clearly third-party material embedded in a filing.",
+        "Configure a descriptive SEC User-Agent that identifies the operator and includes contact information; the SEC says automated tools must be classified.",
+        "Stay at or below the SEC limit of 10 requests per second aggregated across machines; the app's 125ms per-process start spacing is below this limit, but multiple processes are not coordinated.",
+        "Use a TypeSafe account authorized by its owner and confirm the current agreement, account limits, auto-refill, retention, telemetry, rejected-request billing, and that the intended product use fits the similar/competing-product restriction before dispatch."
       ],
-      "type_safe_billing": "The current MCA says each submitted Input consumes credits and does not document a 429/529 billing exception. Treat each attempted submission, including an explicit rejection, as potentially billable until the account owner verifies otherwise.",
+      "type_safe_billing": "The MCA currently posted as last updated 2026-09-23 says credits are consumed by each submitted Input, and account settings control consumption/refills. The reviewed API documentation describes 429 and 529 retry behavior but does not say those submissions are free. Treat them as potentially billable until the authorized account owner verifies the account's actual billing behavior.",
+      "type_safe_data_use": "The current MCA grants TypeSafe processing of Input to provide the service and broad, perpetual processing of Customer Data to derive Telemetry; Telemetry includes hashes, summary statistics, classifications, metrics, and learnings, and may be used without restriction to improve TypeSafe products. The privacy policy says Inputs are not used to train or fine-tune models, but it also describes service-improvement and reasonably-necessary retention and says services are hosted in the U.S. The MCA also restricts use of Services or Output to develop a similar or competing product/service; the account owner should confirm that the intended Sentiment Desk use is within the account's permitted scope. These account-level terms must be reviewed separately from the SEC's public reuse policy.",
       "not_cleared": [
         "Google News RSS third-party publisher titles/snippets",
         "Yahoo Finance RSS/article content and the exact chart endpoint contract",
         "GDELT-linked publisher article titles/content",
         "Finnhub, Reddit, and X content"
       ],
-      "evidence": "Read-only official-source review by source_rights_audit agent; no files, credentials, databases, provider requests, or real content were accessed or transmitted."
+      "evidence": "Read-only review of official SEC policy, SEC fair-access guidance, TypeSafe's current MCA/privacy/API documentation, and prior official-source audit notes on 2026-09-28. No credentials, databases, provider requests, or real content were accessed or transmitted."
     },
     "findings": [
       {
@@ -44,20 +45,24 @@
       },
       {
         "source": "SEC EDGAR",
-        "evidence": "SEC public API access has a fair-access policy and asks clients to identify themselves. The app now disables SEC requests unless SEC_USER_AGENT contains both a non-empty operator/project identifier and contact email within the length bound. This guard does not settle project-specific retention, display, or external model-processing policy.",
-        "reference": "https://www.sec.gov/about/developer-resources",
-        "action": "Configure an identifying User-Agent with contact information; keep text-use and model-processing review open."
+        "evidence": "The SEC Webmaster FAQ states that EDGAR public filing content is free to access and reuse; the Website Dissemination policy says sec.gov information may be copied or further distributed without SEC permission. The SEC separately limits traffic to 10 requests per second aggregated across machines and does not allow unclassified automated tools. The app gates requests on an identifying User-Agent with contact email and paces starts at 125ms per process; no valid SEC_USER_AGENT is configured in the current environment.",
+        "references": [
+          "https://www.sec.gov/about/webmaster-frequently-asked-questions",
+          "https://www.sec.gov/about/privacy-information",
+          "https://www.sec.gov/about/developer-resources"
+        ],
+        "action": "The official policy supports a narrow public-EDGAR evaluation path, subject to filing-content exceptions and non-endorsement/mark restrictions. This is not clearance for unrelated publisher feeds or proof that TypeSafe account data-use terms are acceptable."
       },
       {
         "source": "TypeSafe Jev",
-        "evidence": "The current agreement assigns the customer responsibility for rights and states submitted inputs consume credits. Privacy terms describe processing/retention as reasonably necessary and US hosting; training use is disclaimed. Whether explicit 429/529 rejections consume credits is not documented in the reviewed API terms.",
+        "evidence": "The MCA was last updated 2026-09-23. It places responsibility for input rights on the customer; credits are consumed by each submitted Input and auto-refill depends on account settings. Its telemetry definition includes hashes, summary statistics, classifications, metrics, and learnings, which may be processed without restriction to improve TypeSafe services. The privacy policy disclaims training/fine-tuning on Inputs and describes reasonably-necessary retention and U.S. hosting. The MCA also restricts use of Services or Output to develop a similar or competing product/service; application of that clause to this intended use needs account-owner or written TypeSafe clarification. The API documents 429/529 retry behavior but not a rejected-request billing exception.",
         "references": [
           "https://typesafe.ai/legal/mca",
           "https://typesafe.ai/legal/privacy-policy",
           "https://docs.typesafe.ai/api",
           "https://docs.typesafe.ai/models"
         ],
-        "action": "Do not enable a controlled public-source-to-Jev workflow until source permissions and account retention are verified. Historical payloads from the legacy loopback process have not been audited; rejected-request billing remains unresolved."
+        "action": "Do not enable a controlled public-source-to-Jev workflow until the authorized account owner accepts/reviews the applicable agreement and verifies account limits, auto-refill, telemetry/data-use acceptability, retention, rejected-request billing, and that the intended Sentiment Desk use is permitted under the similar/competing-product restriction. Seek written clarification from TypeSafe if needed. Historical payloads from the legacy loopback process have not been audited."
       },
       {
         "source": "Optional X, Reddit, and Finnhub feeds",
@@ -105,7 +110,7 @@
       "identity": "CIK, accession number, form type, and filing items.",
       "time": "Filing date and EDGAR acceptanceDateTime are separate. Acceptance is used as the source-declared event timestamp; missing timestamps stay unknown.",
       "retention": "Normalized filing metadata and bounded extracted text are stored; acquisition receipts keep adapter versions and a digest of normalized parsed items, not raw SEC bytes. The source model receives the normalized excerpt.",
-      "rights": "The official endpoint's fair-access guidance was reviewed, but project-specific retention, display, and external model-processing policy remains open. Personalize the generic application User-Agent for unattended use. A tested packaged SEC connector contract available on the host says ui_display=false, so it is not substituted into this display product."
+      "rights": "The SEC Webmaster FAQ says EDGAR public filing content is free to access and reuse; SEC.gov also permits copying/further distribution without SEC permission, subject to stated exceptions and mark/non-endorsement limits. The app gates SEC requests on a descriptive User-Agent with contact information. TypeSafe account terms, telemetry, retention, and billing still require account-owner review before forwarding filing text. A tested packaged SEC connector contract available on the host says ui_display=false, so it is not substituted into this display product."
     },
     {
       "name": "Finnhub company news, earnings, and calendar",
@@ -197,7 +202,7 @@
       "command": "npm run verify:jev-sanity",
       "covers": "Historical ten-case fictional sanity pilot using isolated test databases; reports only test-fixture agreement and is not real-source quality, classifier calibration, or release evidence.",
       "status": "PASS",
-      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234\u2013370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     },
     "no_synthetic_runtime": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run build; live-only browser and API readback at http://127.0.0.1:8794/",
@@ -230,16 +235,17 @@
       "evidence": "2026-09-28: project-record/4-log/2026-09-28-real-data-only-runtime.md records the null-judge unit regression and the clean restart. All 1,361 judgments in the isolated live DB were pending; Jev health was disabled, ok=0, fail=0, error=null, and usage was all zero while live RSS deliveries continued."
     },
     "real_source_jev_quality": {
-      "command": "Rights-reviewed, labeled evaluation on actual public source items",
-      "covers": "Jev accuracy and calibration on representative real publisher observations under verified source/model-use rights.",
-      "status": "NOT RUN",
-      "evidence": "No real-source text was sent to Jev. The configured key was explicitly empty and the product left all real judgments pending. Historical synthetic-only integration tests do not establish live-source quality."
+      "command": "Run the frozen real-source evaluation in project-record/3-project-specs/sentiment-desk-completion.md after all external gates clear",
+      "covers": "Independent, provenance-backed labels and source-scoped Jev sentiment/event-type quality on representative authorized real observations; separate company/investor relevance and calibration evidence.",
+      "status": "BLOCKED",
+      "protocol_status": "PREPARED; sample IDs and final sample size must be frozen after a blinded label-only pilot and before any Jev output is opened",
+      "evidence": "No real-source text was sent to Jev and no independent real-source labels exist. The current key was explicitly empty and the product left real judgments pending. Synthetic integration/sanity runs do not establish live-source quality. Execution requires SEC User-Agent configuration, authorized TypeSafe account-owner confirmation of permitted use/telemetry/retention/limits/auto-refill/billing and similar-product terms, source-scoped request/spend approval, and enough eligible real EDGAR cases to meet the predeclared clustered confidence-interval precision. Even a passing EDGAR result does not generalize to publisher or social feeds."
     },
     "source_rights_review": {
       "command": "Verify official terms for exact Yahoo endpoints, publisher snippet retention/display/model use, SEC excerpts, and TypeSafe retention/billing configuration",
       "covers": "The operator has an evidenced basis for the exact retention, display, and model-processing behavior in the live product.",
       "status": "BLOCKED",
-      "evidence": "The rights review in this record remains explicitly open and is not a legal determination. Public availability and possession of credentials do not establish permission."
+      "evidence": "Official SEC policy supports reuse of public EDGAR filing content, but no SEC User-Agent is configured locally. Exact Yahoo endpoint terms and non-SEC publisher permissions remain unclear. The current TypeSafe MCA adds per-input credits, broad perpetual telemetry including classifications, and a similar/competing-product restriction; authorized account review, usage/refill settings, retention, and rejected-request billing have not been verified. Public availability and credential possession do not establish account authorization."
     },
     "source_coverage": {
       "command": "Document and test provider contract, identity, timing, rights, delivery, and failure behavior for every intended source",
@@ -285,7 +291,7 @@
     "2026-09-28 exact-source chart verification passed: only provider-timestamped points in the selected window are drawn; a real latest point outside the window is preserved as metadata and not repeated into generated display buckets.",
     "GDELT is currently rate-limited with HTTP 429. Non-JSON bodies are rejected by the adapter and verified by tests; a post-fix live HTTP-200 non-JSON body was not observed. This is a coverage limitation, not evidence of no activity.",
     "Optional X, Reddit, and Finnhub sources were disabled in the final live verification by explicit empty credentials. Their coverage and rights are not verified.",
-    "Provider rights review is unresolved: publisher permission for stored/displayed snippets and external model processing is not recorded; exact Yahoo endpoint rights are unclear; SEC excerpt-use policy, TypeSafe retention configuration, and rejected-request billing semantics are unverified. No real-source Jev scoring is enabled or validated.",
+    "Official SEC policy supports reuse of public EDGAR filing content, but SEC collection is currently disabled because no descriptive SEC_USER_AGENT with contact is configured; this does not establish TypeSafe account suitability. Non-SEC publisher permission for storing/displaying snippets or sending them to Jev is not recorded; exact Yahoo endpoint rights are unclear. TypeSafe account acceptance, telemetry scope (including classifications), retention, similar/competing-product restriction, usage/refill settings, and rejected-request billing are unverified. No real-source Jev scoring is enabled or validated.",
     "A separate legacy loopback process was previously found with thousands of Jev failures; its database, submitted payloads, and TypeSafe usage history were not inspected. Whether those historical submissions contained publisher text or incurred usage remains unknown.",
     "Source collectors retry on the next scheduled poll. Jev retries only explicit retryable HTTP 429 or documented HTTP 529 rejections through persisted, bounded scheduling (maximum three attempts), honoring valid Retry-After values and otherwise exponential backoff. Transport failures, generic server errors, malformed output, and model mismatches are not automatically resubmitted. A submitted failure requires provider-usage review and explicit operator confirmation before manual retry; corrupt judgments cannot be retried. Provider coverage and pagination completeness are not proven exhaustive.",
     "No rights-reviewed public-source-to-Jev classifier evaluation, labeled real-source accuracy/calibration assessment, exhaustive source-coverage audit, or historical TypeSafe usage reconciliation has been completed.",
