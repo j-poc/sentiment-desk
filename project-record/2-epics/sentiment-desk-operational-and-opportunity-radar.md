@@ -1,7 +1,11 @@
 # Operational Sentiment Desk, then Opportunity Radar
 
-Status: Phase 1 and the first supported-data Radar release are implemented,
-verified, and checkpointed at `603932b` on `codex/real-data-rebuild`.
+Status (2026-09-29): the repository contains the earlier local Desk and Radar
+implementations, but Sentiment Desk is not yet externally operational or
+release-ready. Local hardening is checkpointed at
+`4fe03a2b2ca6df7e77dd0aa658c4d2b55882f61e`; source/account authority, real
+label quality, legacy-use reconciliation, and exhaustive coverage remain open.
+Do not expand or promote Opportunity Radar until the Sentiment Desk gates pass.
 
 ## Intent
 
@@ -11,11 +15,13 @@ collection through Jev's unchanged per-item sentiment judgment into the local
 dashboard, understand source timing and delivery health, and recover the SQLite
 service without losing history.
 
-Jev remains the per-item sentiment and event classifier. Opportunity Radar was
-built after the operational gate and compares Jev-scored observations already
-in the local ledger. It preserves publisher identity, source clocks, opposing
-directions, and coverage state rather than turning sentiment or source counts
-into a claim of alpha.
+Jev remains the per-item sentiment and event classifier. The initial Radar
+implementation followed an earlier local Desk gate and compares Jev-scored
+observations already in the local ledger. Later account, source-rights, and
+real-source-quality gates remain open, so do not expand or promote Radar now.
+Its design preserves publisher identity, source clocks, opposing directions,
+and coverage state rather than turning sentiment or source counts into a claim
+of alpha.
 
 ## Scope
 

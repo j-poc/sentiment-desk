@@ -1,7 +1,20 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-28): the isolated production-build smoke remains valid: its
-backup database contained 2,281 real source-backed observations, zero
+Status (2026-09-29): collector recovery and source-admission hardening passed
+local verification and was pushed as `4fe03a2b2ca6df7e77dd0aa658c4d2b55882f61e`.
+Jev's effective source allowlist is now the intersection of model permission
+and active collection permission; SEC directory lookup retries after HTTP
+startup and company coverage counts distinct companies rather than receipts.
+GDELT has its own health counter. Verification passed 160 tests across 24
+files, typecheck, production build, and fresh-process default/per-collector
+request probes with network interception. The chart/UI evidence below is a
+saved-data-only browser run against an isolated database copy; this checkpoint
+does not establish live collection, provider/model rights, account authority,
+or real-source Jev quality. See
+`project-record/4-log/2026-09-29-collector-operations-hardening.md`.
+
+Saved-data UI verification snapshot (2026-09-28): the isolated production-build
+smoke remains valid: its backup database contained 2,281 real source-backed observations, zero
 simulation observations, and 2,281 pending judgments with Jev disabled; the
 browser selected Adobe and drew its real Yahoo 7D chart. That smoke does not
 establish the provenance of the separate default local database. A read-only
@@ -82,7 +95,37 @@ evidence is recorded in
 gates and their limits are recorded in
 `project-record/4-log/2026-09-28-jev-evaluator-hardening.md`.
 
-## Durable goal state (2026-09-28)
+## Durable goal state (2026-09-29)
+
+The native ultragoal remains `active`. Local collector hardening is verified
+and pushed to `origin/codex/real-data-rebuild` at
+`4fe03a2b2ca6df7e77dd0aa658c4d2b55882f61e`. SEC bootstrap retries no longer
+block HTTP startup, Jev dispatch uses the intersection of Jev and active
+source allowlists, GDELT health is separately visible, and delivery coverage
+counts distinct companies while excluding global bootstrap receipts. The
+current checkpoint passed 160 tests across 24 files, typecheck, production
+build, the fresh-process offline startup verifier, and all nine guarded
+collector path probes plus a positive-budget mismatched-source Jev probe.
+
+The loopback UI at `127.0.0.1:8794` remains in saved-data-only mode on an
+isolated copy of the local database. The same-day browser pass selected Adobe
+and rendered the persisted sentiment/price chart and source-health panel. It
+made only loopback requests; the browser console had zero errors. The copy had
+no `demo_simulation` observations, and `legacy_unknown` rows are excluded from
+research reads. This proves saved-data presentation, not current provider
+delivery or Jev quality.
+
+The goal remains incomplete and must not be reported as 10/10. No new source
+or Jev requests were sent. Remaining gates are account-owner confirmation of
+TypeSafe use/telemetry/retention/rejected-request billing and an approved
+request/cost ceiling; a valid SEC contact in `SEC_USER_AGENT`; rights for each
+non-SEC publisher source; independent blinded real-source labels and a passed
+frozen Jev evaluation; audit of historical `legacy_unknown` provider/model
+use and billing; and exhaustive source-coverage review. Opportunity Radar
+expansion remains downstream until these Sentiment Desk gates pass. See the
+dated verification trace for the exact evidence and next actions.
+
+## Prior durable goal state (2026-09-28)
 
 The native ultragoal remains `active`. The saved-data-only UI, retry-gating,
 and explicit external-request opt-in checkpoints are pushed to
