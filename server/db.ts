@@ -232,6 +232,8 @@ export interface DeliverySourceSchedule {
   targetCount: number;
   /** Restrict health and coverage to receipts for this source's primary feed. */
   healthAdapterVersions?: readonly string[];
+  /** Ignore global auxiliary receipts when this row measures company coverage. */
+  healthCompanyOnly?: boolean;
 }
 
 export class Desk {
@@ -748,9 +750,10 @@ export class Desk {
 
     return sources.map((source) => {
       const allRows = byCollector.get(source.collector) ?? [];
-      const rows = source.healthAdapterVersions == null
-        ? allRows
-        : allRows.filter((row) => source.healthAdapterVersions!.includes(row.adapterVersion));
+      const rows = allRows.filter((row) =>
+        (source.healthAdapterVersions == null || source.healthAdapterVersions.includes(row.adapterVersion)) &&
+        (!source.healthCompanyOnly || row.companyId !== null)
+      );
       const latest = [...rows].sort((a, b) => b.completedAt - a.completedAt)[0] ?? null;
       const dueAfterMs = Math.max(source.intervalSeconds * 3_000, 180_000);
       const recent = rows.filter((row) => now - row.completedAt <= dueAfterMs);
@@ -964,6 +967,37 @@ export class Desk {
         "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       )
       .run(key, value);
+  }
+
+  /** Atomically change persisted state and append its matching event. */
+  transitionKvWithEvent(input: {
+    key: string;
+    when: { equals: string } | { notEquals: string };
+    value: string;
+    event: { level: "info" | "warn" | "error"; source: string; message: string };
+  }): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(input.key) as
+        | { value: string }
+        | undefined;
+      if ("equals" in input.when) {
+        if (current?.value !== input.when.equals) {
+          this.db.exec("COMMIT");
+          return false;
+        }
+      } else if (current?.value === input.when.notEquals) {
+        this.db.exec("COMMIT");
+        return false;
+      }
+      this.setKv(input.key, input.value);
+      this.logEvent(input.event.level, input.event.source, input.event.message);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   remainingJevRequests(input: { utcDay: string; maxRequests: number; maxRequestBytes: number }): number {

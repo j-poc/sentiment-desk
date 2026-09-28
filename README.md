@@ -23,6 +23,9 @@ fact-checking.
   X recent-search pages resume from a persisted continuation cursor and only
   advance the committed post ID after the page chain completes; the endpoint
   still covers a bounded recent window and the configured search terms.
+  Reddit search also resumes its provider listing cursor one page per poll.
+  GDELT requests up to its documented 250-article maximum and marks a response
+  at that cap as partial coverage because older matches may be omitted.
   Every item keeps publisher identity, source identity, and source, provider,
   retrieval, and ingestion clocks separately. Missing source time stays
   unknown.

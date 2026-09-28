@@ -7,11 +7,14 @@ import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { Pipeline } from "../server/pipeline.js";
 import { startGdeltPoller } from "../server/schedule.js";
-import { GdeltHttpError, type GdeltArticle } from "../server/sources/gdelt.js";
+import { GDELT_ARTICLE_LIMIT, GdeltHttpError, type GdeltArticle, type GdeltFetchResult } from "../server/sources/gdelt.js";
 import type { Company } from "../server/types.js";
 
 const directories: string[] = [];
 const databases: Desk[] = [];
+const emptyResult = (): GdeltFetchResult => ({
+  articles: [], providerResultCount: 0, requestedLimit: GDELT_ARTICLE_LIMIT, saturated: false,
+});
 const company = (id: string, ticker: string): Company => ({
   id,
   name: `${ticker} Corporation`,
@@ -55,7 +58,58 @@ async function runImmediatePoll(deps: Parameters<typeof startGdeltPoller>[0]): P
   await control.stop();
 }
 
-describe("GDELT source-wide 429 cooldown", () => {
+describe("GDELT delivery and source-wide cooldown", () => {
+  it("marks a saturated provider result as partial coverage", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    const { db, companies, health, pipeline } = setup();
+    const articles: GdeltArticle[] = Array.from({ length: GDELT_ARTICLE_LIMIT }, (_, index) => ({
+      title: `ACME Corporation quarterly results update ${index}`,
+      url: `https://news.example/article-${index}`,
+      domain: "news.example",
+      seenAt: Date.now(),
+    }));
+    await runImmediatePoll({
+      companies: companies.slice(0, 1), pipeline, db, health, intervalSeconds: 60,
+      fetchArticles: async () => ({
+        articles, providerResultCount: articles.length, requestedLimit: GDELT_ARTICLE_LIMIT, saturated: true,
+      }), now: () => Date.now(), pause: async () => {},
+    });
+
+    expect(health.snapshot().gdelt).toMatchObject({ ok: 1, fail: 0 });
+    expect(db.deliveryHealth([{
+      collector: "gdelt_doc_api", enabled: true, intervalSeconds: 60, targetCount: 1,
+    }], Date.now())[0]).toMatchObject({
+      state: "partial", latestResult: "partial", latestItemCount: GDELT_ARTICLE_LIMIT,
+      latestError: `GDELT reached the requested ${GDELT_ARTICLE_LIMIT}-article limit; older matching articles may be omitted`,
+    });
+  });
+
+  it("marks raw-cap saturation partial even if malformed rows are discarded", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    const { db, companies, health, pipeline } = setup();
+    const articles: GdeltArticle[] = Array.from({ length: GDELT_ARTICLE_LIMIT - 1 }, (_, index) => ({
+      title: `ACME Corporation quarterly results update ${index}`,
+      url: `https://news.example/article-${index}`,
+      domain: "news.example",
+      seenAt: Date.now(),
+    }));
+    await runImmediatePoll({
+      companies: companies.slice(0, 1), pipeline, db, health, intervalSeconds: 60,
+      fetchArticles: async () => ({
+        articles, providerResultCount: GDELT_ARTICLE_LIMIT, requestedLimit: GDELT_ARTICLE_LIMIT, saturated: true,
+      }), now: () => Date.now(), pause: async () => {},
+    });
+
+    expect(db.deliveryHealth([{
+      collector: "gdelt_doc_api", enabled: true, intervalSeconds: 60, targetCount: 1,
+    }], Date.now())[0]).toMatchObject({
+      state: "partial", latestResult: "partial", latestItemCount: GDELT_ARTICLE_LIMIT,
+      latestError: `GDELT reached the requested ${GDELT_ARTICLE_LIMIT}-article limit; older matching articles may be omitted`,
+    });
+  });
+
   it("stops the current company sweep, survives restart, and resumes after cooldown", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
@@ -79,7 +133,7 @@ describe("GDELT source-wide 429 cooldown", () => {
     const retryAt = Number(db.getKv("gdelt:rate-limit:retry-at"));
     expect(retryAt).toBe(Date.now() + 60_000);
 
-    const restartedFetch = vi.fn(async (): Promise<GdeltArticle[]> => []);
+    const restartedFetch = vi.fn(async (): Promise<GdeltFetchResult> => emptyResult());
     await runImmediatePoll({
       companies,
       pipeline,
@@ -161,7 +215,7 @@ describe("GDELT source-wide 429 cooldown", () => {
     vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
     const { db, companies, health, pipeline } = setup();
     db.setKv("gdelt:rate-limit:retry-at", "not-a-timestamp");
-    const fetchArticles = vi.fn(async (): Promise<GdeltArticle[]> => []);
+    const fetchArticles = vi.fn(async (): Promise<GdeltFetchResult> => emptyResult());
 
     await runImmediatePoll({
       companies,

@@ -45,6 +45,9 @@ export class MarketData {
   private readonly backfilled = new Set<string>();
   private readonly seriesRequests = new Map<string, Promise<PriceSeriesResult>>();
   private backfillTask: Promise<void> | null = null;
+  private indexQuoteFailureKey(ticker: string): string {
+    return `yahoo:index-quote-failure:${encodeURIComponent(ticker)}`;
+  }
 
   constructor(
     private readonly deps: {
@@ -69,8 +72,9 @@ export class MarketData {
     const tickers = [...this.deps.companies.map((c) => c.ticker), ...this.deps.indices];
     const quotes: Record<string, ServedQuote> = {};
     let ok = 0;
-    let fail = 0;
-    let lastError: string | null = null;
+    let companyOk = 0;
+    let companyFail = 0;
+    let companyError: string | null = null;
     for (const ticker of tickers) {
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
       const startedAt = Date.now();
@@ -86,6 +90,15 @@ export class MarketData {
         });
         clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
         ok += 1;
+        if (company) companyOk += 1;
+        else {
+          this.deps.db.transitionKvWithEvent({
+            key: this.indexQuoteFailureKey(ticker),
+            when: { equals: "1" },
+            value: "",
+            event: { level: "info", source: "yahoo_index_quote", message: `${ticker}: index quote recovered` },
+          });
+        }
       } catch (err) {
         const prior = this.snapshot.quotes[ticker];
         if (prior) quotes[ticker] = { ...prior, lastAttemptAt: Date.now(), delivery: "cache" };
@@ -94,8 +107,19 @@ export class MarketData {
           requestKey: `yahoo-chart:quote:${ticker}`, startedAt, adapterVersion: "yahoo-chart/1",
           result: classifyDeliveryError(err), parsedItemCount: 0, error: err,
         });
-        fail += 1;
-        lastError = err instanceof Error ? err.message : String(err);
+        const message = err instanceof Error ? err.message : String(err);
+        if (company) {
+          companyFail += 1;
+          companyError = message;
+        } else {
+          const failureKey = this.indexQuoteFailureKey(ticker);
+          this.deps.db.transitionKvWithEvent({
+            key: failureKey,
+            when: { notEquals: "1" },
+            value: "1",
+            event: { level: "warn", source: "yahoo_index_quote", message: `${ticker}: ${message}` },
+          });
+        }
         if (err instanceof RateLimitedError) {
           recordProviderRateLimit({
             db: this.deps.db,
@@ -121,8 +145,8 @@ export class MarketData {
       if (q?.at != null) this.deps.db.upsertPricePoint(company.ticker, q.at, q.price);
     }
     if (this.chartRequestsAllowed()) this.startBackfill();
-    if (ok > 0) this.deps.health.recordQuotes(true);
-    if (fail > 0) this.deps.health.recordQuotes(false, lastError ?? "quote fetch failures");
+    if (companyOk > 0) this.deps.health.recordQuotes(true);
+    if (companyFail > 0) this.deps.health.recordQuotes(false, companyError ?? "company quote fetch failures");
     if (Object.keys(quotes).length > 0) this.deps.hub.broadcast("quotes", { quotes, updatedAt: this.snapshot.updatedAt });
   }
 

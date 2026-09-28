@@ -476,4 +476,33 @@ describe("Desk observation and judgment storage", () => {
       db.close();
     }
   });
+
+  it("keeps failed auxiliary Yahoo receipts out of company quote health", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-yahoo-coverage-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    const startedAt = Date.now() - 100;
+    try {
+      db.seedCompanies([company]);
+      db.recordDelivery({
+        collector: "yahoo_quote", companyId: company.id, requestKey: "company-quote", startedAt,
+        completedAt: startedAt + 1, result: "success", parsedItemCount: 1,
+        adapterVersion: "yahoo-chart/1",
+      });
+      db.recordDelivery({
+        collector: "yahoo_quote", companyId: null, requestKey: "index-quote", startedAt,
+        completedAt: startedAt + 2, result: "failed", parsedItemCount: 0,
+        adapterVersion: "yahoo-chart/1", error: "index unavailable",
+      });
+
+      expect(db.deliveryHealth([{
+        collector: "yahoo_quote", enabled: true, intervalSeconds: 60, targetCount: 1,
+        healthCompanyOnly: true,
+      }], startedAt + 50)[0]).toMatchObject({
+        state: "current", coverageCount: 1, latestResult: "success", latestError: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
 });

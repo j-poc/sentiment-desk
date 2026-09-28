@@ -2,9 +2,9 @@ import type { CollectorId, Company } from "./types.js";
 import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Pipeline } from "./pipeline.js";
-import { fetchGdeltArticles, GdeltHttpError, type GdeltArticle } from "./sources/gdelt.js";
+import { fetchGdeltArticles, GDELT_ARTICLE_LIMIT, GdeltHttpError, type GdeltFetchResult } from "./sources/gdelt.js";
 import { fetchEarningsHistory, fetchFinnhubNews, fetchUpcomingEarnings, latestSurprise } from "./sources/finnhub.js";
-import { getRedditToken, searchReddit, type RedditClient } from "./sources/reddit.js";
+import { getRedditToken, RedditPaginationRestartError, searchReddit, type RedditClient } from "./sources/reddit.js";
 import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
 import { searchRecent, XPaginationTokenRejectedError, xQuery } from "./sources/x.js";
@@ -563,7 +563,7 @@ export function startGdeltPoller(deps: {
   db: Desk;
   health: HealthTracker;
   intervalSeconds: number;
-  fetchArticles?: (query: string) => Promise<GdeltArticle[]>;
+  fetchArticles?: (query: string) => Promise<GdeltFetchResult>;
   now?: () => number;
   pause?: (ms: number) => Promise<void>;
 }): SchedulerControl {
@@ -591,13 +591,18 @@ export function startGdeltPoller(deps: {
 
       for (const company of deps.companies) {
         const startedAt = now();
-        let articles: Awaited<ReturnType<typeof fetchGdeltArticles>> = [];
+        let result: GdeltFetchResult = {
+          articles: [], providerResultCount: 0, requestedLimit: GDELT_ARTICLE_LIMIT, saturated: false,
+        };
         try {
           const query = `"${company.name}" OR "${company.ticker}"`;
-          articles = await fetchArticles(query);
+          result = await fetchArticles(query);
+          const truncationNotice = result.saturated
+            ? `GDELT reached the requested ${result.requestedLimit}-article limit; older matching articles may be omitted`
+            : undefined;
           let added = 0;
           let dropped = 0;
-          for (const a of articles) {
+          for (const a of result.articles) {
             if (!matchesCompany(company, a.title)) continue;
             if (
               !isFinanceRelevant({
@@ -634,8 +639,8 @@ export function startGdeltPoller(deps: {
           recordDelivery({
             db: deps.db, collector: "gdelt_doc_api", companyId: company.id,
             requestKey: `gdelt:${query}`, startedAt, adapterVersion: "gdelt-doc/1",
-            result: articles.length === 0 ? "empty" : "success", parsedItemCount: articles.length,
-            normalizedItems: articles,
+            result: truncationNotice ? "partial" : result.providerResultCount === 0 ? "empty" : "success",
+            parsedItemCount: result.providerResultCount, normalizedItems: result.articles, error: truncationNotice,
           });
           deps.health.recordGdelt(true);
           deps.db.setKv(retryAtKey, "0");
@@ -647,8 +652,8 @@ export function startGdeltPoller(deps: {
           recordDelivery({
             db: deps.db, collector: "gdelt_doc_api", companyId: company.id,
             requestKey: `gdelt:${company.id}`, startedAt, adapterVersion: "gdelt-doc/1",
-            result: articles.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: articles.length,
-            normalizedItems: articles, error: err,
+            result: result.providerResultCount > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: result.providerResultCount,
+            normalizedItems: result.articles, error: err,
           });
           deps.health.recordGdelt(false, `gdelt ${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "gdelt", `${company.ticker}: ${message}`);
@@ -940,7 +945,28 @@ export function startRedditPoller(deps: {
   db: Desk;
   health: HealthTracker;
   intervalSeconds: number;
+  pause?: (ms: number) => Promise<void>;
 }): SchedulerControl {
+  const pause = deps.pause ?? sleep;
+  type RedditPageCheckpoint = { after: string; page: number; query: string; limit: number };
+  const pageSize = 25;
+  const checkpointKey = (companyId: string): string => `reddit:pagination:${companyId}`;
+  const readCheckpoint = (companyId: string, query: string): RedditPageCheckpoint | null => {
+    const raw = deps.db.getKv(checkpointKey(companyId));
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw) as Partial<RedditPageCheckpoint>;
+      if (
+        typeof value.after === "string" && value.after.trim() !== "" &&
+        Number.isSafeInteger(value.page) && Number(value.page) >= 2 &&
+        value.query === query && value.limit === pageSize
+      ) return value as RedditPageCheckpoint;
+    } catch {
+      // Invalid persisted cursors are replayed from the newest page.
+    }
+    deps.db.setKv(checkpointKey(companyId), "");
+    return null;
+  };
   let running = false;
   let client: RedditClient | null = null;
   const tick = async (): Promise<void> => {
@@ -972,10 +998,18 @@ export function startRedditPoller(deps: {
         const active = client;
         if (!active) break;
         const startedAt = Date.now();
-        let posts: Awaited<ReturnType<typeof searchReddit>> = [];
+        let posts: Awaited<ReturnType<typeof searchReddit>>["posts"] = [];
+        let requestKey = `reddit:${company.id}:${company.ticker}`;
         try {
           const query = `"${company.name}" OR "$${company.ticker}"`;
-          posts = await searchReddit(active, query);
+          const checkpoint = readCheckpoint(company.id, query);
+          const page = checkpoint?.page ?? 1;
+          requestKey = `reddit:${company.id}:${query}:page:${page}`;
+          const result = await searchReddit(active, query, {
+            after: checkpoint?.after,
+            limit: pageSize,
+          });
+          posts = result.posts;
           let added = 0;
           let dropped = 0;
           for (const p of posts) {
@@ -1013,19 +1047,34 @@ export function startRedditPoller(deps: {
           }
           recordDelivery({
             db: deps.db, collector: "reddit", companyId: company.id,
-            requestKey: `reddit:${company.id}:${query}`, startedAt,
-            adapterVersion: "reddit-search/1", result: posts.length === 0 ? "empty" : "success",
+            requestKey, startedAt,
+            adapterVersion: "reddit-search/1",
+            result: result.nextAfter ? "partial" : posts.length === 0 ? "empty" : "success",
             parsedItemCount: posts.length, normalizedItems: posts,
+            error: result.nextAfter ? `Reddit listing page ${page}; more results remain` : undefined,
           });
+          if (result.nextAfter) {
+            deps.db.setKv(checkpointKey(company.id), JSON.stringify({
+              after: result.nextAfter,
+              page: page + 1,
+              query,
+              limit: pageSize,
+            } satisfies RedditPageCheckpoint));
+          } else {
+            deps.db.setKv(checkpointKey(company.id), "");
+          }
           deps.health.recordReddit(true);
           clearProviderRateLimit(deps.db, "reddit", startedAt);
           if (added > 0) deps.db.logEvent("info", "reddit", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `reddit ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          if (err instanceof RedditPaginationRestartError) {
+            deps.db.setKv(checkpointKey(company.id), "");
+          }
           recordDelivery({
             db: deps.db, collector: "reddit", companyId: company.id,
-            requestKey: `reddit:${company.id}`, startedAt, adapterVersion: "reddit-search/1",
+            requestKey, startedAt, adapterVersion: "reddit-search/1",
             result: posts.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: posts.length,
             normalizedItems: posts, error: err,
           });
@@ -1042,7 +1091,7 @@ export function startRedditPoller(deps: {
             break;
           }
         }
-        await sleep(1_500);
+        await pause(1_500);
       }
     } finally {
       running = false;

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Desk } from "../server/db.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
@@ -184,6 +187,62 @@ describe("market quote provenance", () => {
     ]);
     expect(quoteHealth[0]?.state).toBe("failed");
     db.close();
+  });
+
+  it("does not let a failed auxiliary index quote degrade company quote health", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-market-"));
+    let db: Desk | undefined;
+    try {
+      const dbPath = join(directory, "desk.db");
+      db = new Desk(dbPath);
+      db.seedCompanies([company]);
+      const health = new HealthTracker(false, false, "unconfigured");
+      const request = vi.fn(async (input: RequestInfo | URL) => {
+        const ticker = decodeURIComponent(new URL(String(input)).pathname.split("/").at(-1) ?? "");
+        return ticker === "^GSPC"
+          ? new Response("index quote unavailable", { status: 503 })
+          : chartResponse();
+      });
+      globalThis.fetch = request;
+      const data = new MarketData({
+        companies: [company], indices: ["^GSPC"], hub: new Hub(), health, db,
+        externalRequestsEnabled: true, quoteRequestsEnabled: true, chartRequestsEnabled: false,
+      });
+
+      await data.refresh();
+      const delivery = db.deliveryHealth([{
+        collector: "yahoo_quote", enabled: true, intervalSeconds: 45, targetCount: 1,
+        healthCompanyOnly: true,
+      }]);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(delivery[0]).toMatchObject({ state: "current", coverageCount: 1, latestResult: "success" });
+      expect(health.snapshot().quotes).toMatchObject({ ok: 1, fail: 0, lastError: null });
+      expect(db.deliverySummary().some((row) => row.companyId === null && row.result === "failed")).toBe(true);
+      expect(db.recentEvents(5)).toContainEqual(expect.objectContaining({
+        level: "warn", source: "yahoo_index_quote", message: "^GSPC: HTTP 503",
+      }));
+      expect(db.getKv("yahoo:index-quote-failure:%5EGSPC")).toBe("1");
+      db.close();
+
+      // A new Desk and MarketData instance simulate a process restart while
+      // retaining the durable database state and warning event.
+      db = new Desk(dbPath);
+      db.seedCompanies([company]);
+      const restarted = new MarketData({
+        companies: [company], indices: ["^GSPC"], hub: new Hub(),
+        health: new HealthTracker(false, false, "unconfigured"), db,
+        externalRequestsEnabled: true, quoteRequestsEnabled: true, chartRequestsEnabled: false,
+      });
+      globalThis.fetch = vi.fn(async () => chartResponse());
+      await restarted.refresh();
+      expect(db.recentEvents(5)).toContainEqual(expect.objectContaining({
+        level: "info", source: "yahoo_index_quote", message: "^GSPC: index quote recovered",
+      }));
+      expect(db.getKv("yahoo:index-quote-failure:%5EGSPC")).toBe("");
+    } finally {
+      db?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("labels the bounded in-memory price-series cache and preserves the source timestamp", async () => {

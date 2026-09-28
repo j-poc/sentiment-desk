@@ -24,6 +24,18 @@ export interface RedditClient {
   expiresAt: number;
 }
 
+export interface RedditSearchResult {
+  posts: RedditPost[];
+  nextAfter: string | null;
+}
+
+export class RedditPaginationRestartError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = "RedditPaginationRestartError";
+  }
+}
+
 export async function getRedditToken(
   creds: { clientId: string; clientSecret: string },
   existing?: RedditClient,
@@ -53,6 +65,7 @@ export async function getRedditToken(
 
 interface ListingResponse {
   data?: {
+    after?: unknown;
     children?: Array<{
       data?: {
         id?: string;
@@ -72,15 +85,20 @@ interface ListingResponse {
 export async function searchReddit(
   client: RedditClient,
   query: string,
-  timeoutMs = 15_000,
-): Promise<RedditPost[]> {
+  opts: { after?: string; limit?: number; timeoutMs?: number } = {},
+): Promise<RedditSearchResult> {
+  const limit = opts.limit ?? 25;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("Reddit listing limit must be an integer from 1 to 100");
+  }
   const params = new URLSearchParams({
     q: query,
-    limit: "25",
+    limit: String(limit),
     sort: "new",
     t: "week",
     type: "link",
   });
+  if (opts.after) params.set("after", opts.after);
   await paceProviderRequest("reddit", 1_000);
   const res = await fetch(`https://oauth.reddit.com/search?${params}`, {
     headers: {
@@ -88,11 +106,27 @@ export async function searchReddit(
       "user-agent": "sentiment-desk/0.3 (personal research desk)",
       accept: "application/json",
     },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
   });
   if (res.status === 429) throw new ProviderRateLimitError("reddit", parseRetryAfterMs(res.headers.get("retry-after")), "Reddit search HTTP 429");
-  if (!res.ok) throw new Error(`reddit search HTTP ${res.status}`);
+  if (!res.ok) {
+    if (opts.after && [400, 404].includes(res.status)) {
+      throw new RedditPaginationRestartError(`Reddit pagination cursor was rejected with HTTP ${res.status}`, res.status);
+    }
+    throw new Error(`reddit search HTTP ${res.status}`);
+  }
   const body = (await res.json()) as ListingResponse;
+  if (!body || typeof body !== "object" || !body.data || typeof body.data !== "object" || Array.isArray(body.data)
+    || !Array.isArray(body.data.children) || !Object.hasOwn(body.data, "after")) {
+    throw new Error("Reddit returned invalid listing pagination metadata");
+  }
+  const rawAfter = body.data.after;
+  if (rawAfter !== null && (typeof rawAfter !== "string" || rawAfter.trim() === "")) {
+    throw new Error("Reddit returned an invalid listing continuation cursor");
+  }
+  if (typeof rawAfter === "string" && rawAfter === opts.after) {
+    throw new RedditPaginationRestartError("Reddit listing continuation did not advance");
+  }
   const out: RedditPost[] = [];
   for (const child of body.data?.children ?? []) {
     const d = child.data;
@@ -112,5 +146,5 @@ export async function searchReddit(
       numComments: d.num_comments ?? 0,
     });
   }
-  return out;
+  return { posts: out, nextAfter: typeof rawAfter === "string" ? rawAfter : null };
 }

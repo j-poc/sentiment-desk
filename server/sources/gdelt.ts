@@ -12,6 +12,17 @@ export interface GdeltArticle {
   seenAt: number | null;
 }
 
+export interface GdeltFetchResult {
+  articles: GdeltArticle[];
+  /** Number of rows returned by the provider before unusable rows are discarded. */
+  providerResultCount: number;
+  requestedLimit: number;
+  /** True when the provider may have omitted older matches at the requested cap. */
+  saturated: boolean;
+}
+
+export const GDELT_ARTICLE_LIMIT = 250;
+
 export class GdeltHttpError extends Error {
   constructor(
     readonly status: number,
@@ -23,13 +34,14 @@ export class GdeltHttpError extends Error {
 }
 
 interface GdeltResponse {
-  articles?: Array<{
-    url?: string;
-    title?: string;
-    seendate?: string;
-    domain?: string;
-    language?: string;
-  }>;
+  articles?: unknown[];
+}
+
+interface GdeltRawArticle {
+  url?: unknown;
+  title?: unknown;
+  seendate?: unknown;
+  domain?: unknown;
 }
 
 function parseSeenDate(raw: string | undefined): number {
@@ -64,8 +76,11 @@ function parseRetryAfter(value: string | null, now = Date.now()): number | undef
 export async function fetchGdeltArticles(
   query: string,
   timeoutMs = 15_000,
-  maxRecords = 25,
-): Promise<GdeltArticle[]> {
+  maxRecords = GDELT_ARTICLE_LIMIT,
+): Promise<GdeltFetchResult> {
+  if (!Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > GDELT_ARTICLE_LIMIT) {
+    throw new Error(`GDELT maxRecords must be an integer from 1 to ${GDELT_ARTICLE_LIMIT}`);
+  }
   const params = new URLSearchParams({
     query: `${query} sourcelang:english`,
     mode: "ArtList",
@@ -97,16 +112,26 @@ export async function fetchGdeltArticles(
     || (body.articles != null && !Array.isArray(body.articles))) {
     throw new Error("GDELT response had an invalid shape");
   }
+  const providerArticles = body.articles ?? [];
+  const providerResultCount = providerArticles.length;
+  const saturated = providerResultCount >= maxRecords;
   const out: GdeltArticle[] = [];
-  for (const a of body.articles ?? []) {
-    if (!a.url || !a.title) continue;
-    const seenAt = parseSeenDate(a.seendate);
+  for (const row of providerArticles) {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) continue;
+    const a = row as GdeltRawArticle;
+    if (typeof a.url !== "string" || a.url.trim() === "" || typeof a.title !== "string" || a.title.trim() === "") continue;
+    const seenAt = parseSeenDate(typeof a.seendate === "string" ? a.seendate : undefined);
     out.push({
       title: a.title,
       url: a.url,
-      domain: a.domain ?? "unknown",
+      domain: typeof a.domain === "string" && a.domain.trim() !== "" ? a.domain : "unknown",
       seenAt: Number.isFinite(seenAt) ? seenAt : null,
     });
   }
-  return out;
+  return {
+    articles: out,
+    providerResultCount,
+    requestedLimit: maxRecords,
+    saturated,
+  };
 }

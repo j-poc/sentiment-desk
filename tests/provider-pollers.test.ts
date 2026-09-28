@@ -182,6 +182,7 @@ describe("optional provider rate limits", () => {
       db,
       health: new HealthTracker(false, false, "unconfigured", false, false, true),
       intervalSeconds: 180,
+      pause: async () => {},
     });
     await control.stop();
     expect(request).toHaveBeenCalledTimes(2);
@@ -208,7 +209,7 @@ describe("optional provider rate limits", () => {
           permalink: "/r/stocks/comments/post-1/alpha_revenue_report/",
           score: 3,
           num_comments: 1,
-        } }] },
+        } }], after: null },
       }), { status: 200, headers: { "content-type": "application/json" } }));
     globalThis.fetch = request;
     const ingest = vi.fn(() => true);
@@ -219,6 +220,7 @@ describe("optional provider rate limits", () => {
       db,
       health: new HealthTracker(false, false, "unconfigured", false, false, true),
       intervalSeconds: 180,
+      pause: async () => {},
     });
 
     try {
@@ -229,6 +231,120 @@ describe("optional provider rate limits", () => {
       db.close();
     }
   });
+
+  it("resumes Reddit listing pages from the saved provider cursor", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-reddit-pages-"));
+    const databasePath = join(directory, "desk.db");
+    let db = new Desk(databasePath);
+    db.seedCompanies([companies[0]!]);
+    const urls: URL[] = [];
+    const request = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("access_token")) {
+        return new Response(JSON.stringify({ access_token: "test-token", expires_in: 3600 }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      urls.push(url);
+      const after = url.searchParams.get("after");
+      const post = after == null
+        ? { id: "post-1", title: "$ALPH revenue report", permalink: "/r/stocks/comments/post-1/", selftext: "Alpha reports growth" }
+        : { id: "post-2", title: "$ALPH revenue guidance", permalink: "/r/stocks/comments/post-2/", selftext: "Alpha updates guidance" };
+      return new Response(JSON.stringify({
+        data: { children: [{ data: { ...post, subreddit: "stocks", author: "member", created_utc: 1_790_000_000 } }],
+          after: after == null ? "t3_next-page" : null },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    globalThis.fetch = request;
+    const ingest = vi.fn(() => true);
+    const deps = {
+      companies: [companies[0]!],
+      creds: { clientId: "test-id", clientSecret: "test-secret" },
+      pipeline: { ingest } as unknown as Pipeline,
+      db,
+      health: new HealthTracker(false, false, "unconfigured", false, false, true),
+      intervalSeconds: 180,
+      pause: async () => {},
+    };
+
+    try {
+      const firstPage = startRedditPoller(deps);
+      await firstPage.stop();
+      expect(JSON.parse(db.getKv("reddit:pagination:alpha") ?? "{}")).toMatchObject({
+        after: "t3_next-page", page: 2, query: '"Alpha Inc" OR "$ALPH"', limit: 25,
+      });
+      expect(db.deliverySummary().find((row) => row.adapterVersion === "reddit-search/1"))
+        .toMatchObject({ result: "partial", parsedItemCount: 1 });
+
+      db.close();
+      db = new Desk(databasePath);
+      deps.db = db;
+      const secondPage = startRedditPoller(deps);
+      await secondPage.stop();
+      expect(urls).toHaveLength(2);
+      expect(urls[0]?.searchParams.has("after")).toBe(false);
+      expect(urls[1]?.searchParams.get("after")).toBe("t3_next-page");
+      expect(db.getKv("reddit:pagination:alpha")).toBe("");
+      expect(ingest).toHaveBeenCalledTimes(2);
+      expect(db.deliverySummary().filter((row) => row.adapterVersion === "reddit-search/1")
+        .map((row) => row.result).sort()).toEqual(["partial", "success"]);
+      expect(db.deliveryHealth([{
+        collector: "reddit", enabled: true, intervalSeconds: 180, targetCount: 1,
+      }], Date.now())[0]).toMatchObject({ state: "current", coverageCount: 1, latestResult: "success" });
+    } finally {
+      db.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("restarts Reddit from the newest listing when a saved cursor is rejected", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const query = '"Alpha Inc" OR "$ALPH"';
+    db.setKv("reddit:pagination:alpha", JSON.stringify({ after: "t3_expired", page: 3, query, limit: 25 }));
+    const searchUrls: URL[] = [];
+    const request = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("access_token")) {
+        return new Response(JSON.stringify({ access_token: "test-token", expires_in: 3600 }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      searchUrls.push(url);
+      if (url.searchParams.has("after")) return new Response("cursor expired", { status: 400 });
+      return new Response(JSON.stringify({ data: { children: [], after: null } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    });
+    globalThis.fetch = request;
+    const deps = {
+      companies: [companies[0]!],
+      creds: { clientId: "test-id", clientSecret: "test-secret" },
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(false, false, "unconfigured", false, false, true),
+      intervalSeconds: 180,
+      pause: async () => {},
+    };
+
+    try {
+      const rejected = startRedditPoller(deps);
+      await rejected.stop();
+      expect(db.getKv("reddit:pagination:alpha")).toBe("");
+      expect(db.deliverySummary().find((row) => row.result === "failed"))
+        .toMatchObject({ error: "Reddit pagination cursor was rejected with HTTP 400" });
+
+      const replay = startRedditPoller(deps);
+      await replay.stop();
+      expect(searchUrls).toHaveLength(2);
+      expect(searchUrls[0]?.searchParams.get("after")).toBe("t3_expired");
+      expect(searchUrls[1]?.searchParams.has("after")).toBe(false);
+      expect(db.deliverySummary().filter((row) => row.adapterVersion === "reddit-search/1")
+        .map((row) => row.result).sort()).toEqual(["empty", "failed"]);
+    } finally {
+      db.close();
+    }
+  }, 15_000);
 
   it("drains X search pages before committing the newest seen ID", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-x-pages-"));

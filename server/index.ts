@@ -132,7 +132,7 @@ async function main(): Promise<void> {
       { collector: "finnhub", enabled: collectorEnabled("finnhub") && config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length, healthAdapterVersions: ["finnhub-news/1"] },
       { collector: "reddit", enabled: collectorEnabled("reddit") && config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
       { collector: "x", enabled: collectorEnabled("x") && config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },
-      { collector: "yahoo_quote", enabled: collectorEnabled("yahoo_quote"), intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length },
+      { collector: "yahoo_quote", enabled: collectorEnabled("yahoo_quote"), intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length, healthCompanyOnly: true },
       { collector: "yahoo_chart", enabled: collectorEnabled("yahoo_chart"), intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length },
     ],
   });
