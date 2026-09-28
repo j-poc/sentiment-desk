@@ -7,7 +7,7 @@ import { fetchEarningsHistory, fetchFinnhubNews, fetchUpcomingEarnings, latestSu
 import { getRedditToken, searchReddit, type RedditClient } from "./sources/reddit.js";
 import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl } from "./sources/rss.js";
-import { searchRecent } from "./sources/x.js";
+import { searchRecent, XPaginationTokenRejectedError, xQuery } from "./sources/x.js";
 import { isFinanceRelevant } from "./scoring.js";
 import { fetchPrimaryDocText, fetchRecent8Ks, fetchTickerCikMap, titleForItems } from "./sources/sec.js";
 import { classifyDeliveryError, recordDelivery } from "./delivery.js";
@@ -170,6 +170,75 @@ export function startXPoller(deps: {
   health: HealthTracker;
   intervalSeconds: number;
 }): SchedulerControl {
+  type XPageCheckpoint = {
+    sinceId: string | null;
+    newestId: string | null;
+    nextToken: string;
+    page: number;
+    query: string;
+    maxResults: number;
+  };
+  type XCommittedCursor = {
+    sinceId: string | null;
+    query: string;
+    maxResults: number;
+  };
+  const pageSize = 25;
+  const checkpointKey = (companyId: string): string => `x:pagination:${companyId}`;
+  const committedCursorKey = (companyId: string): string => `x:since-state:${companyId}`;
+  const legacyCursorKey = (companyId: string): string => `x:since:${companyId}`;
+  const readCommittedCursor = (companyId: string, query: string): string | null => {
+    const raw = deps.db.getKv(committedCursorKey(companyId));
+    if (raw) {
+      try {
+        const value = JSON.parse(raw) as Partial<XCommittedCursor>;
+        if (
+          (value.sinceId === null || (typeof value.sinceId === "string" && /^\d+$/.test(value.sinceId))) &&
+          typeof value.query === "string" && Number.isSafeInteger(value.maxResults)
+        ) {
+          if (value.query === query && value.maxResults === pageSize) return value.sinceId ?? null;
+        }
+      } catch {
+        // A damaged cursor is treated as unverified and replayed from the recent window.
+      }
+      deps.db.setKv(committedCursorKey(companyId), "");
+      deps.db.setKv(legacyCursorKey(companyId), "");
+      return null;
+    }
+    if (deps.db.getKv(legacyCursorKey(companyId))) {
+      // Pre-fingerprint IDs cannot be proven to belong to this query. Replaying
+      // the provider's recent window is safer; ingested post IDs are idempotent.
+      deps.db.setKv(legacyCursorKey(companyId), "");
+    }
+    return null;
+  };
+  const readCheckpoint = (companyId: string, query: string, sinceId: string | null): XPageCheckpoint | null => {
+    const raw = deps.db.getKv(checkpointKey(companyId));
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw) as Partial<XPageCheckpoint>;
+      if (
+        typeof value.nextToken === "string" && value.nextToken.length > 0 &&
+        value.sinceId === sinceId &&
+        (value.newestId === null || typeof value.newestId === "string") &&
+        Number.isSafeInteger(value.page) && Number(value.page) >= 1 &&
+        value.query === query && value.maxResults === pageSize
+      ) {
+        return value as XPageCheckpoint;
+      }
+    } catch {
+      // A damaged in-progress cursor must not replace the last committed since_id.
+    }
+    deps.db.setKv(checkpointKey(companyId), "");
+    return null;
+  };
+  const newestId = (...ids: Array<string | undefined | null>): string | undefined => {
+    const numeric = ids.filter((id): id is string => typeof id === "string" && /^\d+$/.test(id));
+    return numeric.reduce<string | undefined>((latest, id) => {
+      if (latest == null || id.length > latest.length || (id.length === latest.length && id > latest)) return id;
+      return latest;
+    }, undefined);
+  };
   let running = false;
   const tick = async (): Promise<void> => {
     if (providerCoolingDown(deps.db, "x")) return;
@@ -180,14 +249,25 @@ export function startXPoller(deps: {
         if (providerCoolingDown(deps.db, "x")) break;
         const startedAt = Date.now();
         let posts: Awaited<ReturnType<typeof searchRecent>>["posts"] = [];
+        const query = xQuery(company);
+        const committedSinceId = readCommittedCursor(company.id, query);
+        const checkpoint = readCheckpoint(company.id, query, committedSinceId);
+        const sinceId = checkpoint ? checkpoint.sinceId : committedSinceId;
+        const page = checkpoint?.page ?? 1;
+        const requestKey = `x:${company.id}:${sinceId ?? "initial"}:page:${page}`;
         try {
-          const sinceId = deps.db.getKv(`x:since:${company.id}`);
-          const res = await searchRecent({ bearer: deps.bearer, company, sinceId });
+          const res = await searchRecent({
+            bearer: deps.bearer,
+            company,
+            sinceId: sinceId ?? undefined,
+            paginationToken: checkpoint?.nextToken,
+            maxResults: pageSize,
+          });
           posts = res.posts;
           if (res.rateLimited) {
             recordDelivery({
               db: deps.db, collector: "x", companyId: company.id,
-              requestKey: `x:${company.id}:${sinceId ?? "initial"}`, startedAt,
+              requestKey, startedAt,
               adapterVersion: "x-search/1", result: "rate_limited", parsedItemCount: 0,
               error: "X API rate limited this request",
             });
@@ -237,19 +317,43 @@ export function startXPoller(deps: {
           }
           recordDelivery({
             db: deps.db, collector: "x", companyId: company.id,
-            requestKey: `x:${company.id}:${sinceId ?? "initial"}`, startedAt,
-            adapterVersion: "x-search/1", result: posts.length === 0 ? "empty" : "success",
+            requestKey, startedAt,
+            adapterVersion: "x-search/1", result: res.nextToken ? "partial" : posts.length === 0 ? "empty" : "success",
             parsedItemCount: posts.length, normalizedItems: posts,
           });
-          if (res.newestId) deps.db.setKv(`x:since:${company.id}`, res.newestId);
+          const newestSeenId = newestId(checkpoint?.newestId, res.newestId, ...posts.map((post) => post.id));
+          if (res.nextToken) {
+            deps.db.setKv(checkpointKey(company.id), JSON.stringify({
+              sinceId,
+              newestId: newestSeenId ?? null,
+              nextToken: res.nextToken,
+              page: page + 1,
+              query,
+              maxResults: pageSize,
+            } satisfies XPageCheckpoint));
+          } else {
+            const nextSinceId = newestSeenId ?? sinceId;
+            deps.db.setKv(committedCursorKey(company.id), JSON.stringify({
+              sinceId: nextSinceId,
+              query,
+              maxResults: pageSize,
+            } satisfies XCommittedCursor));
+            deps.db.setKv(legacyCursorKey(company.id), nextSinceId ?? "");
+            deps.db.setKv(checkpointKey(company.id), "");
+          }
           deps.health.recordX(true);
           clearProviderRateLimit(deps.db, "x", startedAt);
           if (added > 0) deps.db.logEvent("info", "x", `${company.ticker}: ${added} new posts`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          if (err instanceof XPaginationTokenRejectedError && checkpoint) {
+            // Keep x:since unchanged so the next scheduled request can replay
+            // from the last fully drained search window.
+            deps.db.setKv(checkpointKey(company.id), "");
+          }
           recordDelivery({
             db: deps.db, collector: "x", companyId: company.id,
-            requestKey: `x:${company.id}`, startedAt, adapterVersion: "x-search/1",
+            requestKey, startedAt, adapterVersion: "x-search/1",
             result: posts.length > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: posts.length,
             normalizedItems: posts, error: err,
           });

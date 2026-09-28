@@ -230,6 +230,8 @@ export interface DeliverySourceSchedule {
   enabled: boolean;
   intervalSeconds: number;
   targetCount: number;
+  /** Restrict health and coverage to receipts for this source's primary feed. */
+  healthAdapterVersions?: readonly string[];
 }
 
 export class Desk {
@@ -715,7 +717,7 @@ export class Desk {
       `WITH ranked AS (
         SELECT collector, company_id AS companyId, completed_at AS completedAt, result,
           parsed_item_count AS parsedItemCount, error, adapter_version AS adapterVersion,
-          ROW_NUMBER() OVER (PARTITION BY collector, COALESCE(company_id, '')
+          ROW_NUMBER() OVER (PARTITION BY collector, COALESCE(company_id, ''), adapter_version
             ORDER BY completed_at DESC, started_at DESC, rowid DESC) AS rn
         FROM source_deliveries WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')
       )
@@ -745,7 +747,10 @@ export class Desk {
     const observationByCollector = new Map(observations.map((row) => [row.collector, row]));
 
     return sources.map((source) => {
-      const rows = byCollector.get(source.collector) ?? [];
+      const allRows = byCollector.get(source.collector) ?? [];
+      const rows = source.healthAdapterVersions == null
+        ? allRows
+        : allRows.filter((row) => source.healthAdapterVersions!.includes(row.adapterVersion));
       const latest = [...rows].sort((a, b) => b.completedAt - a.completedAt)[0] ?? null;
       const dueAfterMs = Math.max(source.intervalSeconds * 3_000, 180_000);
       const recent = rows.filter((row) => now - row.completedAt <= dueAfterMs);

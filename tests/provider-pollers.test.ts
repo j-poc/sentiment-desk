@@ -1,8 +1,12 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Desk } from "../server/db.js";
 import { HealthTracker } from "../server/health.js";
 import { providerCoolingDown } from "../server/provider-cooldown.js";
 import { startFinnhubPoller, startRedditPoller, startSecCollector, startSecPoller, startXPoller } from "../server/schedule.js";
+import { xQuery } from "../server/sources/x.js";
 import type { Pipeline } from "../server/pipeline.js";
 import type { Company } from "../server/types.js";
 
@@ -221,6 +225,278 @@ describe("optional provider rate limits", () => {
       await control.stop();
       expect(request).toHaveBeenCalledTimes(2);
       expect(ingest).toHaveBeenCalledWith(expect.objectContaining({ publishedAt: null }));
+    } finally {
+      db.close();
+    }
+  });
+
+  it("drains X search pages before committing the newest seen ID", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-x-pages-"));
+    const databasePath = join(directory, "desk.db");
+    let db = new Desk(databasePath);
+    db.seedCompanies([companies[0]!]);
+    const urls: URL[] = [];
+    const posts = [
+      { id: "200", text: "$ALPH reports revenue growth", created_at: "2026-09-29T10:00:00.000Z", author_id: "author-1" },
+      { id: "199", text: "$ALPH revenue guidance is lifted", created_at: "2026-09-29T09:59:00.000Z", author_id: "author-1" },
+    ];
+    const request = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      urls.push(url);
+      const body = url.searchParams.has("next_token")
+        ? { data: [posts[1]], meta: { newest_id: "199", result_count: 1 } }
+        : { data: [posts[0]], meta: { newest_id: "200", next_token: "opaque-page-2", result_count: 1 } };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    globalThis.fetch = request;
+    const ingest = vi.fn(() => true);
+    const deps = {
+      bearer: "test-token",
+      companies: [companies[0]!],
+      pipeline: { ingest } as unknown as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    };
+
+    try {
+      const firstPage = startXPoller(deps);
+      await firstPage.stop();
+      expect(db.getKv("x:since:alpha")).toBeUndefined();
+      expect(JSON.parse(db.getKv("x:pagination:alpha") ?? "{}")).toMatchObject({
+        sinceId: null,
+        newestId: "200",
+        nextToken: "opaque-page-2",
+        page: 2,
+        query: '("Alpha" OR "$ALPH") lang:en -is:retweet -is:reply',
+        maxResults: 25,
+      });
+      expect(db.deliverySummary().find((row) => row.collector === "x"))
+        .toMatchObject({ result: "partial", parsedItemCount: 1 });
+
+      db.close();
+      db = new Desk(databasePath);
+      deps.db = db;
+      const secondPage = startXPoller(deps);
+      await secondPage.stop();
+      expect(urls).toHaveLength(2);
+      expect(urls[0]?.searchParams.has("next_token")).toBe(false);
+      expect(urls[1]?.searchParams.get("next_token")).toBe("opaque-page-2");
+      expect(db.getKv("x:since:alpha")).toBe("200");
+      expect(db.getKv("x:pagination:alpha")).toBe("");
+      expect(ingest).toHaveBeenCalledTimes(2);
+      expect(db.deliverySummary().map((row) => row.result).sort()).toEqual(["partial", "success"]);
+      expect(db.deliveryHealth([{
+        collector: "x", enabled: true, intervalSeconds: 180, targetCount: 1,
+      }], Date.now())[0]).toMatchObject({ state: "current", coverageCount: 1, latestResult: "success" });
+    } finally {
+      db.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("restarts X from the last committed ID after a continuation token is rejected", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    db.setKv("x:since:alpha", "150");
+    db.setKv("x:since-state:alpha", JSON.stringify({
+      sinceId: "150", query: xQuery(companies[0]!), maxResults: 25,
+    }));
+    const urls: URL[] = [];
+    const request = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      urls.push(url);
+      if (url.searchParams.has("next_token")) return new Response("invalid cursor", { status: 400 });
+      if (urls.length === 1) {
+        return new Response(JSON.stringify({ data: [], meta: { newest_id: "200", next_token: "rejected-token" } }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "210" } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    });
+    globalThis.fetch = request;
+    const deps = {
+      bearer: "test-token",
+      companies: [companies[0]!],
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    };
+
+    try {
+      const firstPage = startXPoller(deps);
+      await firstPage.stop();
+      expect(db.getKv("x:pagination:alpha")).toContain("rejected-token");
+      expect(db.getKv("x:since:alpha")).toBe("150");
+
+      const rejectedPage = startXPoller(deps);
+      await rejectedPage.stop();
+      expect(db.getKv("x:pagination:alpha")).toBe("");
+      expect(db.getKv("x:since:alpha")).toBe("150");
+      expect(db.deliverySummary().find((row) => row.result === "failed"))
+        .toMatchObject({ error: "X pagination token was rejected with HTTP 400" });
+
+      const replay = startXPoller(deps);
+      await replay.stop();
+      expect(urls).toHaveLength(3);
+      expect(urls[2]?.searchParams.has("next_token")).toBe(false);
+      expect(urls[2]?.searchParams.get("since_id")).toBe("150");
+      expect(db.getKv("x:since:alpha")).toBe("210");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("fails closed on malformed X pagination metadata without advancing the cursor", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const query = xQuery(companies[0]!);
+    db.setKv("x:since:alpha", "150");
+    db.setKv("x:since-state:alpha", JSON.stringify({ sinceId: "150", query, maxResults: 25 }));
+    const urls: URL[] = [];
+    const tokens: unknown[] = [123, ""];
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      urls.push(new URL(String(input)));
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "200", next_token: tokens.shift() } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    });
+    const deps = {
+      bearer: "test-token",
+      companies: [companies[0]!],
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    };
+
+    try {
+      const firstAttempt = startXPoller(deps);
+      await firstAttempt.stop();
+      const secondAttempt = startXPoller(deps);
+      await secondAttempt.stop();
+      expect(urls).toHaveLength(2);
+      expect(urls.every((url) => url.searchParams.get("since_id") === "150")).toBe(true);
+      expect(urls.every((url) => !url.searchParams.has("next_token"))).toBe(true);
+      expect(db.getKv("x:since:alpha")).toBe("150");
+      expect(JSON.parse(db.getKv("x:since-state:alpha") ?? "{}")).toMatchObject({ sinceId: "150", query, maxResults: 25 });
+      expect(db.deliverySummary().filter((row) => row.result === "invalid")).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("replays X recent search when a committed query's aliases change", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    db.setKv("x:since:alpha", "150");
+    db.setKv("x:since-state:alpha", JSON.stringify({
+      sinceId: "150", query: xQuery(companies[0]!), maxResults: 25,
+    }));
+    const updatedCompany = { ...companies[0]!, aliases: ["NewAlpha"] };
+    let requestedUrl: URL | undefined;
+    const request = vi.fn(async (input: string | URL | Request) => {
+      requestedUrl = new URL(String(input));
+      return new Response(JSON.stringify({
+        data: [{ id: "140", text: "NewAlpha revenue momentum accelerates", created_at: "2026-09-29T10:00:00.000Z", author_id: "author-1" }],
+        meta: { newest_id: "140", result_count: 1 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    globalThis.fetch = request;
+    const ingest = vi.fn(() => true);
+    const deps = {
+      bearer: "test-token",
+      companies: [updatedCompany],
+      pipeline: { ingest } as unknown as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    };
+
+    try {
+      const control = startXPoller(deps);
+      await control.stop();
+      expect(requestedUrl?.searchParams.get("query")).toBe(xQuery(updatedCompany));
+      expect(requestedUrl?.searchParams.has("since_id")).toBe(false);
+      expect(ingest).toHaveBeenCalledWith(expect.objectContaining({
+        sourceItemId: "140", title: "NewAlpha revenue momentum accelerates",
+      }));
+      expect(db.getKv("x:since:alpha")).toBe("140");
+      expect(JSON.parse(db.getKv("x:since-state:alpha") ?? "{}")).toMatchObject({
+        sinceId: "140", query: xQuery(updatedCompany), maxResults: 25,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not trust an X cursor created before query fingerprints were stored", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    db.setKv("x:since:alpha", "150");
+    let requestedUrl: URL | undefined;
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      requestedUrl = new URL(String(input));
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "160" } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    });
+    const deps = {
+      bearer: "test-token",
+      companies: [companies[0]!],
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    };
+
+    try {
+      const control = startXPoller(deps);
+      await control.stop();
+      expect(requestedUrl?.searchParams.has("since_id")).toBe(false);
+      expect(db.getKv("x:since:alpha")).toBe("160");
+      expect(JSON.parse(db.getKv("x:since-state:alpha") ?? "{}")).toMatchObject({
+        sinceId: "160", query: xQuery(companies[0]!), maxResults: 25,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("replays X recent search when a committed cursor is malformed", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    db.setKv("x:since:alpha", "garbage");
+    db.setKv("x:since-state:alpha", JSON.stringify({
+      sinceId: "garbage", query: xQuery(companies[0]!), maxResults: 25,
+    }));
+    let requestedUrl: URL | undefined;
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      requestedUrl = new URL(String(input));
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "170" } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    });
+    const deps = {
+      bearer: "test-token",
+      companies: [companies[0]!],
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    };
+
+    try {
+      const control = startXPoller(deps);
+      await control.stop();
+      expect(requestedUrl?.searchParams.has("since_id")).toBe(false);
+      expect(db.getKv("x:since:alpha")).toBe("170");
+      expect(JSON.parse(db.getKv("x:since-state:alpha") ?? "{}")).toMatchObject({
+        sinceId: "170", query: xQuery(companies[0]!), maxResults: 25,
+      });
     } finally {
       db.close();
     }

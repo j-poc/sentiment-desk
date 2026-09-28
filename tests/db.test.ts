@@ -424,4 +424,56 @@ describe("Desk observation and judgment storage", () => {
       db.close();
     }
   });
+
+  it("does not count Finnhub earnings receipts as company-news coverage", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-finnhub-coverage-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    const startedAt = Date.now() - 100;
+    const source = {
+      collector: "finnhub" as const,
+      intervalSeconds: 60,
+      targetCount: 1,
+      enabled: true,
+      healthAdapterVersions: ["finnhub-news/1"],
+    };
+    try {
+      db.seedCompanies([company]);
+      db.recordDelivery({
+        collector: "finnhub", companyId: null, requestKey: "earnings-calendar", startedAt,
+        completedAt: startedAt + 1, result: "success", parsedItemCount: 0,
+        adapterVersion: "finnhub-calendar/1",
+      });
+      db.recordDelivery({
+        collector: "finnhub", companyId: company.id, requestKey: "earnings-history", startedAt,
+        completedAt: startedAt + 2, result: "success", parsedItemCount: 2,
+        adapterVersion: "finnhub-earnings/1",
+      });
+      expect(db.deliveryHealth([source], startedAt + 50)[0])
+        .toMatchObject({ state: "never", coverageCount: 0, targetCount: 1 });
+
+      db.recordDelivery({
+        collector: "finnhub", companyId: company.id, requestKey: "company-news", startedAt,
+        completedAt: startedAt + 3, result: "empty", parsedItemCount: 0,
+        adapterVersion: "finnhub-news/1",
+      });
+      expect(db.deliveryHealth([source], startedAt + 50)[0])
+        .toMatchObject({ state: "current", coverageCount: 1, targetCount: 1 });
+
+      db.recordDelivery({
+        collector: "finnhub", companyId: null, requestKey: "earnings-calendar-error", startedAt,
+        completedAt: startedAt + 4, result: "failed", parsedItemCount: 0,
+        adapterVersion: "finnhub-calendar/1", error: "test-only failure",
+      });
+      db.recordDelivery({
+        collector: "finnhub", companyId: company.id, requestKey: "earnings-history-partial", startedAt,
+        completedAt: startedAt + 5, result: "partial", parsedItemCount: 1,
+        adapterVersion: "finnhub-earnings/1", error: "test-only partial",
+      });
+      expect(db.deliveryHealth([source], startedAt + 50)[0])
+        .toMatchObject({ state: "current", coverageCount: 1, latestResult: "empty" });
+    } finally {
+      db.close();
+    }
+  });
 });

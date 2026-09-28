@@ -20,6 +20,9 @@ fact-checking.
   submissions and filing text are collected using the configured watchlist.
   Optional Finnhub, Reddit, and X collectors start only when both their
   credentials and matching external-source allowlist entries are configured.
+  X recent-search pages resume from a persisted continuation cursor and only
+  advance the committed post ID after the page chain completes; the endpoint
+  still covers a bounded recent window and the configured search terms.
   Every item keeps publisher identity, source identity, and source, provider,
   retrieval, and ingestion clocks separately. Missing source time stays
   unknown.
