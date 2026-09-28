@@ -30,6 +30,13 @@ export class XPaginationTokenRejectedError extends Error {
   }
 }
 
+export class XNonAdvancingPaginationTokenError extends Error {
+  constructor() {
+    super("X API returned a non-advancing pagination token");
+    this.name = "XNonAdvancingPaginationTokenError";
+  }
+}
+
 export function xQuery(company: Company): string {
   const terms = [...company.aliases, `$${company.ticker}`]
     .map((t) => `"${t}"`)
@@ -75,23 +82,69 @@ export async function searchRecent(opts: {
     throw new Error(`X API HTTP ${res.status}`);
   }
 
-  const body = (await res.json()) as {
-    data?: Array<{ id: string; text: string; created_at: string; author_id: string }>;
-    includes?: { users?: Array<{ id: string; name: string; username: string }> };
-    meta?: unknown;
-  };
-  if (body.meta == null || typeof body.meta !== "object" || Array.isArray(body.meta)) {
+  const body: unknown = await res.json();
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new Error("X API returned an invalid response shape");
+  }
+  const response = body as Record<string, unknown>;
+  if (response.meta == null || typeof response.meta !== "object" || Array.isArray(response.meta)) {
     throw new Error("X API returned invalid pagination metadata");
   }
-  const meta = body.meta as { newest_id?: unknown; next_token?: unknown };
+  const meta = response.meta as Record<string, unknown>;
+  const resultCount = meta.result_count;
+  if (typeof resultCount !== "number" || !Number.isSafeInteger(resultCount) || resultCount < 0) {
+    throw new Error("X API returned an invalid result count");
+  }
   const rawNextToken = meta.next_token;
   if (rawNextToken !== undefined && (typeof rawNextToken !== "string" || rawNextToken.trim() === "")) {
     throw new Error("X API returned an invalid pagination token");
   }
-  const responseNewestId = typeof meta.newest_id === "string" ? meta.newest_id : undefined;
+  if (typeof rawNextToken === "string" && rawNextToken === opts.paginationToken) {
+    throw new XNonAdvancingPaginationTokenError();
+  }
+  const rawNewestId = meta.newest_id;
+  if (rawNewestId !== undefined && (typeof rawNewestId !== "string" || !/^\d+$/.test(rawNewestId))) {
+    throw new Error("X API returned an invalid newest post ID");
+  }
+  const responseNewestId = typeof rawNewestId === "string" ? rawNewestId : undefined;
+  const rawData = response.data;
+  if (rawData == null && resultCount !== 0) {
+    throw new Error("X API returned an invalid response: posts were omitted despite a nonzero result count");
+  }
+  if (rawData != null && !Array.isArray(rawData)) {
+    throw new Error("X API returned an invalid posts list");
+  }
+  const data = (rawData ?? []) as unknown[];
+  if (data.length !== resultCount) {
+    throw new Error("X API post count does not match its result count");
+  }
 
-  const users = new Map((body.includes?.users ?? []).map((u) => [u.id, u]));
-  const posts = (body.data ?? []).map((t) => {
+  const rawUsers = typeof response.includes === "object" && response.includes !== null && !Array.isArray(response.includes)
+    ? (response.includes as Record<string, unknown>).users
+    : undefined;
+  if (rawUsers != null && !Array.isArray(rawUsers)) throw new Error("X API returned an invalid author list");
+  const users = new Map<string, { name?: string; username?: string }>();
+  for (const row of (rawUsers ?? []) as unknown[]) {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) continue;
+    const user = row as Record<string, unknown>;
+    if (typeof user.id === "string") {
+      users.set(user.id, {
+        name: typeof user.name === "string" ? user.name : undefined,
+        username: typeof user.username === "string" ? user.username : undefined,
+      });
+    }
+  }
+  const posts = data.map((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("X API returned a malformed post row");
+    }
+    const t = value as Record<string, unknown>;
+    if (typeof t.id !== "string" || !/^\d+$/.test(t.id)
+      || typeof t.text !== "string" || t.text.trim() === ""
+      || typeof t.created_at !== "string" || !Number.isFinite(Date.parse(t.created_at))
+      || typeof t.author_id !== "string" || t.author_id.trim() === "") {
+      throw new Error("X API post row is missing required identity or timestamp fields");
+    }
     const u = users.get(t.author_id);
     return {
       id: t.id,

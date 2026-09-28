@@ -20,6 +20,13 @@ export interface FeedItem {
   tier: SourceTier;
 }
 
+export interface FeedFetchResult {
+  items: FeedItem[];
+  /** RSS item nodes received before unusable rows are discarded. */
+  providerItemCount: number;
+  malformedItemCount: number;
+}
+
 export function googleNewsUrl(company: Company, windowDays = 2): string {
   const query = `"${company.name}" OR "${company.ticker}" when:${windowDays}d`;
   return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
@@ -40,16 +47,27 @@ const parser = new XMLParser({
   cdataPropName: "__cdata",
 });
 
-export function parseRss(xml: string): FeedItem[] {
-  const doc = parser.parse(xml) as {
+function parseRssResponse(xml: string): { feed: boolean; result: FeedFetchResult } {
+  const doc = parser.parse(xml) as Record<string, unknown> & {
     rss?: { channel?: { item?: unknown } };
   };
-  const rawItems = doc.rss?.channel?.item;
-  if (rawItems == null) return [];
-  const items = (Array.isArray(rawItems) ? rawItems : [rawItems]) as Array<Record<string, unknown>>;
+  const channelValue: unknown = doc.rss?.channel;
+  if (channelValue == null || Array.isArray(channelValue)
+    || (typeof channelValue === "string" && channelValue.trim() !== "")
+    || (typeof channelValue !== "object" && typeof channelValue !== "string")) {
+    return { feed: false, result: { items: [], providerItemCount: 0, malformedItemCount: 0 } };
+  }
+  const channel = (typeof channelValue === "object" ? channelValue : {}) as { item?: unknown };
+  const rawItems = channel.item;
+  if (rawItems == null) {
+    return { feed: true, result: { items: [], providerItemCount: 0, malformedItemCount: 0 } };
+  }
+  const items = Array.isArray(rawItems) ? rawItems : [rawItems];
 
   const out: FeedItem[] = [];
-  for (const item of items) {
+  for (const value of items) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+    const item = value as Record<string, unknown>;
     const title = cleanText(asText(item["title"]));
     const link = asText(item["link"]);
     if (!title || !link) continue;
@@ -76,10 +94,21 @@ export function parseRss(xml: string): FeedItem[] {
       tier: tierForHost(sourceNode && typeof sourceNode["@_url"] === "string" ? sourceNode["@_url"] : link),
     });
   }
-  return out;
+  return {
+    feed: true,
+    result: {
+      items: out,
+      providerItemCount: items.length,
+      malformedItemCount: items.length - out.length,
+    },
+  };
 }
 
-export async function fetchFeed(url: string, timeoutMs = 15_000): Promise<FeedItem[]> {
+export function parseRss(xml: string): FeedItem[] {
+  return parseRssResponse(xml).result.items;
+}
+
+export async function fetchFeed(url: string, timeoutMs = 15_000): Promise<FeedFetchResult> {
   const host = new URL(url).hostname;
   const provider = host === "news.google.com"
     ? "google_news"
@@ -95,12 +124,14 @@ export async function fetchFeed(url: string, timeoutMs = 15_000): Promise<FeedIt
   }
   if (!res.ok) throw new Error(`feed HTTP ${res.status}`);
   const xml = await res.text();
-  if (!/^\uFEFF?\s*(?:<\?xml[^>]*>\s*)?<(?:rss|rdf:RDF)\b/i.test(xml)) {
+  if (!/^\uFEFF?\s*(?:<\?xml[^>]*>\s*)?<rss\b/i.test(xml)) {
     throw new Error("invalid feed response: body is not an RSS XML document");
   }
   const valid = XMLValidator.validate(xml);
   if (valid !== true) throw new Error("invalid feed response: malformed RSS XML");
-  return parseRss(xml);
+  const parsed = parseRssResponse(xml);
+  if (!parsed.feed) throw new Error("invalid feed response: RSS channel is missing or malformed");
+  return parsed.result;
 }
 
 function asText(v: unknown): string {

@@ -40,6 +40,29 @@ describe("parseRss", () => {
     expect(parseRss("not xml at all")).toEqual([]);
     expect(parseRss("<rss><channel><title>empty</title></channel></rss>")).toEqual([]);
   });
+
+  it("preserves provider item count and reports rows discarded by normalization", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(`<rss><channel>
+      <item><title>Usable news</title><link>https://news.example/story</link></item>
+      <item><title>Missing link</title></item>
+    </channel></rss>`, { status: 200 })));
+
+    await expect(fetchFeed("https://news.example/feed")).resolves.toMatchObject({
+      providerItemCount: 2,
+      malformedItemCount: 1,
+      items: [{ title: "Usable news", url: "https://news.example/story" }],
+    });
+  });
+
+  it("rejects an RSS root with no channel rather than reporting an empty feed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<rss><entry/></rss>", { status: 200 })));
+    await expect(fetchFeed("https://news.example/feed")).rejects.toThrow("RSS channel is missing or malformed");
+  });
+
+  it("rejects a non-empty scalar channel instead of reporting a valid empty feed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<rss><channel>provider error</channel></rss>", { status: 200 })));
+    await expect(fetchFeed("https://news.example/feed")).rejects.toThrow("RSS channel is missing or malformed");
+  });
 });
 
 describe("googleNewsUrl", () => {

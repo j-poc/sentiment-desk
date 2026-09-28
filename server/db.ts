@@ -762,29 +762,51 @@ export class Desk {
       ).map((row) => row.companyId)).size;
       const recentFailureCount = recent.filter((row) => ["failed", "rate_limited", "invalid"].includes(row.result)).length;
       const recentPartialCount = recent.filter((row) => row.result === "partial").length;
+      const degradedFilters = [
+        "collector = ?",
+        "completed_at >= ?",
+        "result IN ('failed', 'rate_limited', 'invalid', 'partial')",
+      ];
+      const degradedParams: Array<string | number> = [source.collector, now - dueAfterMs];
+      if (source.healthCompanyOnly) degradedFilters.push("company_id IS NOT NULL");
+      if (source.healthAdapterVersions != null) {
+        if (source.healthAdapterVersions.length === 0) degradedFilters.push("1 = 0");
+        else {
+          degradedFilters.push(`adapter_version IN (${source.healthAdapterVersions.map(() => "?").join(", ")})`);
+          degradedParams.push(...source.healthAdapterVersions);
+        }
+      }
+      const degradationRow: unknown = this.db.prepare(
+        `SELECT error FROM source_deliveries WHERE ${degradedFilters.join(" AND ")}
+         ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 1`,
+      ).get(...degradedParams);
+      const recentDegradationError = typeof degradationRow === "object" && degradationRow !== null &&
+        "error" in degradationRow && (degradationRow.error === null || typeof degradationRow.error === "string")
+        ? degradationRow.error : null;
       const observation = observationByCollector.get(source.collector);
+      const state = deliveryHealthState({
+        enabled: source.enabled,
+        hasDelivery: latest != null,
+        latestDeliveryAt: latest?.completedAt ?? null,
+        latestResult: latest?.result ?? null,
+        recentFailureCount,
+        recentPartialCount,
+        coverageCount,
+        targetCount: source.targetCount,
+        now,
+        intervalSeconds: source.intervalSeconds,
+      });
       return {
         collector: source.collector,
         enabled: source.enabled,
-        state: deliveryHealthState({
-          enabled: source.enabled,
-          hasDelivery: latest != null,
-          latestDeliveryAt: latest?.completedAt ?? null,
-          latestResult: latest?.result ?? null,
-          recentFailureCount,
-          recentPartialCount,
-          coverageCount,
-          targetCount: source.targetCount,
-          now,
-          intervalSeconds: source.intervalSeconds,
-        }),
+        state,
         intervalSeconds: source.intervalSeconds,
         targetCount: source.targetCount,
         coverageCount,
         latestDeliveryAt: latest?.completedAt ?? null,
         latestResult: latest?.result ?? null,
         latestItemCount: latest?.parsedItemCount ?? null,
-        latestError: latest?.error ?? null,
+        latestError: recentDegradationError ?? (state === "overdue" ? latest?.error ?? null : null),
         adapterVersion: latest?.adapterVersion ?? null,
         latestObservationAt: observation?.publisherPublishedAt ?? observation?.providerObservedAt ?? null,
         latestObservationBasis: observation?.timeBasis ?? null,
@@ -967,6 +989,18 @@ export class Desk {
         "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       )
       .run(key, value);
+  }
+
+  /** Atomically replace a group of cached facts so stale values are not mixed with a fresh response. */
+  setKvEntriesAtomically(entries: ReadonlyArray<readonly [string, string]>): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const [key, value] of entries) this.setKv(key, value);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   /** Atomically change persisted state and append its matching event. */

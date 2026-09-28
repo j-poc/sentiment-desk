@@ -16,6 +16,7 @@ export interface GdeltFetchResult {
   articles: GdeltArticle[];
   /** Number of rows returned by the provider before unusable rows are discarded. */
   providerResultCount: number;
+  malformedRowCount: number;
   requestedLimit: number;
   /** True when the provider may have omitted older matches at the requested cap. */
   saturated: boolean;
@@ -131,6 +132,7 @@ export async function fetchGdeltArticles(
   return {
     articles: out,
     providerResultCount,
+    malformedRowCount: providerResultCount - out.length,
     requestedLimit: maxRecords,
     saturated,
   };

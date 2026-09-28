@@ -27,6 +27,9 @@ export interface RedditClient {
 export interface RedditSearchResult {
   posts: RedditPost[];
   nextAfter: string | null;
+  /** Listing children returned by Reddit before unusable rows are discarded. */
+  providerChildCount: number;
+  malformedChildCount: number;
 }
 
 export class RedditPaginationRestartError extends Error {
@@ -78,7 +81,7 @@ interface ListingResponse {
         score?: number;
         num_comments?: number;
       };
-    }>;
+    } | null>;
   };
 }
 
@@ -127,10 +130,17 @@ export async function searchReddit(
   if (typeof rawAfter === "string" && rawAfter === opts.after) {
     throw new RedditPaginationRestartError("Reddit listing continuation did not advance");
   }
+  const children = body.data.children;
   const out: RedditPost[] = [];
-  for (const child of body.data?.children ?? []) {
-    const d = child.data;
-    if (!d?.id || !d.title || !d.permalink) continue;
+  let malformedChildCount = 0;
+  for (const child of children) {
+    const d = child?.data;
+    if (typeof d?.id !== "string" || d.id.trim() === ""
+      || typeof d.title !== "string" || d.title.trim() === ""
+      || typeof d.permalink !== "string" || d.permalink.trim() === "") {
+      malformedChildCount += 1;
+      continue;
+    }
     out.push({
       id: d.id,
       title: d.title,
@@ -146,5 +156,10 @@ export async function searchReddit(
       numComments: d.num_comments ?? 0,
     });
   }
-  return { posts: out, nextAfter: typeof rawAfter === "string" ? rawAfter : null };
+  return {
+    posts: out,
+    nextAfter: typeof rawAfter === "string" ? rawAfter : null,
+    providerChildCount: children.length,
+    malformedChildCount,
+  };
 }

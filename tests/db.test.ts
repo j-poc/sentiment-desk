@@ -425,6 +425,37 @@ describe("Desk observation and judgment storage", () => {
     }
   });
 
+  it("exposes the latest recent degradation when a later company delivery succeeded", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-degraded-error-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    const beta: Company = {
+      id: "beta", name: "Beta", ticker: "BETA", sector: "Technology", aliases: ["Beta"], color: "#654321",
+    };
+    const startedAt = Date.now() - 100;
+    try {
+      db.seedCompanies([company, beta]);
+      db.recordDelivery({
+        collector: "sec_edgar", companyId: company.id, requestKey: "alpha-failure", startedAt,
+        completedAt: startedAt + 1, result: "failed", parsedItemCount: 0,
+        adapterVersion: "sec-submissions/1", error: "Alpha SEC request failed",
+      });
+      db.recordDelivery({
+        collector: "sec_edgar", companyId: beta.id, requestKey: "beta-success", startedAt,
+        completedAt: startedAt + 2, result: "empty", parsedItemCount: 0,
+        adapterVersion: "sec-submissions/1",
+      });
+
+      expect(db.deliveryHealth([{
+        collector: "sec_edgar", enabled: true, intervalSeconds: 60, targetCount: 1,
+      }], startedAt + 50)[0]).toMatchObject({
+        state: "failed", latestResult: "empty", latestError: "Alpha SEC request failed",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not count Finnhub earnings receipts as company-news coverage", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-finnhub-coverage-"));
     directories.push(directory);

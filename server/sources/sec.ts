@@ -36,10 +36,21 @@ export async function fetchTickerCikMap(userAgent: string): Promise<Map<string, 
   });
   if (res.status === 429) throw new ProviderRateLimitError("sec", parseRetryAfterMs(res.headers.get("retry-after")), "SEC ticker directory HTTP 429");
   if (!res.ok) throw new Error(`SEC ticker directory HTTP ${res.status}`);
-  const body = (await res.json()) as Record<string, { cik_str: number; ticker: string; title: string }>;
+  const body: unknown = await res.json();
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new Error("SEC ticker directory returned an invalid response shape");
+  }
   const map = new Map<string, string>();
   for (const entry of Object.values(body)) {
-    map.set(entry.ticker.toUpperCase(), String(entry.cik_str).padStart(10, "0"));
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new Error("SEC ticker directory returned a malformed row");
+    }
+    const row = entry as Record<string, unknown>;
+    if (typeof row.ticker !== "string" || row.ticker.trim() === ""
+      || typeof row.cik_str !== "number" || !Number.isSafeInteger(row.cik_str) || row.cik_str <= 0) {
+      throw new Error("SEC ticker directory row is missing a valid ticker or CIK");
+    }
+    map.set(row.ticker.toUpperCase(), String(row.cik_str).padStart(10, "0"));
   }
   return map;
 }
@@ -65,20 +76,36 @@ export function parseRecent8Ks(
   sinceMs: number,
 ): SecFiling[] {
   const recent = body.filings?.recent;
-  if (!recent) return [];
-  const forms = recent.form ?? [];
+  if (!recent || !Array.isArray(recent.form)
+    || !Array.isArray(recent.filingDate)
+    || !Array.isArray(recent.acceptanceDateTime)
+    || !Array.isArray(recent.accessionNumber)
+    || !Array.isArray(recent.primaryDocument)) {
+    throw new Error("SEC submissions omitted required recent-filing arrays");
+  }
+  const forms = recent.form;
+  if ([recent.filingDate, recent.acceptanceDateTime, recent.accessionNumber, recent.primaryDocument]
+    .some((values) => values.length !== forms.length)) {
+    throw new Error("SEC submissions recent-filing arrays have inconsistent lengths");
+  }
   const out: SecFiling[] = [];
   for (let i = 0; i < forms.length; i++) {
     const form = forms[i];
+    if (typeof form !== "string") throw new Error("SEC submissions form array contains a malformed row");
     if (form !== "8-K" && form !== "8-K/A") continue;
     const acc = recent.accessionNumber?.[i];
     const acceptance = recent.acceptanceDateTime?.[i];
-    if (!acc || !acceptance) continue;
+    if (typeof acc !== "string" || acc.trim() === "" || typeof acceptance !== "string" || acceptance.trim() === "") {
+      throw new Error("SEC 8-K row is missing its accession number or acceptance timestamp");
+    }
     const acceptanceAt = Date.parse(acceptance);
-    if (!Number.isFinite(acceptanceAt) || acceptanceAt < sinceMs) continue;
+    if (!Number.isFinite(acceptanceAt)) throw new Error("SEC 8-K row has an invalid acceptance timestamp");
+    if (acceptanceAt < sinceMs) continue;
 
     const primaryDoc = recent.primaryDocument?.[i] ?? "";
-    const items = (recent.items?.[i] ?? "")
+    const rawItems = recent.items?.[i] ?? "";
+    if (typeof rawItems !== "string") throw new Error("SEC 8-K row contains malformed item codes");
+    const items = rawItems
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);

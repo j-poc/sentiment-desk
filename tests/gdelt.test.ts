@@ -71,6 +71,7 @@ describe("GDELT response boundary", () => {
         seenAt: Date.parse("2026-09-28T08:00:00.000Z"),
       }],
       providerResultCount: 1,
+      malformedRowCount: 0,
       requestedLimit: 250,
       saturated: false,
     });
@@ -88,6 +89,7 @@ describe("GDELT response boundary", () => {
     await expect(fetchGdeltArticles("Apple", 15_000, 2)).resolves.toMatchObject({
       articles: [{ title: "Apple update", url: "https://news.example/article" }],
       providerResultCount: 2,
+      malformedRowCount: 1,
       requestedLimit: 2,
       saturated: true,
     });

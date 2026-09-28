@@ -138,6 +138,39 @@ describe("optional provider rate limits", () => {
     }
   });
 
+  it("records a visible SEC delivery gap for watchlist companies without a CIK mapping", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies(companies);
+    const health = new HealthTracker(false, false, "unconfigured", true);
+    const fetchFilings = vi.fn(async () => []);
+    const control = startSecPoller({
+      companies,
+      cikByTicker: new Map([["ALPH", "0000000001"]]),
+      userAgent: "Sentiment Desk test@example.com",
+      pipeline: {} as Pipeline,
+      db,
+      health,
+      intervalSeconds: 120,
+      fetchFilings,
+    });
+
+    try {
+      await control.stop();
+      expect(fetchFilings).toHaveBeenCalledTimes(1);
+      expect(db.deliverySummary().find((row) => row.companyId === "beta" && row.adapterVersion === "sec-ticker-mapping/1"))
+        .toMatchObject({ result: "invalid", error: "BETA: no CIK mapping in the SEC ticker directory" });
+      expect(db.deliveryHealth([{
+        collector: "sec_edgar", enabled: true, intervalSeconds: 120, targetCount: 2,
+      }], Date.now())[0]).toMatchObject({
+        state: "failed", coverageCount: 1, targetCount: 2,
+        latestError: "BETA: no CIK mapping in the SEC ticker directory",
+      });
+      expect(health.snapshot().sec).toMatchObject({ fail: 1, lastError: "BETA: no CIK mapping in the SEC ticker directory" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("stops Finnhub backfill, earnings, and recent calls after the first 429", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies(companies);
@@ -160,6 +193,115 @@ describe("optional provider rate limits", () => {
     expect(providerCoolingDown(db, "finnhub")).toBe(true);
     expect(db.deliverySummary().filter((row) => row.collector === "finnhub")).toHaveLength(1);
     db.close();
+  });
+
+  it("replaces stale earnings dates atomically and exposes malformed news rows", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies(companies);
+    db.setKv("finnhub:earnings:alpha", "1790726400000");
+    db.setKv("finnhub:earnings:beta", "1790812800000");
+    const health = new HealthTracker(false, false, "unconfigured", false, true);
+    const control = startFinnhubPoller({
+      companies,
+      token: "test-token",
+      pipeline: { ingest: vi.fn(() => true) } as unknown as Pipeline,
+      db,
+      health,
+      intervalSeconds: 120,
+      backfillDays: 0,
+      fetchUpcomingEarnings: vi.fn(async () => new Map([[
+        "ALPH", Date.parse("2026-10-15T00:00:00.000Z"),
+      ]])),
+      fetchEarningsHistory: vi.fn(async () => []),
+      fetchNews: vi.fn(async (symbol: string) => symbol === "ALPH"
+        ? {
+          items: [{
+            headline: "Alpha Inc reports revenue growth",
+            summary: "",
+            source: "finnhub",
+            url: "https://news.example/alpha",
+            datetime: Date.now(),
+          }],
+          providerItemCount: 2,
+          malformedItemCount: 1,
+        }
+        : { items: [], providerItemCount: 1, malformedItemCount: 1 }),
+    });
+
+    try {
+      await control.stop();
+      expect(db.getKv("finnhub:earnings:alpha")).toBe(String(Date.parse("2026-10-15T00:00:00.000Z")));
+      expect(db.getKv("finnhub:earnings:beta")).toBe("");
+      expect(db.deliverySummary().find((row) => row.collector === "finnhub" && row.companyId === "alpha" && row.error === "Finnhub discarded 1 malformed news item"))
+        .toMatchObject({ result: "partial", parsedItemCount: 2, error: "Finnhub discarded 1 malformed news item" });
+      expect(db.deliveryHealth([{
+        collector: "finnhub", enabled: true, intervalSeconds: 120, targetCount: 2,
+        healthAdapterVersions: ["finnhub-news/1"],
+      }], Date.now())[0]).toMatchObject({ state: "failed", coverageCount: 0 });
+      expect(health.snapshot().finnhub).toMatchObject({ fail: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("backs off malformed Finnhub history scans and retries unresolved companies after restart", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-29T12:00:00.000Z"));
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-finnhub-backfill-"));
+    const databasePath = join(directory, "desk.db");
+    let db = new Desk(databasePath);
+    const gamma: Company = { id: "gamma", name: "Gamma Inc", ticker: "GAMM", sector: "Technology", aliases: ["Gamma"], color: "#456789" };
+    const backfillCompanies = [...companies, gamma];
+    db.seedCompanies(backfillCompanies);
+    const historicalRequests: string[] = [];
+    const fetchNews = vi.fn(async (_symbol: string, _token: string, days?: number) => {
+      if (days == null) return { items: [], providerItemCount: 0, malformedItemCount: 0 };
+      historicalRequests.push(_symbol);
+      const attempt = historicalRequests.filter((symbol) => symbol === _symbol).length;
+      if (_symbol === "ALPH" && attempt === 1) return { items: [], providerItemCount: 2, malformedItemCount: 2 };
+      if (_symbol === "GAMM" && attempt === 1) throw new Error("temporary Finnhub history failure");
+      return { items: [], providerItemCount: 0, malformedItemCount: 0 };
+    });
+    const start = (desk: Desk) => startFinnhubPoller({
+      companies: backfillCompanies,
+      token: "test-token",
+      pipeline: {} as Pipeline,
+      db: desk,
+      health: new HealthTracker(false, false, "unconfigured", false, true),
+      intervalSeconds: 120,
+      backfillDays: 14,
+      pause: async () => {},
+      fetchNews,
+      fetchUpcomingEarnings: vi.fn(async () => new Map()),
+      fetchEarningsHistory: vi.fn(async () => []),
+    });
+
+    try {
+      const firstRun = start(db);
+      await firstRun.stop();
+      expect(historicalRequests).toEqual(["ALPH", "BETA", "GAMM"]);
+      expect(Number(db.getKv("finnhub:backfill:14:alpha"))).toBeGreaterThan(Date.now());
+      expect(db.getKv("finnhub:backfill:14:beta")).toBe("complete");
+      expect(Number(db.getKv("finnhub:backfill:14:gamma"))).toBeGreaterThan(Date.now());
+      db.close();
+
+      db = new Desk(databasePath);
+      const backoffRun = start(db);
+      await backoffRun.stop();
+      expect(historicalRequests).toEqual(["ALPH", "BETA", "GAMM"]);
+      vi.setSystemTime(new Date("2026-09-29T12:16:00.000Z"));
+      const retryRun = start(db);
+      await retryRun.stop();
+      expect(historicalRequests).toEqual(["ALPH", "BETA", "GAMM", "ALPH", "GAMM"]);
+      expect(db.getKv("finnhub:backfill:14:alpha")).toBe("complete");
+      expect(db.getKv("finnhub:backfill:14:beta")).toBe("complete");
+      expect(db.getKv("finnhub:backfill:14:gamma")).toBe("complete");
+      expect(db.deliverySummary().find((row) => row.collector === "finnhub" && row.error === "Finnhub discarded 2 malformed news items"))
+        .toMatchObject({ result: "invalid", parsedItemCount: 2 });
+    } finally {
+      db.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("stops Reddit's search rotation after the first 429", async () => {
@@ -227,6 +369,78 @@ describe("optional provider rate limits", () => {
       await control.stop();
       expect(request).toHaveBeenCalledTimes(2);
       expect(ingest).toHaveBeenCalledWith(expect.objectContaining({ publishedAt: null }));
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reports malformed Reddit children as partial coverage", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const request = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }), {
+        status: 200, headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { children: [
+        { data: { id: "valid", title: "$ALPH revenue report", permalink: "/r/stocks/comments/valid/", selftext: "Alpha Inc reports growth" } },
+        { data: { id: "malformed", title: "$ALPH revenue report" } },
+      ], after: null } }), { status: 200, headers: { "content-type": "application/json" } }));
+    globalThis.fetch = request;
+    const health = new HealthTracker(false, false, "unconfigured", false, false, true);
+    const control = startRedditPoller({
+      companies: [companies[0]!],
+      creds: { clientId: "test-id", clientSecret: "test-secret" },
+      pipeline: { ingest: vi.fn(() => true) } as unknown as Pipeline,
+      db,
+      health,
+      intervalSeconds: 180,
+      pause: async () => {},
+    });
+
+    try {
+      await control.stop();
+      expect(db.deliveryHealth([{
+        collector: "reddit", enabled: true, intervalSeconds: 180, targetCount: 1,
+      }], Date.now())[0]).toMatchObject({
+        state: "partial", latestResult: "partial", latestItemCount: 2, coverageCount: 0,
+        latestError: "Reddit discarded 1 malformed listing item",
+      });
+      expect(health.snapshot().reddit).toMatchObject({ ok: 1, fail: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("marks a non-empty all-malformed Reddit page invalid", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const request = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }), {
+        status: 200, headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { children: [
+        { data: { id: "malformed", title: "", permalink: "/r/stocks/comments/malformed/" } },
+      ], after: null } }), { status: 200, headers: { "content-type": "application/json" } }));
+    globalThis.fetch = request;
+    const health = new HealthTracker(false, false, "unconfigured", false, false, true);
+    const control = startRedditPoller({
+      companies: [companies[0]!],
+      creds: { clientId: "test-id", clientSecret: "test-secret" },
+      pipeline: {} as Pipeline,
+      db,
+      health,
+      intervalSeconds: 180,
+      pause: async () => {},
+    });
+
+    try {
+      await control.stop();
+      expect(db.deliveryHealth([{
+        collector: "reddit", enabled: true, intervalSeconds: 180, targetCount: 1,
+      }], Date.now())[0]).toMatchObject({
+        state: "failed", latestResult: "invalid", latestItemCount: 1, coverageCount: 0,
+      });
+      expect(health.snapshot().reddit).toMatchObject({ ok: 0, fail: 1 });
     } finally {
       db.close();
     }
@@ -424,11 +638,11 @@ describe("optional provider rate limits", () => {
       urls.push(url);
       if (url.searchParams.has("next_token")) return new Response("invalid cursor", { status: 400 });
       if (urls.length === 1) {
-        return new Response(JSON.stringify({ data: [], meta: { newest_id: "200", next_token: "rejected-token" } }), {
+        return new Response(JSON.stringify({ data: [], meta: { newest_id: "200", next_token: "rejected-token", result_count: 0 } }), {
           status: 200, headers: { "content-type": "application/json" },
         });
       }
-      return new Response(JSON.stringify({ data: [], meta: { newest_id: "210" } }), {
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "210", result_count: 0 } }), {
         status: 200, headers: { "content-type": "application/json" },
       });
     });
@@ -476,7 +690,7 @@ describe("optional provider rate limits", () => {
     const tokens: unknown[] = [123, ""];
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
       urls.push(new URL(String(input)));
-      return new Response(JSON.stringify({ data: [], meta: { newest_id: "200", next_token: tokens.shift() } }), {
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "200", next_token: tokens.shift(), result_count: 0 } }), {
         status: 200, headers: { "content-type": "application/json" },
       });
     });
@@ -500,6 +714,38 @@ describe("optional provider rate limits", () => {
       expect(db.getKv("x:since:alpha")).toBe("150");
       expect(JSON.parse(db.getKv("x:since-state:alpha") ?? "{}")).toMatchObject({ sinceId: "150", query, maxResults: 25 });
       expect(db.deliverySummary().filter((row) => row.result === "invalid")).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("clears an X continuation when the provider repeats the same pagination token", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    const query = xQuery(companies[0]!);
+    db.setKv("x:since:alpha", "150");
+    db.setKv("x:since-state:alpha", JSON.stringify({ sinceId: "150", query, maxResults: 25 }));
+    db.setKv("x:pagination:alpha", JSON.stringify({
+      sinceId: "150", newestId: "200", nextToken: "repeat-token", page: 2, query, maxResults: 25,
+    }));
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      data: [], meta: { newest_id: "200", next_token: "repeat-token", result_count: 0 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const control = startXPoller({
+      bearer: "test-token",
+      companies: [companies[0]!],
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    });
+
+    try {
+      await control.stop();
+      expect(db.getKv("x:pagination:alpha")).toBe("");
+      expect(db.getKv("x:since:alpha")).toBe("150");
+      expect(db.deliverySummary().find((row) => row.collector === "x"))
+        .toMatchObject({ result: "invalid", error: "X API returned a non-advancing pagination token" });
     } finally {
       db.close();
     }
@@ -556,7 +802,7 @@ describe("optional provider rate limits", () => {
     let requestedUrl: URL | undefined;
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
       requestedUrl = new URL(String(input));
-      return new Response(JSON.stringify({ data: [], meta: { newest_id: "160" } }), {
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "160", result_count: 0 } }), {
         status: 200, headers: { "content-type": "application/json" },
       });
     });
@@ -582,6 +828,35 @@ describe("optional provider rate limits", () => {
     }
   });
 
+  it("does not advance X past a response with missing posts and a nonzero result count", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([companies[0]!]);
+    db.setKv("x:since:alpha", "150");
+    db.setKv("x:since-state:alpha", JSON.stringify({
+      sinceId: "150", query: xQuery(companies[0]!), maxResults: 25,
+    }));
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      meta: { newest_id: "200", result_count: 1 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const control = startXPoller({
+      bearer: "test-token",
+      companies: [companies[0]!],
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(true, false, "unconfigured"),
+      intervalSeconds: 180,
+    });
+
+    try {
+      await control.stop();
+      expect(db.getKv("x:since:alpha")).toBe("150");
+      expect(db.deliverySummary().find((row) => row.collector === "x"))
+        .toMatchObject({ result: "invalid", parsedItemCount: 0, error: "X API returned an invalid response: posts were omitted despite a nonzero result count" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("replays X recent search when a committed cursor is malformed", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies([companies[0]!]);
@@ -592,7 +867,7 @@ describe("optional provider rate limits", () => {
     let requestedUrl: URL | undefined;
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
       requestedUrl = new URL(String(input));
-      return new Response(JSON.stringify({ data: [], meta: { newest_id: "170" } }), {
+      return new Response(JSON.stringify({ data: [], meta: { newest_id: "170", result_count: 0 } }), {
         status: 200, headers: { "content-type": "application/json" },
       });
     });

@@ -13,7 +13,8 @@ import type { Company } from "../server/types.js";
 const directories: string[] = [];
 const databases: Desk[] = [];
 const emptyResult = (): GdeltFetchResult => ({
-  articles: [], providerResultCount: 0, requestedLimit: GDELT_ARTICLE_LIMIT, saturated: false,
+  articles: [], providerResultCount: 0, malformedRowCount: 0,
+  requestedLimit: GDELT_ARTICLE_LIMIT, saturated: false,
 });
 const company = (id: string, ticker: string): Company => ({
   id,
@@ -72,7 +73,8 @@ describe("GDELT delivery and source-wide cooldown", () => {
     await runImmediatePoll({
       companies: companies.slice(0, 1), pipeline, db, health, intervalSeconds: 60,
       fetchArticles: async () => ({
-        articles, providerResultCount: articles.length, requestedLimit: GDELT_ARTICLE_LIMIT, saturated: true,
+        articles, providerResultCount: articles.length, malformedRowCount: 0,
+        requestedLimit: GDELT_ARTICLE_LIMIT, saturated: true,
       }), now: () => Date.now(), pause: async () => {},
     });
 
@@ -98,7 +100,8 @@ describe("GDELT delivery and source-wide cooldown", () => {
     await runImmediatePoll({
       companies: companies.slice(0, 1), pipeline, db, health, intervalSeconds: 60,
       fetchArticles: async () => ({
-        articles, providerResultCount: GDELT_ARTICLE_LIMIT, requestedLimit: GDELT_ARTICLE_LIMIT, saturated: true,
+        articles, providerResultCount: GDELT_ARTICLE_LIMIT, malformedRowCount: 1,
+        requestedLimit: GDELT_ARTICLE_LIMIT, saturated: true,
       }), now: () => Date.now(), pause: async () => {},
     });
 
@@ -106,8 +109,59 @@ describe("GDELT delivery and source-wide cooldown", () => {
       collector: "gdelt_doc_api", enabled: true, intervalSeconds: 60, targetCount: 1,
     }], Date.now())[0]).toMatchObject({
       state: "partial", latestResult: "partial", latestItemCount: GDELT_ARTICLE_LIMIT,
-      latestError: `GDELT reached the requested ${GDELT_ARTICLE_LIMIT}-article limit; older matching articles may be omitted`,
+      latestError: `GDELT reached the requested ${GDELT_ARTICLE_LIMIT}-article limit; older matching articles may be omitted; GDELT discarded 1 malformed article row`,
     });
+  });
+
+  it("marks malformed rows partial below the cap so they cannot count as company coverage", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    const { db, companies, health, pipeline } = setup();
+    const articles: GdeltArticle[] = [{
+      title: "ACME Corporation quarterly results update",
+      url: "https://news.example/article",
+      domain: "news.example",
+      seenAt: Date.now(),
+    }];
+    await runImmediatePoll({
+      companies: companies.slice(0, 1), pipeline, db, health, intervalSeconds: 60,
+      fetchArticles: async () => ({
+        articles, providerResultCount: 2, malformedRowCount: 1,
+        requestedLimit: GDELT_ARTICLE_LIMIT, saturated: false,
+      }), now: () => Date.now(), pause: async () => {},
+    });
+
+    expect(db.deliveryHealth([{
+      collector: "gdelt_doc_api", enabled: true, intervalSeconds: 60, targetCount: 1,
+    }], Date.now())[0]).toMatchObject({
+      state: "partial", latestResult: "partial", latestItemCount: 2, coverageCount: 0,
+      latestError: "GDELT discarded 1 malformed article row",
+    });
+    expect(health.snapshot().gdelt).toMatchObject({ ok: 1, fail: 0 });
+  });
+
+  it("marks a response with no usable rows invalid rather than successful or empty", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T12:00:00.000Z"));
+    const { db, companies, health, pipeline } = setup();
+    await runImmediatePoll({
+      companies: companies.slice(0, 1), pipeline, db, health, intervalSeconds: 60,
+      fetchArticles: async () => ({
+        articles: [], providerResultCount: 2, malformedRowCount: 2,
+        requestedLimit: GDELT_ARTICLE_LIMIT, saturated: false,
+      }), now: () => Date.now(), pause: async () => {},
+    });
+
+    expect(db.deliveryHealth([{
+      collector: "gdelt_doc_api", enabled: true, intervalSeconds: 60, targetCount: 1,
+    }], Date.now())[0]).toMatchObject({
+      state: "failed", latestResult: "invalid", latestItemCount: 2, coverageCount: 0,
+      latestError: "GDELT discarded 2 malformed article rows",
+    });
+    expect(health.snapshot().gdelt).toMatchObject({ ok: 0, fail: 1 });
+    expect(db.recentEvents(1)).toContainEqual(expect.objectContaining({
+      level: "warn", source: "gdelt", message: "ACME: response contained no usable article rows",
+    }));
   });
 
   it("stops the current company sweep, survives restart, and resumes after cooldown", async () => {

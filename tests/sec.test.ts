@@ -38,6 +38,22 @@ describe("parseRecent8Ks", () => {
     expect(f?.acceptanceAt).toBe(Date.parse("2026-09-21T16:31:02.000Z"));
     expect(f?.primaryDocUrl).toContain("/Archives/edgar/data/1045810/000104581026000101/nvda-8k.htm");
   });
+
+  it("rejects misaligned recent-filing arrays instead of reporting no filings", () => {
+    const body = submissionsFixture() as { filings: { recent: { accessionNumber: string[] } } };
+    body.filings.recent.accessionNumber.pop();
+    expect(() => parseRecent8Ks(body as never, CIK, "NVDA", SINCE))
+      .toThrow("inconsistent lengths");
+  });
+
+  it("rejects a recent 8-K missing its acceptance timestamp", () => {
+    const body = submissionsFixture() as {
+      filings: { recent: { acceptanceDateTime: string[] } };
+    };
+    body.filings.recent.acceptanceDateTime[0] = "";
+    expect(() => parseRecent8Ks(body as never, CIK, "NVDA", SINCE))
+      .toThrow("missing its accession number or acceptance timestamp");
+  });
 });
 
 describe("eventForItems", () => {

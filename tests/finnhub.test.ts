@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { latestSurprise, type EarningsEntry } from "../server/sources/finnhub.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchFinnhubNews, fetchUpcomingEarnings, latestSurprise, type EarningsEntry } from "../server/sources/finnhub.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const entries: EarningsEntry[] = [
   { date: Date.parse("2026-06-12"), epsActual: 1.1, epsEstimate: 1.0, period: "2026-Q2" },
@@ -25,5 +27,29 @@ describe("latestSurprise", () => {
   it("returns null with no usable quarter", () => {
     expect(latestSurprise([{ date: Date.parse("2026-01-01"), epsActual: 1, epsEstimate: null, period: "Q" }])).toBeNull();
     expect(latestSurprise([])).toBeNull();
+  });
+});
+
+describe("Finnhub response integrity", () => {
+  it("retains raw news row counts when malformed entries are discarded", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([
+      { headline: "Valid headline", url: "https://news.example/story", datetime: 1_790_000_000 },
+      { headline: "Headline without URL" },
+    ]), { status: 200, headers: { "content-type": "application/json" } })));
+
+    await expect(fetchFinnhubNews("ACME", "test-token")).resolves.toMatchObject({
+      providerItemCount: 2,
+      malformedItemCount: 1,
+      items: [{ headline: "Valid headline", url: "https://news.example/story" }],
+    });
+  });
+
+  it("rejects malformed calendar rows instead of silently returning a partial map", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      earningsCalendar: [{ symbol: "ACME" }],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    await expect(fetchUpcomingEarnings("test-token", new Set(["ACME"])))
+      .rejects.toThrow("missing symbol or date");
   });
 });

@@ -43,6 +43,8 @@ interface ChartResponse {
   };
 }
 
+type ChartResult = NonNullable<NonNullable<ChartResponse["chart"]>["result"]>[number];
+
 // Yahoo throttles long browser-fingerprint UAs but serves the plain one.
 const UA = "Mozilla/5.0";
 
@@ -64,12 +66,31 @@ async function fetchChart(path: string, timeoutMs: number): Promise<unknown> {
   return res.json();
 }
 
+function chartResult(body: unknown): ChartResult | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new Error("Yahoo chart returned an invalid response shape");
+  }
+  const chart = (body as Record<string, unknown>).chart;
+  if (typeof chart !== "object" || chart === null || Array.isArray(chart)) {
+    throw new Error("Yahoo chart response omitted chart metadata");
+  }
+  const chartObject = chart as Record<string, unknown>;
+  if (chartObject.error != null) throw new Error("Yahoo chart provider returned an error");
+  if (!Array.isArray(chartObject.result)) throw new Error("Yahoo chart response omitted its result list");
+  if (chartObject.result.length === 0) return null;
+  const result = chartObject.result[0];
+  if (typeof result !== "object" || result === null || Array.isArray(result)) {
+    throw new Error("Yahoo chart response contains an invalid result row");
+  }
+  return result as ChartResult;
+}
+
 export async function fetchQuote(ticker: string, timeoutMs = 10_000): Promise<Quote> {
-  const body = (await fetchChart(
+  const body = await fetchChart(
     `/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5d&includePrePost=false`,
     timeoutMs,
-  )) as ChartResponse;
-  const meta = body.chart?.result?.[0]?.meta;
+  );
+  const meta = chartResult(body)?.meta;
   const price = meta?.regularMarketPrice;
   const prev = meta?.chartPreviousClose ?? meta?.previousClose;
   if (price == null || !Number.isFinite(price) || price <= 0
@@ -100,18 +121,32 @@ export async function fetchPriceSeries(
   timeoutMs = 10_000,
 ): Promise<PricePoint[]> {
   const { range, interval } = seriesRangeFor(hours);
-  const body = (await fetchChart(
+  const body = await fetchChart(
     `/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}&includePrePost=false`,
     timeoutMs,
-  )) as ChartResponse;
-  const result = body.chart?.result?.[0];
-  const ts = result?.timestamp ?? [];
-  const closes = result?.indicators?.quote?.[0]?.close ?? [];
+  );
+  const result = chartResult(body);
+  if (result === null) return [];
+  const ts = result.timestamp;
+  const closes = result.indicators?.quote?.[0]?.close;
+  if (!Array.isArray(ts) || !Array.isArray(closes)) {
+    throw new Error("Yahoo chart result omitted timestamp or close arrays");
+  }
+  if (ts.length !== closes.length) {
+    throw new Error("Yahoo chart timestamp and close arrays have inconsistent lengths");
+  }
   const out: PricePoint[] = [];
   for (let i = 0; i < ts.length; i++) {
+    const rawTimestamp = ts[i];
     const c = closes[i];
-    const t = (ts[i] ?? 0) * 1000;
-    if (c != null && Number.isFinite(c) && c > 0 && Number.isFinite(t) && t > 0) out.push({ t, price: c });
+    if (typeof rawTimestamp !== "number" || !Number.isFinite(rawTimestamp) || rawTimestamp <= 0) {
+      throw new Error("Yahoo chart result contains an invalid timestamp");
+    }
+    if (c == null) continue;
+    if (typeof c !== "number" || !Number.isFinite(c) || c <= 0) {
+      throw new Error("Yahoo chart result contains an invalid close value");
+    }
+    out.push({ t: rawTimestamp * 1000, price: c });
   }
   return out;
 }

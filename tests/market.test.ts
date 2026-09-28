@@ -6,7 +6,7 @@ import { Desk } from "../server/db.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { MarketData } from "../server/market.js";
-import { fetchQuote } from "../server/sources/quotes.js";
+import { fetchPriceSeries, fetchQuote } from "../server/sources/quotes.js";
 import type { Company } from "../server/types.js";
 
 const company: Company = {
@@ -40,6 +40,22 @@ function market(db: Desk, externalRequestsEnabled = true) {
 }
 
 describe("market quote provenance", () => {
+  it("rejects malformed Yahoo chart payloads instead of caching them as empty", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      chart: { result: null, error: null },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(fetchPriceSeries("ACME", 24)).rejects.toThrow("omitted its result list");
+  });
+
+  it("rejects misaligned Yahoo timestamps and close values", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      chart: { result: [{ timestamp: [1, 2], indicators: { quote: [{ close: [125] }] } }], error: null },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(fetchPriceSeries("ACME", 24)).rejects.toThrow("inconsistent lengths");
+  });
+
   it("honors Yahoo Retry-After without retrying a rejected request", async () => {
     const request = vi.fn(async () => new Response("rate limited", {
       status: 429,

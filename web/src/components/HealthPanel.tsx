@@ -27,30 +27,30 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
       )}
 
       <div className="mt-3 border-t border-white/[0.05] pt-2.5">
-        <Row label="rss news" value={!health.externalRequestsEnabled ? "paused (offline mode)" : `${rss.ok} ok / ${rss.fail} fail · ${timeAgo(rss.lastOkAt)}`} />
+        <Row label="rss news" value={!health.externalRequestsEnabled ? "paused (offline mode)" : rss.enabled ? `${rss.ok} ok / ${rss.fail} fail · ${timeAgo(rss.lastOkAt)}` : "off (configuration)"} />
         <Row
           label="gdelt news"
           value={!health.externalRequestsEnabled ? "paused (offline mode)" : gdelt.enabled ? `${gdelt.ok} ok / ${gdelt.fail} fail · ${timeAgo(gdelt.lastOkAt)}` : "disabled (source allowlist)"}
         />
         <Row
           label="x api"
-          value={!health.externalRequestsEnabled ? "paused (offline mode)" : x.enabled ? `${x.ok} ok / ${x.fail} fail · ${timeAgo(x.lastOkAt)}` : "disabled (no token)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : x.enabled ? `${x.ok} ok / ${x.fail} fail · ${timeAgo(x.lastOkAt)}` : "off (configuration)"}
         />
         <Row
           label="quotes"
-          value={!health.externalRequestsEnabled ? "paused (offline mode)" : `${health.health.quotes.ok} ok / ${health.health.quotes.fail} fail · ${timeAgo(health.health.quotes.lastOkAt)}`}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.quotes.enabled ? `${health.health.quotes.ok} ok / ${health.health.quotes.fail} fail · ${timeAgo(health.health.quotes.lastOkAt)}` : "off (configuration)"}
         />
         <Row
           label="sec edgar"
-          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.sec.enabled ? `${health.health.sec.ok} ok / ${health.health.sec.fail} fail · ${timeAgo(health.health.sec.lastOkAt)}` : "off (no UA)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.sec.enabled ? `${health.health.sec.ok} ok / ${health.health.sec.fail} fail · ${timeAgo(health.health.sec.lastOkAt)}` : "off (configuration)"}
         />
         <Row
           label="finnhub"
-          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.finnhub.enabled ? `${health.health.finnhub.ok} ok / ${health.health.finnhub.fail} fail · ${timeAgo(health.health.finnhub.lastOkAt)}` : "off (no key)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.finnhub.enabled ? `${health.health.finnhub.ok} ok / ${health.health.finnhub.fail} fail · ${timeAgo(health.health.finnhub.lastOkAt)}` : "off (configuration)"}
         />
         <Row
           label="reddit"
-          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.reddit.enabled ? `${health.health.reddit.ok} ok / ${health.health.reddit.fail} fail · ${timeAgo(health.health.reddit.lastOkAt)}` : "off (no app)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.reddit.enabled ? `${health.health.reddit.ok} ok / ${health.health.reddit.fail} fail · ${timeAgo(health.health.reddit.lastOkAt)}` : "off (configuration)"}
         />
         <Row label="sse clients" value={String(health.sseClients)} />
         <Row label="uptime" value={`${Math.max(1, Math.floor(health.uptimeSec / 60))}m`} />
@@ -68,12 +68,26 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
             ? delivery.latestObservationBasis === "unknown" || delivery.latestObservationBasis === "legacy_unknown" ? "source time unknown" : "no stored item"
             : `${delivery.latestObservationBasis === "provider_observed" ? "seen" : "published"} ${timeAgo(delivery.latestObservationAt)}`;
           return (
-            <div key={delivery.collector}
-              className="flex items-baseline gap-2 py-[2px] text-[10.5px]" title={delivery.latestError ?? delivery.adapterVersion ?? undefined}>
-              <span className="min-w-0 flex-1 truncate text-white/45">{name}</span>
-              <span className={`w-16 shrink-0 text-right uppercase ${color}`}>{delivery.state}</span>
-              <span className="tabnum shrink-0 text-white/30">{delivery.latestDeliveryAt == null ? "no delivery" : timeAgo(delivery.latestDeliveryAt)}</span>
-              <span className="w-32 shrink-0 truncate text-right text-white/30">{evidenceLabel}</span>
+            <div key={delivery.collector} className="py-[2px]" title={delivery.adapterVersion ?? undefined}>
+              <div className="flex items-baseline gap-2 text-[10.5px]">
+                <span className="min-w-0 flex-1 truncate text-white/45">{name}</span>
+                <span className={`w-16 shrink-0 text-right uppercase ${color}`}>{delivery.state}</span>
+                <span className="tabnum shrink-0 text-white/30">{delivery.latestDeliveryAt == null ? "no delivery" : timeAgo(delivery.latestDeliveryAt)}</span>
+                <span className="w-32 shrink-0 truncate text-right text-white/30">{evidenceLabel}</span>
+              </div>
+              <div className="ml-1 flex items-baseline justify-between gap-2 text-[9px] text-white/25">
+                <span>recent coverage {delivery.coverageCount}/{delivery.targetCount} companies</span>
+                <span>{delivery.latestItemCount == null ? "no response" : `${delivery.latestItemCount} provider rows`}</span>
+              </div>
+              {delivery.latestError && (delivery.state === "partial" || delivery.state === "failed" || delivery.state === "overdue") && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className={`ml-1 mt-0.5 clamp-2 text-[9.5px] ${delivery.state === "failed" ? "text-red-300/75" : "text-amber-200/75"}`}
+                >
+                  {delivery.latestError}
+                </div>
+              )}
             </div>
           );
         })}
