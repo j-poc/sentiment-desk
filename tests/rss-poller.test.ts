@@ -14,6 +14,33 @@ const companies: Company[] = [
 afterEach(() => vi.restoreAllMocks());
 
 describe("RSS rate-limit recovery", () => {
+  it("runs only the RSS collector explicitly named in the allowlist", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies(companies);
+    const requests: string[] = [];
+    const fetchFeed = vi.fn(async (url: string) => {
+      requests.push(url);
+      return [];
+    });
+    const control = startRssPoller({
+      companies,
+      pipeline: {} as Pipeline,
+      db,
+      health: new HealthTracker(false, false, "unconfigured"),
+      intervalSeconds: 120,
+      concurrency: 1,
+      enabledCollectors: new Set(["google_news_rss"]),
+      fetchFeed,
+      pause: async () => {},
+    });
+    await control.stop();
+
+    expect(requests).toHaveLength(companies.length);
+    expect(requests.every((url) => url.includes("news.google.com"))).toBe(true);
+    expect(db.deliverySummary().every((row) => row.collector === "google_news_rss")).toBe(true);
+    db.close();
+  });
+
   it("stops only the rate-limited provider's sweep and persists its cooldown", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies(companies);

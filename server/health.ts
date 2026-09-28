@@ -3,6 +3,7 @@
  * restart; the durable record lives in the events table. The dashboard treats
  * health as first-class UI: a quiet failure must be visible, not silent.
  */
+import type { CollectorId } from "./types.js";
 
 export interface SourceCounters {
   enabled: boolean;
@@ -43,14 +44,17 @@ export class HealthTracker {
     finnhubEnabled = false,
     redditEnabled = false,
     externalRequestsEnabled = true,
+    externalCollectors?: ReadonlySet<CollectorId>,
   ) {
+    const collectorEnabled = (collector: CollectorId) =>
+      externalRequestsEnabled && (externalCollectors == null || externalCollectors.has(collector));
     this.externalRequestsEnabled = externalRequestsEnabled;
-    this.rss = fresh(externalRequestsEnabled);
-    this.x = fresh(externalRequestsEnabled && xEnabled);
-    this.quotes = fresh(externalRequestsEnabled);
-    this.sec = fresh(externalRequestsEnabled && secEnabled);
-    this.finnhub = fresh(externalRequestsEnabled && finnhubEnabled);
-    this.reddit = fresh(externalRequestsEnabled && redditEnabled);
+    this.rss = fresh(collectorEnabled("google_news_rss") || collectorEnabled("yahoo_finance_rss"));
+    this.x = fresh(collectorEnabled("x") && xEnabled);
+    this.quotes = fresh(collectorEnabled("yahoo_quote"));
+    this.sec = fresh(collectorEnabled("sec_edgar") && secEnabled);
+    this.finnhub = fresh(collectorEnabled("finnhub") && finnhubEnabled);
+    this.reddit = fresh(collectorEnabled("reddit") && redditEnabled);
     this.jev = { ...fresh(externalRequestsEnabled && jevEnabled), model: jevModel };
   }
 

@@ -44,7 +44,24 @@ for the retry attempt, and observed zero outbound fetches. Its empty temporary
 database contains no sample observations; it uses only the configured company
 universe.
 
-The latest `npm test` passes 151 tests across 24 files; typecheck and production
+The same verifier now launches nine additional isolated app processes, one for
+each source collector, with the global switch on and only that collector in the
+source allowlist. It checks the matching delivery/health state and expected
+request path while a preload intercepts global `fetch` before network access.
+The Yahoo quote and chart routes are verified separately. All nine probes
+passed without external network access or Jev credentials. These checks prove
+request gates and routing; they do not establish source rights or provider
+response correctness.
+
+Live requests now require two separate controls: the global
+`EXTERNAL_REQUESTS_ENABLED=true` switch and a non-empty
+`EXTERNAL_SOURCE_COLLECTORS` allowlist. Yahoo quote and chart requests are
+separate entries, and RSS polling schedules only the allowed feed collectors.
+The Jev forwarding allowlist remains separate. This permits a later SEC-only
+collection/evaluation path without starting publisher feeds or Yahoo market
+requests whose endpoint-specific rights remain open.
+
+The latest `npm test` passes 156 tests across 24 files; typecheck and production
 build pass, with the existing Vite chunk-size advisory. The failed-row drawer
 now hides retry controls until both external requests and Jev are enabled, and
 its health-state helper has direct regression coverage. An independent
@@ -94,9 +111,10 @@ backup of the local database, with all external requests disabled. It is a
 saved-data inspection session, not a live collector or Jev runtime. Failed-row
 retry actions are hidden until health confirms both Jev and external requests
 are enabled. The original database was not changed. This checkpoint passes
-151 tests across 24 files, typecheck, production build, the fresh-process
-offline startup check, the named loopback-only browser check, and an
-independent read-only retry-gating review.
+156 tests across 24 files, typecheck, production build, the fresh-process
+saved-data startup check, all nine guarded collector-startup probes, the named
+loopback-only browser check, and independent read-only reviews of retry and
+source gates.
 
 Fresh application launches now default to saved-data-only mode. The Compose
 configuration follows the same default, and live provider traffic requires
@@ -907,6 +925,6 @@ Phase 2 consumer.
 - [x] Add saved-data-only production mode, verify stock selection and the
   sentiment/price chart against persisted records, and suppress failed-row Jev
   retry actions until external requests and Jev are confirmed enabled.
-- [x] Record 151 passing tests, typecheck, production build, named browser
-  network evidence, an independent retry-gating review, and fresh-process
-  saved-data-only startup proof for the latest checkpoint.
+- [x] Record 156 passing tests, typecheck, production build, named browser
+  network evidence, an independent retry-gating review, fresh-process
+  saved-data-only startup proof, and the source-specific request allowlist.

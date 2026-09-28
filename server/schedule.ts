@@ -1,4 +1,4 @@
-import type { Company } from "./types.js";
+import type { CollectorId, Company } from "./types.js";
 import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Pipeline } from "./pipeline.js";
@@ -34,6 +34,7 @@ export function startRssPoller(deps: {
   health: HealthTracker;
   intervalSeconds: number;
   concurrency: number;
+  enabledCollectors?: ReadonlySet<CollectorId>;
   fetchFeed?: typeof fetchFeed;
   pause?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -57,8 +58,12 @@ export function startRssPoller(deps: {
         provider: "google_news" | "yahoo";
       }> = [];
       for (const company of deps.companies) {
-        feeds.push({ company, url: googleNewsUrl(company), fallbackName: company.name, collector: "google_news_rss", provider: "google_news" });
-        feeds.push({ company, url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance", collector: "yahoo_finance_rss", provider: "yahoo" });
+        if (deps.enabledCollectors == null || deps.enabledCollectors.has("google_news_rss")) {
+          feeds.push({ company, url: googleNewsUrl(company), fallbackName: company.name, collector: "google_news_rss", provider: "google_news" });
+        }
+        if (deps.enabledCollectors == null || deps.enabledCollectors.has("yahoo_finance_rss")) {
+          feeds.push({ company, url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance", collector: "yahoo_finance_rss", provider: "yahoo" });
+        }
       }
       const pausedThisCycle = new Set<RateLimitedProvider>();
       let next = 0;

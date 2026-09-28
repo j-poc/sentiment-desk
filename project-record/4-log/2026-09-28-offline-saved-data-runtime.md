@@ -13,7 +13,7 @@ using generated content.
 ## Implementation
 
 - `EXTERNAL_REQUESTS_ENABLED` is strictly parsed as `true` or `false`, defaults
-to `true`, and rejects malformed values.
+to `false`, and rejects malformed values.
 - With the setting `false`, startup skips the SEC ticker lookup, Jev dispatch
 and retry poller, quote poller, and all source pollers. Manual scoring remains
 unavailable. Market price requests read persisted SQLite points only and are
@@ -170,3 +170,49 @@ copy above. It does not update or serve from the original local database.
   build), `docker compose config -q`, shell syntax check, JSON parse, and
   `git diff --check` all passed. Vite reported its existing 531.60 kB chunk
   advisory. No live source, market-data, or Jev request was made.
+
+## Per-source request allowlist and credential-read isolation — 2026-09-28
+
+- Added `EXTERNAL_SOURCE_COLLECTORS`, a separate empty-by-default allowlist.
+  Live source requests now require both this allowlist and
+  `EXTERNAL_REQUESTS_ENABLED=true`; Google and Yahoo RSS are filtered
+  independently, and Yahoo quote and chart requests use separate allowlist
+  entries. Delivery health reports disabled collectors honestly. Jev input
+  admission remains controlled separately by `TYPESAFE_ALLOWED_COLLECTORS`.
+- This enables the planned narrow SEC-only path without starting unverified
+  publisher feeds or Yahoo quote/chart endpoints. It does not establish those
+  feeds' rights or clear the SEC/TypeSafe approval gates. The live Compose
+  smoke names its required collector allowlist but was not executed.
+- Independent review of the offline verifier found that config eagerly read
+  `~/.newsjack/.env` even when `TYPESAFE_API_KEY` was explicitly set. Key
+  resolution is now lazy; unit coverage proves the fallback reader is not
+  called for either non-empty or explicitly empty env values. The verifier
+  supplies a placeholder key and runs from a fresh cwd, so it cannot read the
+  developer fallback credential file.
+- Tightened verifier cleanup so setup failures also remove temporary state,
+  and a child that misses graceful shutdown is killed before cleanup. Added
+  focused tests for collector-list validation, one-feed RSS scheduling, and
+  independent market quote/chart gates.
+- Final verification after the changes: **156 tests passed across 24 files**,
+  typecheck, `npm run verify:offline-startup` including the production build,
+  Compose validation, shell syntax, JSON parsing, and `git diff --check` passed.
+  The verifier's guard saw zero external fetches. No provider/model requests
+  were made; the existing Vite 531.60 kB advisory remains.
+- The offline verifier now also starts one fresh isolated process for each of
+  the nine real source collectors with only that collector allowlisted. It
+  checks the collector's expected external URL shape, confirms every other
+  source's delivery gate remains disabled, and checks the matching health
+  counter where one exists. A preload replaces global `fetch` before the app
+  imports and throws before any network access; the only local requests are
+  loopback health and the explicit Yahoo chart route. Yahoo quote and chart
+  paths are distinguished by their interval/range parameters. Each process
+  uses a temporary SQLite file, one company copied from the configured real
+  watchlist, blank Jev credentials/allowlist, and placeholder source
+  credentials. All nine probes passed. This verifies request gating and
+  routing only, not live source contracts, authorization, data quality, or
+  Jev performance.
+- A fresh independent reviewer reran the production build and complete offline
+  verifier, including all nine isolated source probes, and reported no
+  actionable defect. The review independently confirmed the README, Compose,
+  and smoke-script defaults are consistent. Its conclusion remains bounded to
+  these guarded fetch paths and does not clear live data or release gates.

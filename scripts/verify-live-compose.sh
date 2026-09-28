@@ -25,6 +25,7 @@ services:
       PORT: "8787"
       DB_PATH: /app/data/desk.db
       EXTERNAL_REQUESTS_ENABLED: "true"
+      EXTERNAL_SOURCE_COLLECTORS: "google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart"
       TYPESAFE_API_KEY: ""
       FINNHUB_API_KEY: ""
       REDDIT_CLIENT_ID: ""

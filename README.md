@@ -18,12 +18,13 @@ fact-checking.
 - **Mentions**: Google News RSS, Yahoo Finance headline RSS, and GDELT DOC 2.0
   are keyless collectors; their live availability can vary. SEC EDGAR company
   submissions and filing text are collected using the configured watchlist.
-  Optional Finnhub, Reddit, and X collectors start only with their credentials.
+  Optional Finnhub, Reddit, and X collectors start only when both their
+  credentials and matching external-source allowlist entries are configured.
   Every item keeps publisher identity, source identity, and source, provider,
   retrieval, and ingestion clocks separately. Missing source time stays
   unknown.
-- **Market data**: Yahoo Finance chart endpoints supply quotes and historical
-  price context. Quote currency, provider observation time, retrieval time,
+- **Market data**: explicitly allowlisted Yahoo Finance endpoints supply quotes
+  and historical price context. Quote currency, provider observation time, retrieval time,
   and cache/network state stay separate. Quotes older than 15 minutes, or
   quotes without an observation time, are visibly marked in the tape,
   watchlist, and selected-company header. Price charts plot only actual
@@ -86,13 +87,15 @@ collector IDs are `google_news_rss`, `yahoo_finance_rss`, `gdelt_doc_api`,
 `sec_edgar`, `finnhub`, `reddit`, and `x`. The request-byte cap conservatively
 bounds the serialized input volume; the stored cost estimate still uses
 provider-reported input tokens. Hard maxima are 100 request attempts and
-400,000 serialized bytes per UTC day. No source is allowed by default.
+400,000 serialized bytes per UTC day. No source can be sent to Jev by default.
 
 The SEC's [EDGAR reuse FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions)
 states public filing content is free to access and reuse, subject to SEC
 policies and fair-access limits. This is the only currently documented narrow
 source path for a first real-source Jev evaluation; configure a descriptive
-`SEC_USER_AGENT` and use only `sec_edgar` in the allowlist for that evaluation.
+`SEC_USER_AGENT`, set `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` to collect only
+EDGAR filings, and separately set `TYPESAFE_ALLOWED_COLLECTORS=sec_edgar` to
+allow those filings to be sent to Jev for that evaluation.
 Real-source Jev accuracy has not been evaluated: all current live observations
 remain pending, and synthetic checks establish integration only. The frozen
 labeling, sampling, metrics, and pass/fail rules are in
@@ -113,11 +116,18 @@ npm run dev                # saved real data only by default on :8787
 ```
 
 After applicable source and account terms are confirmed, explicitly opt in to
-live provider traffic:
+live provider traffic and allow only the cleared source:
 
 ```bash
-EXTERNAL_REQUESTS_ENABLED=true npm run dev
+EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar npm run dev
 ```
+
+Set a descriptive `SEC_USER_AGENT` in `.env` before using the SEC-only example.
+The global opt-in pauses every external request by default; even after it is
+enabled, only collectors listed in `EXTERNAL_SOURCE_COLLECTORS` can poll or
+fetch charts. Credentials alone do not enable a collector. Keep publisher feeds
+and Yahoo quote/chart endpoints out of that list until their exact use rights
+are established.
 
 Production:
 
@@ -131,10 +141,11 @@ npm start                  # one process serves API + UI on :8787
 Docker Compose builds the server and dashboard from source and stores SQLite
 history in a named volume. It defaults to saved-data-only mode. After applicable
 source and account terms are confirmed, set `EXTERNAL_REQUESTS_ENABLED=true`
-to start news and market-data collectors. Jev remains disabled unless its key,
-explicit collector allowlist, and finite daily budgets are configured.
-Optional Finnhub, Reddit, and X keys enable those additional collectors; their
-use and forwarding rights must be verified separately.
+and a source-by-source `EXTERNAL_SOURCE_COLLECTORS` allowlist. For example,
+`EXTERNAL_SOURCE_COLLECTORS=sec_edgar` enables SEC filings only; Jev remains
+separately disabled unless its key, `TYPESAFE_ALLOWED_COLLECTORS`, and finite
+daily budgets are configured. Optional Finnhub, Reddit, and X credentials do
+not enable those sources unless they are also allowlisted.
 
 ```bash
 docker compose up --build
@@ -143,7 +154,7 @@ docker compose up --build
 To explicitly enable live source polling:
 
 ```bash
-EXTERNAL_REQUESTS_ENABLED=true docker compose up --build
+EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar docker compose up --build
 ```
 
 Docker Compose 2.24 or newer is required for optional `.env` loading ([Compose
@@ -179,6 +190,7 @@ its temporary volume.
 | `TYPESAFE_API_KEY` | — | Jev credentials; local Node also checks `~/.newsjack/.env`. A key alone does not enable scoring. Set an explicit empty value to disable fallback. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
 | `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and Jev requests; the default serves saved local data only. |
+| `EXTERNAL_SOURCE_COLLECTORS` | empty | Comma-separated real collectors permitted to make network requests; examples include `sec_edgar`, `google_news_rss`, `yahoo_quote`, and `yahoo_chart`. Empty means no source polling or remote chart requests. |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
 | `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated, source-specific Jev admission list; no collectors allowed by default |
 | `TYPESAFE_MAX_REQUESTS_PER_DAY` | `0` | hard cap on Jev request attempts per UTC day; `0` disables dispatch |

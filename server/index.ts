@@ -19,6 +19,7 @@ import {
 } from "./schedule.js";
 import type { SchedulerControl } from "./scheduler.js";
 import { fetchTickerCikMap } from "./sources/sec.js";
+import type { CollectorId } from "./types.js";
 
 /**
  * Boot order matters: DB first (schema + seed), then pipeline, then HTTP, then
@@ -31,6 +32,8 @@ async function main(): Promise<void> {
   const companies = loadCompanies();
   const db = new Desk(config.dbPath);
   db.seedCompanies(companies);
+  const collectorEnabled = (collector: CollectorId) =>
+    config.externalRequestsEnabled && config.externalSourceCollectors.has(collector);
   const jevDispatchEnabled = config.externalRequestsEnabled && config.jev.apiKey !== "" &&
     config.jev.allowedCollectors.size > 0 &&
     config.jev.maxRequestsPerDay > 0 &&
@@ -45,12 +48,15 @@ async function main(): Promise<void> {
     config.finnhubKey !== "",
     config.redditClientId !== "" && config.redditClientSecret !== "",
     config.externalRequestsEnabled,
+    config.externalSourceCollectors,
   );
 
   // Resolve CIKs once at boot; SEC source degrades gracefully if this fails.
   let cikByTicker = new Map<string, string>();
   if (!config.externalRequestsEnabled) {
     console.log("[desk] sec edgar paused: external requests are disabled");
+  } else if (!config.externalSourceCollectors.has("sec_edgar")) {
+    console.log("[desk] sec edgar paused: add sec_edgar to EXTERNAL_SOURCE_COLLECTORS to allow this source");
   } else if (config.secUserAgent) {
     try {
       cikByTicker = await fetchTickerCikMap(config.secUserAgent);
@@ -113,6 +119,8 @@ async function main(): Promise<void> {
     health,
     db,
     externalRequestsEnabled: config.externalRequestsEnabled,
+    quoteRequestsEnabled: collectorEnabled("yahoo_quote"),
+    chartRequestsEnabled: collectorEnabled("yahoo_chart"),
   });
   const secWatchlistCount = companies.filter((company) => cikByTicker.has(company.ticker)).length;
 
@@ -131,35 +139,39 @@ async function main(): Promise<void> {
     health,
     version: VERSION,
     deliverySources: [
-      { collector: "google_news_rss", enabled: config.externalRequestsEnabled, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
-      { collector: "yahoo_finance_rss", enabled: config.externalRequestsEnabled, intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
-      { collector: "gdelt_doc_api", enabled: config.externalRequestsEnabled, intervalSeconds: config.pollGdeltSeconds, targetCount: companies.length },
-      { collector: "sec_edgar", enabled: config.externalRequestsEnabled && secWatchlistCount > 0, intervalSeconds: config.pollSecSeconds, targetCount: secWatchlistCount },
-      { collector: "finnhub", enabled: config.externalRequestsEnabled && config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length },
-      { collector: "reddit", enabled: config.externalRequestsEnabled && config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
-      { collector: "x", enabled: config.externalRequestsEnabled && config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },
-      { collector: "yahoo_quote", enabled: config.externalRequestsEnabled, intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length },
+      { collector: "google_news_rss", enabled: collectorEnabled("google_news_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
+      { collector: "yahoo_finance_rss", enabled: collectorEnabled("yahoo_finance_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
+      { collector: "gdelt_doc_api", enabled: collectorEnabled("gdelt_doc_api"), intervalSeconds: config.pollGdeltSeconds, targetCount: companies.length },
+      { collector: "sec_edgar", enabled: collectorEnabled("sec_edgar") && secWatchlistCount > 0, intervalSeconds: config.pollSecSeconds, targetCount: secWatchlistCount },
+      { collector: "finnhub", enabled: collectorEnabled("finnhub") && config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length },
+      { collector: "reddit", enabled: collectorEnabled("reddit") && config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
+      { collector: "x", enabled: collectorEnabled("x") && config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },
+      { collector: "yahoo_quote", enabled: collectorEnabled("yahoo_quote"), intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length },
+      { collector: "yahoo_chart", enabled: collectorEnabled("yahoo_chart"), intervalSeconds: config.pollQuotesSeconds, targetCount: companies.length },
     ],
   });
 
   const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
 
-  // Quotes are read-only market context, but still require an enabled provider request mode.
+  // Read-only quote context still requires global opt-in and the Yahoo quote allowlist entry.
   const schedulers: SchedulerControl[] = [];
   if (config.externalRequestsEnabled) {
-    schedulers.push(startQuotesPoller({ market, db, intervalSeconds: config.pollQuotesSeconds }));
+    if (collectorEnabled("yahoo_quote")) {
+      schedulers.push(startQuotesPoller({ market, db, intervalSeconds: config.pollQuotesSeconds }));
+    }
     if (judge) schedulers.push(startJevRetryPoller(pipeline));
-    schedulers.push(
-      startRssPoller({
+    if (collectorEnabled("google_news_rss") || collectorEnabled("yahoo_finance_rss")) {
+      schedulers.push(startRssPoller({
         companies,
         pipeline,
         db,
         health,
         intervalSeconds: config.pollRssSeconds,
         concurrency: config.rssConcurrency,
-      }),
-    );
-    if (config.secUserAgent && cikByTicker.size > 0) {
+        enabledCollectors: config.externalSourceCollectors,
+      }));
+    }
+    if (collectorEnabled("sec_edgar") && config.secUserAgent && cikByTicker.size > 0) {
       schedulers.push(
         startSecPoller({
           companies,
@@ -172,8 +184,10 @@ async function main(): Promise<void> {
         }),
       );
     }
-    schedulers.push(startGdeltPoller({ companies, pipeline, db, health, intervalSeconds: config.pollGdeltSeconds }));
-    if (config.finnhubKey) {
+    if (collectorEnabled("gdelt_doc_api")) {
+      schedulers.push(startGdeltPoller({ companies, pipeline, db, health, intervalSeconds: config.pollGdeltSeconds }));
+    }
+    if (collectorEnabled("finnhub") && config.finnhubKey) {
       schedulers.push(
         startFinnhubPoller({
           companies,
@@ -186,7 +200,7 @@ async function main(): Promise<void> {
         }),
       );
     }
-    if (config.redditClientId && config.redditClientSecret) {
+    if (collectorEnabled("reddit") && config.redditClientId && config.redditClientSecret) {
       schedulers.push(
         startRedditPoller({
           companies,
@@ -198,7 +212,7 @@ async function main(): Promise<void> {
         }),
       );
     }
-    if (config.xBearer) {
+    if (collectorEnabled("x") && config.xBearer) {
       schedulers.push(
         startXPoller({
           bearer: config.xBearer,
@@ -215,6 +229,8 @@ async function main(): Promise<void> {
   }
   const mode = !config.externalRequestsEnabled
     ? "OFFLINE (saved data only)"
+    : config.externalSourceCollectors.size === 0
+      ? "REQUESTS ENABLED (source allowlist empty)"
     : judge
       ? "LIVE"
       : "AWAITING KEY (mentions stay pending)";

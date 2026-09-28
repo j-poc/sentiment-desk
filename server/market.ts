@@ -14,9 +14,8 @@ import {
 
 /**
  * The market store: one poll loop, one in-memory snapshot, broadcast on change.
- * Quotes are read-only market facts and run in every mode; they give the
- * dashboard its market context (tape, watchlist prices, price overlay) even
- * while sentiment scoring depends on the Jev key.
+ * When their collectors are explicitly enabled, Yahoo quote/chart requests
+ * provide market context. Saved-data-only mode reads persisted price points.
  */
 
 export interface MarketSnapshot {
@@ -55,6 +54,8 @@ export class MarketData {
       health: HealthTracker;
       db: Desk;
       externalRequestsEnabled?: boolean;
+      quoteRequestsEnabled?: boolean;
+      chartRequestsEnabled?: boolean;
     },
   ) {}
 
@@ -63,7 +64,7 @@ export class MarketData {
   }
 
   async refresh(): Promise<void> {
-    if (this.deps.externalRequestsEnabled === false) return;
+    if (!this.quoteRequestsAllowed()) return;
     if (providerCoolingDown(this.deps.db, "yahoo")) return;
     const tickers = [...this.deps.companies.map((c) => c.ticker), ...this.deps.indices];
     const quotes: Record<string, ServedQuote> = {};
@@ -119,7 +120,7 @@ export class MarketData {
       const q = quotes[company.ticker];
       if (q?.at != null) this.deps.db.upsertPricePoint(company.ticker, q.at, q.price);
     }
-    this.startBackfill();
+    if (this.chartRequestsAllowed()) this.startBackfill();
     if (ok > 0) this.deps.health.recordQuotes(true);
     if (fail > 0) this.deps.health.recordQuotes(false, lastError ?? "quote fetch failures");
     if (Object.keys(quotes).length > 0) this.deps.hub.broadcast("quotes", { quotes, updatedAt: this.snapshot.updatedAt });
@@ -144,7 +145,7 @@ export class MarketData {
    * transient failures retry on the next quote cycle until they succeed.
    */
   private async backfillSeries(): Promise<void> {
-    if (this.deps.externalRequestsEnabled === false) return;
+    if (!this.chartRequestsAllowed()) return;
     for (const company of this.deps.companies) {
       if (this.backfilled.has(company.ticker)) continue;
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
@@ -184,7 +185,7 @@ export class MarketData {
   async priceSeries(ticker: string, hours: number): Promise<PriceSeriesResult> {
     const bucket = hours <= 24 ? 24 : hours <= 72 ? 72 : hours <= 168 ? 168 : 24 * 30;
     const key = `${ticker}:${bucket}`;
-    if (this.deps.externalRequestsEnabled === false) {
+    if (!this.chartRequestsAllowed()) {
       const servedAt = Date.now();
       const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
       return {
@@ -263,6 +264,14 @@ export class MarketData {
       }
       throw error;
     }
+  }
+
+  private quoteRequestsAllowed(): boolean {
+    return this.deps.externalRequestsEnabled !== false && this.deps.quoteRequestsEnabled !== false;
+  }
+
+  private chartRequestsAllowed(): boolean {
+    return this.deps.externalRequestsEnabled !== false && this.deps.chartRequestsEnabled !== false;
   }
 }
 

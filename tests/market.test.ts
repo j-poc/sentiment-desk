@@ -120,6 +120,44 @@ describe("market quote provenance", () => {
     db.close();
   });
 
+  it("gates Yahoo quotes and chart calls independently", async () => {
+    const chartDb = new Desk(":memory:");
+    chartDb.seedCompanies([company]);
+    const chartRequest = vi.fn(async () => chartResponse());
+    globalThis.fetch = chartRequest;
+    const chartOnly = new MarketData({
+      companies: [company], indices: [], hub: new Hub(),
+      health: new HealthTracker(false, false, "unconfigured"),
+      db: chartDb, externalRequestsEnabled: true,
+      quoteRequestsEnabled: false, chartRequestsEnabled: true,
+    });
+
+    await chartOnly.refresh();
+    await chartOnly.waitForIdle();
+    expect(chartRequest).not.toHaveBeenCalled();
+    expect((await chartOnly.priceSeries("ACME", 24)).delivery).toBe("network");
+    expect(chartRequest).toHaveBeenCalledOnce();
+    chartDb.close();
+
+    const quoteDb = new Desk(":memory:");
+    quoteDb.seedCompanies([company]);
+    const quoteRequest = vi.fn(async () => chartResponse());
+    globalThis.fetch = quoteRequest;
+    const quoteOnly = new MarketData({
+      companies: [company], indices: [], hub: new Hub(),
+      health: new HealthTracker(false, false, "unconfigured"),
+      db: quoteDb, externalRequestsEnabled: true,
+      quoteRequestsEnabled: true, chartRequestsEnabled: false,
+    });
+
+    await quoteOnly.refresh();
+    await quoteOnly.waitForIdle();
+    expect(quoteRequest).toHaveBeenCalledOnce();
+    expect((await quoteOnly.priceSeries("ACME", 24)).delivery).toBe("local_store");
+    expect(quoteRequest).toHaveBeenCalledOnce();
+    quoteDb.close();
+  });
+
   it("marks a retained last-good quote as cache after a failed refresh", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies([company]);

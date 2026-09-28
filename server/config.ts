@@ -30,6 +30,28 @@ const scoreableCollectorSchema = z.enum([
   "reddit",
   "x",
 ]);
+const externalSourceCollectorSchema = z.enum([
+  "google_news_rss",
+  "yahoo_finance_rss",
+  "yahoo_quote",
+  "yahoo_chart",
+  "gdelt_doc_api",
+  "sec_edgar",
+  "finnhub",
+  "reddit",
+  "x",
+]);
+
+export function parseExternalSourceCollectors(value: string | undefined): Set<CollectorId> {
+  const collectors = z.array(externalSourceCollectorSchema).parse(
+    (value ?? "")
+      .split(",")
+      .map((collector) => collector.trim())
+      .filter(Boolean),
+  );
+  return new Set(collectors satisfies CollectorId[]);
+}
+
 const configuredJevCollectors = z.array(scoreableCollectorSchema).parse(
   (process.env.TYPESAFE_ALLOWED_COLLECTORS ?? "")
     .split(",")
@@ -67,9 +89,14 @@ function readEnvFile(filePath: string): Map<string, string> {
   return out;
 }
 
-const newsjackEnv = readEnvFile(path.join(os.homedir(), ".newsjack", ".env"));
+export function resolveJevApiKey(envKey: string | undefined, readFallback: () => string): string {
+  return envKey !== undefined ? envKey.trim() : readFallback().trim();
+}
+
 const envKey = process.env.TYPESAFE_API_KEY;
-const apiKey = envKey !== undefined ? envKey.trim() : newsjackEnv.get("TYPESAFE_API_KEY")?.trim() || "";
+const apiKey = resolveJevApiKey(envKey, () =>
+  readEnvFile(path.join(os.homedir(), ".newsjack", ".env")).get("TYPESAFE_API_KEY") ?? "",
+);
 export const apiKeySource = envKey !== undefined ? (apiKey ? "env" : "disabled by env") : apiKey ? "~/.newsjack/.env" : "missing";
 
 export const VERSION = "0.2.0";
@@ -77,6 +104,8 @@ export const VERSION = "0.2.0";
 export const config = {
   /** Provider and model requests require an explicit opt-in; false serves saved data only. */
   externalRequestsEnabled: parseExternalRequestsEnabled(process.env.EXTERNAL_REQUESTS_ENABLED),
+  /** Empty by default: external request opt-in still needs a per-source allowlist. */
+  externalSourceCollectors: parseExternalSourceCollectors(process.env.EXTERNAL_SOURCE_COLLECTORS),
   /** Native runs stay loopback-only; container images override this for port publishing. */
   host: process.env.HOST?.trim() || "127.0.0.1",
   port: int(process.env.PORT, 8787),

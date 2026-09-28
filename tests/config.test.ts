@@ -1,5 +1,31 @@
-import { describe, expect, it } from "vitest";
-import { boundedNonNegativeInt, parseExternalRequestsEnabled, secContactUserAgent } from "../server/config.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+// Config resolution must not inspect the real shared-machine credential file
+// while these tests exercise explicit or empty environment values.
+vi.stubEnv("TYPESAFE_API_KEY", "");
+const {
+  boundedNonNegativeInt,
+  parseExternalSourceCollectors,
+  parseExternalRequestsEnabled,
+  resolveJevApiKey,
+  secContactUserAgent,
+} = await import("../server/config.js");
+afterAll(() => vi.unstubAllEnvs());
+
+describe("Jev credential resolution", () => {
+  it("does not read the fallback file when the environment variable is present", () => {
+    const readFallback = vi.fn(() => "fallback-key");
+    expect(resolveJevApiKey(" supplied-key ", readFallback)).toBe("supplied-key");
+    expect(resolveJevApiKey("", readFallback)).toBe("");
+    expect(readFallback).not.toHaveBeenCalled();
+  });
+
+  it("reads the fallback only when the environment variable is absent", () => {
+    const readFallback = vi.fn(() => " fallback-key ");
+    expect(resolveJevApiKey(undefined, readFallback)).toBe("fallback-key");
+    expect(readFallback).toHaveBeenCalledOnce();
+  });
+});
 
 describe("external request mode", () => {
   it("defaults to paused and rejects malformed values", () => {
@@ -8,6 +34,15 @@ describe("external request mode", () => {
     expect(parseExternalRequestsEnabled("false")).toBe(false);
     expect(parseExternalRequestsEnabled(" TRUE ")).toBe(true);
     expect(() => parseExternalRequestsEnabled("off")).toThrow();
+  });
+
+  it("requires an explicit collector allowlist and rejects synthetic or unknown collectors", () => {
+    expect(parseExternalSourceCollectors(undefined)).toEqual(new Set());
+    expect(parseExternalSourceCollectors(" sec_edgar, yahoo_chart,sec_edgar ")).toEqual(
+      new Set(["sec_edgar", "yahoo_chart"]),
+    );
+    expect(() => parseExternalSourceCollectors("demo_simulation")).toThrow();
+    expect(() => parseExternalSourceCollectors("not_a_source")).toThrow();
   });
 });
 
