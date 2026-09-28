@@ -244,12 +244,14 @@ export interface SourceHealth {
 
 export interface HealthDTO {
   ok: boolean;
+  externalRequestsEnabled: boolean;
   version: string;
   runtimeId: string;
   uptimeSec: number;
   sseClients: number;
   dbSizeBytes: number | null;
   health: {
+    externalRequestsEnabled: boolean;
     rss: SourceHealth;
     x: SourceHealth;
     quotes: SourceHealth;

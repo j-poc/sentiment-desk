@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Mention } from "../lib/api.js";
 import { retryMention } from "../lib/api.js";
+import type { RetryAvailability } from "../lib/retryAvailability.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { NEU, dayTime, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
 
@@ -44,7 +45,15 @@ type RetryState =
  * The detail sidebar: everything the desk knows about one judgment, opened
  * from any mention row instead of demanding scroll space on the main screen.
  */
-export function MentionDrawer({ mention, onClose }: { mention: Mention | null; onClose: () => void }) {
+export function MentionDrawer({
+  mention,
+  onClose,
+  retryAvailability,
+}: {
+  mention: Mention | null;
+  onClose: () => void;
+  retryAvailability: RetryAvailability;
+}) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -91,7 +100,7 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
 
   useEffect(() => {
     setRetryState({ type: "idle" });
-  }, [mention?.id, mention?.status]);
+  }, [mention?.id, mention?.status, retryAvailability.kind]);
 
   if (!mention) return null;
   const s = mention.score;
@@ -234,7 +243,8 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
 
           {mention.status === "failed" && (
             <section className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/[0.05] p-3" aria-label="Retry Jev judgment">
-              {retryState.type === "idle" && (
+              {retryAvailability.kind === "unavailable" && <p className="text-[11px] leading-relaxed text-amber-100/80">{retryAvailability.reason}</p>}
+              {retryAvailability.kind === "available" && retryState.type === "idle" && (
                 <button
                   type="button"
                   onClick={() => setRetryState({ type: "confirming", chargeConfirmed: false, usageReviewed: false })}
@@ -244,7 +254,7 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
                 </button>
               )}
 
-              {retryState.type === "confirming" && (
+              {retryAvailability.kind === "available" && retryState.type === "confirming" && (
                 <div>
                   <p className="text-[11px] leading-relaxed text-amber-100/90">
                     This sends a new Jev input. TypeSafe charges for submitted inputs, so another attempt may consume more credits.
@@ -306,9 +316,9 @@ export function MentionDrawer({ mention, onClose }: { mention: Mention | null; o
                 </div>
               )}
 
-              {retryState.type === "submitting" && <p role="status" className="text-[11px] text-amber-100/80">Sending the authorized request…</p>}
-              {retryState.type === "accepted" && <p role="status" className="text-[11px] text-amber-100/80">Retry requested. Waiting for Jev to update this item.</p>}
-              {retryState.type === "failed" && (
+              {retryAvailability.kind === "available" && retryState.type === "submitting" && <p role="status" className="text-[11px] text-amber-100/80">Sending the authorized request…</p>}
+              {retryAvailability.kind === "available" && retryState.type === "accepted" && <p role="status" className="text-[11px] text-amber-100/80">Retry requested. Waiting for Jev to update this item.</p>}
+              {retryAvailability.kind === "available" && retryState.type === "failed" && (
                 <div role="alert" className="text-[11px] leading-relaxed text-amber-100/90">
                   <p>{retryState.message}</p>
                   <button type="button" onClick={() => setRetryState({ type: "idle" })} className="mt-2 underline underline-offset-2">Dismiss</button>

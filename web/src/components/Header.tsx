@@ -8,6 +8,13 @@ import { clockTime, fmtCost } from "../lib/format.js";
  */
 function engineChip(health: HealthDTO | null) {
   if (!health) return null;
+  if (!health.health.externalRequestsEnabled) {
+    return (
+      <span className="rounded-md border border-amber-300/25 bg-amber-300/[0.07] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.12em] text-amber-200/90" title="All provider and model requests are paused; the desk is serving saved local data.">
+        SAVED DATA ONLY
+      </span>
+    );
+  }
   if (health.health.jev.enabled) {
     return (
       <span className="flex items-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-emerald-300">

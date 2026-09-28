@@ -32,7 +32,7 @@ export interface ServedQuote extends Quote {
 
 export interface PriceSeriesResult {
   points: PricePoint[];
-  delivery: "network" | "memory_cache";
+  delivery: "network" | "memory_cache" | "local_store";
   servedAt: number;
   sourceLatestAt: number | null;
   cacheAgeMs: number | null;
@@ -54,6 +54,7 @@ export class MarketData {
       hub: Hub;
       health: HealthTracker;
       db: Desk;
+      externalRequestsEnabled?: boolean;
     },
   ) {}
 
@@ -62,6 +63,7 @@ export class MarketData {
   }
 
   async refresh(): Promise<void> {
+    if (this.deps.externalRequestsEnabled === false) return;
     if (providerCoolingDown(this.deps.db, "yahoo")) return;
     const tickers = [...this.deps.companies.map((c) => c.ticker), ...this.deps.indices];
     const quotes: Record<string, ServedQuote> = {};
@@ -142,6 +144,7 @@ export class MarketData {
    * transient failures retry on the next quote cycle until they succeed.
    */
   private async backfillSeries(): Promise<void> {
+    if (this.deps.externalRequestsEnabled === false) return;
     for (const company of this.deps.companies) {
       if (this.backfilled.has(company.ticker)) continue;
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
@@ -181,6 +184,17 @@ export class MarketData {
   async priceSeries(ticker: string, hours: number): Promise<PriceSeriesResult> {
     const bucket = hours <= 24 ? 24 : hours <= 72 ? 72 : hours <= 168 ? 168 : 24 * 30;
     const key = `${ticker}:${bucket}`;
+    if (this.deps.externalRequestsEnabled === false) {
+      const servedAt = Date.now();
+      const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
+      return {
+        points,
+        delivery: "local_store",
+        servedAt,
+        sourceLatestAt: points.at(-1)?.t ?? null,
+        cacheAgeMs: null,
+      };
+    }
     const cached = this.seriesCache.get(key);
     const now = Date.now();
     if (cached && now - cached.retrievedAt < SERIES_CACHE_TTL_MS) {

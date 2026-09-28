@@ -29,10 +29,10 @@ function chartResponse() {
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function market(db: Desk) {
+function market(db: Desk, externalRequestsEnabled = true) {
   return new MarketData({
     companies: [company], indices: [], hub: new Hub(),
-    health: new HealthTracker(false, false, "unconfigured"), db,
+    health: new HealthTracker(false, false, "unconfigured"), db, externalRequestsEnabled,
   });
 }
 
@@ -92,6 +92,31 @@ describe("market quote provenance", () => {
     const results = await Promise.all([first, second]);
     expect(results[0]).toEqual(results[1]);
     expect(request).toHaveBeenCalledTimes(1);
+    db.close();
+  });
+
+  it("serves only persisted points while external requests are disabled", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([company]);
+    const now = Date.now();
+    db.upsertPricePoint("ACME", now - 60_000, 124);
+    db.upsertPricePoint("ACME", now, 125);
+    const latestStoredAt = Math.floor(now / 1_000) * 1_000;
+    const data = market(db, false);
+    const request = vi.fn(async () => { throw new Error("network must remain disabled"); });
+    globalThis.fetch = request;
+
+    await data.refresh();
+    await data.waitForIdle();
+    const result = await data.priceSeries("ACME", 24);
+
+    expect(result).toMatchObject({ delivery: "local_store", sourceLatestAt: latestStoredAt });
+    expect(result.points).toEqual([
+      { t: latestStoredAt - 60_000, price: 124 },
+      { t: latestStoredAt, price: 125 },
+    ]);
+    expect(request).not.toHaveBeenCalled();
+    expect(db.deliverySummary()).toHaveLength(0);
     db.close();
   });
 

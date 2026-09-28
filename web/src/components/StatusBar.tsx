@@ -46,7 +46,9 @@ export function StatusBar({
   tape: Mention[];
 }) {
   const engine = health
-    ? health.health.jev.enabled
+    ? !health.externalRequestsEnabled
+      ? "paused offline"
+      : health.health.jev.enabled
       ? health.health.jev.model
       : "awaiting key"
     : "…";

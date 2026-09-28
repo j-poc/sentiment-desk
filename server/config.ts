@@ -75,6 +75,8 @@ export const apiKeySource = envKey !== undefined ? (apiKey ? "env" : "disabled b
 export const VERSION = "0.2.0";
 
 export const config = {
+  /** Set false to serve only persisted local data without any provider requests. */
+  externalRequestsEnabled: parseExternalRequestsEnabled(process.env.EXTERNAL_REQUESTS_ENABLED),
   /** Native runs stay loopback-only; container images override this for port publishing. */
   host: process.env.HOST?.trim() || "127.0.0.1",
   port: int(process.env.PORT, 8787),
@@ -126,6 +128,11 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean),
 };
+
+export function parseExternalRequestsEnabled(value: string | undefined): boolean {
+  if (value === undefined) return true;
+  return z.enum(["true", "false"]).parse(value.trim().toLowerCase()) === "true";
+}
 
 const companySchema = z.object({
   id: z.string().min(1),

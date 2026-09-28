@@ -406,3 +406,31 @@ passed 124 tests across 21 files; `npm run typecheck`, `npm run build`, and
 advisory. The actual provider charge terms, account/source rights, real-source
 Jev evaluation, exhaustive provider coverage, and historical usage audit
 remain open and are not cleared by this local fix.
+
+## Offline saved-data runtime and failed-row retry gating — 2026-09-28
+
+The production UI now has an explicit `EXTERNAL_REQUESTS_ENABLED=false` mode.
+It disables source/quote/SEC pollers and Jev dispatch, serves saved price
+history from an isolated SQLite backup copy, and labels the interface “SAVED
+DATA ONLY”. A fetch guard recorded zero non-loopback attempts during the named
+Playwright pass. The API returned 24 companies; its first 100 visible AAPL
+records used identified collectors and omitted legacy/simulation rows; 7D
+history contained 2,853 saved price points.
+
+The UI pass selected Adobe and rendered both saved sentiment and price lines.
+Opening a persisted failed item showed the retry-unavailable explanation and
+no retry action while external requests were paused. Playwright recorded only
+loopback GETs and zero console errors. A fresh read-only agent review found no
+actionable defects in the App health mapping or drawer gate.
+
+The focused regression covers unknown health, paused external requests,
+disabled Jev, and the enabled path. Final local verification for this change:
+150 tests across 24 files, `npm run typecheck`, `npm run build`, and
+`git diff --check` all pass. Browser screenshots are
+`output/playwright/2026-09-28-offline-adobe-chart.png` and
+`output/playwright/2026-09-28-offline-drawer-chart.png`.
+
+This proves the saved-data UI path only. It does not establish live-source
+rights, TypeSafe account authorization or billing, source coverage, historical
+request lineage, or real-source Jev quality. Port 8787 had no listener during
+the check; the controlled offline process on 8794 uses an isolated backup.

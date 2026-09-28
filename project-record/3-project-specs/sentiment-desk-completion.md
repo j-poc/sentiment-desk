@@ -13,25 +13,45 @@ legacy unknown rows from research reads, Jev dispatch/retry, source health,
 aggregates, and Radar, and preserves their saved non-demo usage estimates in
 the usage summary. Historical rows remain untouched.
 
-The long-running local server on port 8787 predates this change and remains on
-its in-memory version. I did not restart it because that could resume source
-collection or Jev requests before account and source-use gates are resolved;
-until a controlled restart, its UI may still expose legacy rows. A browser
-preview briefly reached that existing server through Vite's configured API
-proxy; it was closed, no retry or write action was performed, and that page is
-excluded from verification evidence. A separate static-only browser check
-confirmed the new Desk coverage notice is visible at desktop and 390px width;
-the 390px document width remained 390px with no horizontal overflow. `npm test` passes 146 tests across 23 files;
-typecheck and production build pass, with the existing Vite chunk-size
-advisory. Generated examples remain isolated to tests and frozen evaluations;
-they are not application data or real-source model-quality evidence. This is
-not a 10/10 release: non-SEC publisher rights, TypeSafe account/telemetry/
-billing terms, exhaustive source coverage, legacy provider-use reconciliation,
-and real-source classifier quality remain open. Evidence:
+The prior process audit later found neither port 8787 nor the earlier 8794
+smoke server listening. To verify the current UI without restarting collectors,
+the app now supports `EXTERNAL_REQUESTS_ENABLED=false`: it skips SEC lookup,
+all collectors and Jev, serves saved price history from SQLite, and marks the
+UI as “SAVED DATA ONLY”. A production build ran against an isolated SQLite
+backup of the real local database. A server-side guard recorded zero external
+fetch attempts; browser resource inspection found no origin outside localhost.
+The API returned 24 companies and 100 AAPL records from identified collectors,
+with no `legacy_unknown` or simulation rows in that result; 7D chart history
+returned 2,853 saved points. Playwright selected Adobe, confirmed the company
+heading changed, and showed both sentiment and price lines. A later named
+Playwright session confirmed the 24H local-store chart and opened a saved failed
+judgment: the drawer explained that retries are unavailable while requests are
+paused and exposed no retry action. That browser issued only loopback GETs; its
+console had zero errors. At 390×844 the earlier browser check measured both
+document and body widths at 390px. Screenshots are kept locally in
+`output/playwright/2026-09-28-offline-adobe-chart.png`,
+`output/playwright/2026-09-28-offline-drawer-chart.png`, and the earlier
+`2026-09-28-offline-saved-data-mobile.png`.
+
+The latest `npm test` passes 150 tests across 24 files; typecheck and production
+build pass, with the existing Vite chunk-size advisory. The failed-row drawer
+now hides retry controls until both external requests and Jev are enabled, and
+its health-state helper has direct regression coverage. An independent
+read-only review found no actionable defect. The original database
+still has migrated `legacy_unknown` rows whose provider and model-use history
+are unaudited; the latest code filters them from research views. Generated
+examples remain isolated to tests and frozen evaluations; they are not product
+data or real-source model-quality evidence. This is not a 10/10 release:
+non-SEC publisher rights, TypeSafe account/telemetry/billing terms, exhaustive
+source coverage, legacy provider-use reconciliation, and real-source
+classifier quality remain open. The offline smoke proves the saved-data UI,
+not live collection or real-source Jev quality. Evidence:
 `project-record/4-log/2026-09-28-real-data-only-runtime.md`,
 `project-record/4-log/2026-09-28-sentiment-desk-readiness-continuation.md`, and
-`project-record/4-log/2026-09-28-legacy-source-quarantine.md`. The offline
-evaluation gates and their current limitations are recorded in
+`project-record/4-log/2026-09-28-legacy-source-quarantine.md`. Offline runtime
+evidence is recorded in
+`project-record/4-log/2026-09-28-offline-saved-data-runtime.md`; the evaluator
+gates and their limits are recorded in
 `project-record/4-log/2026-09-28-jev-evaluator-hardening.md`.
 
 ## Durable goal state (2026-09-28)
@@ -54,6 +74,14 @@ evaluator, verify the live pending-to-scored UI path, and re-evaluate the
 remaining coverage/release gates. The exhaustive source-coverage review and
 historical TypeSafe usage reconciliation are still open. Opportunity Radar
 stays downstream until Sentiment Desk passes its operational gates.
+
+The offline runtime is available on `127.0.0.1:8794` against a temporary
+backup of the local database, with all external requests disabled. It is a
+saved-data inspection session, not a live collector or Jev runtime. Failed-row
+retry actions are hidden until health confirms both Jev and external requests
+are enabled. The original database was not changed. This checkpoint passes
+150 tests across 24 files, typecheck, production build, the named loopback-only
+browser check, and an independent read-only retry-gating review.
 
 ## User and outcome
 
@@ -854,3 +882,8 @@ Phase 2 consumer.
   pipeline runner.
 - [x] Run and record the ten-case synthetic Jev pilot; report every case
   without promoting it to real-source quality evidence.
+- [x] Add saved-data-only production mode, verify stock selection and the
+  sentiment/price chart against persisted records, and suppress failed-row Jev
+  retry actions until external requests and Jev are confirmed enabled.
+- [x] Record 150 passing tests, typecheck, production build, named browser
+  network evidence, and an independent retry-gating review for this checkpoint.

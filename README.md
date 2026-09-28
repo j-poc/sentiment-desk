@@ -164,6 +164,7 @@ its temporary volume.
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | — | Jev credentials; local Node also checks `~/.newsjack/.env`. A key alone does not enable scoring. Set an explicit empty value to disable fallback. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
+| `EXTERNAL_REQUESTS_ENABLED` | `true` | Set `false` to pause all provider and Jev requests and serve saved local data only. |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
 | `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated, source-specific Jev admission list; no collectors allowed by default |
 | `TYPESAFE_MAX_REQUESTS_PER_DAY` | `0` | hard cap on Jev request attempts per UTC day; `0` disables dispatch |

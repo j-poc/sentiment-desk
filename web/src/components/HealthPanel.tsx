@@ -16,7 +16,8 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
 
   return (
     <div className="px-4 py-3.5 text-[11px]">
-      <Row label="engine" value={`${jev.model} · ${jev.enabled ? "live" : "off"}`} />
+      <Row label="external requests" value={health.externalRequestsEnabled ? "enabled" : "paused · saved data only"} />
+      <Row label="engine" value={`${jev.model} · ${health.externalRequestsEnabled ? jev.enabled ? "live" : "off" : "paused"}`} />
       <Row label="judged today" value={String(health.usage.judgedItems)} />
       <Row label="est. input cost" value={fmtCost(health.usage.estimatedInputCostUsd)} />
       {jev.lastError && (
@@ -26,26 +27,26 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
       )}
 
       <div className="mt-3 border-t border-white/[0.05] pt-2.5">
-        <Row label="rss news" value={`${rss.ok} ok / ${rss.fail} fail · ${timeAgo(rss.lastOkAt)}`} />
+        <Row label="rss news" value={!health.externalRequestsEnabled ? "paused (offline mode)" : `${rss.ok} ok / ${rss.fail} fail · ${timeAgo(rss.lastOkAt)}`} />
         <Row
           label="x api"
-          value={x.enabled ? `${x.ok} ok / ${x.fail} fail · ${timeAgo(x.lastOkAt)}` : "disabled (no token)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : x.enabled ? `${x.ok} ok / ${x.fail} fail · ${timeAgo(x.lastOkAt)}` : "disabled (no token)"}
         />
         <Row
           label="quotes"
-          value={`${health.health.quotes.ok} ok / ${health.health.quotes.fail} fail · ${timeAgo(health.health.quotes.lastOkAt)}`}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : `${health.health.quotes.ok} ok / ${health.health.quotes.fail} fail · ${timeAgo(health.health.quotes.lastOkAt)}`}
         />
         <Row
           label="sec edgar"
-          value={health.health.sec.enabled ? `${health.health.sec.ok} ok / ${health.health.sec.fail} fail · ${timeAgo(health.health.sec.lastOkAt)}` : "off (no UA)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.sec.enabled ? `${health.health.sec.ok} ok / ${health.health.sec.fail} fail · ${timeAgo(health.health.sec.lastOkAt)}` : "off (no UA)"}
         />
         <Row
           label="finnhub"
-          value={health.health.finnhub.enabled ? `${health.health.finnhub.ok} ok / ${health.health.finnhub.fail} fail · ${timeAgo(health.health.finnhub.lastOkAt)}` : "off (no key)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.finnhub.enabled ? `${health.health.finnhub.ok} ok / ${health.health.finnhub.fail} fail · ${timeAgo(health.health.finnhub.lastOkAt)}` : "off (no key)"}
         />
         <Row
           label="reddit"
-          value={health.health.reddit.enabled ? `${health.health.reddit.ok} ok / ${health.health.reddit.fail} fail · ${timeAgo(health.health.reddit.lastOkAt)}` : "off (no app)"}
+          value={!health.externalRequestsEnabled ? "paused (offline mode)" : health.health.reddit.enabled ? `${health.health.reddit.ok} ok / ${health.health.reddit.fail} fail · ${timeAgo(health.health.reddit.lastOkAt)}` : "off (no app)"}
         />
         <Row label="sse clients" value={String(health.sseClients)} />
         <Row label="uptime" value={`${Math.max(1, Math.floor(health.uptimeSec / 60))}m`} />

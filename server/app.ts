@@ -58,6 +58,7 @@ export function createApp(deps: AppDeps): Hono {
     const healthSnapshot = deps.health.snapshot();
     return c.json({
       ok: true,
+      externalRequestsEnabled: healthSnapshot.externalRequestsEnabled,
       version: deps.version,
       runtimeId,
       uptimeSec: Math.floor(process.uptime()),

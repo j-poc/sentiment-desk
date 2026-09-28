@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { secContactUserAgent } from "../server/config.js";
+import { parseExternalRequestsEnabled, secContactUserAgent } from "../server/config.js";
+
+describe("external request mode", () => {
+  it("defaults to enabled and rejects malformed values", () => {
+    expect(parseExternalRequestsEnabled(undefined)).toBe(true);
+    expect(parseExternalRequestsEnabled("false")).toBe(false);
+    expect(parseExternalRequestsEnabled(" TRUE ")).toBe(true);
+    expect(() => parseExternalRequestsEnabled("off")).toThrow();
+  });
+});
 
 describe("SEC User-Agent configuration", () => {
   it("requires a bounded value with operator contact information", () => {

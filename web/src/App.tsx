@@ -27,6 +27,7 @@ import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
+import { retryAvailabilityFor } from "./lib/retryAvailability.js";
 
 const WINDOWS = [
   { h: 6, label: "6H" },
@@ -488,6 +489,7 @@ export default function App() {
   const filteredMentions = useMemo(() => applyFilter(selectedMentions, feedFilter), [selectedMentions, feedFilter]);
   const mentionsPending = selectedId != null && !mentionsLoadedByCompany[selectedId] && !mentionsErrorByCompany[selectedId];
   const mentionsFailed = selectedId != null && mentionsErrorByCompany[selectedId];
+  const retryAvailability = retryAvailabilityFor(health);
 
   return (
     <>
@@ -540,7 +542,7 @@ export default function App() {
               </button>
             ))}
           </div>
-          {researchView === "desk" && <SourceCoverageDisclosure />}
+          {researchView === "desk" && <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? true} />}
           {selected ? (
             researchView === "radar" ? (
               <OpportunityRadar
@@ -793,7 +795,11 @@ export default function App() {
 
       <StatusBar health={health} session={session} connected={connected} tape={tape} />
     </div>
-    <MentionDrawer mention={drawerMention} onClose={closeDrawer} />
+    <MentionDrawer
+      mention={drawerMention}
+      onClose={closeDrawer}
+      retryAvailability={retryAvailability}
+    />
     </>
   );
 }

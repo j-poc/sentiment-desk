@@ -52,18 +52,31 @@ treated as verified source-backed evidence until their origins are established.
   scored. Their actual upstream payloads, source permissions, TypeSafe requests,
   and billed usage were not inspected. Reconcile historical provider usage and
   source rights before making any quality or authorization claim.
-- A pre-existing Node service on `127.0.0.1:8787` started before this code
-  change and remains running with its in-memory version. A Vite preview briefly
+- At this log's initial check, a pre-existing Node service on
+  `127.0.0.1:8787` had started before this code change and was still running
+  with its in-memory version. A Vite preview briefly
   proxied normal read requests to it; the browser showed live dashboard state
   whose provenance was not established. The preview was closed. No retry,
   write, manual Jev call, or direct public-source request was initiated, and
   the visible output is excluded from verification evidence. Background work
   by that pre-existing process was not audited.
-- Do not use that service as evidence for this change. The quarantine takes
-  effect after a controlled restart. A restart can run configured providers or
-  Jev, so perform it only after applicable rights, account, and budget gates
-  are cleared; otherwise keep the service's existing operator decision intact.
+- At the initial check, do not use that service as evidence for this change.
+  The quarantine takes effect after a controlled restart. A restart can run
+  configured providers or Jev, so perform it only after applicable rights,
+  account, and budget gates are cleared; otherwise keep the service's existing
+  operator decision intact.
 - Source rights, exhaustive coverage, TypeSafe account/telemetry/retention/
   billing terms, independent real-source labels, and classifier quality remain
   unresolved. This checkpoint does not make Sentiment Desk release-ready or
   10/10.
+
+## Later controlled offline runtime check — 2026-09-28
+
+At this later check, port 8787 had no listening process. The rebuilt offline
+server on 127.0.0.1:8794 served an isolated SQLite backup copy of the default
+database with `EXTERNAL_REQUESTS_ENABLED=false`; the original database was not
+modified. The external-fetch guard log stayed empty through the browser run,
+which showed no `legacy_unknown` rows in the exercised visible feed. This
+confirms the latest quarantine code in this controlled process; it does not
+resolve the saved legacy rows' historical source, TypeSafe-use, or billing
+lineage. See `2026-09-28-offline-saved-data-runtime.md`.

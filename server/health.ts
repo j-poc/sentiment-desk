@@ -14,6 +14,7 @@ export interface SourceCounters {
 }
 
 export interface HealthSnapshot {
+  externalRequestsEnabled: boolean;
   rss: SourceCounters;
   x: SourceCounters;
   quotes: SourceCounters;
@@ -32,6 +33,7 @@ export class HealthTracker {
   private readonly sec: SourceCounters;
   private readonly finnhub: SourceCounters;
   private readonly reddit: SourceCounters;
+  private readonly externalRequestsEnabled: boolean;
 
   constructor(
     xEnabled: boolean,
@@ -40,14 +42,16 @@ export class HealthTracker {
     secEnabled = false,
     finnhubEnabled = false,
     redditEnabled = false,
+    externalRequestsEnabled = true,
   ) {
-    this.rss = fresh(true);
-    this.x = fresh(xEnabled);
-    this.quotes = fresh(true);
-    this.sec = fresh(secEnabled);
-    this.finnhub = fresh(finnhubEnabled);
-    this.reddit = fresh(redditEnabled);
-    this.jev = { ...fresh(jevEnabled), model: jevModel };
+    this.externalRequestsEnabled = externalRequestsEnabled;
+    this.rss = fresh(externalRequestsEnabled);
+    this.x = fresh(externalRequestsEnabled && xEnabled);
+    this.quotes = fresh(externalRequestsEnabled);
+    this.sec = fresh(externalRequestsEnabled && secEnabled);
+    this.finnhub = fresh(externalRequestsEnabled && finnhubEnabled);
+    this.reddit = fresh(externalRequestsEnabled && redditEnabled);
+    this.jev = { ...fresh(externalRequestsEnabled && jevEnabled), model: jevModel };
   }
 
   recordQuotes(ok: boolean, error?: string): void {
@@ -80,6 +84,7 @@ export class HealthTracker {
 
   snapshot(): HealthSnapshot {
     return {
+      externalRequestsEnabled: this.externalRequestsEnabled,
       rss: { ...this.rss },
       x: { ...this.x },
       quotes: { ...this.quotes },
