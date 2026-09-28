@@ -144,3 +144,29 @@ copy above. It does not update or serve from the original local database.
   JSON parsing, and `git diff --check` passed. The existing Vite chunk-size
   advisory remains. The existing loopback process remains in offline mode and
   its network-guard log stayed empty; no provider/model requests were made.
+
+## Fresh-process default-mode verifier — 2026-09-28
+
+- Added `npm run verify:offline-startup`, which builds the production app and
+  launches it from a fresh temporary working directory with a temporary SQLite
+  database. The process environment deliberately omits
+  `EXTERNAL_REQUESTS_ENABLED`, contains placeholder credentials for every
+  provider, and supplies positive Jev limits and a valid-shaped SEC User-Agent
+  to prove that credentials alone do not activate traffic.
+- The verifier reads the actual health and configured-company endpoints,
+  checks every source/quote/Jev health counter remains disabled, confirms a
+  Jev retry request returns 503, and installs a child-process `fetch` guard
+  that blocks/logs non-loopback requests. No source observations or synthetic
+  company records are inserted; only the configured company universe is
+  loaded into the empty temporary database.
+- `npm run verify:offline-startup` passed: all 24 configured companies loaded,
+  the saved-data-only health state held, the retry returned 503, and the guard
+  recorded zero external fetch attempts. The check shut down cleanly and
+  removed its temporary database and guard files. It validates the app's
+  current `fetch`-based provider paths; it does not grant source rights or
+  establish live delivery or Jev quality.
+- Final verification after integration: **151 tests passed across 24 files**,
+  `npm run typecheck`, `npm run verify:offline-startup` (including production
+  build), `docker compose config -q`, shell syntax check, JSON parse, and
+  `git diff --check` all passed. Vite reported its existing 531.60 kB chunk
+  advisory. No live source, market-data, or Jev request was made.

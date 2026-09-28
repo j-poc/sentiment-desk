@@ -33,6 +33,17 @@ document and body widths at 390px. Screenshots are kept locally in
 `output/playwright/2026-09-28-offline-drawer-chart.png`, and the earlier
 `2026-09-28-offline-saved-data-mobile.png`.
 
+The application now also defaults to saved-data-only mode when
+`EXTERNAL_REQUESTS_ENABLED` is absent. The repeatable
+`npm run verify:offline-startup` check starts the production server in a fresh
+temporary directory with every provider credential present but unused, reads
+health and company endpoints, confirms Jev retry is unavailable, and blocks
+and counts outbound `fetch` calls. The latest run served all 24 configured
+companies, showed every source/quote/Jev health counter disabled, returned 503
+for the retry attempt, and observed zero outbound fetches. Its empty temporary
+database contains no sample observations; it uses only the configured company
+universe.
+
 The latest `npm test` passes 151 tests across 24 files; typecheck and production
 build pass, with the existing Vite chunk-size advisory. The failed-row drawer
 now hides retry controls until both external requests and Jev are enabled, and
@@ -56,12 +67,13 @@ gates and their limits are recorded in
 
 ## Durable goal state (2026-09-28)
 
-The native ultragoal remains `active`; the evaluator implementation checkpoint,
-`cae369bd4af9ca571501fa580c7a6326094bda15`, is verified on
-`origin/codex/real-data-rebuild`. The saved-data-only runtime and retry-gating
-checkpoint `1647a1102236cebb5579e30debcab7271f408e7b` is also pushed to that
-branch. Local implementation and its verification
-are recorded as complete for this iteration. The active attention state is
+The native ultragoal remains `active`. The saved-data-only UI, retry-gating,
+and explicit external-request opt-in checkpoints are pushed to
+`origin/codex/real-data-rebuild`; the latest previous checkpoint was
+`34a015d06ad7a33abc9f6324853aac17d48a321a`. A fresh-process verifier now
+proves credentials alone do not activate source or Jev traffic when the
+opt-in variable is absent. Local implementation and verification are recorded
+as complete for this iteration. The active attention state is
 `awaiting_authority`: the authorized TypeSafe account owner and applicable
 source-rights owners must establish permitted use, retention, telemetry,
 billing, and an approved request/cost ceiling; a valid SEC User-Agent contact
@@ -77,13 +89,14 @@ remaining coverage/release gates. The exhaustive source-coverage review and
 historical TypeSafe usage reconciliation are still open. Opportunity Radar
 stays downstream until Sentiment Desk passes its operational gates.
 
-The offline runtime is available on `127.0.0.1:8794` against a temporary
+The offline UI runtime is available on `127.0.0.1:8794` against a temporary
 backup of the local database, with all external requests disabled. It is a
 saved-data inspection session, not a live collector or Jev runtime. Failed-row
 retry actions are hidden until health confirms both Jev and external requests
 are enabled. The original database was not changed. This checkpoint passes
-151 tests across 24 files, typecheck, production build, the named loopback-only
-browser check, and an independent read-only retry-gating review.
+151 tests across 24 files, typecheck, production build, the fresh-process
+offline startup check, the named loopback-only browser check, and an
+independent read-only retry-gating review.
 
 Fresh application launches now default to saved-data-only mode. The Compose
 configuration follows the same default, and live provider traffic requires
@@ -894,5 +907,6 @@ Phase 2 consumer.
 - [x] Add saved-data-only production mode, verify stock selection and the
   sentiment/price chart against persisted records, and suppress failed-row Jev
   retry actions until external requests and Jev are confirmed enabled.
-- [x] Record 150 passing tests, typecheck, production build, named browser
-  network evidence, and an independent retry-gating review for this checkpoint.
+- [x] Record 151 passing tests, typecheck, production build, named browser
+  network evidence, an independent retry-gating review, and fresh-process
+  saved-data-only startup proof for the latest checkpoint.

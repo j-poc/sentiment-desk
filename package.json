@@ -15,6 +15,7 @@
     "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist/server/index.js --packages=external",
     "start": "node dist/server/index.js",
     "verify:jev-live": "tsx scripts/verify-live-jev.ts",
+    "verify:offline-startup": "npm run build && tsx scripts/verify-offline-startup.ts",
     "verify:retry-browser": "tsx scripts/verify-retry-browser.ts",
     "verify:jev-sanity": "tsx scripts/verify-jev-sanity.ts",
     "evaluate:jev-labels": "tsx scripts/evaluate-jev-labels.ts",
