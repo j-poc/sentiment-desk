@@ -1,4 +1,5 @@
 import type { EventType } from "../rubric.js";
+import { paceProviderRequest, parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
 
 /**
  * SEC EDGAR as a first-class source. No third-party library needed: EDGAR is
@@ -28,10 +29,12 @@ export interface SecFiling {
 
 /** ticker -> CIK, from the official directory. */
 export async function fetchTickerCikMap(userAgent: string): Promise<Map<string, string>> {
+  await paceProviderRequest("sec", 125);
   const res = await fetch(`${SEC_WWW}/files/company_tickers.json`, {
     headers: { "user-agent": userAgent, accept: "application/json" },
     signal: AbortSignal.timeout(20_000),
   });
+  if (res.status === 429) throw new ProviderRateLimitError("sec", parseRetryAfterMs(res.headers.get("retry-after")), "SEC ticker directory HTTP 429");
   if (!res.ok) throw new Error(`SEC ticker directory HTTP ${res.status}`);
   const body = (await res.json()) as Record<string, { cik_str: number; ticker: string; title: string }>;
   const map = new Map<string, string>();
@@ -106,10 +109,12 @@ export async function fetchRecent8Ks(opts: {
   userAgent: string;
   timeoutMs?: number;
 }): Promise<SecFiling[]> {
+  await paceProviderRequest("sec", 125);
   const res = await fetch(`${SEC_BASE}/submissions/CIK${opts.cik}.json`, {
     headers: { "user-agent": opts.userAgent, accept: "application/json" },
     signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
   });
+  if (res.status === 429) throw new ProviderRateLimitError("sec", parseRetryAfterMs(res.headers.get("retry-after")), `SEC submissions HTTP 429 for ${opts.ticker}`);
   if (!res.ok) throw new Error(`SEC submissions HTTP ${res.status} for ${opts.ticker}`);
   return parseRecent8Ks((await res.json()) as SubmissionsBody, opts.cik, opts.ticker, opts.sinceMs);
 }
@@ -117,10 +122,12 @@ export async function fetchRecent8Ks(opts: {
 /** Plain-text extraction from the primary document, bounded for the state block. */
 export async function fetchPrimaryDocText(url: string, userAgent: string, maxChars = 3_000): Promise<string> {
   if (!url) return "";
+  await paceProviderRequest("sec", 125);
   const res = await fetch(url, {
     headers: { "user-agent": userAgent, accept: "text/html,text/plain" },
     signal: AbortSignal.timeout(15_000),
   });
+  if (res.status === 429) throw new ProviderRateLimitError("sec", parseRetryAfterMs(res.headers.get("retry-after")), "SEC document HTTP 429");
   if (!res.ok) throw new Error(`SEC document HTTP ${res.status}`);
   const html = await res.text();
   return html

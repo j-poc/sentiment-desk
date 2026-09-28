@@ -1,6 +1,7 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import type { Company, SourceTier } from "../types.js";
 import { tierForHost } from "./tiers.js";
+import { paceProviderRequest, parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
 
 /**
  * RSS ingestion. Google News runs one query per company (name OR ticker,
@@ -79,10 +80,19 @@ export function parseRss(xml: string): FeedItem[] {
 }
 
 export async function fetchFeed(url: string, timeoutMs = 15_000): Promise<FeedItem[]> {
+  const host = new URL(url).hostname;
+  const provider = host === "news.google.com"
+    ? "google_news"
+    : host === "feeds.finance.yahoo.com" ? "yahoo" : null;
+  if (provider) await paceProviderRequest(provider, 1_000);
   const res = await fetch(url, {
     signal: AbortSignal.timeout(timeoutMs),
     headers: { "user-agent": "SentimentDesk/0.1 (+https://github.com; personal research desk)" },
   });
+  if (res.status === 429) {
+    if (!provider) throw new Error("feed HTTP 429");
+    throw new ProviderRateLimitError(provider, parseRetryAfterMs(res.headers.get("retry-after")));
+  }
   if (!res.ok) throw new Error(`feed HTTP ${res.status}`);
   const xml = await res.text();
   if (!/^\uFEFF?\s*(?:<\?xml[^>]*>\s*)?<(?:rss|rdf:RDF)\b/i.test(xml)) {

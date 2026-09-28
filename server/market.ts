@@ -5,6 +5,12 @@ import type { Hub } from "./hub.js";
 import type { Desk } from "./db.js";
 import { classifyDeliveryError, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
+import {
+  clearProviderRateLimit,
+  providerCoolingDown,
+  providerRetryAt,
+  recordProviderRateLimit,
+} from "./provider-cooldown.js";
 
 /**
  * The market store: one poll loop, one in-memory snapshot, broadcast on change.
@@ -38,6 +44,7 @@ export class MarketData {
   private snapshot: MarketSnapshot = { quotes: {}, updatedAt: 0 };
   private readonly seriesCache = new Map<string, { retrievedAt: number; points: PricePoint[] }>();
   private readonly backfilled = new Set<string>();
+  private readonly seriesRequests = new Map<string, Promise<PriceSeriesResult>>();
   private backfillTask: Promise<void> | null = null;
 
   constructor(
@@ -55,12 +62,14 @@ export class MarketData {
   }
 
   async refresh(): Promise<void> {
+    if (providerCoolingDown(this.deps.db, "yahoo")) return;
     const tickers = [...this.deps.companies.map((c) => c.ticker), ...this.deps.indices];
     const quotes: Record<string, ServedQuote> = {};
     let ok = 0;
     let fail = 0;
     let lastError: string | null = null;
     for (const ticker of tickers) {
+      if (providerCoolingDown(this.deps.db, "yahoo")) break;
       const startedAt = Date.now();
       const company = this.deps.companies.find((c) => c.ticker === ticker) ?? null;
       try {
@@ -72,6 +81,7 @@ export class MarketData {
           requestKey: `yahoo-chart:quote:${ticker}`, startedAt, adapterVersion: "yahoo-chart/1",
           result: "success", parsedItemCount: 1, normalizedItems: received,
         });
+        clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
         ok += 1;
       } catch (err) {
         const prior = this.snapshot.quotes[ticker];
@@ -83,11 +93,16 @@ export class MarketData {
         });
         fail += 1;
         lastError = err instanceof Error ? err.message : String(err);
-        // Quota protection: a 429 aborts the rest of this cycle; the next
-        // rotation starts fresh. Partial results still broadcast.
-        if (err instanceof RateLimitedError) break;
+        if (err instanceof RateLimitedError) {
+          recordProviderRateLimit({
+            db: this.deps.db,
+            provider: "yahoo",
+            minDelayMs: 60_000,
+            retryAfterMs: err.retryAfterMs,
+          });
+          break;
+        }
       }
-      await sleep(500); // pacing: the whole rotation stays well under rate limits
     }
     // Keep last-known values for failed tickers; refresh what succeeded.
     this.snapshot = {
@@ -129,11 +144,13 @@ export class MarketData {
   private async backfillSeries(): Promise<void> {
     for (const company of this.deps.companies) {
       if (this.backfilled.has(company.ticker)) continue;
+      if (providerCoolingDown(this.deps.db, "yahoo")) break;
       const startedAt = Date.now();
       try {
         const points = await fetchPriceSeries(company.ticker, 72);
         for (const p of points) this.deps.db.upsertPricePoint(company.ticker, p.t, p.price);
         this.backfilled.add(company.ticker);
+        clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
         recordDelivery({
           db: this.deps.db, collector: "yahoo_chart", companyId: company.id,
           requestKey: `yahoo-chart:series:${company.ticker}:72h`, startedAt,
@@ -147,9 +164,17 @@ export class MarketData {
           adapterVersion: "yahoo-chart/1", result: classifyDeliveryError(err),
           parsedItemCount: 0, error: err,
         });
+        if (err instanceof RateLimitedError) {
+          recordProviderRateLimit({
+            db: this.deps.db,
+            provider: "yahoo",
+            minDelayMs: 60_000,
+            retryAfterMs: err.retryAfterMs,
+          });
+          break;
+        }
         /* retried on the next quotes cycle; live points accrue regardless */
       }
-      await sleep(600);
     }
   }
 
@@ -167,11 +192,29 @@ export class MarketData {
         cacheAgeMs: now - cached.retrievedAt,
       };
     }
+    const existing = this.seriesRequests.get(key);
+    if (existing) return existing;
+    const request = this.loadPriceSeries(ticker, bucket);
+    this.seriesRequests.set(key, request);
+    try {
+      return await request;
+    } finally {
+      if (this.seriesRequests.get(key) === request) this.seriesRequests.delete(key);
+    }
+  }
+
+  private async loadPriceSeries(ticker: string, bucket: number): Promise<PriceSeriesResult> {
+    const key = `${ticker}:${bucket}`;
+    const cooldownUntil = providerRetryAt(this.deps.db, "yahoo");
+    if (cooldownUntil > Date.now()) {
+      throw new RateLimitedError(cooldownUntil - Date.now(), "Yahoo Finance cooldown active", true);
+    }
     const startedAt = Date.now();
     try {
       const points = await fetchPriceSeries(ticker, bucket);
       const retrievedAt = Date.now();
       this.seriesCache.set(key, { retrievedAt, points });
+      clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
       const company = this.deps.companies.find((item) => item.ticker === ticker);
       recordDelivery({
         db: this.deps.db, collector: "yahoo_chart", companyId: company?.id ?? null,
@@ -187,13 +230,23 @@ export class MarketData {
         cacheAgeMs: null,
       };
     } catch (error) {
+      if (error instanceof RateLimitedError && !error.deferred) {
+        recordProviderRateLimit({
+          db: this.deps.db,
+          provider: "yahoo",
+          minDelayMs: 60_000,
+          retryAfterMs: error.retryAfterMs,
+        });
+      }
       const company = this.deps.companies.find((item) => item.ticker === ticker);
-      recordDelivery({
-        db: this.deps.db, collector: "yahoo_chart", companyId: company?.id ?? null,
-        requestKey: `yahoo-chart:series:${ticker}:${bucket}h`, startedAt,
-        adapterVersion: "yahoo-chart/1", result: classifyDeliveryError(error),
-        parsedItemCount: 0, error,
-      });
+      if (!(error instanceof RateLimitedError && error.deferred)) {
+        recordDelivery({
+          db: this.deps.db, collector: "yahoo_chart", companyId: company?.id ?? null,
+          requestKey: `yahoo-chart:series:${ticker}:${bucket}h`, startedAt,
+          adapterVersion: "yahoo-chart/1", result: classifyDeliveryError(error),
+          parsedItemCount: 0, error,
+        });
+      }
       throw error;
     }
   }
@@ -217,8 +270,4 @@ export function startQuotesPoller(deps: {
     }
   };
   return scheduleTask(tick, deps.intervalSeconds * 1000);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }

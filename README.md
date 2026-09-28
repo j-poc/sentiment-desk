@@ -150,13 +150,13 @@ its temporary volume.
 | `SEC_USER_AGENT` | empty (SEC disabled) | required descriptive SEC User-Agent with operator contact information |
 | `POLL_SEC_SECONDS` | `90` | EDGAR submissions poll cadence |
 | `POLL_GDELT_SECONDS` | `300` | GDELT breadth poll cadence |
-| `POLL_RSS_SECONDS` | `30` | news poll cadence |
+| `POLL_RSS_SECONDS` | `180` | Google/Yahoo RSS poll cadence; backs off source-wide on HTTP 429 |
 | `POLL_X_SECONDS` | `180` | X poll cadence |
-| `POLL_QUOTES_SECONDS` | `45` | quote poll cadence |
+| `POLL_QUOTES_SECONDS` | `90` | market quote poll cadence; Yahoo 429 cooldown is shared with its RSS feed |
 | `POLL_FINNHUB_SECONDS` | `120` | Finnhub poll cadence |
 | `POLL_REDDIT_SECONDS` | `180` | Reddit poll cadence |
 | `BACKFILL_DAYS` | `5` | Finnhub company-news backfill window |
-| `RSS_CONCURRENCY` | `4` | concurrent RSS requests |
+| `RSS_CONCURRENCY` | `2` | maximum concurrent RSS requests; provider requests are spaced one second apart |
 | `INDICES` | `SPY,QQQ,^VIX` | context rows on the tape (never scored) |
 | `SCORE_CONCURRENCY` | `6` | maximum concurrent Jev calls after source and budget admission |
 | `DB_PATH` | `./data/desk.db` | SQLite file |

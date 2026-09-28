@@ -1,4 +1,5 @@
 import type { Company } from "../types.js";
+import { paceProviderRequest } from "../provider-cooldown.js";
 
 /**
  * X (Twitter) recent-search ingestion via API v2. Optional: without a bearer
@@ -44,6 +45,7 @@ export async function searchRecent(opts: {
   });
   if (opts.sinceId) params.set("since_id", opts.sinceId);
 
+  await paceProviderRequest("x", 1_000);
   const res = await fetch(`https://api.x.com/2/tweets/search/recent?${params}`, {
     headers: { authorization: `Bearer ${opts.bearer}` },
     signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),

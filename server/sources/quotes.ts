@@ -10,6 +10,8 @@
  * good value and shows "as of" age. Nothing here touches scoring.
  */
 
+import { paceProviderRequest, parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
+
 export interface Quote {
   ticker: string;
   price: number;
@@ -44,41 +46,22 @@ interface ChartResponse {
 // Yahoo throttles long browser-fingerprint UAs but serves the plain one.
 const UA = "Mozilla/5.0";
 
-export class RateLimitedError extends Error {
-  constructor(message = "rate limited") {
-    super(message);
+export class RateLimitedError extends ProviderRateLimitError {
+  constructor(retryAfterMs?: number, message = "Yahoo Finance HTTP 429", readonly deferred = false) {
+    super("yahoo", retryAfterMs, message);
     this.name = "RateLimitedError";
   }
 }
 
-async function fetchChart(path: string, timeoutMs: number, tries = 2): Promise<unknown> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < tries; attempt++) {
-    if (attempt > 0) await sleep(2_000);
-    try {
-      const res = await fetch(`https://query1.finance.yahoo.com${path}`, {
-        headers: { "user-agent": UA, accept: "application/json" },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (res.status === 429) {
-        lastErr = new RateLimitedError();
-        continue;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
-    } catch (err) {
-      if (err instanceof RateLimitedError) {
-        lastErr = err;
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error("quote fetch failed");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+async function fetchChart(path: string, timeoutMs: number): Promise<unknown> {
+  await paceProviderRequest("yahoo", 500);
+  const res = await fetch(`https://query1.finance.yahoo.com${path}`, {
+    headers: { "user-agent": UA, accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (res.status === 429) throw new RateLimitedError(parseRetryAfterMs(res.headers.get("retry-after")));
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
 export async function fetchQuote(ticker: string, timeoutMs = 10_000): Promise<Quote> {

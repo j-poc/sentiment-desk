@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import { vi } from "vitest";
 import { fetchFeed, googleNewsUrl, parseRss } from "../server/sources/rss.js";
 
@@ -52,6 +52,8 @@ describe("googleNewsUrl", () => {
 });
 
 describe("fetchFeed", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("rejects a 200 HTML error page instead of reporting a successful empty feed", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>blocked</html>", { status: 200 })));
     try {
@@ -59,5 +61,18 @@ describe("fetchFeed", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("preserves Retry-After for a feed rate limit", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "90" },
+    })));
+
+    await expect(fetchFeed("https://news.google.com/rss/search?q=NVDA")).rejects.toMatchObject({
+      name: "ProviderRateLimitError",
+      provider: "google_news",
+      retryAfterMs: 90_000,
+    });
   });
 });

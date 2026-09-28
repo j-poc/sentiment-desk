@@ -12,6 +12,13 @@ import { isFinanceRelevant } from "./scoring.js";
 import { fetchPrimaryDocText, fetchRecent8Ks, titleForItems } from "./sources/sec.js";
 import { classifyDeliveryError, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
+import {
+  clearProviderRateLimit,
+  ProviderRateLimitError,
+  providerCoolingDown,
+  recordProviderRateLimit,
+  type RateLimitedProvider,
+} from "./provider-cooldown.js";
 
 /**
  * Polling schedulers. Each source loop is failure-isolated: one company's feed
@@ -27,7 +34,13 @@ export function startRssPoller(deps: {
   health: HealthTracker;
   intervalSeconds: number;
   concurrency: number;
+  fetchFeed?: typeof fetchFeed;
+  pause?: (ms: number) => Promise<void>;
+  now?: () => number;
 }): SchedulerControl {
+  const fetch = deps.fetchFeed ?? fetchFeed;
+  const pause = deps.pause ?? sleep;
+  const now = deps.now ?? Date.now;
   let running = false;
   const tick = async (): Promise<void> => {
     if (running) return;
@@ -36,11 +49,18 @@ export function startRssPoller(deps: {
       // Two feeds per company: Google News for breadth, Yahoo Finance's
       // per-ticker feed for speed. Fetched with a small worker pool so a full
       // sweep completes in seconds, not minutes: detection lag is the product.
-      const feeds: Array<{ company: Company; url: string; fallbackName: string; collector: "google_news_rss" | "yahoo_finance_rss" }> = [];
+      const feeds: Array<{
+        company: Company;
+        url: string;
+        fallbackName: string;
+        collector: "google_news_rss" | "yahoo_finance_rss";
+        provider: "google_news" | "yahoo";
+      }> = [];
       for (const company of deps.companies) {
-        feeds.push({ company, url: googleNewsUrl(company), fallbackName: company.name, collector: "google_news_rss" });
-        feeds.push({ company, url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance", collector: "yahoo_finance_rss" });
+        feeds.push({ company, url: googleNewsUrl(company), fallbackName: company.name, collector: "google_news_rss", provider: "google_news" });
+        feeds.push({ company, url: yahooFinanceUrl(company), fallbackName: "Yahoo Finance", collector: "yahoo_finance_rss", provider: "yahoo" });
       }
+      const pausedThisCycle = new Set<RateLimitedProvider>();
       let next = 0;
       const worker = async (): Promise<void> => {
         for (;;) {
@@ -48,10 +68,14 @@ export function startRssPoller(deps: {
           next += 1;
           if (!job) return;
           const { company, feed } = { company: job.company, feed: { url: job.url, fallbackName: job.fallbackName, collector: job.collector } };
+          if (pausedThisCycle.has(job.provider) || providerCoolingDown(deps.db, job.provider, now())) {
+            await pause(100);
+            continue;
+          }
           const startedAt = Date.now();
           let items: Awaited<ReturnType<typeof fetchFeed>> = [];
           try {
-            items = await fetchFeed(feed.url);
+            items = await fetch(feed.url);
             let added = 0;
             let dropped = 0;
             for (const item of items) {
@@ -93,6 +117,7 @@ export function startRssPoller(deps: {
               normalizedItems: items,
             });
             deps.health.recordRss(true);
+            clearProviderRateLimit(deps.db, job.provider, startedAt);
             if (added > 0) {
               deps.db.logEvent("info", "rss", `${company.ticker}: ${added} new mentions`);
             }
@@ -109,8 +134,18 @@ export function startRssPoller(deps: {
             });
             deps.health.recordRss(false, `${company.ticker}: ${message}`);
             deps.db.logEvent("warn", "rss", `${company.ticker}: ${message}`);
+            if (err instanceof ProviderRateLimitError) {
+              pausedThisCycle.add(err.provider);
+              recordProviderRateLimit({
+                db: deps.db,
+                provider: err.provider,
+                minDelayMs: deps.intervalSeconds * 1_000,
+                retryAfterMs: err.retryAfterMs,
+                now: now(),
+              });
+            }
           }
-          await sleep(120);
+          await pause(1_000);
         }
       };
       const workers = Array.from({ length: Math.max(1, deps.concurrency) }, () => worker());
@@ -132,10 +167,12 @@ export function startXPoller(deps: {
 }): SchedulerControl {
   let running = false;
   const tick = async (): Promise<void> => {
+    if (providerCoolingDown(deps.db, "x")) return;
     if (running) return;
     running = true;
     try {
       for (const company of deps.companies) {
+        if (providerCoolingDown(deps.db, "x")) break;
         const startedAt = Date.now();
         let posts: Awaited<ReturnType<typeof searchRecent>>["posts"] = [];
         try {
@@ -151,6 +188,12 @@ export function startXPoller(deps: {
             });
             deps.health.recordX(false, "rate limited");
             deps.db.logEvent("warn", "x", `${company.ticker}: rate limited, pausing this cycle`);
+            recordProviderRateLimit({
+              db: deps.db,
+              provider: "x",
+              minDelayMs: deps.intervalSeconds * 1_000,
+              retryAfterMs: res.resetAt == null ? undefined : Math.max(0, res.resetAt - Date.now()),
+            });
             break;
           }
           let added = 0;
@@ -195,6 +238,7 @@ export function startXPoller(deps: {
           });
           if (res.newestId) deps.db.setKv(`x:since:${company.id}`, res.newestId);
           deps.health.recordX(true);
+          clearProviderRateLimit(deps.db, "x", startedAt);
           if (added > 0) deps.db.logEvent("info", "x", `${company.ticker}: ${added} new posts`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -232,6 +276,7 @@ export function startSecPoller(deps: {
 }): SchedulerControl {
   let running = false;
   const tick = async (): Promise<void> => {
+    if (providerCoolingDown(deps.db, "sec")) return;
     if (running) return;
     running = true;
     try {
@@ -248,7 +293,8 @@ export function startSecPoller(deps: {
             let snippet = "";
             try {
               snippet = await fetchPrimaryDocText(f.primaryDocUrl, deps.userAgent);
-            } catch {
+            } catch (err) {
+              if (err instanceof ProviderRateLimitError) throw err;
               /* scoring proceeds on the item-typed title if the doc fails */
             }
             const url = f.primaryDocUrl || `https://www.sec.gov/Archives/edgar/data/${Number(f.cik)}/${f.accessionNo.replace(/-/g, "")}/`;
@@ -279,6 +325,7 @@ export function startSecPoller(deps: {
             normalizedItems: filings,
           });
           deps.health.recordSec(true);
+          clearProviderRateLimit(deps.db, "sec", startedAt);
           if (added > 0) deps.db.logEvent("info", "sec", `${company.ticker}: ${added} new 8-K filings`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -290,6 +337,15 @@ export function startSecPoller(deps: {
           });
           deps.health.recordSec(false, `${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "sec", `${company.ticker}: ${message}`);
+          if (err instanceof ProviderRateLimitError) {
+            recordProviderRateLimit({
+              db: deps.db,
+              provider: "sec",
+              minDelayMs: deps.intervalSeconds * 1_000,
+              retryAfterMs: err.retryAfterMs,
+            });
+            break;
+          }
         }
         await sleep(150); // SEC fair-access pacing: ~6.7 req/s ceiling
       }
@@ -443,9 +499,13 @@ export function startFinnhubPoller(deps: {
   let lastEarningsRefresh = 0;
   let backfilled = false;
   const runBackfill = async (): Promise<void> => {
-    if (backfilled || deps.backfillDays <= 0) return;
-    backfilled = true;
+    if (backfilled || deps.backfillDays <= 0 || providerCoolingDown(deps.db, "finnhub")) return;
+    let complete = true;
     for (const company of deps.companies) {
+      if (providerCoolingDown(deps.db, "finnhub")) {
+        complete = false;
+        break;
+      }
       const startedAt = Date.now();
       let news: Awaited<ReturnType<typeof fetchFinnhubNews>> = [];
       try {
@@ -487,8 +547,10 @@ export function startFinnhubPoller(deps: {
           adapterVersion: "finnhub-news/1", result: news.length === 0 ? "empty" : "success",
           parsedItemCount: news.length, normalizedItems: news,
         });
+        clearProviderRateLimit(deps.db, "finnhub", startedAt);
         deps.db.logEvent("info", "backfill", `${company.ticker}: ${added} historical mentions`);
       } catch (err) {
+        complete = false;
         recordDelivery({
           db: deps.db, collector: "finnhub", companyId: company.id,
           requestKey: `finnhub:${company.ticker}:backfill:${deps.backfillDays}`, startedAt,
@@ -496,11 +558,22 @@ export function startFinnhubPoller(deps: {
           parsedItemCount: news.length, normalizedItems: news, error: err,
         });
         deps.db.logEvent("warn", "backfill", `${company.ticker}: ${err instanceof Error ? err.message : String(err)}`);
+        if (err instanceof ProviderRateLimitError) {
+          recordProviderRateLimit({
+            db: deps.db,
+            provider: "finnhub",
+            minDelayMs: deps.intervalSeconds * 1_000,
+            retryAfterMs: err.retryAfterMs,
+          });
+          break;
+        }
       }
       await sleep(300);
     }
+    if (complete) backfilled = true;
   };
   const refreshEarnings = async (): Promise<void> => {
+    if (providerCoolingDown(deps.db, "finnhub")) return;
     const symbols = new Set(deps.companies.map((c) => c.ticker));
     const calendarStartedAt = Date.now();
     try {
@@ -517,6 +590,7 @@ export function startFinnhubPoller(deps: {
         normalizedItems: [...upcoming.entries()],
       });
       deps.health.recordFinnhub(true);
+      clearProviderRateLimit(deps.db, "finnhub", calendarStartedAt);
     } catch (err) {
       recordDelivery({
         db: deps.db, collector: "finnhub", companyId: null,
@@ -525,8 +599,18 @@ export function startFinnhubPoller(deps: {
         result: classifyDeliveryError(err), parsedItemCount: 0, error: err,
       });
       deps.health.recordFinnhub(false, `calendar: ${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof ProviderRateLimitError) {
+        recordProviderRateLimit({
+          db: deps.db,
+          provider: "finnhub",
+          minDelayMs: deps.intervalSeconds * 1_000,
+          retryAfterMs: err.retryAfterMs,
+        });
+        return;
+      }
     }
     for (const company of deps.companies) {
+      if (providerCoolingDown(deps.db, "finnhub")) return;
       const startedAt = Date.now();
       let entries: Awaited<ReturnType<typeof fetchEarningsHistory>> = [];
       try {
@@ -540,6 +624,7 @@ export function startFinnhubPoller(deps: {
           parsedItemCount: entries.length, normalizedItems: entries,
         });
         deps.health.recordFinnhub(true);
+        clearProviderRateLimit(deps.db, "finnhub", startedAt);
       } catch (err) {
         recordDelivery({
           db: deps.db, collector: "finnhub", companyId: company.id,
@@ -548,12 +633,22 @@ export function startFinnhubPoller(deps: {
           parsedItemCount: entries.length, normalizedItems: entries, error: err,
         });
         deps.health.recordFinnhub(false, `${company.ticker}: ${err instanceof Error ? err.message : String(err)}`);
+        if (err instanceof ProviderRateLimitError) {
+          recordProviderRateLimit({
+            db: deps.db,
+            provider: "finnhub",
+            minDelayMs: deps.intervalSeconds * 1_000,
+            retryAfterMs: err.retryAfterMs,
+          });
+          return;
+        }
       }
       await sleep(300);
     }
     lastEarningsRefresh = Date.now();
   };
   const tick = async (): Promise<void> => {
+    if (providerCoolingDown(deps.db, "finnhub")) return;
     if (running) return;
     running = true;
     try {
@@ -562,6 +657,7 @@ export function startFinnhubPoller(deps: {
         await refreshEarnings();
       }
       for (const company of deps.companies) {
+        if (providerCoolingDown(deps.db, "finnhub")) break;
         const startedAt = Date.now();
         let news: Awaited<ReturnType<typeof fetchFinnhubNews>> = [];
         try {
@@ -607,6 +703,7 @@ export function startFinnhubPoller(deps: {
             parsedItemCount: news.length, normalizedItems: news,
           });
           deps.health.recordFinnhub(true);
+          clearProviderRateLimit(deps.db, "finnhub", startedAt);
           if (added > 0) deps.db.logEvent("info", "finnhub", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `finnhub ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
@@ -619,6 +716,15 @@ export function startFinnhubPoller(deps: {
           });
           deps.health.recordFinnhub(false, `${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "finnhub", `${company.ticker}: ${message}`);
+          if (err instanceof ProviderRateLimitError) {
+            recordProviderRateLimit({
+              db: deps.db,
+              provider: "finnhub",
+              minDelayMs: deps.intervalSeconds * 1_000,
+              retryAfterMs: err.retryAfterMs,
+            });
+            break;
+          }
         }
         await sleep(250);
       }
@@ -641,6 +747,7 @@ export function startRedditPoller(deps: {
   let running = false;
   let client: RedditClient | null = null;
   const tick = async (): Promise<void> => {
+    if (providerCoolingDown(deps.db, "reddit")) return;
     if (running) return;
     running = true;
     try {
@@ -653,9 +760,18 @@ export function startRedditPoller(deps: {
           result: classifyDeliveryError(err), parsedItemCount: 0, error: err,
         });
         deps.health.recordReddit(false, err instanceof Error ? err.message : String(err));
+        if (err instanceof ProviderRateLimitError) {
+          recordProviderRateLimit({
+            db: deps.db,
+            provider: "reddit",
+            minDelayMs: deps.intervalSeconds * 1_000,
+            retryAfterMs: err.retryAfterMs,
+          });
+        }
         return;
       }
       for (const company of deps.companies) {
+        if (providerCoolingDown(deps.db, "reddit")) break;
         const active = client;
         if (!active) break;
         const startedAt = Date.now();
@@ -705,6 +821,7 @@ export function startRedditPoller(deps: {
             parsedItemCount: posts.length, normalizedItems: posts,
           });
           deps.health.recordReddit(true);
+          clearProviderRateLimit(deps.db, "reddit", startedAt);
           if (added > 0) deps.db.logEvent("info", "reddit", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `reddit ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
@@ -718,6 +835,15 @@ export function startRedditPoller(deps: {
           deps.health.recordReddit(false, `${company.ticker}: ${message}`);
           client = null; // force token refresh next cycle
           deps.db.logEvent("warn", "reddit", `${company.ticker}: ${message}`);
+          if (err instanceof ProviderRateLimitError) {
+            recordProviderRateLimit({
+              db: deps.db,
+              provider: "reddit",
+              minDelayMs: deps.intervalSeconds * 1_000,
+              retryAfterMs: err.retryAfterMs,
+            });
+            break;
+          }
         }
         await sleep(1_500);
       }

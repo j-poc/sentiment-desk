@@ -5,6 +5,8 @@
  * 401. Posts are tiered "social" and weighted accordingly by the rubric.
  */
 
+import { paceProviderRequest, parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
+
 export interface RedditPost {
   id: string;
   title: string;
@@ -28,6 +30,7 @@ export async function getRedditToken(
   timeoutMs = 10_000,
 ): Promise<RedditClient> {
   if (existing && existing.expiresAt > Date.now() + 60_000) return existing;
+  await paceProviderRequest("reddit", 1_000);
   const res = await fetch("https://www.reddit.com/api/v1/access_token", {
     method: "POST",
     headers: {
@@ -38,6 +41,7 @@ export async function getRedditToken(
     body: "grant_type=client_credentials",
     signal: AbortSignal.timeout(timeoutMs),
   });
+  if (res.status === 429) throw new ProviderRateLimitError("reddit", parseRetryAfterMs(res.headers.get("retry-after")), "Reddit OAuth HTTP 429");
   if (!res.ok) throw new Error(`reddit auth HTTP ${res.status}`);
   const body = (await res.json()) as { access_token?: string; expires_in?: number };
   if (!body.access_token) throw new Error("reddit auth returned no token");
@@ -77,6 +81,7 @@ export async function searchReddit(
     t: "week",
     type: "link",
   });
+  await paceProviderRequest("reddit", 1_000);
   const res = await fetch(`https://oauth.reddit.com/search?${params}`, {
     headers: {
       authorization: `Bearer ${client.token}`,
@@ -85,6 +90,7 @@ export async function searchReddit(
     },
     signal: AbortSignal.timeout(timeoutMs),
   });
+  if (res.status === 429) throw new ProviderRateLimitError("reddit", parseRetryAfterMs(res.headers.get("retry-after")), "Reddit search HTTP 429");
   if (!res.ok) throw new Error(`reddit search HTTP ${res.status}`);
   const body = (await res.json()) as ListingResponse;
   const out: RedditPost[] = [];

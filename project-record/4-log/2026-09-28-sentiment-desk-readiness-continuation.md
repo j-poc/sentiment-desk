@@ -213,8 +213,10 @@ source coverage gaps remain separate gates.
 
 ## Current checkpoint result
 
-The implementation checkpoint is ready to push on the existing
-`codex/real-data-rebuild` branch. The UI/chart workflow and real-data-only
+The real-data admission and GDELT cooldown checkpoint was pushed as `58f6ba1`
+to `origin/codex/real-data-rebuild`. This continuation records a second,
+read-only collector audit and the follow-up rate-limit fixes. The UI/chart
+workflow and real-data-only
 runtime also passed a fresh production-build browser smoke at
 `http://127.0.0.1:8794/`. A SQLite backup of the verified real-only database
 was used so the existing application database stayed untouched. The UI showed
@@ -234,3 +236,52 @@ were introduced into the application.
 The targeted code tests made no provider calls. The separate browser smoke
 above intentionally exercised the live public-source UI path; its counts and
 outcomes are limited to that temporary database and date.
+
+## Follow-up: provider rate limits and request fanout
+
+An independent read-only review of the checked-out collector paths found a
+rate-limit retry risk beyond GDELT. Before the follow-up, the default RSS
+poller could issue 48 requests every 30 seconds with four concurrent workers;
+HTTP 429s did not stop the current feed rotation. Yahoo quote requests retried
+429s after two seconds without using `Retry-After`, quote/chart share the same
+provider, and simultaneous identical chart cache misses could duplicate
+requests. SEC primary documents had no spacing within one company's filings.
+Optional Finnhub, Reddit, and X collectors stopped or paced inconsistently
+after rate limits.
+
+The follow-up implementation now:
+
+- Adds durable provider-level cooldown state with `Retry-After` support,
+  bounded exponential fallback, a one-day upper bound, restart persistence,
+  corrupt-state fail-closed behavior, and protection against an older
+  in-flight success clearing a newer 429 cooldown.
+- Paces request starts per provider. RSS defaults to a three-minute cadence
+  with two workers; Google and Yahoo requests are at least one second apart.
+  Quotes default to 90 seconds and Yahoo chart/quote requests are at least
+  500ms apart. SEC requests are at least 125ms apart. These are application
+  controls, not proof of provider quotas or permission.
+- Stops only the rate-limited provider's current sweep. RSS, Yahoo quote/chart,
+  SEC, Finnhub, Reddit, and X do not keep issuing requests after the first 429;
+  unrelated providers in the RSS cycle may continue. No synthetic success or
+  delivery receipt is created for a cooldown skip.
+- Removes the immediate Yahoo retry, honors Yahoo `Retry-After`, shares a
+  provider cooldown between its RSS and chart endpoints, pauses chart
+  backfill while the provider is cooling down, and coalesces simultaneous
+  requests for the same ticker/window.
+
+Focused regressions cover RSS isolation, Retry-After parsing, cooldown across
+a SQLite reopen, corrupt stored state, all credentialed poller sweep stops,
+Yahoo quote/chart behavior, duplicate chart-request coalescing, and preserving
+the longest cooldown deadline when overlapping 429 responses complete out of
+order. Full local verification passes 121 tests across 21 files, TypeScript
+typecheck, production build, and `git diff --check`. These tests use mocks; no
+provider was contacted for this follow-up. The remaining release gates are
+unchanged: source/model-use
+rights, TypeSafe account and retention/billing settings, labeled real-source
+Jev quality, exhaustive coverage, and historical legacy-usage reconciliation.
+
+The final independent read-only review confirmed the overlapping-429 fix and
+found no remaining actionable defects in the audited collector changes. The
+focused reviewer reran the cooldown, poller, RSS, market/coalescing tests,
+typecheck, and diff check successfully. No external provider or model was
+called for this review.

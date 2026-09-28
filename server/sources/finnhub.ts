@@ -1,9 +1,10 @@
 /**
- * Finnhub free tier: per-symbol company news, the earnings calendar, and EPS
- * surprise history (actual vs consensus). The surprise number is what upgrades
- * the desk's "surprise" judgment from model guess to measured fact. Free tier
- * is 60 calls/minute; the poller stays far under it.
+ * Optional Finnhub news and earnings endpoints. Plan quotas vary; requests are
+ * paced to one start per second and stop source-wide on HTTP 429 until the
+ * provider's Retry-After window or the bounded fallback expires.
  */
+
+import { paceProviderRequest, parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
 
 export interface FinnhubNewsItem {
   headline: string;
@@ -28,11 +29,12 @@ export async function fetchFinnhubNews(
     to: fmt(to),
     token,
   });
+  await paceProviderRequest("finnhub", 1_000);
   const res = await fetch(`https://finnhub.io/api/v1/company-news?${params}`, {
     headers: { "user-agent": "Mozilla/5.0", accept: "application/json" },
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (res.status === 429) throw new Error("finnhub rate limited");
+  if (res.status === 429) throw new ProviderRateLimitError("finnhub", parseRetryAfterMs(res.headers.get("retry-after")), "Finnhub HTTP 429");
   if (!res.ok) throw new Error(`finnhub news HTTP ${res.status}`);
   const body = (await res.json()) as Array<{
     headline?: string;
@@ -67,10 +69,12 @@ export async function fetchEarningsHistory(
   timeoutMs = 15_000,
 ): Promise<EarningsEntry[]> {
   const params = new URLSearchParams({ symbol, token });
+  await paceProviderRequest("finnhub", 1_000);
   const res = await fetch(`https://finnhub.io/api/v1/stock/earnings?${params}`, {
     headers: { "user-agent": "Mozilla/5.0", accept: "application/json" },
     signal: AbortSignal.timeout(timeoutMs),
   });
+  if (res.status === 429) throw new ProviderRateLimitError("finnhub", parseRetryAfterMs(res.headers.get("retry-after")), "Finnhub earnings HTTP 429");
   if (!res.ok) throw new Error(`finnhub earnings HTTP ${res.status}`);
   const body = (await res.json()) as Array<{
     date?: string;
@@ -118,10 +122,12 @@ export async function fetchUpcomingEarnings(
     to: fmt(to),
     token,
   });
+  await paceProviderRequest("finnhub", 1_000);
   const res = await fetch(`https://finnhub.io/api/v1/calendar/earnings?${params}`, {
     headers: { "user-agent": "Mozilla/5.0", accept: "application/json" },
     signal: AbortSignal.timeout(timeoutMs),
   });
+  if (res.status === 429) throw new ProviderRateLimitError("finnhub", parseRetryAfterMs(res.headers.get("retry-after")), "Finnhub calendar HTTP 429");
   if (!res.ok) throw new Error(`finnhub calendar HTTP ${res.status}`);
   const body = (await res.json()) as {
     earningsCalendar?: Array<{ symbol?: string; date?: string }>;

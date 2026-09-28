@@ -110,7 +110,7 @@ export const config = {
    */
   secUserAgent: secContactUserAgent(process.env.SEC_USER_AGENT),
   pollSecSeconds: int(process.env.POLL_SEC_SECONDS, 90),
-  pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 30),
+  pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 180),
   /** Webhook (Discord/Slack-style JSON) pinged on fresh, high-strength events. */
   alertWebhookUrl: process.env.ALERT_WEBHOOK_URL?.trim() || "",
   alertEventScore: int(process.env.ALERT_EVENT_SCORE, 65),
@@ -118,9 +118,9 @@ export const config = {
   alertFreshMinutes: int(process.env.ALERT_FRESH_MINUTES, 15),
   pollXSeconds: int(process.env.POLL_X_SECONDS, 180),
   pollGdeltSeconds: int(process.env.POLL_GDELT_SECONDS, 300),
-  pollQuotesSeconds: int(process.env.POLL_QUOTES_SECONDS, 45),
+  pollQuotesSeconds: int(process.env.POLL_QUOTES_SECONDS, 90),
   scoreConcurrency: int(process.env.SCORE_CONCURRENCY, 6),
-  rssConcurrency: int(process.env.RSS_CONCURRENCY, 4),
+  rssConcurrency: int(process.env.RSS_CONCURRENCY, 2),
   /** Market context rows shown on the tape; never scored, never in the watchlist. */
   indices: (process.env.INDICES?.split(",") ?? ["SPY", "QQQ", "^VIX"])
     .map((s) => s.trim())

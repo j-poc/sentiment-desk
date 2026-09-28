@@ -3,6 +3,7 @@ import { Desk } from "../server/db.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { MarketData } from "../server/market.js";
+import { fetchQuote } from "../server/sources/quotes.js";
 import type { Company } from "../server/types.js";
 
 const company: Company = {
@@ -36,13 +37,71 @@ function market(db: Desk) {
 }
 
 describe("market quote provenance", () => {
+  it("honors Yahoo Retry-After without retrying a rejected request", async () => {
+    const request = vi.fn(async () => new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "120" },
+    }));
+    globalThis.fetch = request;
+
+    await expect(fetchQuote("ACME")).rejects.toMatchObject({
+      name: "RateLimitedError",
+      provider: "yahoo",
+      retryAfterMs: 120_000,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists Yahoo cooldown and skips the rest of quote and chart requests", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([company]);
+    const data = market(db);
+    const request = vi.fn(async () => new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "120" },
+    }));
+    globalThis.fetch = request;
+
+    await data.refresh();
+    await data.waitForIdle();
+    expect(request).toHaveBeenCalledTimes(1);
+    const storedRetryAt = Number(db.getKv("provider-cooldown:yahoo:retry-at"));
+    expect(storedRetryAt).toBeGreaterThan(Date.now());
+    await data.refresh();
+    await data.waitForIdle();
+    expect(request).toHaveBeenCalledTimes(1);
+    await expect(data.priceSeries("ACME", 24)).rejects.toMatchObject({ deferred: true });
+    expect(request).toHaveBeenCalledTimes(1);
+    db.close();
+  });
+
+  it("coalesces concurrent identical price-series cache misses", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([company]);
+    const data = market(db);
+    let release!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { release = resolve; });
+    const request = vi.fn(async () => response);
+    globalThis.fetch = request;
+
+    const first = data.priceSeries("ACME", 24);
+    const second = data.priceSeries("ACME", 24);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1), { timeout: 1_000 });
+    expect(request).toHaveBeenCalledTimes(1);
+    release(chartResponse());
+    const results = await Promise.all([first, second]);
+    expect(results[0]).toEqual(results[1]);
+    expect(request).toHaveBeenCalledTimes(1);
+    db.close();
+  });
+
   it("marks a retained last-good quote as cache after a failed refresh", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies([company]);
     const data = market(db);
     globalThis.fetch = vi.fn(async () => chartResponse());
     await data.refresh();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await data.waitForIdle();
     const first = data.current().quotes.ACME!;
     expect(first.currency).toBe("EUR");
     expect(first.delivery).toBe("network");
@@ -50,6 +109,7 @@ describe("market quote provenance", () => {
 
     globalThis.fetch = vi.fn(async () => new Response("unavailable", { status: 503 }));
     await data.refresh();
+    await data.waitForIdle();
     const cached = data.current().quotes.ACME!;
     expect(cached.delivery).toBe("cache");
     expect(cached.price).toBe(first.price);
