@@ -37,6 +37,8 @@ marked `local_store`.
 - `npm run build` — passed; Vite retains its existing ~531 kB main-chunk
 advisory.
 - `git diff --check` — passed.
+- Checkpoint `1647a1102236cebb5579e30debcab7271f408e7b` was pushed to
+  `origin/codex/real-data-rebuild`; screenshot artifacts remain local.
 - An isolated SQLite backup copy of `data/desk.db` was served from
 `/private/tmp/sentiment-desk-offline-zXvxwj/desk.db`; the original file was
 not modified. The current API returned 24 companies. AAPL's first 100 visible

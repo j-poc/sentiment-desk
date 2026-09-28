@@ -58,7 +58,9 @@ gates and their limits are recorded in
 
 The native ultragoal remains `active`; the evaluator implementation checkpoint,
 `cae369bd4af9ca571501fa580c7a6326094bda15`, is verified on
-`origin/codex/real-data-rebuild`. Local implementation and its verification
+`origin/codex/real-data-rebuild`. The saved-data-only runtime and retry-gating
+checkpoint `1647a1102236cebb5579e30debcab7271f408e7b` is also pushed to that
+branch. Local implementation and its verification
 are recorded as complete for this iteration. The active attention state is
 `awaiting_authority`: the authorized TypeSafe account owner and applicable
 source-rights owners must establish permitted use, retention, telemetry,
