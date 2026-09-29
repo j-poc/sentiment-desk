@@ -62,13 +62,26 @@ project-specific plan, model-processing, display, retention, and deletion
 permissions remain unresolved for these feeds. These observations are not a
 legal determination.
 
+## User-provided source-use attestation
+
+On 2026-09-29, the user stated that they have rights for all public sources and
+APIs. This is recorded as the operator's source-use attestation, not as an
+independent review of agreements or endpoint-specific rights. It does not
+confirm TypeSafe account authority, telemetry/retention terms, billing or
+spend limits, nor does it resolve the historical usage records.
+
 ## Data and side-effect boundary
 
-No provider, SEC, market-data, Reddit, X, Finnhub, or Jev request was sent for
-this checkpoint. The offline-startup verifier intercepted external fetches
-before network access. No application database, credential value, or saved
-source text was read or changed for this implementation. No demo or synthetic
-product data was added.
+Before the user provided the source-use attestation, the offline-startup
+verifier intercepted every external fetch before network access. After that
+attestation, the isolated Compose smoke was configured with only the five
+keyless public collector paths: Google News RSS, Yahoo Finance RSS, GDELT,
+Yahoo quotes, and Yahoo chart. It made no Jev, Finnhub, Reddit, or X calls and
+used no API credentials. The smoke's temporary container, project,
+database volume, and collected real observations were removed by its cleanup
+trap. No source text was printed, manually reviewed, or committed; the smoke
+used the API response only to confirm a pending item existed. No demo or
+synthetic product data was added.
 
 ## Verification
 
@@ -80,6 +93,13 @@ product data was added.
   requests, and Jev remained disabled without account approval or a matching
   source intersection. The fully configured Jev case only checked health; it
   had no pending item and made no model request.
+- `SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh`
+  — **PASS** after starting the dedicated Desk verification profile. The
+  isolated live run reported 27 quotes across 24 companies and a
+  publisher-timed Google News RSS observation with pending Jev status. After
+  container recreation, the same pending observation remained in the
+  persistent test volume. Host-published health returned HTTP 200 before and
+  after recovery. The script removed its temporary project and volume.
 - `git diff --check`, `sh -n scripts/verify-live-compose.sh`, and JSON parsing
   of `live-data-etl.json` — **PASS**.
 - Browser readback at `http://127.0.0.1:8796/` confirmed the global-off,
@@ -94,11 +114,21 @@ product data was added.
 
 This is a local enforcement and disclosure checkpoint, not live operation,
 10/10, or release readiness. The source-use flags remain empty in normal
-configuration. Still required: a valid SEC User-Agent contact; actual
-source-specific permissions; authorized TypeSafe account-owner evidence and
-approved request/spend limits; at least two independent qualified reviewers
-for frozen blinded real-source labels and a passing Jev evaluation; and
-historical `legacy_unknown` request/payload/billing reconciliation from
-account/provider records. Coverage remains explicitly finite and incomplete.
-Opportunity Radar is unchanged and remains downstream of Sentiment Desk
-operational readiness.
+configuration. Source rights are user-attested but not independently verified.
+Still required: a valid SEC User-Agent contact; authorized TypeSafe account
+owner evidence and approved request/spend limits; at least two independent
+qualified reviewers for frozen blinded real-source labels and a passing Jev
+evaluation; and historical `legacy_unknown` request/payload/billing
+reconciliation from account/provider records. Coverage remains explicitly
+finite and incomplete. Opportunity Radar is unchanged and remains downstream
+of Sentiment Desk operational readiness.
+
+## Requested whole-build adversarial review
+
+The user requested the named `engineering_bullshit_detector` subagent. Its
+profile exists at `/Users/jurgis/.codex/agents/engineering_bullshit_detector.toml`
+and is registered in `/Users/jurgis/.codex/config.toml`, but the current
+subagent launcher rejected it with `unknown agent_type
+'engineering_bullshit_detector'`. No generic reviewer was substituted. This
+whole-build review remains **NOT RUN** until the named role is callable in the
+session or the user authorizes a clearly labeled fallback.

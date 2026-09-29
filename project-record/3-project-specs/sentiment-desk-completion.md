@@ -8,9 +8,14 @@ three-way source allowlist intersection. The approval flags are disclosed in
 Health and do not independently verify rights or authority. The local suite
 now passes 212 tests across 28 files, typecheck and production build pass, and
 the fresh-process network-intercepted verifier proves the default-off and
-approval gates. No provider or Jev request was sent. Actual source/account
-rights, contact details, historical usage reconciliation, and real-source Jev
-quality remain unresolved; overall status is partial. The Desk also discloses
+approval gates. After the user attested to rights for public sources and APIs,
+the isolated live Compose smoke collected 27 real quotes for 24 companies and
+persisted a publisher-timed RSS observation as pending across container
+recreation. Jev and credentialed optional sources stayed off; the temporary
+Compose volume was removed. The source-rights statement is user-attested, not
+independently verified. TypeSafe account terms and spend limits, SEC contact,
+historical usage reconciliation, and real-source Jev quality remain
+unresolved; overall status is partial. The Desk also discloses
 the configured collector bounds and missing public-source families in an
 expandable, keyboard-operable coverage panel; local source inventory is
 complete while overall coverage remains partial. Reaction measurements now

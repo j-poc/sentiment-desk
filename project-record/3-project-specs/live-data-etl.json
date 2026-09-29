@@ -1,12 +1,20 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "Local source-use and Jev-account gates were tightened in the 2026-09-29 checkpoint and verified with 212 tests across 28 files, TypeScript typecheck, production build, and a network-intercepted fresh-process verifier. Each requested source now needs a separate SOURCE_RIGHTS_APPROVED_COLLECTORS entry; Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true and its three-way source allowlist intersection. The health API/UI reports these flags as operator attestations, not verified rights. No provider or Jev request was sent. The Desk remains externally unoperational and overall status partial: SEC contact, provider and TypeSafe account rights/authority, eligible real-source blinded labels and passing Jev evaluation, legacy_unknown usage reconciliation, and finite source coverage remain unresolved. The saved-data selection/chart UI has prior direct browser verification; this checkpoint changes approval status visibility only. The user-facing RSS disclosure states that one response per company, without pagination or a completeness signal, leaves coverage unknown and potentially incomplete.",
+  "operational_status": "Local source-use and Jev-account gates were tightened in the 2026-09-29 checkpoint and verified with 212 tests across 28 files, TypeScript typecheck, production build, and a network-intercepted fresh-process verifier. Each source requires both a request allowlist and separate user-attested rights; Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true and its three-way source allowlist intersection. The user attested to holding rights for all public sources and APIs; this is not an independent review of endpoint agreements. An isolated live Compose smoke then collected 27 quotes for 24 companies and persisted a publisher-timed Google News RSS item as pending across container recreation. Jev and credentialed optional providers remained off; the temporary test volume was removed. The Desk remains incomplete: TypeSafe account authority/terms and spend ceiling, SEC contact, independent real-source labels and Jev evaluation, legacy_unknown use/billing reconciliation, and finite source coverage remain unresolved. The saved-data selection/chart UI has prior direct browser verification; the Health UI visibly discloses blocked approvals and the saved-data-only state.",
   "source_request_policy": {
     "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults to false and gates all external polling, chart retrieval, Jev calls, and operator retry.",
     "source_allowlist": "EXTERNAL_SOURCE_COLLECTORS defaults to empty. A source request runs only when EXTERNAL_REQUESTS_ENABLED is true and its collector appears in both EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. The latter is an operator attestation, not independent verification of rights.",
     "jev_forwarding": "TYPESAFE_ALLOWED_COLLECTORS is intersected with EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true, a non-empty key, and positive finite daily request and request-body-byte limits. This account-use flag is also an operator attestation, not evidence of account authority or terms.",
-    "verification": "The fresh-process offline verifier proves the default-off startup makes zero external fetches; verifies each of nine isolated collectors reaches only its expected network-guarded path when both source lists admit it; proves a missing source approval makes zero fetches; and tests Jev disabled without account attestation or matching three-way source lists, then config-ready only when every config gate is present. All external fetches are intercepted before network access; no provider or Jev request is sent."
+    "verification": "The offline-startup verifier proves default-off startup makes zero fetches; verifies each of nine isolated collectors reaches only its guarded path when both source lists admit it; proves missing approval makes zero fetches; and checks Jev blocked without account attestation or matching three-way source lists. All outbound fetches in this verifier are intercepted before network access. The separate user-attested live Compose smoke result and scope are recorded below.",
+    "live_smoke": {
+      "reviewed_at": "2026-09-29",
+      "status": "PASS",
+      "command": "SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh",
+      "scope": "Isolated temporary Compose project; five keyless public collector paths only; TypeSafe, Finnhub, Reddit, and X disabled.",
+      "evidence": "Live API reported 27 quotes across 24 companies and a publisher-timed Google News RSS observation in pending status. The same observation remained pending after container recreation; host health returned HTTP 200 before and after recovery. Cleanup removed the temporary project and volume.",
+      "limitation": "This proves a scoped live ingestion and persistence/recovery path, not legal rights, complete source coverage, Jev quality, or production readiness."
+    }
   },
   "rights_review": {
     "as_of": "2026-09-29",
@@ -91,7 +99,14 @@
         "reference": "https://docs.x.com/developer-terms/policy",
         "action": "Keep X disabled until account/use rights are confirmed and an approved removal/reconciliation process is implemented for stored content."
       }
-    ]
+    ],
+    "user_attestation": {
+      "reviewed_at": "2026-09-29",
+      "statement": "User reports holding rights for all public sources and APIs.",
+      "evidence_type": "user-provided operator attestation",
+      "verification_status": "not independently verified against endpoint-specific agreements",
+      "applied_to": "The isolated keyless public-source Compose smoke only."
+    }
   },
   "intended_use": "Private, single-user research interface for investigating sourced observations and Jev judgments; not an authoritative point-in-time archive or investment signal service.",
   "delivery": "Local Docker Compose or local Node process. The public source/build does not provide a hosted data service.",
