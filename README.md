@@ -6,8 +6,10 @@ multi-user data service.
 
 **Jev** (TypeSafe AI System One) is the per-item sentiment and event judge and
 uses one fixed rubric. Live items stay pending by default. A key alone never
-starts scoring: dispatch also requires an explicit source-collector allowlist
-and finite daily request and request-body-byte limits.
+starts scoring: dispatch also requires matching source request and approval
+allowlists, `TYPESAFE_ACCOUNT_USE_APPROVED=true`, and finite daily request and
+request-body-byte limits. These approval settings are operator attestations;
+they do not independently verify source rights or account authority.
 
 The core idea is the live "BS meter" pattern: the same structured Jev judgment
 for every item, with the source attached. It is a judgment, not a claim of
@@ -38,7 +40,8 @@ fact-checking.
   left empty and an out-of-window latest quote is never carried forward.
 - **Judgment**: Jev dispatch requires `TYPESAFE_API_KEY`, an explicit
   `TYPESAFE_ALLOWED_COLLECTORS` value, the same collector in
-  `EXTERNAL_SOURCE_COLLECTORS`, and positive finite daily limits. Local
+  `EXTERNAL_SOURCE_COLLECTORS` and `SOURCE_RIGHTS_APPROVED_COLLECTORS`,
+  `TYPESAFE_ACCOUNT_USE_APPROVED=true`, and positive finite daily limits. Local
   Node also checks `~/.newsjack/.env` for the key unless the variable is
   explicitly set empty; Docker Compose passes values from this project’s
   `.env` only. A key without the remaining controls leaves every observation
@@ -125,20 +128,23 @@ npm run dev                # saved real data only by default on :8787
 ```
 
 After applicable source and account terms are confirmed, explicitly opt in to
-live provider traffic and allow only the cleared source:
+live provider traffic and add only the cleared source to both source lists:
 
 ```bash
-EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar npm run dev
+EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar npm run dev
 ```
 
 Set a descriptive `SEC_USER_AGENT` in `.env` before using the SEC-only example.
 SEC ticker-directory lookup runs after the local API is available; transient
 failures are recorded in delivery health and retried on the SEC polling cadence.
 The global opt-in pauses every external request by default; even after it is
-enabled, only collectors listed in `EXTERNAL_SOURCE_COLLECTORS` can poll or
-fetch charts. Credentials alone do not enable a collector. Keep publisher feeds
-and Yahoo quote/chart endpoints out of that list until their exact use rights
-are established.
+enabled, only collectors listed in both `EXTERNAL_SOURCE_COLLECTORS` and
+`SOURCE_RIGHTS_APPROVED_COLLECTORS` can poll or fetch charts. The second list is
+an operator attestation, not independent verification of rights. Credentials
+alone do not enable a collector. Jev additionally requires the authorized
+account owner's `TYPESAFE_ACCOUNT_USE_APPROVED=true`, a Jev allowlist, and
+finite request/byte ceilings. Keep publisher feeds and Yahoo quote/chart
+endpoints out of the approval list until their exact use rights are established.
 
 Production:
 
@@ -152,12 +158,14 @@ npm start                  # one process serves API + UI on :8787
 Docker Compose builds the server and dashboard from source and stores SQLite
 history in a named volume. It defaults to saved-data-only mode. After applicable
 source and account terms are confirmed, set `EXTERNAL_REQUESTS_ENABLED=true`
-and a source-by-source `EXTERNAL_SOURCE_COLLECTORS` allowlist. For example,
-`EXTERNAL_SOURCE_COLLECTORS=sec_edgar` enables SEC filings only; Jev remains
-separately disabled unless its key, `TYPESAFE_ALLOWED_COLLECTORS` also includes
-`sec_edgar`, and finite daily budgets are configured. Jev can only process a
-collector present in both allowlists. Optional Finnhub, Reddit, and X
-credentials do not enable those sources unless they are also allowlisted.
+and matching source-by-source request and approval lists. For example,
+`EXTERNAL_SOURCE_COLLECTORS=sec_edgar` plus
+`SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar` enables SEC filings only; SEC
+still requires a valid `SEC_USER_AGENT`. Jev remains disabled unless the
+authorized account owner sets `TYPESAFE_ACCOUNT_USE_APPROVED=true`, its key,
+`TYPESAFE_ALLOWED_COLLECTORS=sec_edgar`, and finite daily budgets are configured.
+Optional Finnhub, Reddit, and X credentials do not enable those sources unless
+both their request and approval entries are present.
 
 ```bash
 docker compose up --build
@@ -166,7 +174,7 @@ docker compose up --build
 To explicitly enable live source polling:
 
 ```bash
-EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar docker compose up --build
+EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar docker compose up --build
 ```
 
 Docker Compose 2.24 or newer is required for optional `.env` loading ([Compose
@@ -190,10 +198,13 @@ retrievable document text are reported as partial delivery and never scored
 from locally constructed replacement text.
 
 To verify a live, credential-free Compose rebuild and persistent-volume
-recovery, run `./scripts/verify-live-compose.sh`. It uses a temporary Compose
-project, disables Jev and optional credentialed sources, checks live quote and
-news-source health through the API, recreates the container, then removes only
-its temporary volume.
+recovery, first obtain and configure source-use approvals for Google News RSS,
+Yahoo Finance RSS, GDELT, Yahoo quote, and Yahoo chart. Then export
+`SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart`
+and run `./scripts/verify-live-compose.sh`. The script refuses to self-approve
+these sources. It uses a temporary Compose project, disables Jev and optional
+credentialed sources, checks live quote and news-source health through the API,
+recreates the container, then removes only its temporary volume.
 
 ## Configuration
 
@@ -203,8 +214,10 @@ its temporary volume.
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
 | `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and Jev requests; the default serves saved local data only. |
 | `EXTERNAL_SOURCE_COLLECTORS` | empty | Comma-separated real collectors permitted to make network requests; examples include `sec_edgar`, `google_news_rss`, `yahoo_quote`, and `yahoo_chart`. Empty means no source polling or remote chart requests. |
+| `SOURCE_RIGHTS_APPROVED_COLLECTORS` | empty | Separate operator-attestation allowlist; a requested collector without this entry cannot make requests. It does not independently prove rights. |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
 | `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated Jev admission list, intersected with `EXTERNAL_SOURCE_COLLECTORS`; no collectors allowed by default |
+| `TYPESAFE_ACCOUNT_USE_APPROVED` | `false` | Authorized account-owner attestation required for Jev dispatch; does not independently verify authority or terms |
 | `TYPESAFE_MAX_REQUESTS_PER_DAY` | `0` | hard cap on Jev request attempts per UTC day; `0` disables dispatch |
 | `TYPESAFE_MAX_REQUEST_BYTES_PER_DAY` | `0` | hard cap on serialized Jev input bytes reserved per UTC day; `0` disables dispatch |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |

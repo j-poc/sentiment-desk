@@ -1,11 +1,11 @@
 import type { HealthDTO } from "../lib/api.js";
 import { fmtCost, shortTime, timeAgo } from "../lib/format.js";
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value, wrap = false }: { label: string; value: string; wrap?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-[3px]">
-      <span className="text-white/35">{label}</span>
-      <span className="tabnum truncate text-right text-white/70">{value}</span>
+      <span className="shrink-0 text-white/35">{label}</span>
+      <span className={`tabnum min-w-0 text-right text-white/70 ${wrap ? "whitespace-normal break-words" : "truncate"}`}>{value}</span>
     </div>
   );
 }
@@ -13,11 +13,23 @@ function Row({ label, value }: { label: string; value: string }) {
 export function HealthPanel({ health }: { health: HealthDTO | null }) {
   if (!health) return null;
   const { jev, rss, gdelt, x } = health.health;
+  const { sourceApproval } = health.health;
 
   return (
     <div className="px-4 py-3.5 text-[11px]">
-      <Row label="external requests" value={health.externalRequestsEnabled ? "enabled" : "paused · saved data only"} />
+      <Row label="global request switch" value={health.externalRequestsEnabled ? "on" : "off · saved data only"} />
+      <Row
+        label="source-use approvals"
+        value={sourceApproval.blockedRequestedCollectors.length > 0
+          ? `${sourceApproval.blockedRequestedCollectors.length} requested blocked · ${sourceApproval.blockedRequestedCollectors.join(", ")}`
+          : `${sourceApproval.approvedCollectors.length} approved source flag(s) · ${sourceApproval.approvedCollectors.join(", ") || "none"}`}
+        wrap
+      />
+      <Row label="Jev account-use flag" value={sourceApproval.typesafeAccountUseApproved ? "set · operator attestation" : "missing · dispatch blocked"} wrap />
       <Row label="engine" value={`${jev.model} · ${health.externalRequestsEnabled ? jev.enabled ? "live" : "off" : "paused"}`} />
+      <div role="note" className="mt-1 text-[9.5px] text-amber-200/55">
+        Approval flags are operator attestations; they do not independently verify source rights or account terms.
+      </div>
       <Row label="source-identified judged today" value={String(health.usage.judgedItems)} />
       <Row label="est. input cost · identified sources" value={fmtCost(health.usage.estimatedInputCostUsd)} />
       {jev.lastError && (

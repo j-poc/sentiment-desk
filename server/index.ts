@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { VERSION, config, apiKeySource, loadCompanies } from "./config.js";
-import { intersectJevSourceAllowlist } from "./collector-policy.js";
+import { intersectCollectorAllowlists, intersectJevSourceAllowlist } from "./collector-policy.js";
 import { Desk } from "./db.js";
 import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
@@ -33,13 +33,19 @@ async function main(): Promise<void> {
   const companies = loadCompanies();
   const db = new Desk(config.dbPath);
   db.seedCompanies(companies);
+  const activeSourceCollectors = intersectCollectorAllowlists(
+    config.externalSourceCollectors,
+    config.sourceRightsApprovedCollectors,
+  );
   const collectorEnabled = (collector: CollectorId) =>
-    config.externalRequestsEnabled && config.externalSourceCollectors.has(collector);
+    config.externalRequestsEnabled && activeSourceCollectors.has(collector);
   const jevAllowedCollectors = intersectJevSourceAllowlist(
     config.jev.allowedCollectors,
     config.externalSourceCollectors,
+    config.sourceRightsApprovedCollectors,
   );
   const jevDispatchEnabled = config.externalRequestsEnabled && config.jev.apiKey !== "" &&
+    config.jev.accountUseApproved &&
     jevAllowedCollectors.size > 0 &&
     config.jev.maxRequestsPerDay > 0 &&
     config.jev.maxRequestBytesPerDay > 0;
@@ -53,7 +59,16 @@ async function main(): Promise<void> {
     config.finnhubKey !== "",
     config.redditClientId !== "" && config.redditClientSecret !== "",
     config.externalRequestsEnabled,
-    config.externalSourceCollectors,
+    activeSourceCollectors,
+    {
+      requestedCollectors: [...config.externalSourceCollectors].sort(),
+      approvedCollectors: [...activeSourceCollectors].sort(),
+      blockedRequestedCollectors: [...config.externalSourceCollectors]
+        .filter((collector) => !config.sourceRightsApprovedCollectors.has(collector))
+        .sort(),
+      typesafeAccountUseApproved: config.jev.accountUseApproved,
+      jevAllowedCollectors: [...jevAllowedCollectors].sort(),
+    },
   );
 
   const jevClient = new JevClient({
@@ -154,7 +169,7 @@ async function main(): Promise<void> {
         health,
         intervalSeconds: config.pollRssSeconds,
         concurrency: config.rssConcurrency,
-        enabledCollectors: config.externalSourceCollectors,
+        enabledCollectors: activeSourceCollectors,
       }));
     }
     if (collectorEnabled("sec_edgar") && config.secUserAgent) {
@@ -212,9 +227,11 @@ async function main(): Promise<void> {
   }
   const mode = !config.externalRequestsEnabled
     ? "OFFLINE (saved data only)"
-    : config.externalSourceCollectors.size === 0
-      ? "REQUESTS ENABLED (source allowlist empty)"
-    : judge
+    : activeSourceCollectors.size === 0
+      ? config.externalSourceCollectors.size === 0
+        ? "REQUESTS ENABLED (source allowlist empty)"
+        : "REQUESTS ENABLED (source approvals missing)"
+      : judge
       ? "LIVE"
       : "AWAITING KEY (mentions stay pending)";
   console.log(`[desk] sentiment desk v${VERSION} ${mode} on http://localhost:${config.port}`);
@@ -233,6 +250,13 @@ async function main(): Promise<void> {
     console.log("[desk] finnhub: no key — free tier adds news, EPS surprises, earnings dates");
   if (config.externalRequestsEnabled && !(config.redditClientId && config.redditClientSecret))
     console.log("[desk] reddit: no app credentials — free tier adds the social tier");
+  if (config.externalRequestsEnabled && config.externalSourceCollectors.size > activeSourceCollectors.size) {
+    console.log(`[desk] blocked unapproved source requests: ${[...config.externalSourceCollectors]
+      .filter((collector) => !config.sourceRightsApprovedCollectors.has(collector)).sort().join(", ")}`);
+  }
+  if (config.externalRequestsEnabled && config.jev.apiKey && !config.jev.accountUseApproved) {
+    console.log("[desk] Jev dispatch blocked: TYPESAFE_ACCOUNT_USE_APPROVED is not set");
+  }
 
   let stopping = false;
   const shutdown = (signal: string) => {

@@ -16,6 +16,13 @@ export interface SourceCounters {
 
 export interface HealthSnapshot {
   externalRequestsEnabled: boolean;
+  sourceApproval: {
+    requestedCollectors: CollectorId[];
+    approvedCollectors: CollectorId[];
+    blockedRequestedCollectors: CollectorId[];
+    typesafeAccountUseApproved: boolean;
+    jevAllowedCollectors: CollectorId[];
+  };
   rss: SourceCounters;
   gdelt: SourceCounters;
   x: SourceCounters;
@@ -37,6 +44,7 @@ export class HealthTracker {
   private readonly finnhub: SourceCounters;
   private readonly reddit: SourceCounters;
   private readonly externalRequestsEnabled: boolean;
+  private readonly sourceApproval: HealthSnapshot["sourceApproval"];
 
   constructor(
     xEnabled: boolean,
@@ -47,10 +55,24 @@ export class HealthTracker {
     redditEnabled = false,
     externalRequestsEnabled = true,
     externalCollectors?: ReadonlySet<CollectorId>,
+    sourceApproval: HealthSnapshot["sourceApproval"] = {
+      requestedCollectors: [],
+      approvedCollectors: [],
+      blockedRequestedCollectors: [],
+      typesafeAccountUseApproved: false,
+      jevAllowedCollectors: [],
+    },
   ) {
     const collectorEnabled = (collector: CollectorId) =>
       externalRequestsEnabled && (externalCollectors == null || externalCollectors.has(collector));
     this.externalRequestsEnabled = externalRequestsEnabled;
+    this.sourceApproval = {
+      requestedCollectors: [...sourceApproval.requestedCollectors],
+      approvedCollectors: [...sourceApproval.approvedCollectors],
+      blockedRequestedCollectors: [...sourceApproval.blockedRequestedCollectors],
+      typesafeAccountUseApproved: sourceApproval.typesafeAccountUseApproved,
+      jevAllowedCollectors: [...sourceApproval.jevAllowedCollectors],
+    };
     this.rss = fresh(collectorEnabled("google_news_rss") || collectorEnabled("yahoo_finance_rss"));
     this.gdelt = fresh(collectorEnabled("gdelt_doc_api"));
     this.x = fresh(collectorEnabled("x") && xEnabled);
@@ -96,6 +118,13 @@ export class HealthTracker {
   snapshot(): HealthSnapshot {
     return {
       externalRequestsEnabled: this.externalRequestsEnabled,
+      sourceApproval: {
+        requestedCollectors: [...this.sourceApproval.requestedCollectors],
+        approvedCollectors: [...this.sourceApproval.approvedCollectors],
+        blockedRequestedCollectors: [...this.sourceApproval.blockedRequestedCollectors],
+        typesafeAccountUseApproved: this.sourceApproval.typesafeAccountUseApproved,
+        jevAllowedCollectors: [...this.sourceApproval.jevAllowedCollectors],
+      },
       rss: { ...this.rss },
       gdelt: { ...this.gdelt },
       x: { ...this.x },

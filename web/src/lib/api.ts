@@ -254,6 +254,13 @@ export interface HealthDTO {
   dbSizeBytes: number | null;
   health: {
     externalRequestsEnabled: boolean;
+    sourceApproval: {
+      requestedCollectors: CollectorId[];
+      approvedCollectors: CollectorId[];
+      blockedRequestedCollectors: CollectorId[];
+      typesafeAccountUseApproved: boolean;
+      jevAllowedCollectors: CollectorId[];
+    };
     rss: SourceHealth;
     gdelt: SourceHealth;
     x: SourceHealth;

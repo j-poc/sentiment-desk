@@ -87,7 +87,11 @@ async function verifyCollectorGate(
   repo: string,
   companiesPath: string,
   collector: typeof sourceCollectors[number],
-  jevConfig?: { apiKey: string; allowedCollectors: string; expectedEnabled: boolean },
+  options: {
+    jev?: { apiKey: string; allowedCollectors: string; expectedEnabled: boolean };
+    sourceRightsApproved?: boolean;
+    typesafeAccountUseApproved?: boolean;
+  } = {},
 ): Promise<void> {
   const directory = mkdtempSync(path.join(tmpdir(), `sentiment-desk-allowlist-${collector}-`));
   const dbPath = path.join(directory, "desk.db");
@@ -112,10 +116,12 @@ async function verifyCollectorGate(
       NETWORK_GUARD_LOG: guardLog,
       EXTERNAL_REQUESTS_ENABLED: "true",
       EXTERNAL_SOURCE_COLLECTORS: collector,
-      TYPESAFE_API_KEY: jevConfig?.apiKey ?? "",
-      TYPESAFE_ALLOWED_COLLECTORS: jevConfig?.allowedCollectors ?? "",
-      TYPESAFE_MAX_REQUESTS_PER_DAY: jevConfig ? "10" : "0",
-      TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: jevConfig ? "100000" : "0",
+      SOURCE_RIGHTS_APPROVED_COLLECTORS: options.sourceRightsApproved === false ? "" : collector,
+      TYPESAFE_ACCOUNT_USE_APPROVED: options.typesafeAccountUseApproved ? "true" : "false",
+      TYPESAFE_API_KEY: options.jev?.apiKey ?? "",
+      TYPESAFE_ALLOWED_COLLECTORS: options.jev?.allowedCollectors ?? "",
+      TYPESAFE_MAX_REQUESTS_PER_DAY: options.jev ? "10" : "0",
+      TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: options.jev ? "100000" : "0",
       SEC_USER_AGENT: "Offline verifier verifier@example.invalid",
       FINNHUB_API_KEY: "offline-verifier-unused",
       REDDIT_CLIENT_ID: "offline-verifier-unused",
@@ -156,42 +162,56 @@ async function verifyCollectorGate(
     assert.ok(health, `${collector} server did not become healthy; stderr: ${stderr.slice(-2_000)}`);
     assert.equal(health.externalRequestsEnabled, true);
     const deliveryHealth = health.deliveryHealth as Array<{ collector: string; enabled: boolean }>;
+    const sourceIsApproved = options.sourceRightsApproved !== false;
     assert.equal(deliveryHealth.length, sourceCollectors.length, "health should disclose each real collector");
     for (const source of sourceCollectors) {
       const delivery = deliveryHealth.find((row) => row.collector === source);
       assert.ok(delivery, `${source} must appear in delivery health`);
-      assert.equal(delivery.enabled, source === collector, `${source} delivery gate must match the one-source allowlist`);
+      assert.equal(delivery.enabled, source === collector && sourceIsApproved,
+        `${source} delivery gate must match the request and source-use approval allowlists`);
     }
-    const counters = (health.health ?? {}) as Record<string, { enabled?: boolean }>;
+    const counters = (health.health ?? {}) as Record<string, { enabled?: boolean; sourceApproval?: {
+      blockedRequestedCollectors?: string[];
+      typesafeAccountUseApproved?: boolean;
+      jevAllowedCollectors?: string[];
+    } }>;
+    const sourceApproval = counters.sourceApproval;
+    assert.ok(sourceApproval, "health should disclose source-use and account-approval gates");
+    assert.deepEqual(sourceApproval.blockedRequestedCollectors, sourceIsApproved ? [] : [collector]);
+    assert.equal(sourceApproval.typesafeAccountUseApproved, options.typesafeAccountUseApproved ?? false);
     const expectedCounter: Record<string, string> = {
       google_news_rss: "rss", yahoo_finance_rss: "rss", gdelt_doc_api: "gdelt", yahoo_quote: "quotes",
       sec_edgar: "sec", finnhub: "finnhub", reddit: "reddit", x: "x",
     };
     for (const [source, counter] of Object.entries(expectedCounter)) {
       const enabled = counter === "rss"
-        ? collector === "google_news_rss" || collector === "yahoo_finance_rss"
-        : source === collector;
+        ? sourceIsApproved && (collector === "google_news_rss" || collector === "yahoo_finance_rss")
+        : sourceIsApproved && source === collector;
       assert.equal(counters[counter]?.enabled, enabled, `${counter} health counter must reflect ${source} allowlist state`);
     }
-    assert.equal(counters.jev?.enabled, jevConfig?.expectedEnabled ?? false,
-      "Jev dispatch must match key, budget, and intersection of source allowlists");
+    assert.equal(counters.jev?.enabled, options.jev?.expectedEnabled ?? false,
+      "Jev dispatch must match the account approval, key, budget, and three-way source allowlist intersection");
 
-    if (collector === "yahoo_chart") {
+    if (sourceIsApproved && collector === "yahoo_chart") {
       const response = await fetch(`http://127.0.0.1:${port}/api/companies/apple/price?ticker=AAPL&hours=24`);
       assert.equal(response.status, 502, "the guarded chart request should fail visibly at the fetch boundary");
     }
 
-    const requestDeadline = Date.now() + 5_000;
+    const requestDeadline = Date.now() + (sourceIsApproved ? 5_000 : 750);
     let attempts: GuardedAttempt[] = [];
     while (Date.now() < requestDeadline) {
       attempts = existsSync(guardLog)
         ? readFileSync(guardLog, "utf8").split("\\n").filter(Boolean).map((line) => JSON.parse(line) as GuardedAttempt)
         : [];
-      if (attempts.some((attempt) => matchesCollectorRequest(collector, attempt))) break;
+      if (sourceIsApproved && attempts.some((attempt) => matchesCollectorRequest(collector, attempt))) break;
       await delay(100);
     }
-    assert.ok(attempts.some((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} never reached its guarded request path`);
-    assert.ok(attempts.every((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} allowlist leaked requests to another source: ${JSON.stringify(attempts)}`);
+    if (sourceIsApproved) {
+      assert.ok(attempts.some((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} never reached its guarded request path`);
+      assert.ok(attempts.every((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} allowlist leaked requests to another source: ${JSON.stringify(attempts)}`);
+    } else {
+      assert.equal(attempts.length, 0, `${collector} attempted a request without explicit source-use approval`);
+    }
   } finally {
     try {
       if (child && exitResult == null) {
@@ -248,6 +268,8 @@ async function main(): Promise<void> {
       TYPESAFE_MAX_REQUESTS_PER_DAY: "10",
       TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: "100000",
       EXTERNAL_SOURCE_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,finnhub,reddit,x",
+      SOURCE_RIGHTS_APPROVED_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,finnhub,reddit,x",
+      TYPESAFE_ACCOUNT_USE_APPROVED: "true",
       SEC_USER_AGENT: "Offline verifier offline@example.invalid",
       FINNHUB_API_KEY: "unused-offline-verification-key",
       REDDIT_CLIENT_ID: "unused-offline-verification-id",
@@ -317,11 +339,29 @@ async function main(): Promise<void> {
     writeFileSync(singleCompanyPath, JSON.stringify({ companies: [apple] }));
     for (const collector of sourceCollectors) await verifyCollectorGate(repo, singleCompanyPath, collector);
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", {
-      apiKey: "unused-offline-verification-key",
-      allowedCollectors: "google_news_rss",
-      expectedEnabled: false,
+      jev: {
+        apiKey: "unused-offline-verification-key",
+        allowedCollectors: "google_news_rss",
+        expectedEnabled: false,
+      },
     });
-    console.log(`PASS: fresh default startup served ${companies.length} configured companies; sources and Jev stayed paused, retry returned 503, and zero fetches were attempted. Separate fresh processes proved all ${sourceCollectors.length} source allowlists activate only their own guarded request path and health state. A mismatched Jev/source allowlist stayed disabled with an API key present. All outbound fetches were intercepted before network access.`);
+    await verifyCollectorGate(repo, singleCompanyPath, "finnhub", { sourceRightsApproved: false });
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", {
+      jev: {
+        apiKey: "unused-offline-verification-key",
+        allowedCollectors: "sec_edgar",
+        expectedEnabled: false,
+      },
+    });
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", {
+      jev: {
+        apiKey: "unused-offline-verification-key",
+        allowedCollectors: "sec_edgar",
+        expectedEnabled: true,
+      },
+      typesafeAccountUseApproved: true,
+    });
+    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, a missing source approval made zero fetches, and Jev stayed disabled without account-use attestation or a matching source allowlist. All outbound fetches were intercepted before network access.`);
   } finally {
     try {
       if (child && exitResult == null) {

@@ -118,7 +118,7 @@ describe("Jev pipeline recovery", () => {
     const { db, pipeline, source } = setup(async () => {
       calls += 1;
       return { answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
-    }, { allowedCollectors: intersectJevSourceAllowlist(jevAllowlist, externalAllowlist) });
+    }, { allowedCollectors: intersectJevSourceAllowlist(jevAllowlist, externalAllowlist, new Set(["sec_edgar"])) });
     try {
       pipeline.ingest(source);
       expect(pipeline.drainPending(10)).toBe(0);

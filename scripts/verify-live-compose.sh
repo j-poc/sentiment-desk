@@ -12,9 +12,18 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# This script exercises real, keyless providers. Never self-approve a source in
+# the verifier: require the operator to attest to every source it will contact.
+required_sources="google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart"
+if [ "${SOURCE_RIGHTS_APPROVED_COLLECTORS:-}" != "$required_sources" ]; then
+  echo "Set SOURCE_RIGHTS_APPROVED_COLLECTORS to exactly this list only after clearing each source: $required_sources" >&2
+  exit 2
+fi
+
 # This isolated Compose file never reads the developer's .env. It deliberately
-# opts into keyless live-source HTTP reads; run only when those source uses are
-# authorized. It cannot spend Jev credits or call optional APIs.
+# opts into keyless live-source HTTP reads; the source-use approvals come only
+# from the explicit operator environment value above. It cannot spend Jev
+# credits or call optional APIs.
 cat >"$compose_file" <<EOF
 services:
   sentiment-desk:
@@ -26,6 +35,8 @@ services:
       DB_PATH: /app/data/desk.db
       EXTERNAL_REQUESTS_ENABLED: "true"
       EXTERNAL_SOURCE_COLLECTORS: "google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart"
+      SOURCE_RIGHTS_APPROVED_COLLECTORS: "$SOURCE_RIGHTS_APPROVED_COLLECTORS"
+      TYPESAFE_ACCOUNT_USE_APPROVED: "false"
       TYPESAFE_API_KEY: ""
       FINNHUB_API_KEY: ""
       REDDIT_CLIENT_ID: ""

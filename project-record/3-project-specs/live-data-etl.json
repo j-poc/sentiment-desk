@@ -1,19 +1,19 @@
 {
   "applicability": "required",
   "status": "partial",
-  "operational_status": "Latest follow-up checkpoint 12472ec (feat(ui): disclose source coverage limits) is pushed to origin/codex/real-data-rebuild after the 76b46c2 reaction-window checkpoint. The Desk now exposes the configured bounds and missing public-source families; the nine-collector local inventory is complete, while overall source coverage remains partial. The saved-data preview verified Adobe selection, 68 saved mentions, and the persisted sentiment/price chart with all collectors and Jev disabled. A direct visible ticker click switched Adobe to Apple, changed the selected state and mention count to 268, and rendered the matching sentiment/price chart; the browser console error readback was empty. The follow-up suite passed 209 tests across 27 files, typecheck, and the offline-startup verifier; no provider or Jev request was sent. The runtime has source-filtered usage and truthful empty states; Top Movers distinguishes unscored from no-comparison cases, and movement sorting is disabled when all comparison deltas are absent. RSS, GDELT, Reddit, and Finnhub distinguish clean empties, mixed malformed rows, and unusable responses; X rejects non-advancing pagination; SEC exposes missing ticker mappings and validates response shapes; Yahoo chart payloads are validated; Finnhub history retries persist and earnings cache replacement is atomic; source health is visible. Forward reactions require a post-publication baseline, a terminal point no more than five minutes before the target, and a matured horizon. 30m and 4h denominators are separate; 4h-only observations cannot enter the 30m hit rate. The company endpoint aggregates the full eligible source-identified, publisher-timed window and returns eight measured examples with an explicit count. The watchlist-wide reaction view is explicitly exploratory and unclustered. The 76b46c2 base checkpoint passed 208 tests across 27 files; typecheck, production build, offline-startup request-gate verifier, and saved-data-only browser checks passed. In the isolated 127.0.0.1:8795 preview, selecting AMD showed its persisted sentiment/price chart and outcome counts (30m n=41, 4h n=7, hit rate 37%, top 8 of 41 measured); console errors were zero. Watchlist readback had 736 timely 30m prices among 2,732 scored items and item-level rank IC 0.032, descriptive only. External requests and Jev were paused; no provider or Jev request was sent and no demo/synthetic product data was added. Live operation and completion remain blocked by unresolved account authority/terms and cost ceiling, SEC_USER_AGENT, non-SEC rights, blinded real-source Jev labels/evaluation, legacy_unknown use/billing reconciliation, and exhaustive coverage.",
+  "operational_status": "Local source-use and Jev-account gates were tightened in the 2026-09-29 checkpoint and verified with 212 tests across 28 files, TypeScript typecheck, production build, and a network-intercepted fresh-process verifier. Each requested source now needs a separate SOURCE_RIGHTS_APPROVED_COLLECTORS entry; Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true and its three-way source allowlist intersection. The health API/UI reports these flags as operator attestations, not verified rights. No provider or Jev request was sent. The Desk remains externally unoperational and overall status partial: SEC contact, provider and TypeSafe account rights/authority, eligible real-source blinded labels and passing Jev evaluation, legacy_unknown usage reconciliation, and finite source coverage remain unresolved. The saved-data selection/chart UI has prior direct browser verification; this checkpoint changes approval status visibility only. The user-facing RSS disclosure states that one response per company, without pagination or a completeness signal, leaves coverage unknown and potentially incomplete.",
   "source_request_policy": {
     "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults to false and gates all external polling, chart retrieval, Jev calls, and operator retry.",
-    "source_allowlist": "EXTERNAL_SOURCE_COLLECTORS defaults to empty. When global opt-in is true, only listed real collectors can poll; yahoo_quote and yahoo_chart are separate allowlist entries.",
-    "jev_forwarding": "TYPESAFE_ALLOWED_COLLECTORS is intersected with EXTERNAL_SOURCE_COLLECTORS. Jev may receive a source item only when its collector is explicitly admitted by both lists, a non-empty key is configured, and both finite daily budgets are positive. The effective set gates startup and scheduled drains, new ingestion, and operator retry.",
-    "verification": "The fresh-process offline verifier proves the saved-data default makes zero external fetch attempts. It launches one isolated process per collector with only that collector allowlisted, checks the expected request URL shape and exact health/delivery gates, and intercepts every external global fetch before network access. A separate mismatch case supplies an API key, positive finite budgets, and a Jev allowlist that does not intersect the active source allowlist; Jev health must remain disabled."
+    "source_allowlist": "EXTERNAL_SOURCE_COLLECTORS defaults to empty. A source request runs only when EXTERNAL_REQUESTS_ENABLED is true and its collector appears in both EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. The latter is an operator attestation, not independent verification of rights.",
+    "jev_forwarding": "TYPESAFE_ALLOWED_COLLECTORS is intersected with EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true, a non-empty key, and positive finite daily request and request-body-byte limits. This account-use flag is also an operator attestation, not evidence of account authority or terms.",
+    "verification": "The fresh-process offline verifier proves the default-off startup makes zero external fetches; verifies each of nine isolated collectors reaches only its expected network-guarded path when both source lists admit it; proves a missing source approval makes zero fetches; and tests Jev disabled without account attestation or matching three-way source lists, then config-ready only when every config gate is present. All external fetches are intercepted before network access; no provider or Jev request is sent."
   },
   "rights_review": {
-    "as_of": "2026-09-28",
+    "as_of": "2026-09-29",
     "status": "open; not a legal determination",
     "current_followup": {
-      "reviewed_at": "2026-09-28",
-      "result": "The SEC's current Webmaster FAQ says EDGAR public filing content is free to access and reuse, and its Website Dissemination policy says sec.gov information may be copied or further distributed without SEC permission. This supports a narrow evaluation path using public EDGAR filing content. It is not blanket rights clearance for non-EDGAR publisher text, an SEC endorsement, or authorization to use a TypeSafe account.",
+      "reviewed_at": "2026-09-29",
+      "result": "Read-only review of current official SEC, TypeSafe, Finnhub, Reddit, and X terms confirms that source access and account credentials do not establish this project's rights to retain, display, analyze, or forward each source. SEC public EDGAR content supports a narrow reuse path subject to stated exceptions and a descriptive contact-bearing User-Agent. TypeSafe requires customer authority and input rights, consumes credits per submitted input, allows broad telemetry use, and restricts using Services or Output to develop a similar or competing product; exact account and product applicability, retention, telemetry, limits/refill, and rejected-request billing remain unverified. Finnhub terms restrict sharing data or derived results without written approval and prohibit business/internal business use of personal plans without written approval; subscription-end deletion also applies. Reddit terms limit User Content use to the app context, require a separate agreement for commercial use or other uses not expressly allowed, and restrict AI model training absent rightsholder permission. X policy restricts redistribution of content and requires removal when content is no longer available. No rights or account-owner evidence has been supplied. These observations are not a legal determination.",
       "sec_conditions": [
         "For the initial path, use public EDGAR filing content only; omit SEC marks/artwork and avoid any clearly third-party material embedded in a filing.",
         "Configure a descriptive SEC User-Agent that identifies the operator and includes contact information; the SEC says automated tools must be classified.",
@@ -26,9 +26,12 @@
         "Google News RSS third-party publisher titles/snippets",
         "Yahoo Finance RSS/article content and the exact chart endpoint contract",
         "GDELT-linked publisher article titles/content",
-        "Finnhub, Reddit, and X content"
+        "Finnhub plan, business use, retention and redistribution rights",
+        "Reddit commercial/use-case agreement, content retention and inference processing",
+        "X plan, content retention/removal, and redistribution rights",
+        "TypeSafe account authority, accepted Order, telemetry/retention, refill, billing, and similar/competing-product applicability"
       ],
-      "evidence": "Read-only review of official SEC policy, SEC fair-access guidance, TypeSafe's current MCA/privacy/API documentation, and prior official-source audit notes on 2026-09-28. No credentials, databases, provider requests, or real content were accessed or transmitted."
+      "evidence": "Read-only recheck of official SEC, TypeSafe, Finnhub, Reddit, and X sources on 2026-09-29. SEC policy, TypeSafe MCA, Finnhub Terms of Service, Reddit Data API Terms, and X Developer Policy were read. No credentials, provider accounts, databases, saved source text, billing console, or provider request was accessed. Account-specific agreements, plan permissions, billing settings, and source-owner grants remain unavailable; conclusions are not a legal determination."
     },
     "findings": [
       {
@@ -71,14 +74,22 @@
         "action": "Do not enable a controlled public-source-to-Jev workflow until the authorized account owner accepts/reviews the applicable agreement and verifies account limits, auto-refill, telemetry/data-use acceptability, retention, rejected-request billing, and that the intended Sentiment Desk use is permitted under the similar/competing-product restriction. Seek written clarification from TypeSafe if needed. Historical payloads from the legacy loopback process have not been audited."
       },
       {
-        "source": "Optional X, Reddit, and Finnhub feeds",
-        "evidence": "These credentials are disabled in the current configuration. The reviewed terms do not establish project-specific permission for stored content, analytics, or external model forwarding.",
-        "references": [
-          "https://docs.x.com/developer-terms/policy",
-          "https://redditinc.com/policies/data-api-terms",
-          "https://finnhub.io/terms-of-service"
-        ],
-        "action": "Keep optional live paths disabled until the applicable plan and use rights are confirmed."
+        "source": "Finnhub",
+        "evidence": "The official Terms of Service state that plans are personal unless explicitly stated otherwise, that a personal plan may not be used by a business even internally without written approval, and that data or derived results may not be redistributed/shared without written approval. The terms also require deletion of data if the subscription ends. The project account, plan, internal-use authorization, retention behavior, and derived-output rights are unverified.",
+        "reference": "https://finnhub.io/terms-of-service",
+        "action": "Keep Finnhub disabled until the exact account/plan and written business, retention, display, and processing permissions are verified; implement its deletion obligation before enabling it if required by the approved plan."
+      },
+      {
+        "source": "Reddit Data API",
+        "evidence": "Current Data API Terms grant a limited, revocable license to copy/display User Content only as necessary to develop, deploy, distribute, and run the app for its app users; commercial purposes and uses not expressly permitted require a separate agreement. The terms also prohibit use of User Content to train an AI model without express rightsholder permission, and require deletion of stored content when access terminates. Whether this app's commercial status and third-party Jev inference/retention fit the permitted use is not established.",
+        "reference": "https://redditinc.com/policies/data-api-terms",
+        "action": "Keep Reddit disabled until the exact approved use, retention/deletion process, and any required commercial agreement are documented. Do not forward content to Jev absent documented source and account permission."
+      },
+      {
+        "source": "X API",
+        "evidence": "Current X Developer Policy restricts content redistribution to specified identifiers in most cases and requires displayed content that becomes unavailable through the API to be removed promptly. The app has no verified project-specific display/retention approval or source-removal reconciliation path for X content.",
+        "reference": "https://docs.x.com/developer-terms/policy",
+        "action": "Keep X disabled until account/use rights are confirmed and an approved removal/reconciliation process is implemented for stored content."
       }
     ]
   },
@@ -124,7 +135,7 @@
       "identity": "Provider symbol, article URL, and earnings period when supplied.",
       "time": "News datetime and earnings dates use provider fields; absent event times remain unknown. Local retrieval and ingestion are separate.",
       "retention": "Optional source enabled only with the operator's FINNHUB_API_KEY; normalized items, response digests of parsed items, and bounded delivery receipts only. No raw response retention.",
-      "rights": "Optional path disabled. Credential possession does not establish rights; confirm the applicable plan's model access, display, and retention terms before enabling."
+      "rights": "The current Finnhub Terms restrict all listed plans to personal use unless expressly stated otherwise, prohibit business/internal-business use of personal plans without written approval, prohibit sharing data or derived results without written approval, and require deletion when a subscription ends. This project's exact account/plan permissions and deletion obligations are unverified; keep disabled."
     },
     {
       "name": "X API recent search",
@@ -132,7 +143,7 @@
       "identity": "Provider post ID and configured ticker/company match.",
       "time": "Provider-created time when supplied; absent time stays unknown. Retrieval and ingestion are separate.",
       "retention": "Optional source enabled only with the operator's X_BEARER_TOKEN; normalized items and parsed-item digests only. No raw response retention.",
-      "rights": "Optional path disabled. Credential possession does not establish rights; confirm the applicable API terms for storage, display, analytics, and model forwarding before enabling."
+      "rights": "The current X Developer Policy restricts content redistribution and requires unavailable content to be removed from the service. Project-specific retention/display rights and an automated removal/reconciliation path are not verified; keep disabled."
     },
     {
       "name": "Reddit search",
@@ -140,7 +151,7 @@
       "identity": "Provider post ID and configured company match.",
       "time": "Provider-created time when supplied; absent time stays unknown. Retrieval and ingestion are separate.",
       "retention": "Optional source enabled only with the operator's Reddit app credentials; normalized items and parsed-item digests only. No raw response retention.",
-      "rights": "Optional path disabled. Credential possession does not establish rights; confirm the applicable account plan for storage, display, and model processing before enabling."
+      "rights": "The current Reddit Data API Terms limit the granted User Content license to the app-use context, require separate agreement for commercial or otherwise unpermitted uses, and restrict AI model training without rightsholder permission. The project's approved use, inference handling, retention, and removal duties are unverified; keep disabled."
     }
   ],
   "checks": {
@@ -269,7 +280,22 @@
       "command": "Document and test provider contract, identity, timing, rights, delivery, and failure behavior for every intended source",
       "covers": "The product does not imply exhaustive market or social coverage from a partial provider set.",
       "status": "PARTIAL",
-      "local_inventory": {"status": "PASS", "reviewed_at": "2026-09-29", "external_collectors": ["google_news_rss", "yahoo_finance_rss", "yahoo_quote", "yahoo_chart", "gdelt_doc_api", "sec_edgar", "finnhub", "reddit", "x"], "evidence": "All nine real external collector IDs were checked against config, adapter/poller bounds, delivery health, allowlist probes, rights records, and user-visible scope. The Sentiment Desk now exposes one-response RSS uncertainty, GDELT cap behavior, SEC/Finnhub/Reddit/X time windows, price-only endpoints, missing direct source families, optional social collectors, and per-source rights caveat. Trace: project-record/4-log/2026-09-29-source-scope-disclosure.md."},
+      "local_inventory": {
+        "status": "PASS",
+        "reviewed_at": "2026-09-29",
+        "external_collectors": [
+          "google_news_rss",
+          "yahoo_finance_rss",
+          "yahoo_quote",
+          "yahoo_chart",
+          "gdelt_doc_api",
+          "sec_edgar",
+          "finnhub",
+          "reddit",
+          "x"
+        ],
+        "evidence": "All nine real external collector IDs were checked against config, adapter/poller bounds, delivery health, allowlist probes, rights records, and user-visible scope. The Sentiment Desk now exposes one-response RSS uncertainty, GDELT cap behavior, SEC/Finnhub/Reddit/X time windows, price-only endpoints, missing direct source families, optional social collectors, and per-source rights caveat. Trace: project-record/4-log/2026-09-29-source-scope-disclosure.md."
+      },
       "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays “Configured feeds only. This desk does not cover the entire public web or all investor activity.” Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
     },
     "legacy_provider_usage_audit": {
@@ -373,6 +399,12 @@
       "covers": "Missing watchlist ticker-to-CIK mappings are visible in SEC delivery/health state; malformed directory and submission response structures fail closed.",
       "status": "PASS",
       "evidence": "2026-09-29: local poller regression confirms a watchlist company without a CIK gets an invalid delivery receipt, SEC health failure, and warning event instead of being silently skipped. Parser checks reject invalid directory rows, missing required filing arrays, misaligned arrays, and malformed required 8-K fields. Mock responses only; SEC was not contacted."
+    },
+    "source_use_request_gate": {
+      "command": "npm run verify:offline-startup",
+      "covers": "A source request cannot start from EXTERNAL_SOURCE_COLLECTORS alone; Jev cannot receive source text without a separate account-use attestation and the source admitted by all three allowlists.",
+      "status": "PASS",
+      "evidence": "2026-09-29: the fresh-process production-build verifier intercepted all external fetches before network access. It proved global requests default off with all credentials, nine separately guarded source paths activate only when both request and source-use approval lists admit that source, a requested-but-unapproved Finnhub source makes zero fetches, a matching Jev key/budget/source list remains disabled without TYPESAFE_ACCOUNT_USE_APPROVED, mismatched source lists stay disabled, and a fully flagged configuration only exposes Jev as configured without any pending item or provider call. The full suite passed 212 tests across 28 files; TypeScript typecheck and production build passed. This proves local configuration enforcement, not rights, account authority, or actual provider behavior."
     }
   },
   "known_gaps": [

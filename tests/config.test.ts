@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { intersectJevSourceAllowlist } from "../server/collector-policy.js";
+import { intersectCollectorAllowlists, intersectJevSourceAllowlist } from "../server/collector-policy.js";
 
 // Config resolution must not inspect the real shared-machine credential file
 // while these tests exercise explicit or empty environment values.
@@ -7,6 +7,8 @@ vi.stubEnv("TYPESAFE_API_KEY", "");
 const {
   boundedNonNegativeInt,
   parseExternalSourceCollectors,
+  parseExplicitBoolean,
+  parseSourceRightsApprovedCollectors,
   parseExternalRequestsEnabled,
   resolveJevApiKey,
   secContactUserAgent,
@@ -46,14 +48,40 @@ describe("external request mode", () => {
     expect(() => parseExternalSourceCollectors("not_a_source")).toThrow();
   });
 
+  it("keeps source-use approvals separate from request allowlists", () => {
+    expect(parseSourceRightsApprovedCollectors(undefined)).toEqual(new Set());
+    expect(parseSourceRightsApprovedCollectors("sec_edgar,yahoo_chart")).toEqual(
+      new Set(["sec_edgar", "yahoo_chart"]),
+    );
+    expect(() => parseSourceRightsApprovedCollectors("demo_simulation")).toThrow();
+    expect(intersectCollectorAllowlists(
+      new Set(["sec_edgar", "reddit"]),
+      new Set(["sec_edgar"]),
+    )).toEqual(new Set(["sec_edgar"]));
+  });
+
+  it("requires an explicit account-use attestation and rejects malformed values", () => {
+    expect(parseExplicitBoolean(undefined)).toBe(false);
+    expect(parseExplicitBoolean("TRUE")).toBe(true);
+    expect(parseExplicitBoolean("false")).toBe(false);
+    expect(() => parseExplicitBoolean("yes")).toThrow();
+  });
+
   it("intersects Jev forwarding permission with the active source allowlist", () => {
     expect(intersectJevSourceAllowlist(
       new Set(["google_news_rss", "sec_edgar"]),
+      new Set(["sec_edgar"]),
       new Set(["sec_edgar"]),
     )).toEqual(new Set(["sec_edgar"]));
     expect(intersectJevSourceAllowlist(
       new Set(["google_news_rss"]),
       new Set(["sec_edgar"]),
+      new Set(["sec_edgar"]),
+    )).toEqual(new Set());
+    expect(intersectJevSourceAllowlist(
+      new Set(["sec_edgar"]),
+      new Set(["sec_edgar"]),
+      new Set(),
     )).toEqual(new Set());
   });
 });

@@ -1,11 +1,19 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): latest code checkpoint `12472ec` (`feat(ui): disclose
-source coverage limits`) is pushed to `origin/codex/real-data-rebuild`, after
-`76b46c2`. The Desk now discloses the configured collector bounds and missing
-public-source families in an expandable, keyboard-operable coverage panel;
-the full collector inventory is locally complete, while overall coverage
-remains partial. Reaction measurements now
+Status (2026-09-29): source-use and TypeSafe account-use runtime gates were
+added in `project-record/4-log/2026-09-29-source-approval-runtime-gate.md`.
+Every source request now needs both a request allowlist and a separate
+operator source-use approval; Jev also needs an account-use attestation and a
+three-way source allowlist intersection. The approval flags are disclosed in
+Health and do not independently verify rights or authority. The local suite
+now passes 212 tests across 28 files, typecheck and production build pass, and
+the fresh-process network-intercepted verifier proves the default-off and
+approval gates. No provider or Jev request was sent. Actual source/account
+rights, contact details, historical usage reconciliation, and real-source Jev
+quality remain unresolved; overall status is partial. The Desk also discloses
+the configured collector bounds and missing public-source families in an
+expandable, keyboard-operable coverage panel; local source inventory is
+complete while overall coverage remains partial. Reaction measurements now
 require a post-publication baseline, an endpoint within five minutes before
 the target, and a fully matured horizon; 30-minute and four-hour counts remain
 separate, and four-hour-only observations cannot enter the 30-minute hit-rate

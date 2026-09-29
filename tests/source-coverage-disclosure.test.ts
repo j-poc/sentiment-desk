@@ -12,7 +12,7 @@ describe("Desk source coverage disclosure", () => {
     expect(html).toContain("Configured feeds only.");
     expect(html).toContain("does not cover the entire public web or all investor activity");
     expect(html).toContain("Collection scope and gaps");
-    expect(html).toContain("RSS reads one response per company and has no completeness signal");
+    expect(html).toContain("RSS reads one response per company with no pagination or provider completeness signal, so its coverage is unknown and may be incomplete");
     expect(html).toContain("flags its 250-row cap as partial");
     expect(html).toContain("Finnhub company news uses a three-day window");
     expect(html).toContain("X recent search is bounded to seven days");
@@ -20,6 +20,9 @@ describe("Desk source coverage disclosure", () => {
     expect(html).toContain("app-store reviews, search trends, YouTube or podcast transcripts");
     expect(html).toContain("Reddit and X are the only direct social collectors");
     expect(html).toContain("Feed access does not by itself establish rights");
+    expect(html).toContain("SOURCE_RIGHTS_APPROVED_COLLECTORS");
+    expect(html).toContain("TYPESAFE_ACCOUNT_USE_APPROVED=true");
+    expect(html).toContain("operator attestations");
   });
 
   it("keeps paused external requests and saved-data mode visible", () => {

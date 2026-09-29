@@ -52,6 +52,11 @@ export function parseExternalSourceCollectors(value: string | undefined): Set<Co
   return new Set(collectors satisfies CollectorId[]);
 }
 
+/** Operator attestation gate, kept separate from the request allowlist. */
+export function parseSourceRightsApprovedCollectors(value: string | undefined): Set<CollectorId> {
+  return parseExternalSourceCollectors(value);
+}
+
 const configuredJevCollectors = z.array(scoreableCollectorSchema).parse(
   (process.env.TYPESAFE_ALLOWED_COLLECTORS ?? "")
     .split(",")
@@ -106,6 +111,8 @@ export const config = {
   externalRequestsEnabled: parseExternalRequestsEnabled(process.env.EXTERNAL_REQUESTS_ENABLED),
   /** Empty by default: external request opt-in still needs a per-source allowlist. */
   externalSourceCollectors: parseExternalSourceCollectors(process.env.EXTERNAL_SOURCE_COLLECTORS),
+  /** Empty by default: each requested source also needs a separate operator approval flag. */
+  sourceRightsApprovedCollectors: parseSourceRightsApprovedCollectors(process.env.SOURCE_RIGHTS_APPROVED_COLLECTORS),
   /** Native runs stay loopback-only; container images override this for port publishing. */
   host: process.env.HOST?.trim() || "127.0.0.1",
   port: int(process.env.PORT, 8787),
@@ -115,6 +122,8 @@ export const config = {
     apiKey,
     baseUrl: (process.env.TYPESAFE_BASE_URL?.trim() || "https://api.typesafe.ai").replace(/\/+$/, ""),
     model: process.env.TYPESAFE_MODEL?.trim() || "jev-latest",
+    /** Operator attestation; it does not independently verify account terms or authority. */
+    accountUseApproved: parseExplicitBoolean(process.env.TYPESAFE_ACCOUNT_USE_APPROVED),
     timeoutMs: 30_000,
     /** List price per million input tokens; output is free. */
     inputPricePerMTok: 0.042,
@@ -159,6 +168,10 @@ export const config = {
 };
 
 export function parseExternalRequestsEnabled(value: string | undefined): boolean {
+  return parseExplicitBoolean(value);
+}
+
+export function parseExplicitBoolean(value: string | undefined): boolean {
   if (value === undefined) return false;
   return z.enum(["true", "false"]).parse(value.trim().toLowerCase()) === "true";
 }
