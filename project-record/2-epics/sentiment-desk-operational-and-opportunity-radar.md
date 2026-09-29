@@ -1,16 +1,27 @@
 # Operational Sentiment Desk, then Opportunity Radar
 
 Status (2026-09-29): Sentiment Desk comparison-empty-state, watchlist-sort,
-usage, and provider-integrity hardening is checkpointed at `cc493be` on
-`origin/codex/real-data-rebuild`, after `c00d61e`. Collectors now
-preserve raw provider row counts and surface malformed responses; repeated X
-pagination, missing SEC CIK mappings, malformed Yahoo chart responses, stale
-Finnhub history retries, and health disclosure have regression coverage.
-Verification passed 199 tests across 26 files, typecheck, production build,
+usage, provider-integrity, and reaction-measurement hardening is
+checkpointed at `76b46c2` on `origin/codex/real-data-rebuild`, after `2a0f199`.
+Outcome windows require a post-publication baseline, timely endpoint prices,
+and a matured horizon; four-hour-only data cannot inflate the 30-minute
+hit-rate denominator, and watchlist-wide correlation is labelled exploratory
+and unclustered. The company endpoint aggregates all eligible events while
+the UI discloses its eight displayed examples. Collectors preserve raw provider
+row counts and distinguish clean empty, partly malformed, and unusable results;
+repeated X pagination, missing SEC CIK mappings, malformed SEC/Yahoo responses,
+durable Finnhub history retries, atomic earnings-cache replacement, and health
+disclosure have regression coverage. Top Movers distinguishes
+unscored companies from scores without a comparison baseline; the watchlist
+falls back to alphabetical order and disables movement sorting when every
+company delta is null.
+Verification passed 208 tests across 27 files, typecheck, production build,
 and the offline startup/request-gate probes. The refreshed saved-data browser
 check selected AMD from the watchlist, showed its persisted sentiment/price
-chart, and confirmed the comparison sort is unavailable while all company
-deltas are null. External requests were paused. This remains a local
+chart, `30m n=41`, `4h n=7`, `hit 37%`, and `top 8 of 41 measured items`.
+Watchlist readback showed 736 timely 30-minute prices among 2,732 items and
+item-level rank IC 0.032, descriptive only. External requests were paused.
+This remains a local
 checkpoint, not live-source, account-authority, rights, or real-source Jev
 quality proof. Those gates remain open. Do not expand or promote Opportunity
 Radar until the Sentiment Desk gates pass.

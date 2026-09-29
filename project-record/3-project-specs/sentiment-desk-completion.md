@@ -1,24 +1,33 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): the latest code checkpoint is pushed at `cc493be` to
-`origin/codex/real-data-rebuild`, following saved-data usage/UI work at
-`c00d61e` and provider-integrity hardening at `e86960b`. RSS, GDELT, Reddit, and
-Finnhub preserve raw provider row counts and distinguish clean empties, mixed
-malformed rows, and wholly unusable responses. X rejects non-advancing
-pagination; SEC reports unmapped tickers and validates response shapes; Yahoo
-chart payloads are checked before caching. Finnhub history retry state survives
-SQLite restarts, stale earnings cache entries are replaced atomically, and
-source-health details are visible in the UI. Verification passed 199 tests
-across 26 files, typecheck, production build, the offline startup/request-gate
-verifier, and the saved-data-only browser check. The watchlist disables
-comparison sorting when every 24-hour delta is missing, and Top Movers
-distinguishes no scores from scores without a baseline. This does not establish
-live collection, provider/model rights, account authority, or real-source Jev
-quality. Current operational usage excludes legacy-unknown and demo rows, and
-the APP badge separates local connectivity from collector status. See
-`project-record/4-log/2026-09-29-source-provenance-usage-ui-clarity.md`,
-`project-record/4-log/2026-09-29-sentiment-comparison-empty-states.md`, and
-`project-record/4-log/2026-09-29-provider-row-integrity-and-health-disclosure.md`.
+Status (2026-09-29): latest code checkpoint `76b46c2` is pushed to
+`origin/codex/real-data-rebuild`, after `2a0f199`. Reaction measurements now
+require a post-publication baseline, an endpoint within five minutes before
+the target, and a fully matured horizon; 30-minute and four-hour counts remain
+separate, and four-hour-only observations cannot enter the 30-minute hit-rate
+denominator. The company endpoint aggregates the full eligible window while
+the UI discloses that it shows only the eight highest-scored measured examples.
+Recent provider hardening preserves row counts and malformed-response state for
+RSS, GDELT, Reddit, and Finnhub, distinguishing clean empties, partial
+malformation, and wholly unusable responses; rejects non-advancing X
+pagination; exposes missing SEC ticker mappings and validates SEC response
+shapes; validates Yahoo chart payloads; and persists Finnhub history retries
+while atomically replacing earnings cache entries. Source health and
+comparison-empty states are visible, and movement sorting is disabled when no
+company has a prior comparison.
+The watchlist-wide reaction statistic is described as exploratory, item-level,
+and unclustered. The suite passes 208 tests across 27 files; typecheck,
+production build, offline request-gate verification, and saved-data browser
+checks pass. Selecting AMD in the isolated saved-data preview changed the
+company view and rendered both sentiment and price lines; the outcome panel
+showed `30m n=41`, `4h n=7`, and a 37% 30-minute hit rate. It disclosed `top 8
+of 41 measured items`. Browser console errors: zero. The current watchlist
+readback has 736 timely 30-minute prices among 2,732 items and item-level rank
+IC `0.032`; this is descriptive only. This does not establish live collection,
+provider/model rights, account authority, or real-source Jev quality.
+Operational usage excludes legacy-unknown rows, and the APP badge separates
+local connectivity from collector status. See the 2026-09-29 reaction-window
+trace and prior provider/usage/UI traces in `project-record/4-log`.
 
 Saved-data UI verification snapshot (2026-09-28): the isolated production-build
 smoke remains valid: its backup database contained 2,281 real source-backed observations, zero
@@ -106,7 +115,7 @@ gates and their limits are recorded in
 ## Durable goal state (2026-09-29)
 
 The native ultragoal remains `active`. The latest code checkpoint is pushed to
-`origin/codex/real-data-rebuild` at `cc493be`. Raw provider counts and malformed
+`origin/codex/real-data-rebuild` at `76b46c2`. Raw provider counts and malformed
 rows are represented in delivery health for RSS, GDELT, Reddit, and Finnhub;
 repeated X pagination tokens fail without advancing the committed cursor;
 missing SEC ticker/CIK mappings are visible invalid deliveries; Yahoo chart
@@ -120,7 +129,20 @@ no prior comparison window. The watchlist uses alphabetical order and disables
 its movement-sort control while every comparison delta is null; when some
 deltas exist, missing rows sort last and equal magnitudes use ticker order.
 
-The checkpoint passed 199 tests across 26 files, TypeScript typecheck,
+The earlier outcome endpoint carried forward stale market prices and reported
+them as reactions, often as 0.00%; the 30-minute hit-rate denominator could
+also include observations that had only a four-hour result. This checkpoint
+requires each price endpoint to be within five minutes of its target, keeps
+30-minute and four-hour sample counts separate, and uses only timely 30-minute
+observations for the directional hit rate. The watchlist-wide correlation is
+explicitly descriptive and unclustered. The isolated saved-data preview showed
+AMD's chart and selected-company state; its outcome panel read `30m n=41`,
+`4h n=7`, and `hit 37%`, and disclosed `top 8 of 41 measured items`. The
+browser console had no errors. At watchlist level, the current readback had
+736 timely 30-minute prices among 2,732 items; item-level rank IC was 0.032.
+This is an exploratory statistic, not evidence of Jev quality or prediction.
+
+The checkpoint passed 208 tests across 27 files, TypeScript typecheck,
 production build, `git diff --check`, and `npm run verify:offline-startup`.
 The verifier served 24 configured companies with all sources and Jev paused,
 returned 503 for a retry attempt, observed zero outbound fetches, passed all
