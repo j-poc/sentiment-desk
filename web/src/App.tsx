@@ -28,6 +28,7 @@ import { StatusBar } from "./components/StatusBar.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
+import { hasComparableDeltas, orderWatchlistCompanies } from "./lib/watchlist-order.js";
 
 const WINDOWS = [
   { h: 6, label: "6H" },
@@ -430,15 +431,11 @@ export default function App() {
   }, []);
 
   // Ordering for display and keyboard navigation.
-  const ordered = useMemo(() => {
-    const list = [...companies];
-    if (sortMode === "delta") {
-      list.sort((a, b) => Math.abs(b.delta ?? -999) - Math.abs(a.delta ?? -999));
-    } else {
-      list.sort((a, b) => a.ticker.localeCompare(b.ticker));
-    }
-    return list;
-  }, [companies, sortMode]);
+  const deltaSortAvailable = hasComparableDeltas(companies);
+  const ordered = useMemo(
+    () => orderWatchlistCompanies(companies, sortMode),
+    [companies, sortMode],
+  );
   const orderRef = useRef<string[]>([]);
   useEffect(() => {
     orderRef.current = ordered.map((c) => c.id);
@@ -509,10 +506,13 @@ export default function App() {
             <span className="micro">Watchlist</span>
             <button
               onClick={() => setSortMode((m) => (m === "delta" ? "alpha" : "delta"))}
-              className="tabnum flex items-center gap-1 rounded border border-white/10 px-1.5 py-[1px] text-[9.5px] text-white/50 hover:bg-white/[0.05]"
-              title="toggle sort (delta movement vs alphabetical)"
+              disabled={!deltaSortAvailable}
+              className="tabnum flex items-center gap-1 rounded border border-white/10 px-1.5 py-[1px] text-[9.5px] text-white/50 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-35"
+              title={deltaSortAvailable
+                ? "toggle sort (delta movement vs alphabetical)"
+                : "No prior sentiment comparison is available; companies are sorted alphabetically."}
             >
-              {sortMode === "delta" ? "Δ MOVE" : "A-Z"}
+              {sortMode === "delta" && deltaSortAvailable ? "Δ MOVE" : "A-Z"}
               <kbd>j/k</kbd>
             </button>
           </div>

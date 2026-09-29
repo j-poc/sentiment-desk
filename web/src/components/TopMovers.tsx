@@ -15,12 +15,15 @@ export function TopMovers({
     .filter((c) => c.delta != null)
     .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))
     .slice(0, 5);
+  const hasScores = companies.some((company) => company.index != null);
 
   return (
     <div>
       {movers.length === 0 && (
         <div className="px-4 py-4 text-[11px] text-white/30">
-          Current scores are available; no prior 24h comparison yet.
+          {hasScores
+            ? "Current scores are available; no prior 24h comparison yet."
+            : "No scored sentiment is available yet."}
         </div>
       )}
       {movers.map((c) => {
