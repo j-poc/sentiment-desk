@@ -89,7 +89,8 @@ export interface ReactionEvent {
 }
 
 export interface ReactionSummary {
-  n: number;
+  n30m: number;
+  n4h: number;
   median30m: number | null;
   median4h: number | null;
   hitRate: number | null;

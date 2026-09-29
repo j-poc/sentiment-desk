@@ -368,15 +368,15 @@ export class Pipeline {
         r240: null,
       }));
       const overall = summarizeReactions(rows);
-      if (overall.n >= 5) {
+      if (overall.n30m >= 5) {
         const fmt = (v: number | null) => (v == null ? "--" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
         const byType: Record<string, string> = {};
         for (const t of new Set(rows.map((r) => r.eventType))) {
           const s = summarizeReactions(rows.filter((r) => r.eventType === t));
-          if (s.n >= 3) byType[t] = `n=${s.n}, median30m=${fmt(s.median30m)}, hit=${s.hitRate ?? "-"}%`;
+          if (s.n30m >= 3) byType[t] = `n30m=${s.n30m}, median30m=${fmt(s.median30m)}, hit=${s.hitRate ?? "-"}%`;
         }
         block = {
-          overall: `n=${overall.n}, median30m=${fmt(overall.median30m)}, hit=${overall.hitRate ?? "-"}%`,
+          overall: `n30m=${overall.n30m}, median30m=${fmt(overall.median30m)}, hit=${overall.hitRate ?? "-"}%`,
           byType,
         };
         this.deps.db.logEvent("info", "memory", `${ticker}: ${block.overall}`);

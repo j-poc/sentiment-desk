@@ -43,9 +43,9 @@ export function ValidationPanel() {
   return (
     <div className="panel mt-4">
       <div className="panel-head">
-        <span className="micro">Signal validation · watchlist-wide</span>
+        <span className="micro">Exploratory reaction check · watchlist-wide</span>
         <span className="text-[9px] text-white/30">
-          {data.withReaction}/{data.totalEvents} events with measured reaction
+          {data.withReaction}/{data.totalEvents} items with timely 30m prices
         </span>
       </div>
       {data.rankIC != null && (
@@ -54,7 +54,7 @@ export function ValidationPanel() {
             {data.rankIC > 0 ? "+" : ""}{data.rankIC.toFixed(3)}
           </span>
           <span className="text-[10px] text-white/40">
-            rank IC · event strength vs |30m move| · positive = stronger events move more
+            item-level rank IC · unclustered · event strength vs |30m move|
           </span>
         </div>
       )}
@@ -91,8 +91,8 @@ export function ValidationPanel() {
           </tbody>
         </table>
         <div className="mt-1.5 text-[9.5px] text-white/30">
-          Under test: stronger event scores should predict larger absolute reactions and higher directional hit rates.
-          Sample grows as the desk runs; treat small n as what it is.
+          Descriptive only: duplicate and syndicated stories are not grouped, issuer clustering is not adjusted, and
+          this does not establish Jev quality, causality, or predictive value.
         </div>
       </div>
     </div>

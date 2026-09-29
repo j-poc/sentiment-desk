@@ -16,14 +16,13 @@ const TYPE_LABEL: Record<string, string> = {
 function SummaryRow({ label, s, color }: { label: string; s: ReactionSummary; color: string }) {
   const fmt = (v: number | null) => (v == null ? "--" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
   return (
-    <div className="flex items-center gap-3 border-b border-white/[0.04] px-3 py-1.5 text-[10.5px]">
+    <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_minmax(0,1fr)_3rem] items-center gap-2 border-b border-white/[0.04] px-3 py-1.5 text-[10.5px]">
       <span className="w-14 font-semibold tracking-wider" style={{ color }}>
         {label}
       </span>
-      <span className="tabnum w-10 text-white/60">n={s.n}</span>
-      <span className="tabnum w-20 text-white/70">30m {fmt(s.median30m)}</span>
-      <span className="tabnum w-20 text-white/70">4h {fmt(s.median4h)}</span>
-      <span className="tabnum text-white/50">
+      <span className="tabnum truncate text-white/70">30m {fmt(s.median30m)} · n={s.n30m}</span>
+      <span className="tabnum truncate text-white/70">4h {fmt(s.median4h)} · n={s.n4h}</span>
+      <span className="tabnum text-right text-white/50">
         {s.hitRate == null ? "" : `hit ${s.hitRate}%`}
       </span>
     </div>
@@ -105,6 +104,9 @@ export function OutcomeCheck({
         <SummaryRow label="ALL" s={data.all} color="#e8ebf2" />
         <SummaryRow label="BEAR" s={data.bear} color="#f87171" />
         <SummaryRow label="BULL" s={data.bull} color="#34d399" />
+      </div>
+      <div className="px-3 py-1 text-[9px] text-white/30">
+        Hit rate uses only timely 30m observations. Stale or unavailable price windows are excluded.
       </div>
       {top.length > 0 && (
         <div className="mt-1 border-t border-white/[0.05]">

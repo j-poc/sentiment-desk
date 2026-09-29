@@ -186,26 +186,38 @@ export interface PriceLike {
   price: number;
 }
 
-/** Price of the last known point at or before time t; null if none. */
-export function priceAt(points: PriceLike[], t: number): number | null {
-  let best: number | null = null;
+const OUTCOME_PRICE_MAX_GAP_MS = 5 * 60_000;
+
+/** Last observed point at or before time t; null if none. */
+function pointAt(points: PriceLike[], t: number): PriceLike | null {
+  let best: PriceLike | null = null;
   for (const p of points) {
-    if (p.t <= t) best = p.price;
+    if (p.t <= t) best = p;
     else break;
   }
   return best;
 }
 
+/** Price of the last known point at or before time t; null if none. */
+export function priceAt(points: PriceLike[], t: number): number | null {
+  return pointAt(points, t)?.price ?? null;
+}
+
 /**
- * Forward return in % from the last price at or before `t` (plus a small
- * detection allowance) to the last price at or before `t + windowMs`.
- * Null when either end is missing: we never impute a reaction.
+ * Forward return in % from a timely baseline near `t` (plus a small detection
+ * allowance) to a timely observation near `t + windowMs`. A prior close must
+ * not be carried forward across closed-market or missing-data gaps and counted
+ * as a measured zero return.
  */
 export function forwardReturn(points: PriceLike[], t: number, windowMs: number): number | null {
-  const p0 = priceAt(points, t + 90_000);
-  const p1 = priceAt(points, t + windowMs);
-  if (p0 == null || p1 == null || p0 === 0) return null;
-  return Math.round(((p1 - p0) / p0) * 10000) / 100;
+  if (!Number.isFinite(t) || !Number.isFinite(windowMs) || windowMs <= 0) return null;
+  const baselineAt = t + 90_000;
+  const outcomeAt = t + windowMs;
+  const p0 = pointAt(points, baselineAt);
+  const p1 = pointAt(points, outcomeAt);
+  if (p0 == null || p1 == null || !Number.isFinite(p0.price) || !Number.isFinite(p1.price) || p0.price <= 0) return null;
+  if (baselineAt - p0.t > OUTCOME_PRICE_MAX_GAP_MS || outcomeAt - p1.t > OUTCOME_PRICE_MAX_GAP_MS) return null;
+  return Math.round(((p1.price - p0.price) / p0.price) * 1_000_000) / 10_000;
 }
 
 export interface ValidationBucket {
@@ -298,7 +310,8 @@ export function rankIC(pairs: Array<[number, number]>): number | null {
 }
 
 export interface ReactionSummary {
-  n: number;
+  n30m: number;
+  n4h: number;
   median30m: number | null;
   median4h: number | null;
   /** Share of events where the 30m reaction matched the judged direction. */
@@ -308,7 +321,7 @@ export interface ReactionSummary {
 export function summarizeReactions(
   items: Array<{ sentiment: string; r30: number | null; r240: number | null }>,
 ): ReactionSummary {
-  const usable = items.filter((x) => x.r30 != null || x.r240 != null);
+  const with30m = items.filter((x) => x.r30 != null);
   const median = (arr: number[]): number | null => {
     if (arr.length === 0) return null;
     const s = [...arr].sort((a, b) => a - b);
@@ -319,20 +332,21 @@ export function summarizeReactions(
     const value = s.length % 2 ? a : b != null ? (a + b) / 2 : a;
     return Math.round(value * 100) / 100;
   };
-  const r30s = usable.map((x) => x.r30).filter((v): v is number => v != null);
-  const r240s = usable.map((x) => x.r240).filter((v): v is number => v != null);
-  const confirms = usable.filter((x) => {
-    const r = x.r30 ?? x.r240;
+  const r30s = items.flatMap((x) => x.r30 == null ? [] : [x.r30]);
+  const r240s = items.flatMap((x) => x.r240 == null ? [] : [x.r240]);
+  const confirms = with30m.filter((x) => {
+    const r = x.r30;
     if (r == null) return false;
     if (x.sentiment === "negative") return r < 0;
     if (x.sentiment === "positive") return r > 0;
     return Math.abs(r) < 0.25;
   }).length;
   return {
-    n: usable.length,
+    n30m: r30s.length,
+    n4h: r240s.length,
     median30m: median(r30s),
     median4h: median(r240s),
-    hitRate: usable.length > 0 ? Math.round((confirms / usable.length) * 100) : null,
+    hitRate: with30m.length > 0 ? Math.round((confirms / with30m.length) * 100) : null,
   };
 }
 

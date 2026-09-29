@@ -193,11 +193,29 @@ describe("forwardReturn", () => {
   it("measures the forward move from the last price at or before the event", () => {
     // p0 = 101 (t=2m, last point within the 90s detection allowance),
     // p1 = 96.57 (t=30.5m, last point within the 30m window).
-    expect(forwardReturn(points, 60_000, 30 * 60_000)).toBe(-4.39);
+    expect(forwardReturn(points, 60_000, 30 * 60_000)).toBe(-4.3861);
   });
   it("returns null instead of imputing when a side is missing", () => {
     expect(forwardReturn(points, -300_000, 60_000)).toBeNull();
     expect(forwardReturn([], 0, 60_000)).toBeNull();
+  });
+  it("rejects a stale baseline even when a later outcome point exists", () => {
+    expect(forwardReturn([
+      { t: -10 * 60_000, price: 100 },
+      { t: 30 * 60_000, price: 102 },
+    ], 0, 30 * 60_000)).toBeNull();
+  });
+  it("rejects a stale terminal quote instead of counting a carried-forward zero", () => {
+    expect(forwardReturn([
+      { t: 90_000, price: 100 },
+      { t: 25 * 60_000 - 1, price: 100 },
+    ], 0, 30 * 60_000)).toBeNull();
+  });
+  it("retains a zero return when both price observations are timely", () => {
+    expect(forwardReturn([
+      { t: 90_000, price: 100 },
+      { t: 30 * 60_000, price: 100 },
+    ], 0, 30 * 60_000)).toBe(0);
   });
 });
 
@@ -210,9 +228,19 @@ describe("summarizeReactions", () => {
       { sentiment: "positive", r30: 0.5, r240: null },
       { sentiment: "neutral", r30: null, r240: null },
     ]);
-    expect(s.n).toBe(4);
+    expect(s.n30m).toBe(4);
+    expect(s.n4h).toBe(0);
     expect(s.median30m).toBe(0.05); // median of [-1.2, -0.4, 0.5, 0.9]
     expect(s.hitRate).toBe(75);
+  });
+  it("keeps 4h-only observations out of the 30m hit-rate denominator", () => {
+    const s = summarizeReactions([
+      { sentiment: "positive", r30: 0.2, r240: -1.2 },
+      { sentiment: "negative", r30: null, r240: -2.5 },
+    ]);
+    expect(s.n30m).toBe(1);
+    expect(s.n4h).toBe(2);
+    expect(s.hitRate).toBe(100);
   });
 });
 
