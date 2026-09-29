@@ -1,0 +1,55 @@
+{
+  "checks": [
+    {
+      "exit_code": 0,
+      "id": "fixture_suite",
+      "kind": "fixture",
+      "output_bytes": 769,
+      "output_digest": "8acf9c8aac94da5ae0b4f56b76a698e6b769858485840b6024f04398ef7726c2",
+      "started_at": "2026-09-29T11:47:12Z",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "id": "failure_recovery_regressions",
+      "kind": "failure",
+      "output_bytes": 577,
+      "output_digest": "250263efec73669865939cdc9b152aa7b89f7ea0813dd4fd054d95efe3a9e698",
+      "started_at": "2026-09-29T11:48:25Z",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "id": "pipeline_replay_regressions",
+      "kind": "replay",
+      "output_bytes": 424,
+      "output_digest": "44c7d4d8a683e5cdf6cc6362e6595b11f2b1e12144380ffca442e5913bfa7735",
+      "started_at": "2026-09-29T11:49:00Z",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "id": "offline_source_request_gates",
+      "kind": "failure",
+      "output_bytes": 8334,
+      "output_digest": "abe44934efc3c11a03dfc543a840488a4abe5199255e63db94026f57c2da4706",
+      "started_at": "2026-09-29T11:49:04Z",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "id": "authorized_keyless_live_smoke",
+      "kind": "live_smoke",
+      "output_bytes": 13119,
+      "output_digest": "a1e6d430bba8b869753ce25a901404c37d4430ebcc61e4086604852346993cc6",
+      "started_at": "2026-09-29T11:49:28Z",
+      "status": "PASS"
+    }
+  ],
+  "code_fingerprint": "019c8ddefa47365c6fe9bbf163040386d09ead7efcf041d860601d7f4eec8f17",
+  "contract_digest": "c103964a87db80232922521e1dce49f53d2dd7a16be7cb9e62d13d4cd032a7fc",
+  "schema_version": 1,
+  "standard_digest": "ae47172520e40d0f75b04ae8a914fbe056e1a1fa18764368d0b793eb9d3b2081",
+  "status": "PASS",
+  "verified_at": "2026-09-29T11:50:55Z"
+}
