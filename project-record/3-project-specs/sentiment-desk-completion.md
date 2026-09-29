@@ -1,7 +1,11 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): latest code checkpoint `76b46c2` is pushed to
-`origin/codex/real-data-rebuild`, after `2a0f199`. Reaction measurements now
+Status (2026-09-29): latest code checkpoint `12472ec` (`feat(ui): disclose
+source coverage limits`) is pushed to `origin/codex/real-data-rebuild`, after
+`76b46c2`. The Desk now discloses the configured collector bounds and missing
+public-source families in an expandable, keyboard-operable coverage panel;
+the full collector inventory is locally complete, while overall coverage
+remains partial. Reaction measurements now
 require a post-publication baseline, an endpoint within five minutes before
 the target, and a fully matured horizon; 30-minute and four-hour counts remain
 separate, and four-hour-only observations cannot enter the 30-minute hit-rate
@@ -114,8 +118,9 @@ gates and their limits are recorded in
 
 ## Durable goal state (2026-09-29)
 
-The native ultragoal remains `active`. The latest code checkpoint is pushed to
-`origin/codex/real-data-rebuild` at `76b46c2`. Raw provider counts and malformed
+The durable goal remains incomplete. The latest code checkpoint is pushed to
+`origin/codex/real-data-rebuild` at `12472ec`, after the `76b46c2` scoring and
+reaction-window checkpoint. Raw provider counts and malformed
 rows are represented in delivery health for RSS, GDELT, Reddit, and Finnhub;
 repeated X pagination tokens fail without advancing the committed cursor;
 missing SEC ticker/CIK mappings are visible invalid deliveries; Yahoo chart
@@ -142,7 +147,7 @@ browser console had no errors. At watchlist level, the current readback had
 736 timely 30-minute prices among 2,732 items; item-level rank IC was 0.032.
 This is an exploratory statistic, not evidence of Jev quality or prediction.
 
-The checkpoint passed 208 tests across 27 files, TypeScript typecheck,
+The current implementation passed 209 tests across 27 files, TypeScript typecheck,
 production build, `git diff --check`, and `npm run verify:offline-startup`.
 The verifier served 24 configured companies with all sources and Jev paused,
 returned 503 for a retry attempt, observed zero outbound fetches, passed all

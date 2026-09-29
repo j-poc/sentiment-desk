@@ -1,6 +1,8 @@
 # Collector scope disclosure and local source inventory — 2026-09-29
 
 Trace ID: `TRACE-20260929-source-scope-disclosure`
+Implementation checkpoint: `12472ec31624eea36b114b091c676de49f2e3ed4`, pushed to
+`origin/codex/real-data-rebuild`.
 
 ## Request and acceptance
 
