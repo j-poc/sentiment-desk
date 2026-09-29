@@ -248,6 +248,32 @@ describe("Desk observation and judgment storage", () => {
     }
   });
 
+  it("returns every eligible publisher-timed reaction event beyond the recent-feed page size", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-reaction-events-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    try {
+      db.seedCompanies([company]);
+      const since = Date.now() - 10 * 60_000;
+      for (let i = 0; i < 205; i += 1) {
+        const stored = db.insertObservation(mention({
+          sourceItemId: `reaction-${i}`,
+          sourceUrl: `https://reuters.com/reaction/${i}`,
+          publishedAt: since + i * 100,
+        }));
+        db.markScored(stored.observationId, score("results"), false);
+      }
+
+      const events = db.scoredReactionEventsForCompany(company.id, since);
+
+      expect(events).toHaveLength(205);
+      expect(events[0]?.eventScore).toBe(70);
+      expect(events.every((event) => event.publishedAt >= since)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
   it("persists successful empty and failed deliveries across a restart without exposing request keys", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-delivery-"));
     directories.push(directory);

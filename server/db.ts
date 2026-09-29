@@ -824,6 +824,32 @@ export class Desk {
     return rows.map(rowToDTO);
   }
 
+  scoredReactionEventsForCompany(companyId: string, sinceMs: number): Array<{
+    id: string;
+    title: string;
+    publishedAt: number;
+    sentiment: string;
+    eventScore: number;
+    eventType: string;
+  }> {
+    return this.db.prepare(
+      `SELECT id, title, published_at AS publishedAt, sentiment, event_score AS eventScore,
+         COALESCE(event_type, 'other') AS eventType
+       FROM mentions
+       WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
+         AND published_at IS NOT NULL AND time_basis = 'publisher_declared' AND impact IS NOT NULL
+         AND published_at >= ?
+       ORDER BY published_at DESC, ingested_at DESC`,
+    ).all(companyId, sinceMs) as unknown as Array<{
+      id: string;
+      title: string;
+      publishedAt: number;
+      sentiment: string;
+      eventScore: number;
+      eventType: string;
+    }>;
+  }
+
   radarEvidence(companyId: string, fromMs: number, toMs: number, asOf = Number.MAX_SAFE_INTEGER): RadarItemEvidence[] {
     return this.db.prepare(
       `SELECT id, title, source_url AS sourceUrl, publisher_name AS publisherName,

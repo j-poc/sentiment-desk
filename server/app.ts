@@ -183,34 +183,37 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   /**
-   * Outcome verification: forward price returns after each judged event, plus
-   * aggregate hit-rate stats. Reaction is evidence, not causation; the payload
-   * carries n so small samples stay visibly small.
+   * Outcome description: timely forward price reactions for publisher-timed,
+   * source-identified judgments. Aggregates cover every eligible event in the
+   * window; only the eight highest-scored measured examples are returned.
    */
   app.get("/api/companies/:id/reactions", (c) => {
     const id = c.req.param("id");
     const hours = clampNumber(c.req.query("hours"), 6, 168, 24);
     const ticker = deps.db.companies().find((x) => x.id === id)?.ticker;
     if (!ticker) return c.json({ error: "unknown company" }, 404);
-    const since = Date.now() - hours * 60 * 60 * 1000;
-    const mentions = deps.db
-      .mentionsForCompany(id, since, 200)
-      .filter((m) => m.status === "scored" && m.score && m.publishedAt != null);
+    const now = Date.now();
+    const since = now - hours * 60 * 60 * 1000;
+    const mentions = deps.db.scoredReactionEventsForCompany(id, since);
     const series = deps.db.priceWindow(ticker, since - 60 * 60 * 1000);
     const events = mentions.map((m) => ({
       id: m.id,
       title: m.title,
-      publishedAt: m.publishedAt!,
-      sentiment: m.score?.sentiment ?? "neutral",
-      eventScore: m.score?.eventScore ?? 0,
-      eventType: m.score?.eventType ?? "other",
-      r30: forwardReturn(series, m.publishedAt!, 30 * 60_000),
-      r240: forwardReturn(series, m.publishedAt!, 4 * 60 * 60_000),
+      publishedAt: m.publishedAt,
+      sentiment: m.sentiment,
+      eventScore: m.eventScore,
+      eventType: m.eventType,
+      r30: forwardReturn(series, m.publishedAt, 30 * 60_000, now),
+      r240: forwardReturn(series, m.publishedAt, 4 * 60 * 60_000, now),
     }));
     const bull = summarizeReactions(events.filter((e) => e.sentiment === "positive"));
     const bear = summarizeReactions(events.filter((e) => e.sentiment === "negative"));
     const all = summarizeReactions(events);
-    return c.json({ ticker, events, bull, bear, all });
+    const measured = events.filter((e) => e.r30 != null || e.r240 != null);
+    const examples = [...measured]
+      .sort((a, b) => b.eventScore - a.eventScore || b.publishedAt - a.publishedAt || a.id.localeCompare(b.id))
+      .slice(0, 8);
+    return c.json({ ticker, events: examples, measuredEventCount: measured.length, bull, bear, all });
   });
 
   app.get("/api/companies/:id/series", (c) => {
@@ -268,12 +271,13 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   /**
-  * Signal validation across the whole watchlist: judged events bucketed by
-  * strength, measured against realized 30-minute price reactions.
+  * Exploratory watchlist-wide item-level description; not a Jev quality
+  * evaluation, causal estimate, or clustered return study.
   */
   app.get("/api/validation", (c) => {
     const hours = clampNumber(c.req.query("hours"), 24, 168, 120);
-    const since = Date.now() - hours * 60 * 60 * 1000;
+    const now = Date.now();
+    const since = now - hours * 60 * 60 * 1000;
     const events = deps.db.scoredMentionEvents(since);
     const seriesByTicker = new Map<string, Array<{ t: number; price: number }>>();
     for (const e of events) {
@@ -284,7 +288,7 @@ export function createApp(deps: AppDeps): Hono {
     const rows = events.map((e) => ({
       eventScore: e.eventScore,
       sentiment: e.sentiment,
-      r30: forwardReturn(seriesByTicker.get(e.ticker) ?? [], e.publishedAt, 30 * 60_000),
+      r30: forwardReturn(seriesByTicker.get(e.ticker) ?? [], e.publishedAt, 30 * 60_000, now),
     }));
     const measured = rows
       .filter((r) => r.r30 != null)
@@ -295,7 +299,7 @@ export function createApp(deps: AppDeps): Hono {
       withReaction: measured.length,
       rankIC: rankIC(measured),
       buckets: validateSignal(rows),
-      generatedAt: Date.now(),
+      generatedAt: now,
     });
   });
 

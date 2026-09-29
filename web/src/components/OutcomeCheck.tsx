@@ -106,7 +106,8 @@ export function OutcomeCheck({
         <SummaryRow label="BULL" s={data.bull} color="#34d399" />
       </div>
       <div className="px-3 py-1 text-[9px] text-white/30">
-        Hit rate uses only timely 30m observations. Stale or unavailable price windows are excluded.
+        Baseline: quote within 90s after publication. Incomplete or &gt;5m-stale windows are excluded; counts cover all eligible items.
+        {data.measuredEventCount > top.length && ` Showing top ${top.length} of ${data.measuredEventCount} measured items by score.`}
       </div>
       {top.length > 0 && (
         <div className="mt-1 border-t border-white/[0.05]">

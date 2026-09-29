@@ -99,6 +99,7 @@ export interface ReactionSummary {
 export interface ReactionsDTO {
   ticker: string;
   events: ReactionEvent[];
+  measuredEventCount: number;
   bull: ReactionSummary;
   bear: ReactionSummary;
   all: ReactionSummary;

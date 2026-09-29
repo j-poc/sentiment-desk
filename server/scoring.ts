@@ -204,18 +204,20 @@ export function priceAt(points: PriceLike[], t: number): number | null {
 }
 
 /**
- * Forward return in % from a timely baseline near `t` (plus a small detection
- * allowance) to a timely observation near `t + windowMs`. A prior close must
- * not be carried forward across closed-market or missing-data gaps and counted
- * as a measured zero return.
+ * Forward return in % from a price point in the first 90 seconds after `t` to a
+ * timely observation near `t + windowMs`, once that window has matured as of
+ * `asOf`. A pre-publication price or prior close must not be carried forward
+ * and counted as a measured reaction.
  */
-export function forwardReturn(points: PriceLike[], t: number, windowMs: number): number | null {
-  if (!Number.isFinite(t) || !Number.isFinite(windowMs) || windowMs <= 0) return null;
+export function forwardReturn(points: PriceLike[], t: number, windowMs: number, asOf = Date.now()): number | null {
+  if (!Number.isFinite(t) || !Number.isFinite(windowMs) || windowMs <= 0 || !Number.isFinite(asOf)) return null;
   const baselineAt = t + 90_000;
   const outcomeAt = t + windowMs;
+  if (outcomeAt > asOf) return null;
   const p0 = pointAt(points, baselineAt);
   const p1 = pointAt(points, outcomeAt);
   if (p0 == null || p1 == null || !Number.isFinite(p0.price) || !Number.isFinite(p1.price) || p0.price <= 0) return null;
+  if (p0.t < t) return null;
   if (baselineAt - p0.t > OUTCOME_PRICE_MAX_GAP_MS || outcomeAt - p1.t > OUTCOME_PRICE_MAX_GAP_MS) return null;
   return Math.round(((p1.price - p0.price) / p0.price) * 1_000_000) / 10_000;
 }

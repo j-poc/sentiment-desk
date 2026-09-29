@@ -190,8 +190,8 @@ describe("forwardReturn", () => {
     { t: 600_000, price: 99 },
     { t: 1_830_000, price: 96.57 },
   ];
-  it("measures the forward move from the last price at or before the event", () => {
-    // p0 = 101 (t=2m, last point within the 90s detection allowance),
+  it("measures the forward move from a timely post-publication price", () => {
+    // p0 = 101 (t=2m, within the 90s post-publication window),
     // p1 = 96.57 (t=30.5m, last point within the 30m window).
     expect(forwardReturn(points, 60_000, 30 * 60_000)).toBe(-4.3861);
   });
@@ -204,6 +204,22 @@ describe("forwardReturn", () => {
       { t: -10 * 60_000, price: 100 },
       { t: 30 * 60_000, price: 102 },
     ], 0, 30 * 60_000)).toBeNull();
+  });
+  it("rejects a pre-publication baseline even when it is within the freshness tolerance", () => {
+    expect(forwardReturn([
+      { t: -2 * 60_000, price: 100 },
+      { t: 30 * 60_000, price: 102 },
+    ], 0, 30 * 60_000)).toBeNull();
+  });
+  it.each([30 * 60_000, 4 * 60 * 60_000])("does not score an immature %i ms reaction window", (windowMs) => {
+    const outcomeAt = windowMs;
+    const observations = [
+      { t: 60_000, price: 100 },
+      { t: outcomeAt - 60_000, price: 101 },
+    ];
+
+    expect(forwardReturn(observations, 0, windowMs, outcomeAt - 1)).toBeNull();
+    expect(forwardReturn(observations, 0, windowMs, outcomeAt)).toBe(1);
   });
   it("rejects a stale terminal quote instead of counting a carried-forward zero", () => {
     expect(forwardReturn([
