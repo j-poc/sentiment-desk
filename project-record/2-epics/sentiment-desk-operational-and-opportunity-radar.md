@@ -1,13 +1,16 @@
 # Operational Sentiment Desk, then Opportunity Radar
 
-Status (2026-09-29): Sentiment Desk local provider-integrity hardening is
-checkpointed at `e86960b` on `origin/codex/real-data-rebuild`. Collectors now
+Status (2026-09-29): Sentiment Desk comparison-empty-state, watchlist-sort,
+usage, and provider-integrity hardening is checkpointed at `cc493be` on
+`origin/codex/real-data-rebuild`, after `c00d61e`. Collectors now
 preserve raw provider row counts and surface malformed responses; repeated X
 pagination, missing SEC CIK mappings, malformed Yahoo chart responses, stale
 Finnhub history retries, and health disclosure have regression coverage.
-Verification passed 196 tests, typecheck, production build, and the offline
-startup/request-gate probes. The saved-data browser check showed AMD's persisted
-sentiment/price chart with external requests paused. This remains a local
+Verification passed 199 tests across 26 files, typecheck, production build,
+and the offline startup/request-gate probes. The refreshed saved-data browser
+check selected AMD from the watchlist, showed its persisted sentiment/price
+chart, and confirmed the comparison sort is unavailable while all company
+deltas are null. External requests were paused. This remains a local
 checkpoint, not live-source, account-authority, rights, or real-source Jev
 quality proof. Those gates remain open. Do not expand or promote Opportunity
 Radar until the Sentiment Desk gates pass.

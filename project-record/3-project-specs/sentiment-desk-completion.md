@@ -1,17 +1,23 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): the latest local provider-integrity checkpoint is pushed
-at `e86960b` to `origin/codex/real-data-rebuild`. RSS, GDELT, Reddit, and
+Status (2026-09-29): the latest code checkpoint is pushed at `cc493be` to
+`origin/codex/real-data-rebuild`, following saved-data usage/UI work at
+`c00d61e` and provider-integrity hardening at `e86960b`. RSS, GDELT, Reddit, and
 Finnhub preserve raw provider row counts and distinguish clean empties, mixed
 malformed rows, and wholly unusable responses. X rejects non-advancing
 pagination; SEC reports unmapped tickers and validates response shapes; Yahoo
 chart payloads are checked before caching. Finnhub history retry state survives
 SQLite restarts, stale earnings cache entries are replaced atomically, and
-source-health details are visible in the UI. Verification passed 196 tests
-across 24 files, typecheck, production build, the offline startup/request-gate
-verifier, and the saved-data-only browser check. This does not establish live
-collection, provider/model rights, account authority, or real-source Jev
-quality. See
+source-health details are visible in the UI. Verification passed 199 tests
+across 26 files, typecheck, production build, the offline startup/request-gate
+verifier, and the saved-data-only browser check. The watchlist disables
+comparison sorting when every 24-hour delta is missing, and Top Movers
+distinguishes no scores from scores without a baseline. This does not establish
+live collection, provider/model rights, account authority, or real-source Jev
+quality. Current operational usage excludes legacy-unknown and demo rows, and
+the APP badge separates local connectivity from collector status. See
+`project-record/4-log/2026-09-29-source-provenance-usage-ui-clarity.md`,
+`project-record/4-log/2026-09-29-sentiment-comparison-empty-states.md`, and
 `project-record/4-log/2026-09-29-provider-row-integrity-and-health-disclosure.md`.
 
 Saved-data UI verification snapshot (2026-09-28): the isolated production-build
@@ -24,8 +30,9 @@ with saved Jev judgments. The explicit simulation markers were absent, but
 unknown provenance is not proof of real source data. The latest code now
 rejects new observations or deliveries without a known collector, quarantines
 legacy unknown rows from research reads, Jev dispatch/retry, source health,
-aggregates, and Radar, and preserves their saved non-demo usage estimates in
-the usage summary. Historical rows remain untouched.
+aggregates, Radar, and current operational usage totals. Their saved token and
+cost fields remain in the historical rows for audit; they are not represented
+as current, source-identified usage. Historical rows remain untouched.
 
 The prior process audit later found neither port 8787 nor the earlier 8794
 smoke server listening. To verify the current UI without restarting collectors,
@@ -99,25 +106,38 @@ gates and their limits are recorded in
 ## Durable goal state (2026-09-29)
 
 The native ultragoal remains `active`. The latest code checkpoint is pushed to
-`origin/codex/real-data-rebuild` at `e86960b`. Raw provider counts and malformed
+`origin/codex/real-data-rebuild` at `cc493be`. Raw provider counts and malformed
 rows are represented in delivery health for RSS, GDELT, Reddit, and Finnhub;
 repeated X pagination tokens fail without advancing the committed cursor;
 missing SEC ticker/CIK mappings are visible invalid deliveries; Yahoo chart
 responses are validated before caching; Finnhub history retry state is durable
 and its earnings cache replacement is atomic. The Health panel discloses recent
 coverage, provider row counts, degraded errors, and configuration-off state.
+Operational Jev usage totals include only identified-source rows, and the
+header distinguishes local app connectivity from paused source collection.
+Top Movers distinguishes missing current scores from a scored watchlist with
+no prior comparison window. The watchlist uses alphabetical order and disables
+its movement-sort control while every comparison delta is null; when some
+deltas exist, missing rows sort last and equal magnitudes use ticker order.
 
-The checkpoint passed 196 tests across 24 files, TypeScript typecheck,
+The checkpoint passed 199 tests across 26 files, TypeScript typecheck,
 production build, `git diff --check`, and `npm run verify:offline-startup`.
 The verifier served 24 configured companies with all sources and Jev paused,
 returned 503 for a retry attempt, observed zero outbound fetches, passed all
 nine isolated source-allowlist probes, and rejected a mismatched Jev/source
 allowlist. A production browser check selected AMD and showed the saved
-sentiment/price chart from an isolated SQLite copy with requests paused; it
-made loopback requests and had zero console errors. Screenshot:
-`output/playwright/2026-09-29-final-saved-data-amd.png`. This proves the saved
-data presentation only, not current provider delivery. Synthetic examples
-remain confined to tests/evaluations and are not product data.
+sentiment/price chart from an isolated SQLite copy with requests paused. The
+follow-up UI check selected AMD from the watchlist, showed 166 saved mentions,
+and displayed the saved sentiment/price chart. It confirmed the alphabetical
+fallback and disabled comparison-sort control while all 24 company deltas were
+null, plus the truthful Top Movers empty state. At the 2026-09-29 00:09 UTC
+preview readback, source-identified usage and estimated cost for the new UTC
+day were both zero; an earlier snapshot showed 3,165 source-identified
+judgments and $0.293 estimated input cost, a historical estimate rather than an
+invoice. Saved source rows were about six hours old and external requests were
+paused. This proves saved-data presentation, not current provider delivery.
+Synthetic examples remain confined to tests/evaluations and are not product
+data.
 
 The goal remains incomplete and must not be reported as 10/10 or externally
 operational. No provider or Jev request was sent for this checkpoint. Remaining
