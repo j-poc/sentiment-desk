@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
-  AreaSeries,
+  BaselineSeries,
   ColorType,
   createChart,
   CrosshairMode,
@@ -12,19 +12,17 @@ import {
 } from "lightweight-charts";
 import type { PricePoint, SeriesPoint } from "../lib/api.js";
 
-/**
- * Sentiment index chart with an optional price overlay, built on TradingView
- * lightweight-charts (Apache-2.0; attribution satisfied via attributionLogo).
- *
- * The sentiment index uses its own bucket grid; prices retain their actual
- * provider timestamps and are never carried into closed or empty periods. The
- * sentiment series is a smoothed leaky-integrator index drawn as a green area
- * around the zero baseline; the price overlay lives on its own right price
- * scale. Crosshair, tooltips, and resize are the library's job — that is why it
- * was adopted over the hand-rolled SVG chart.
- */
+function toSec(ms: number): UTCTimestamp {
+  const seconds = Math.floor(ms / 1000);
+  if (!Number.isSafeInteger(seconds)) throw new RangeError("Chart timestamp is outside the UTC time range.");
+  return seconds as UTCTimestamp;
+}
 
-const toSec = (ms: number): UTCTimestamp => Math.floor(ms / 1000) as UTCTimestamp;
+function seriesValue(value: unknown): number | null {
+  if (typeof value !== "object" || value === null || !("value" in value)) return null;
+  const candidate = value.value;
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : null;
+}
 
 export function SeriesChart({
   points,
@@ -32,6 +30,7 @@ export function SeriesChart({
   loading,
   mode,
   price,
+  currency,
   latestPriceAt,
   onViewHistory,
   priceLoading = false,
@@ -42,8 +41,9 @@ export function SeriesChart({
   points: SeriesPoint[];
   hours: number;
   loading: boolean;
-  mode: "sentiment" | "overlay";
+  mode: "sentiment" | "comparison";
   price?: PricePoint[];
+  currency: string | null;
   latestPriceAt: number | null;
   onViewHistory?: () => void;
   priceLoading?: boolean;
@@ -53,26 +53,42 @@ export function SeriesChart({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const sentimentRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const indexRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+  const decayRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceRef = useRef<ISeriesApi<"Line"> | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const comparison = mode === "comparison";
+
   const drawableSentiment = useMemo(
     () => points.filter((point) => Number.isFinite(point.t) && (point.v == null || Number.isFinite(point.v))),
     [points],
   );
-  const hasSentiment = drawableSentiment.some((point) => point.v != null);
+  const sentimentByTime = useMemo(
+    () => new Map(drawableSentiment.map((point) => [Number(toSec(point.t)), point])),
+    [drawableSentiment],
+  );
+  const sentimentByTimeRef = useRef(sentimentByTime);
+  sentimentByTimeRef.current = sentimentByTime;
+  const currencyRef = useRef(currency);
+  currencyRef.current = currency;
   const drawablePrice = useMemo(
-    () => mode === "overlay"
+    () => comparison
       ? (price ?? []).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.price))
       : [],
-    [mode, price],
+    [comparison, price],
   );
+  const hasSentiment = drawableSentiment.some((point) => point.v != null && point.n > 0);
   const hasPrice = drawablePrice.length >= 2;
-  const insufficientPrice = mode === "overlay" && drawablePrice.length === 1;
-  const hasChartData = hasSentiment || hasPrice;
-  const waitingForPrice = mode === "overlay" && priceLoading && !hasPrice;
+  const insufficientPrice = comparison && drawablePrice.length === 1;
+  const hasChartData = hasSentiment || drawablePrice.length > 0;
+  const waitingForPrice = comparison && priceLoading && drawablePrice.length === 0;
+  const lastScoredAt = [...drawableSentiment].reverse().find((point) => point.v != null && point.n > 0)?.t ?? null;
+  const hasModeledTail = lastScoredAt != null
+    && drawableSentiment.some((point) => point.t > lastScoredAt && point.v != null && point.n === 0);
+  const scorePointCount = drawableSentiment.filter((point) => point.v != null && point.n > 0).length;
 
-  // Create the chart once.
+  // A new chart per mode gives comparison its own price pane while keeping the
+  // sentiment-only view at full height. The two panes share one time scale.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -81,159 +97,239 @@ export function SeriesChart({
       autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "rgba(232,235,242,0.45)",
+        textColor: "rgba(232,235,242,0.52)",
         fontSize: 10,
         attributionLogo: true,
+        panes: {
+          enableResize: false,
+          separatorColor: "rgba(255,255,255,0.12)",
+          separatorHoverColor: "rgba(255,255,255,0.18)",
+        },
       },
       grid: {
-        vertLines: { color: "rgba(255,255,255,0.03)" },
-        horzLines: { color: "rgba(255,255,255,0.04)" },
+        vertLines: { color: "rgba(255,255,255,0.035)" },
+        horzLines: { color: "rgba(255,255,255,0.05)" },
       },
       leftPriceScale: { visible: true, borderVisible: false },
       rightPriceScale: { visible: true, borderVisible: false },
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 0 },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(255,255,255,0.25)", labelBackgroundColor: "#1a1f2b" },
-        horzLine: { color: "rgba(255,255,255,0.25)", labelBackgroundColor: "#1a1f2b" },
+        vertLine: { color: "rgba(255,255,255,0.3)", labelBackgroundColor: "#1a1f2b" },
+        horzLine: { color: "rgba(255,255,255,0.2)", labelBackgroundColor: "#1a1f2b" },
       },
     });
 
-    const sentiment = chart.addSeries(AreaSeries, {
+    const index = chart.addSeries(BaselineSeries, {
       priceScaleId: "left",
-      lineColor: "#34d399",
-      topColor: "rgba(52,211,153,0.28)",
-      bottomColor: "rgba(52,211,153,0.02)",
+      baseValue: { type: "price", price: 0 },
+      topFillColor1: "rgba(52,211,153,0.2)",
+      topFillColor2: "rgba(52,211,153,0.025)",
+      topLineColor: "#34d399",
+      bottomFillColor1: "rgba(248,113,113,0.025)",
+      bottomFillColor2: "rgba(248,113,113,0.18)",
+      bottomLineColor: "#f87171",
       lineWidth: 2,
+      lineStyle: LineStyle.Solid,
+      baseLineVisible: true,
+      baseLineColor: "rgba(255,255,255,0.35)",
+      baseLineStyle: LineStyle.Dashed,
+      pointMarkersVisible: true,
+      pointMarkersRadius: 2,
+      crosshairMarkerRadius: 4,
+      priceFormat: { type: "price", precision: 0, minMove: 1 },
+      autoscaleInfoProvider: () => ({ priceRange: { minValue: -100, maxValue: 100 } }),
       priceLineVisible: false,
       lastValueVisible: false,
-      crosshairMarkerRadius: 4,
-    });
-    sentiment.priceScale().applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
-    sentiment.createPriceLine({
-      price: 0,
-      color: "rgba(255,255,255,0.25)",
+    }, 0);
+
+    const decay = chart.addSeries(LineSeries, {
+      priceScaleId: "left",
+      color: "rgba(203,213,225,0.8)",
       lineWidth: 1,
       lineStyle: LineStyle.Dashed,
-      axisLabelVisible: false,
-      title: "",
-    });
-
-    const priceSeries = chart.addSeries(LineSeries, {
-      color: "rgba(226,232,240,0.6)",
-      lineWidth: 1,
+      pointMarkersVisible: false,
+      crosshairMarkerVisible: false,
+      priceFormat: { type: "price", precision: 0, minMove: 1 },
+      autoscaleInfoProvider: () => ({ priceRange: { minValue: -100, maxValue: 100 } }),
       priceLineVisible: false,
       lastValueVisible: false,
-      crosshairMarkerVisible: false,
-    });
-    priceSeries.applyOptions({ visible: false });
+    }, 0);
+    index.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 } });
+
+    let priceSeries: ISeriesApi<"Line"> | null = null;
+    if (comparison) {
+      chart.addPane();
+      priceSeries = chart.addSeries(LineSeries, {
+        priceScaleId: "right",
+        color: "rgba(226,232,240,0.78)",
+        lineWidth: 1,
+        pointMarkersVisible: false,
+        crosshairMarkerVisible: true,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        priceLineVisible: false,
+        lastValueVisible: false,
+      }, 1);
+    }
 
     chart.subscribeCrosshairMove((param) => {
       const tip = tooltipRef.current;
       if (!tip) return;
-      if (param.point == null || param.time == null) {
+      if (param.point == null || typeof param.time !== "number") {
         tip.style.opacity = "0";
         return;
       }
-      const s = param.seriesData.get(sentiment) as { value?: number } | undefined;
-      const p = param.seriesData.get(priceSeries) as { value?: number } | undefined;
+
+      const time = Number(param.time);
+      const score = sentimentByTimeRef.current.get(time);
       const parts: string[] = [];
-      if (s?.value != null) {
-        parts.push(`sent ${s.value > 0 ? "+" : ""}${s.value.toFixed(1)}`);
+      if (score?.v != null) {
+        const value = `${score.v > 0 ? "+" : ""}${score.v.toFixed(1)}`;
+        parts.push(score.n > 0
+          ? `Jev index ${value} · ${score.n} scored ${score.n === 1 ? "item" : "items"}`
+          : `Modeled decay ${value} · no new scored items`);
       }
-      if (p?.value != null) {
-        parts.push(`$${p.value.toFixed(2)}`);
-      }
-      tip.textContent = parts.length > 0 ? parts.join("  ·  ") : "";
+      const priceValue = priceSeries ? seriesValue(param.seriesData.get(priceSeries)) : null;
+      const activeCurrency = currencyRef.current;
+      if (priceValue != null) parts.push(`${activeCurrency ? `${activeCurrency} ` : ""}${priceValue.toFixed(2)}`);
+      tip.textContent = parts.join("  ·  ");
       tip.style.opacity = parts.length > 0 ? "1" : "0";
     });
 
     chartRef.current = chart;
-    sentimentRef.current = sentiment;
+    indexRef.current = index;
+    decayRef.current = decay;
     priceRef.current = priceSeries;
+    const panes = chart.panes();
+    panes[0]?.setStretchFactor(comparison ? 2 : 1);
+    panes[1]?.setStretchFactor(1);
 
     return () => {
       chart.remove();
       chartRef.current = null;
-      sentimentRef.current = null;
+      indexRef.current = null;
+      decayRef.current = null;
       priceRef.current = null;
     };
-  }, []);
+  }, [comparison]);
 
-  // Push data on every change.
   useEffect(() => {
-    const sentiment = sentimentRef.current;
+    const index = indexRef.current;
+    const decay = decayRef.current;
     const priceSeries = priceRef.current;
     const chart = chartRef.current;
-    if (!sentiment || !priceSeries || !chart) return;
+    if (!index || !decay || !chart) return;
 
-    sentiment.setData(
-      drawableSentiment.map((p) => (p.v == null ? { time: toSec(p.t) } : { time: toSec(p.t), value: p.v })),
-    );
+    index.setData(drawableSentiment.map((point) => (
+      point.v != null && point.n > 0
+        ? { time: toSec(point.t), value: point.v }
+        : { time: toSec(point.t) }
+    )));
 
-    if (mode === "overlay" && drawablePrice.length >= 2) {
-      priceSeries.setData(drawablePrice.map((p) => ({ time: toSec(p.t), value: p.price })));
-      priceSeries.applyOptions({ visible: true });
-    } else {
-      priceSeries.setData([]);
-      priceSeries.applyOptions({ visible: false });
+    decay.setData(drawableSentiment.map((point, indexInSeries) => {
+      const next = drawableSentiment[indexInSeries + 1];
+      const beginsFade = point.n > 0 && next?.n === 0;
+      return point.v != null && (point.n === 0 || beginsFade)
+        ? { time: toSec(point.t), value: point.v }
+        : { time: toSec(point.t) };
+    }));
+
+    if (priceSeries) {
+      priceSeries.setData(drawablePrice.map((point) => ({ time: toSec(point.t), value: point.price })));
+      priceSeries.applyOptions({ pointMarkersVisible: drawablePrice.length === 1 });
     }
 
-    // setVisibleRange throws when Lightweight Charts has no time points (for
-    // example, an all-whitespace Jev series before price history arrives).
-    // fitContent safely handles an empty chart and fits whichever series has
-    // drawable observations.
-    if (hasChartData) chart.timeScale().fitContent();
-  }, [drawableSentiment, drawablePrice, mode, hasChartData]);
+    // Keep the selected window visible even when the latest saved observation
+    // is stale; empty time to the right is part of the freshness evidence.
+    if (hasChartData) {
+      const now = Date.now();
+      chart.timeScale().setVisibleRange({
+        from: toSec(now - hours * 60 * 60 * 1000),
+        to: toSec(now),
+      });
+    }
+  }, [drawableSentiment, drawablePrice, hasChartData, hours]);
 
-  const requestError = seriesError || (mode === "overlay" && priceError);
+  const requestError = seriesError || (comparison && priceError);
   const noDataMessage = requestError
     ? "Chart data could not be loaded. Check the source status above."
     : mode === "sentiment"
       ? "No Jev scores in this window."
       : insufficientPrice
-        ? "One price observation is not enough to draw a line; no Jev scores in this window."
-      : "No source price observations or Jev scores in this window.";
+        ? "One saved price observation; at least two are needed for a line."
+        : "No saved Yahoo prices or Jev scores in this window.";
   const noScoreMessage = seriesError
     ? "Sentiment history could not be loaded. Check the source status above."
-    : "No Jev scores in this window";
+    : "No Jev-scored items in this window";
   const hasOlderPriceHistory = latestPriceAt != null
     && latestPriceAt < Date.now() - hours * 60 * 60 * 1000;
+  const priceStatus = priceError
+    ? drawablePrice.length > 0 ? "Refresh failed · showing saved prices" : "Price history unavailable"
+    : priceLoading
+      ? "Loading saved price history…"
+      : insufficientPrice
+        ? "One saved price point; a line needs two"
+        : drawablePrice.length === 0
+          ? "No saved Yahoo price points in this window"
+          : null;
 
   return (
     <div className="relative">
-      <div ref={containerRef} className="h-[280px] w-full" />
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label={`Jev sentiment index on a fixed scale from minus 100 to plus 100. Solid colored marks show ${scorePointCount} buckets with newly scored items; dashed segments show modeled decay between scored buckets. Last scored ${lastScoredAt == null ? "time unknown" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
+        className={comparison ? "chart-canvas chart-canvas-comparison" : "chart-canvas chart-canvas-sentiment"}
+      />
+      {comparison && (
+        <>
+          <div className="pointer-events-none absolute left-[86px] top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
+            JEV INDEX · −100 TO +100
+          </div>
+          <div className="pointer-events-none absolute left-[86px] top-[calc(66.667%+2px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
+            SHARE PRICE{currency ? ` · ${currency}` : " · CURRENCY UNKNOWN"}
+          </div>
+          {priceStatus && (
+            <div className="pointer-events-none absolute right-[76px] top-[calc(66.667%+36px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10px] text-white/45">
+              {priceStatus}
+            </div>
+          )}
+        </>
+      )}
       <div
         ref={tooltipRef}
-        className="pointer-events-none absolute left-3 top-2 z-10 rounded-md border border-desk-line bg-[#0c0e14]/90 px-2.5 py-1 text-[10.5px] text-white/80 tabnum opacity-0 transition-opacity"
+        className="pointer-events-none absolute right-[76px] top-2 z-20 max-w-[70%] rounded-md border border-desk-line bg-[#0c0e14]/95 px-2.5 py-1 text-[10.5px] text-white/85 tabnum opacity-0 transition-opacity"
       />
       {loading && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-white/40">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-white/50">
           loading chart data…
         </div>
       )}
-      {!loading && !waitingForPrice && (seriesReady || seriesError) && !hasSentiment && hasPrice && (
-        <div role="status" className="pointer-events-none absolute left-3 top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10.5px] text-white/55">
+      {!loading && !waitingForPrice && comparison && !hasSentiment && drawablePrice.length > 0 && (
+        <div role="status" className="pointer-events-none absolute left-[86px] top-9 z-10 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/55">
           {noScoreMessage}
         </div>
       )}
-      {!loading && !waitingForPrice && insufficientPrice && hasSentiment && (
-        <div role="status" className="pointer-events-none absolute left-3 top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10.5px] text-white/55">
-          One price observation; at least two are needed for a line
-        </div>
-      )}
       {!loading && !waitingForPrice && !hasChartData && (
-        <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-[11px] text-white/45">
+        <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-[11px] text-white/55">
           <span>{noDataMessage}</span>
           {!requestError && hours < 168 && hasOlderPriceHistory && onViewHistory && (
             <button
               onClick={onViewHistory}
-              className="rounded border border-white/10 px-2 py-1 text-white/65 hover:bg-white/[0.05]"
+              className="rounded border border-white/10 px-2 py-1 text-white/70 hover:bg-white/[0.05]"
             >
-              View 7D source history
+              View 7D saved price history
             </button>
           )}
         </div>
+      )}
+      {comparison && hasModeledTail && !loading && (
+        <span className="sr-only">
+          The dashed sentiment segment is modelled decay after the last scored item at {new Date(lastScoredAt ?? 0).toISOString()}.
+        </span>
+      )}
+      {comparison && scorePointCount > 0 && (
+        <span className="sr-only">{scorePointCount} sentiment buckets contain newly scored items.</span>
       )}
     </div>
   );

@@ -122,7 +122,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const [windowHours, setWindowHours] = useState(24);
-  const [chartMode, setChartMode] = useState<"sentiment" | "overlay">("overlay");
+  const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("comparison");
   const [feedFilter, setFeedFilter] = useState<FilterKey>("all");
   const [sortMode, setSortMode] = useState<"delta" | "alpha">("delta");
   const [clock, setClock] = useState(Date.now());
@@ -132,7 +132,7 @@ export default function App() {
 
   const selectedIdRef = useRef<string | null>(null);
   const windowRef = useRef(24);
-  const chartModeRef = useRef<"sentiment" | "overlay">("overlay");
+  const chartModeRef = useRef<"sentiment" | "comparison">("comparison");
   const seriesRequestSeq = useRef(0);
   const priceKeyRef = useRef<string | null>(null);
   const priceRequestSeq = useRef(0);
@@ -163,17 +163,29 @@ export default function App() {
     () => companies.find((c) => c.id === selectedId) ?? null,
     [companies, selectedId],
   );
+  const selectedQuote = selected && market ? market.quotes[selected.ticker] ?? null : null;
   const selectedSeriesKey = selectedId == null ? null : `${selectedId}:${windowHours}`;
   const selectedSeriesReady = selectedSeriesKey != null && seriesKey === selectedSeriesKey;
   const selectedSeries = selectedSeriesReady ? series : [];
   const selectedSeriesError = selectedSeriesKey != null && seriesLoadErrorKey === selectedSeriesKey;
-  const selectedSeriesHasSentiment = selectedSeries.some((point) => point.v != null && Number.isFinite(point.v));
+  const selectedSeriesLastScoredAt = selectedSeries.reduce<number | null>(
+    (latest, point) => point.v != null && point.n > 0 ? point.t : latest,
+    null,
+  );
+  const selectedSeriesHasSentiment = selectedSeriesLastScoredAt != null;
+  const selectedSeriesFreshness = !selectedSeriesReady && !selectedSeriesError
+    ? "loading scores…"
+    : selectedSeriesError
+      ? "score history unavailable"
+      : selectedSeriesLastScoredAt == null
+        ? "no scored items"
+        : `last scored ${timeAgo(selectedSeriesLastScoredAt)}`;
   const selectedPriceReady = selectedSeriesKey != null && priceResultKey === selectedSeriesKey;
   const selectedPrice = selectedPriceReady ? price : [];
   const selectedPriceSource = selectedPriceReady ? priceSource : null;
   const selectedPriceError = selectedSeriesKey != null && priceLoadErrorKey === selectedSeriesKey;
-  const selectedPricePending = chartMode === "overlay" && selectedSeriesKey != null && !selectedPriceReady && !selectedPriceError;
-  const chartHasPrice = chartMode === "overlay" && selectedPrice.length >= 2;
+  const selectedPricePending = chartMode === "comparison" && selectedSeriesKey != null && !selectedPriceReady && !selectedPriceError;
+  const chartHasPrice = chartMode === "comparison" && selectedPrice.length >= 2;
   const chartLoading = selectedSeriesKey != null && (
     (!selectedSeriesReady && !selectedSeriesError)
     || (selectedPricePending && !chartHasPrice && !selectedSeriesHasSentiment)
@@ -200,7 +212,7 @@ export default function App() {
   }, []);
 
   const refreshPrice = useCallback(async () => {
-    if (chartModeRef.current !== "overlay") return;
+    if (chartModeRef.current !== "comparison") return;
     const id = selectedIdRef.current;
     if (!id) return;
     const hours = windowRef.current;
@@ -288,7 +300,7 @@ export default function App() {
   }, [refreshPrice, refreshSeries]);
 
   useEffect(() => {
-    if (chartMode === "overlay") void refreshPrice();
+    if (chartMode === "comparison") void refreshPrice();
   }, [chartMode, refreshPrice]);
 
   // Initial load: refresh authoritative server snapshots.
@@ -507,7 +519,7 @@ export default function App() {
       else if (e.key === "f") {
         const i = FILTERS.findIndex((f) => f.key === feedFilter);
         setFeedFilter(FILTERS[(i + 1) % FILTERS.length]?.key ?? "all");
-      } else if (e.key === "c") setChartMode((m) => (m === "overlay" ? "sentiment" : "overlay"));
+      } else if (e.key === "c") setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -726,19 +738,37 @@ export default function App() {
 
               <div className="panel mt-2 shrink-0">
                 <div className="panel-head chart-panel-head">
-                  <span className="micro">
-                    {chartMode === "overlay" ? "Sentiment × Price" : "Sentiment"}
-                  </span>
+                  <div className="chart-panel-topline">
+                    <span className="micro">
+                      {chartMode === "comparison" ? "Sentiment vs. Price" : "Jev Sentiment Index"}
+                    </span>
+                    <button
+                      onClick={() => setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"))}
+                      aria-pressed={chartMode === "comparison"}
+                      aria-label={chartMode === "comparison" ? "Switch to sentiment-only view" : "Compare sentiment with price"}
+                      className="tabnum rounded border border-white/10 px-1.5 py-[1px] hover:bg-white/[0.05]"
+                    >
+                      {chartMode === "comparison" ? "Index only" : "Compare price"}
+                      <kbd className="ml-1">c</kbd>
+                    </button>
+                  </div>
                   <div className="chart-panel-meta flex items-center gap-2 text-[9.5px] text-white/40">
                     <span className="flex items-center gap-1">
-                      <span className="inline-block h-[2px] w-3 bg-emerald-400" /> sentiment
+                      <span className="inline-block h-[3px] w-3 rounded-sm bg-gradient-to-r from-rose-400 to-emerald-400" />
+                      Jev index · −100 to +100
                     </span>
-                    {chartMode === "overlay" && (
+                    <span className="text-white/35">
+                      {selectedSeriesFreshness}
+                    </span>
+                    <span className="flex items-center gap-1" title="Dashed segments show the index fading between buckets with newly scored items.">
+                      <span className="inline-block w-3 border-t border-dashed border-slate-300/80" /> modeled decay
+                    </span>
+                    {chartMode === "comparison" && (
                       <span className="flex items-center gap-1">
-                        <span className="inline-block h-[2px] w-3 bg-white/80" /> price
+                        <span className="inline-block h-[2px] w-3 bg-white/80" /> price{selectedQuote?.currency ? ` · ${selectedQuote.currency}` : " · unit unknown"}
                       </span>
                     )}
-                    {chartMode === "overlay" && (
+                    {chartMode === "comparison" && (
                       <span
                         className={selectedPriceError ? "text-amber-300/80" : "text-white/30"}
                         title={selectedPriceSource ? `Latest provider observation ${selectedPriceSource.sourceLatestAt == null ? "time unknown" : new Date(selectedPriceSource.sourceLatestAt).toISOString()}; served ${new Date(selectedPriceSource.servedAt).toISOString()}${selectedPriceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`}; only provider timestamps within this window are plotted.` : undefined}
@@ -748,23 +778,17 @@ export default function App() {
                           : "price waiting"}
                       </span>
                     )}
-                    <button
-                      onClick={() => setChartMode((m) => (m === "overlay" ? "sentiment" : "overlay"))}
-                      className="tabnum rounded border border-white/10 px-1.5 py-[1px] hover:bg-white/[0.05]"
-                    >
-                      {chartMode === "overlay" ? "S×P" : "S"}
-                      <kbd className="ml-1">c</kbd>
-                    </button>
                   </div>
                 </div>
                 <div className="px-3 py-2">
                   <SeriesChart
-                    key={selectedSeriesKey ?? "no-selection"}
+                    key={`${selectedSeriesKey ?? "no-selection"}:${chartMode}`}
                     points={selectedSeries}
                     hours={windowHours}
                     loading={chartLoading}
                     mode={chartMode}
                     price={selectedPrice}
+                    currency={selectedQuote?.currency ?? null}
                     latestPriceAt={selectedPriceSource?.sourceLatestAt ?? null}
                     onViewHistory={() => setWindowHours(168)}
                     priceLoading={selectedPricePending}

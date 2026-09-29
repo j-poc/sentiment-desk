@@ -13,6 +13,15 @@ increased the visible list to 200. External requests and Jev were paused. The
 isolated UI database contains saved, source-attributed observations; historical
 `legacy_unknown` rows remain quarantined and are not presented as research data.
 
+The chart now defaults to a fixed −100 to +100 Jev index in the main pane, with
+saved share-price history in a smaller time-aligned pane on its own scale.
+Scored buckets and modeled decay are visually distinct, and saved-data age and
+unknown price currency are disclosed. This is the current design hypothesis,
+not a claim of “absolute best”: no task-based investor usability study has been
+run. The 2026-09-29 in-app-browser check showed 10 scored AAPL buckets, last
+scored 21 hours earlier, with external requests paused; it verifies the saved
+chart path, not live operation or Jev quality.
+
 Latest test, typecheck, production-build, live-data ETL-gate, final read-only
 review, and GitHub checkpoint results are recorded in
 `project-record/4-log/2026-09-29-engineering-bullshit-detector-review.md` and
