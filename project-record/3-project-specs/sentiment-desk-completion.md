@@ -11,6 +11,11 @@ the target, and a fully matured horizon; 30-minute and four-hour counts remain
 separate, and four-hour-only observations cannot enter the 30-minute hit-rate
 denominator. The company endpoint aggregates the full eligible window while
 the UI discloses that it shows only the eight highest-scored measured examples.
+The post-push saved-data browser check changed the selected company from Adobe
+to Apple through the visible ticker control; the heading and mention count
+changed from 68 to 268, and the sentiment/price chart rendered. The preview
+reported local data 14 hours old, with collectors and Jev disabled; browser
+console errors were zero.
 Recent provider hardening preserves row counts and malformed-response state for
 RSS, GDELT, Reddit, and Finnhub, distinguishing clean empties, partial
 malformation, and wholly unusable responses; rejects non-advancing X

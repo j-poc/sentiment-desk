@@ -77,6 +77,18 @@ remain isolated to tests.
   their historical Jev-use/billing lineage remains unaudited. The original
   `data/desk.db` was not used by the preview server or modified.
 
+## Follow-up browser interaction check
+
+After an independent reviewer noted that the earlier browser evidence did not
+reproduce a direct stock click, the visible ticker row was clicked from Adobe
+to Apple in the same saved-data-only preview. The selected state changed from
+`ADBE` to `AAPL`, the heading and saved mention count changed from 68 to 268,
+and the sentiment/price chart rendered for Apple. Its status remained `local
+store · source 14h ago`. The browser console error readback was empty. The
+preview health still showed external requests and every collector and Jev
+disabled; no provider or Jev request was sent. This verifies the user click
+path against saved data, not current live collection.
+
 ## Gate state
 
 The local source inventory is complete for the nine current external collector
