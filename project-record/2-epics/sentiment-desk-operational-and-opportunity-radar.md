@@ -2,11 +2,14 @@
 
 Status (2026-09-29): The whole-build detector review found a missing saved-feed
 recovery path and stale phase-gate records. Server-side filter pagination and
-all-history recovery for pending/failed judgments are implemented and being
-verified; current outcome is recorded in
-`project-record/4-log/2026-09-29-engineering-bullshit-detector-review.md`.
-Opportunity Radar code exists from earlier work, but Sentiment Desk operational
-gates have not passed. Do not expand or promote Radar until they do.
+all-history recovery for pending/failed judgments are implemented and verified;
+the post-review five-check ETL evidence and final reviewer disposition are in
+`project-record/4-log/2026-09-29-engineering-bullshit-detector-review.md` and
+`project-record/4-log/live-data-etl-evidence.json`. The requested fully
+operational Desk gate still fails on external TypeSafe, SEC, real-source Jev
+evaluation, historical usage, and coverage evidence. Opportunity Radar code
+exists from earlier work; do not expand or promote it until those Desk gates
+pass.
 
 Historical checkpoint: Sentiment Desk comparison-empty-state, watchlist-sort,
 usage, provider-integrity, and reaction-measurement hardening was
