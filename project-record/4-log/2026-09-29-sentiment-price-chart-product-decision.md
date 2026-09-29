@@ -63,7 +63,13 @@ remains downstream of that gate.
 - The browser confirmed saved-data-only mode, source/quote feeds disabled, Jev
   paused, and unknown price currency; it did not exercise a live collection or
   classification path.
-- `git diff --check` — to be run after this trace is staged.
+- `git diff --check` — **PASS** before the implementation checkpoint; the
+  follow-up trace edit also passed `git diff --cached --check`.
 
-The code checkpoint and remote SHA are recorded in the follow-up below after
-the push completes.
+## GitHub checkpoint
+
+The implementation and decision record were committed as
+`30eafafb6c999455bb8bc33d786f85309acc4be6`
+(`refine(ui): prioritize sentiment in price comparison chart`) and pushed to
+`origin/codex/real-data-rebuild`. A read-only `git ls-remote` check returned the
+same SHA for `refs/heads/codex/real-data-rebuild`.
