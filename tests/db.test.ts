@@ -184,6 +184,91 @@ describe("Desk observation and judgment storage", () => {
     }
   });
 
+  it("requires provider-usage review for an attempted legacy failure even when its saved flag is false", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-legacy-retry-review-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    try {
+      db.seedCompanies([company]);
+      const { observationId } = db.insertObservation(mention({ sourceItemId: "legacy-mismatch" }));
+      expect(db.claimForScoring(observationId, Date.now())).toBeDefined();
+      db.markFailed(observationId, "TypeSafe response model mismatch; request outcome is unknown", false);
+
+      const visible = db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(visible).toMatchObject({ status: "failed", usageCheckRequired: true });
+      expect(db.requeueFailed(observationId, false)).toBe("usage_review_required");
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("failed");
+      expect(db.requeueFailed(observationId, true)).toBe("queued");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("pages older unscored observations without skipping when a newer item gets scored", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-unscored-pages-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    try {
+      db.seedCompanies([company]);
+      const now = Date.now();
+      const scoredId = db.insertObservation(mention({ sourceItemId: "newest-scored", publishedAt: now - 1_000 })).observationId;
+      db.markScored(scoredId, score("results"), false);
+      const firstId = db.insertObservation(mention({ sourceItemId: "first-pending", publishedAt: now - 2_000 })).observationId;
+      const failedId = db.insertObservation(mention({ sourceItemId: "older-failed", publishedAt: now - 3_000 })).observationId;
+      expect(db.claimForScoring(failedId, now)).toBeDefined();
+      db.markFailed(failedId, "request outcome unknown", false);
+      const lastId = db.insertObservation(mention({ sourceItemId: "oldest-pending", publishedAt: now - 4_000 })).observationId;
+
+      const first = db.mentionsForCompanyPage({ companyId: company.id, sinceMs: 0, limit: 1, cursor: null, filter: "failed" });
+      expect(first.items[0]?.id).toBe(firstId);
+      db.markScored(firstId, score("results"), false);
+      const second = db.mentionsForCompanyPage({ companyId: company.id, sinceMs: 0, limit: 1, cursor: first.nextCursor, filter: "failed" });
+      const third = db.mentionsForCompanyPage({ companyId: company.id, sinceMs: 0, limit: 1, cursor: second.nextCursor, filter: "failed" });
+
+      expect(second).toMatchObject({ items: [{ id: failedId, status: "failed", usageCheckRequired: true }] });
+      expect(second.nextCursor).toMatchObject({ id: failedId });
+      expect(third).toEqual({ items: [expect.objectContaining({ id: lastId, status: "pending" })], nextCursor: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("finds matching scored items past the first hundred unmatched observations", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-filtered-pages-"));
+    directories.push(directory);
+    const db = new Desk(join(directory, "desk.db"));
+    try {
+      db.seedCompanies([company]);
+      const now = Date.now();
+      for (let index = 0; index < 105; index += 1) {
+        db.insertObservation(mention({
+          sourceItemId: `pending-${index}`,
+          publishedAt: now - index * 1_000,
+        }));
+      }
+      const olderBullish = db.insertObservation(mention({
+        sourceItemId: "older-bullish",
+        title: "Older bullish result beyond first page",
+        publishedAt: now - 106_000,
+      }));
+      db.markScored(olderBullish.observationId, score("results"), false);
+
+      const page = db.mentionsForCompanyPage({
+        companyId: company.id,
+        sinceMs: now - 168 * 60 * 60 * 1000,
+        limit: 100,
+        cursor: null,
+        filter: "bull",
+      });
+
+      expect(page.items.map((item) => item.title)).toEqual(["Older bullish result beyond first page"]);
+      expect(page.items[0]?.score?.sentiment).toBe("positive");
+      expect(page.nextCursor).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps collector-specific records, dedupes exact replays, and only indexes known source times", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-db-"));
     directories.push(directory);

@@ -4,6 +4,7 @@ import {
   openStream,
   type CompanySnapshot,
   type HealthDTO,
+  type MentionPage,
   type MarketSnapshot,
   type Mention,
   type PricePoint,
@@ -47,6 +48,41 @@ const FILTERS = [
 ] as const;
 type FilterKey = (typeof FILTERS)[number]["key"];
 type ResearchView = "desk" | "radar";
+type MentionFeedState = {
+  companyId: string;
+  filter: FilterKey;
+  items: Mention[];
+  nextCursor: MentionPage["nextCursor"];
+  loaded: boolean;
+  loadingMore: boolean;
+  error: boolean;
+  loadMoreError: boolean;
+};
+
+function isUnscoredMention(mention: Mention): boolean {
+  return ["failed", "pending", "retrying", "scoring", "corrupt"].includes(mention.status);
+}
+
+function matchesMentionFeedFilter(mention: Mention, filter: FilterKey): boolean {
+  switch (filter) {
+    case "all": return true;
+    case "bull": return mention.status === "scored" && mention.score?.sentiment === "positive";
+    case "bear": return mention.status === "scored" && mention.score?.sentiment === "negative";
+    case "material": return mention.status === "scored" && (mention.score?.material ?? 0) >= 0.6;
+    case "offtarget": return mention.status === "off_target";
+    case "failed": return isUnscoredMention(mention);
+  }
+}
+
+function mergeMentionPages(...pages: Mention[][]): Mention[] {
+  const byId = new Map<string, Mention>();
+  for (const page of pages) for (const mention of page) byId.set(mention.id, mention);
+  return [...byId.values()].sort((a, b) =>
+    (b.publishedAt ?? b.providerObservedAt ?? b.retrievedAt) - (a.publishedAt ?? a.providerObservedAt ?? a.retrievedAt)
+    || b.ingestedAt - a.ingestedAt
+    || (a.id === b.id ? 0 : a.id > b.id ? -1 : 1),
+  );
+}
 
 function applyFilter(ms: Mention[], f: FilterKey): Mention[] {
   switch (f) {
@@ -72,9 +108,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [researchView, setResearchView] = useState<ResearchView>("desk");
   const [tape, setTape] = useState<Mention[]>([]);
-  const [mentionsByCompany, setMentionsByCompany] = useState<Record<string, Mention[]>>({});
-  const [mentionsLoadedByCompany, setMentionsLoadedByCompany] = useState<Record<string, boolean>>({});
-  const [mentionsErrorByCompany, setMentionsErrorByCompany] = useState<Record<string, boolean>>({});
+  const [mentionFeedPage, setMentionFeedPage] = useState<MentionFeedState | null>(null);
   const [series, setSeries] = useState<SeriesPoint[]>([]);
   const [seriesKey, setSeriesKey] = useState<string | null>(null);
   const [seriesLoadErrorKey, setSeriesLoadErrorKey] = useState<string | null>(null);
@@ -245,9 +279,7 @@ export default function App() {
     }
     if (quoteSnapshot) setMarket(quoteSnapshot);
     if (cs && tapeSnapshot) {
-      setMentionsByCompany({});
-      setMentionsLoadedByCompany({});
-      setMentionsErrorByCompany({});
+      setMentionFeedPage(null);
       setSnapshotRevision((revision) => revision + 1);
     }
     setSparks({});
@@ -280,9 +312,7 @@ export default function App() {
           setTape([]);
           setMarket(null);
           setSparks({});
-          setMentionsByCompany({});
-          setMentionsLoadedByCompany({});
-          setMentionsErrorByCompany({});
+          setMentionFeedPage(null);
           setDrawerMention(null);
           setHealth(null);
           healthRef.current = null;
@@ -310,11 +340,12 @@ export default function App() {
           if (oldestId !== undefined) latestStreamedMention.current.delete(oldestId);
         }
         setTape((prev) => upsertMention(prev, m, 60));
-        setMentionsByCompany((prev) => {
-          const cached = prev[m.companyId];
-          if (!cached && m.companyId !== selectedIdRef.current) return prev;
-          const current = cached ?? [];
-          return { ...prev, [m.companyId]: upsertMention(current, m, 100) };
+        setMentionFeedPage((current) => {
+          if (!current || current.companyId !== m.companyId || !current.loaded) return current;
+          const items = matchesMentionFeedFilter(m, current.filter)
+            ? mergeMentionPages(current.items, [m])
+            : current.items.filter((item) => item.id !== m.id);
+          return { ...current, items };
         });
         setDrawerMention((current) => current?.id === m.id ? m : current);
         const now = Date.now();
@@ -343,40 +374,56 @@ export default function App() {
     return () => clearInterval(t);
   }, [selectedId, windowHours, refreshSeries, refreshPrice]);
 
-  // Mentions for the selected company.
+  // Each Desk filter has its own server-side cursor. Failed and pending work
+  // is unbounded by age so an old provider failure remains recoverable.
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId) {
+      setMentionFeedPage(null);
+      return;
+    }
     let alive = true;
+    const companyId = selectedId;
+    const filter = feedFilter;
     const streamSequenceAtStart = mentionStreamSequence.current;
-    setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: false }));
-    (async () => {
-      try {
-        const ms = await getJSON<Mention[]>(`/api/companies/${selectedId}/mentions?hours=168&limit=100`);
-        if (alive) {
-          setMentionsByCompany((prev) => {
-            const live = prev[selectedId] ?? [];
-            return {
-              ...prev,
-            [selectedId]: mergeSnapshotWithLive(
-              ms.filter(isApplicationMention),
-              live,
-              latestStreamedMention.current,
-              streamSequenceAtStart,
-              100,
-            ),
-            };
-          });
-          setMentionsLoadedByCompany((prev) => ({ ...prev, [selectedId]: true }));
-          setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: false }));
-        }
-      } catch {
-        if (alive) setMentionsErrorByCompany((prev) => ({ ...prev, [selectedId]: true }));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [selectedId, snapshotRevision]);
+    setMentionFeedPage({
+      companyId, filter, items: [], nextCursor: null, loaded: false,
+      loadingMore: false, error: false, loadMoreError: false,
+    });
+    const params = new URLSearchParams({ filter, limit: "100" });
+    if (filter !== "failed") params.set("hours", "168");
+    getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`)
+      .then((page) => {
+        if (!alive) return;
+        setMentionFeedPage((current) => {
+          if (!current || current.companyId !== companyId || current.filter !== filter) return current;
+          const reconciled = mergeSnapshotWithLive(
+            page.items,
+            [],
+            latestStreamedMention.current,
+            streamSequenceAtStart,
+            page.items.length + latestStreamedMention.current.size,
+            false,
+          ).filter(isApplicationMention).filter((mention) => matchesMentionFeedFilter(mention, filter));
+          return {
+            ...current,
+            items: reconciled,
+            nextCursor: page.nextCursor,
+            loaded: true,
+            loadingMore: false,
+            error: false,
+            loadMoreError: false,
+          };
+        });
+      })
+      .catch(() => {
+        if (!alive) return;
+        setMentionFeedPage((current) => {
+          if (!current || current.companyId !== companyId || current.filter !== filter) return current;
+          return { ...current, error: true };
+        });
+      });
+    return () => { alive = false; };
+  }, [selectedId, snapshotRevision, feedFilter]);
 
   // Health poll.
   useEffect(() => {
@@ -479,14 +526,50 @@ export default function App() {
     (id: string) => companies.find((c) => c.id === id)?.ticker ?? id.slice(0, 4).toUpperCase(),
     [companies],
   );
+  const activeMentionFeed = selectedId
+    && mentionFeedPage?.companyId === selectedId
+    && mentionFeedPage.filter === feedFilter
+    ? mentionFeedPage
+    : undefined;
   const totalMentions = companies.reduce((acc, c) => acc + c.mentions24h, 0);
-  const selectedMentions = selectedId && mentionsLoadedByCompany[selectedId]
-    ? mentionsByCompany[selectedId] ?? []
-    : [];
+  const selectedMentions = activeMentionFeed?.items ?? [];
   const filteredMentions = useMemo(() => applyFilter(selectedMentions, feedFilter), [selectedMentions, feedFilter]);
-  const mentionsPending = selectedId != null && !mentionsLoadedByCompany[selectedId] && !mentionsErrorByCompany[selectedId];
-  const mentionsFailed = selectedId != null && mentionsErrorByCompany[selectedId];
+  const mentionsPending = selectedId != null && !activeMentionFeed?.loaded && !activeMentionFeed?.error;
+  const mentionsFailed = selectedId != null && activeMentionFeed?.error === true;
   const retryAvailability = retryAvailabilityFor(health);
+
+  const loadOlderMentions = async () => {
+    const current = activeMentionFeed;
+    if (!current || current.nextCursor == null || current.loadingMore) return;
+    const { companyId, filter } = current;
+    const cursor = current.nextCursor;
+    const cursorKey = JSON.stringify(cursor);
+    setMentionFeedPage((latest) => latest
+      && latest.companyId === companyId
+      && latest.filter === filter
+      && JSON.stringify(latest.nextCursor) === cursorKey
+      ? { ...latest, loadingMore: true, loadMoreError: false }
+      : latest);
+    try {
+      const params = new URLSearchParams({ filter, limit: "100", cursor: JSON.stringify(cursor) });
+      if (filter !== "failed") params.set("hours", "168");
+      const page = await getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`);
+      setMentionFeedPage((latest) => {
+        if (!latest || latest.companyId !== companyId || latest.filter !== filter || JSON.stringify(latest.nextCursor) !== cursorKey) return latest;
+        return {
+          ...latest,
+          items: mergeMentionPages(latest.items, page.items.filter(isApplicationMention)),
+          nextCursor: page.nextCursor,
+          loadingMore: false,
+          loadMoreError: false,
+        };
+      });
+    } catch {
+      setMentionFeedPage((latest) => !latest || latest.companyId !== companyId || latest.filter !== filter || JSON.stringify(latest.nextCursor) !== cursorKey
+        ? latest
+        : { ...latest, loadingMore: false, loadMoreError: true });
+    }
+  };
 
   return (
     <>
@@ -746,15 +829,47 @@ export default function App() {
                     {filteredMentions.length === 0 && (
                       <div className="px-3 py-4 text-[12px] text-white/35" role="status">
                         {mentionsFailed
-                          ? "Mentions could not be loaded. Select another company and return to retry."
+                          ? feedFilter === "failed"
+                            ? "Unscored items could not be loaded. Retry by selecting another company and returning."
+                            : "Mentions could not be loaded. Select another company and return to retry."
                           : mentionsPending
                             ? `Loading ${selected.ticker} mentions…`
-                            : selectedMentions.length === 0
-                              ? "No mentions in this window yet. New mentions are scored within seconds of arrival."
-                              : feedFilter === "all" && selectedMentions.every((mention) => mention.status === "off_target")
-                                ? `No in-scope mentions yet. ${selectedMentions.length} off-target ${selectedMentions.length === 1 ? "item is" : "items are"} hidden; choose Off-target to review ${selectedMentions.length === 1 ? "it" : "them"}.`
-                              : "Nothing matches this filter."}
+                            : feedFilter === "failed" && activeMentionFeed?.loaded && selectedMentions.length === 0
+                              ? "No unscored items in saved history."
+                              : feedFilter !== "all" && activeMentionFeed?.loaded && selectedMentions.length === 0
+                                ? `No ${FILTERS.find((filter) => filter.key === feedFilter)?.label.toLowerCase()} items in this 7-day window.`
+                              : selectedMentions.length === 0
+                              ? !health
+                                ? "No saved mentions in this window yet."
+                                : !health.externalRequestsEnabled || !health.deliveryHealth.some((source) => source.enabled)
+                                  ? "No saved mentions in this window yet. Live collection is paused."
+                                  : !health.health.jev.enabled
+                                    ? "No saved mentions in this window yet. Jev scoring is paused; collected real-source items remain pending."
+                                    : "No saved mentions in this window yet. Waiting for a real-source delivery and Jev judgment."
+                              : feedFilter === "all" && selectedMentions.length > 0 && selectedMentions.every((mention) => mention.status === "off_target")
+                                ? activeMentionFeed?.nextCursor != null
+                                  ? `The newest ${selectedMentions.length} saved items are off-target. Load older items or choose Off-target to inspect them.`
+                                  : `No in-scope saved mentions. ${selectedMentions.length} off-target ${selectedMentions.length === 1 ? "item is" : "items are"} hidden; choose Off-target to review them.`
+                                : "Nothing matches this filter."}
                       </div>
+                    )}
+                    {activeMentionFeed?.loadMoreError && (
+                      <div className="px-3 py-2 text-[11px] text-amber-200/80" role="status">
+                        Older matching items could not be loaded. Try again.
+                      </div>
+                    )}
+                    {activeMentionFeed?.nextCursor != null && (
+                      <button
+                        type="button"
+                        onClick={() => void loadOlderMentions()}
+                        disabled={activeMentionFeed.loadingMore}
+                        className="self-center rounded-md border border-white/10 px-3 py-2 text-[11px] text-white/55 transition-colors hover:bg-white/[0.05] hover:text-white/80 disabled:cursor-wait disabled:opacity-50"
+                        aria-busy={activeMentionFeed.loadingMore}
+                      >
+                        {activeMentionFeed.loadingMore
+                          ? "Loading older items…"
+                          : feedFilter === "failed" ? "Load older unscored items" : "Load older matching items"}
+                      </button>
                     )}
                   </div>
                 </div>
@@ -780,7 +895,9 @@ export default function App() {
           <TopMovers companies={companies} selectedId={selectedId} onSelect={setSelectedId} />
 
           <div className="panel-head sticky top-0 z-0 mt-3 border-t border-desk-line bg-[#0a0c11]/95 backdrop-blur">
-            <span className="micro">Live tape</span>
+            <span className="micro">
+              {health?.externalRequestsEnabled && health.deliveryHealth.some((source) => source.enabled) ? "Live tape" : "Recent tape"}
+            </span>
           </div>
           <Tape mentions={tape} tickerOf={tickerOf} onOpen={setDrawerMention} />
 

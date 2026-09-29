@@ -123,12 +123,31 @@ reconciliation from account/provider records. Coverage remains explicitly
 finite and incomplete. Opportunity Radar is unchanged and remains downstream
 of Sentiment Desk operational readiness.
 
-## Requested whole-build adversarial review
+## Whole-build adversarial review and follow-up
 
-The user requested the named `engineering_bullshit_detector` subagent. Its
-profile exists at `/Users/jurgis/.codex/agents/engineering_bullshit_detector.toml`
-and is registered in `/Users/jurgis/.codex/config.toml`, but the current
-subagent launcher rejected it with `unknown agent_type
-'engineering_bullshit_detector'`. No generic reviewer was substituted. This
-whole-build review remains **NOT RUN** until the named role is callable in the
-session or the user authorizes a clearly labeled fallback.
+The user requested the named `engineering_bullshit_detector` subagent. The
+launcher rejected that role with the exact error `unknown agent_type
+'engineering_bullshit_detector'`. A generic read-only reviewer then ran with
+the detector's whole-build rubric. It was a fallback, not the named custom
+role. The reviewer returned **FAIL**: the requested fully operational
+source-to-Jev product and 10/10 release readiness were not evidenced. Its
+findings and the follow-up evidence are preserved in
+`2026-09-29-engineering-bullshit-detector-review.md`.
+
+The review initially saw an uncommitted checkout and did not independently
+operate the browser. Follow-up checks completed after its read-only pass:
+the current saved-data preview at `127.0.0.1:8797` was exercised directly,
+including company selection, saved sentiment/price chart rendering, and
+loading Apple unscored items from 100 to 200; the mention-page API returned
+paginated JSON. The live-data ETL `verify` and `check` then passed all five
+declared checks, including the keyless real-source compose and persistent
+volume recovery. The checkpoint is recorded in the detector-review trace.
+
+These follow-up results close the stale-preview, UI-evidence, test/build, gate,
+and dirty-checkpoint findings after the push. They do not close the review's
+core FAIL: the saved-data preview intentionally had external requests and Jev
+disabled; the live smoke left its real-source observation pending; no approved
+TypeSafe account/spend ceiling, contact-bearing SEC User-Agent, independently
+blinded real-source Jev evaluation, or provider records for historical
+`legacy_unknown` usage are available. RSS/GDELT coverage is finite and
+explicitly incomplete. The overall operational goal remains blocked.

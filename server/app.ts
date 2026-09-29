@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
-import type { Desk, DeliverySourceSchedule } from "./db.js";
+import type { Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
@@ -36,6 +36,12 @@ const retryConfirmationSchema = z.object({
   confirmNewCharge: z.literal(true),
   reviewedProviderUsage: z.boolean(),
 });
+const unscoredCursorSchema = z.object({
+  orderAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  ingestedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  id: z.string().min(1).max(200),
+});
+const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed"]);
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
@@ -82,6 +88,32 @@ export function createApp(deps: AppDeps): Hono {
     const limit = clampNumber(c.req.query("limit"), 1, 200, 100);
     const ms = deps.db.mentionsForCompany(id, Date.now() - hours * 60 * 60 * 1000, limit);
     return c.json(ms);
+  });
+
+  app.get("/api/companies/:id/mentions-page", (c) => {
+    const id = c.req.param("id");
+    const hours = clampNumber(c.req.query("hours"), 1, 168, 168);
+    const limit = clampNumber(c.req.query("limit"), 1, 100, 100);
+    const parsedFilter = mentionFeedFilterSchema.safeParse(c.req.query("filter") ?? "all");
+    if (!parsedFilter.success) return c.json({ error: "invalid_filter" }, 400);
+    const filter: MentionFeedFilter = parsedFilter.data;
+    const rawCursor = c.req.query("cursor");
+    let cursor: MentionPageCursor | null = null;
+    if (rawCursor != null) {
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(rawCursor);
+      } catch {
+        return c.json({ error: "invalid_cursor" }, 400);
+      }
+      const parsed = unscoredCursorSchema.safeParse(decoded);
+      if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
+      cursor = parsed.data;
+    }
+    // Failed and pending work must remain recoverable after the normal seven-day
+    // investor window; all other filters stay within the disclosed seven days.
+    const sinceMs = filter === "failed" ? 0 : Date.now() - hours * 60 * 60 * 1000;
+    return c.json(deps.db.mentionsForCompanyPage({ companyId: id, sinceMs, limit, cursor, filter }));
   });
 
   app.post("/api/mentions/:id/retry", async (c) => {

@@ -1,7 +1,61 @@
 {
   "applicability": "required",
+  "schema_version": 1,
+  "reason": "Sentiment Desk ingests public market and publisher observations, preserves source timing and delivery state, and sends approved real observations to Jev.",
+  "live_claim": true,
+  "runtime_data_paths": [
+    "data"
+  ],
+  "evidence_path": "project-record/4-log/live-data-etl-evidence.json",
+  "max_evidence_age_hours": 24,
+  "documentation_review": {
+    "reviewed_at": "2026-09-29",
+    "runtime": "Local Node.js v26.10.0; npm 11.19.1; package engine requires Node >=22.",
+    "references": [
+      {
+        "source": "SEC EDGAR submissions API and fair-access guidance",
+        "url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces",
+        "finding": "Public submissions/XBRL APIs are described by SEC; requests require declared User-Agent and aggregate access stays at or below 10 requests/second. No contact-bearing SEC_USER_AGENT is configured."
+      },
+      {
+        "source": "GDELT DOC 2.0",
+        "url": "https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/",
+        "finding": "Official API documentation describes query parameters and bounded maxrecords; current adapter cap and partial-coverage reporting remain explicit."
+      },
+      {
+        "source": "X recent search",
+        "url": "https://docs.x.com/x-api/posts/search-recent-posts",
+        "finding": "Official endpoint is /2/tweets/search/recent, covers the preceding seven days, supports up to 100 Posts/request and pagination. Optional credentialed collector stays disabled."
+      },
+      {
+        "source": "Reddit listing pagination",
+        "url": "https://developers.reddit.com/docs/api/redditapi/models/type-aliases/ListingFetchOptions",
+        "finding": "Official developer docs define after as an item ID cursor. This Devvit documentation does not independently establish all behavior of the app's public search endpoint; that remains provider-specific uncertainty."
+      },
+      {
+        "source": "Finnhub company-news API",
+        "url": "https://finnhub.io/docs/api/company-news",
+        "finding": "Official endpoint page was reachable but returned no readable body in this review; endpoint plan/rate/retention behavior remains unverified and the credentialed collector stays disabled."
+      },
+      {
+        "source": "TypeSafe System One API and model catalog",
+        "url": "https://docs.typesafe.ai/api",
+        "finding": "Official API specifies POST /v1/systemone, a model field, typed questions, and returned model/usage fields. The model page states jev-latest resolves to a versioned model and aliases can move; account authorization, telemetry/retention, and billing remain unverified."
+      },
+      {
+        "source": "Node.js SQLite",
+        "url": "https://nodejs.org/download/release/v26.8.1/docs/api/sqlite.html",
+        "finding": "Official v26.x docs describe synchronous DatabaseSync and prepared statements. The exact v26.10.0 documentation URL was not accessible to this review; local tests use Node v26.10.0."
+      },
+      {
+        "source": "Google News RSS and Yahoo Finance RSS/chart",
+        "url": "https://policies.google.com/terms?hl=en-US",
+        "finding": "No official API contract was found for the exact RSS/chart endpoints. Public reachability and the user's rights attestation do not independently establish exact retention/display/model-processing terms."
+      }
+    ]
+  },
   "status": "partial",
-  "operational_status": "Local source-use and Jev-account gates were tightened in the 2026-09-29 checkpoint and verified with 212 tests across 28 files, TypeScript typecheck, production build, and a network-intercepted fresh-process verifier. Each source requires both a request allowlist and separate user-attested rights; Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true and its three-way source allowlist intersection. The user attested to holding rights for all public sources and APIs; this is not an independent review of endpoint agreements. An isolated live Compose smoke then collected 27 quotes for 24 companies and persisted a publisher-timed Google News RSS item as pending across container recreation. Jev and credentialed optional providers remained off; the temporary test volume was removed. The Desk remains incomplete: TypeSafe account authority/terms and spend ceiling, SEC contact, independent real-source labels and Jev evaluation, legacy_unknown use/billing reconciliation, and finite source coverage remain unresolved. The saved-data selection/chart UI has prior direct browser verification; the Health UI visibly discloses blocked approvals and the saved-data-only state.",
+  "operational_status": "2026-09-29 detector-review continuation: company mention filters now run in SQLite with keyset pagination, and saved pending/failed/scoring/corrupt Jev records remain reachable across all identified-source history. The current production preview at 127.0.0.1:8797 used an isolated saved-data database with external requests and Jev disabled; direct browser interaction changed AAPL to ADBE and rendered both sentiment and saved Yahoo price lines, then loaded 100 to 200 Apple unscored records through the older-page control. The prior suite passed 216 tests across 29 files, typecheck, and build; the final code-bound live-data gate evidence is stored at the declared evidence_path. Each live source still requires both request allowlisting and operator-attested source use; Jev additionally requires account-use attestation and a three-way allowlist intersection. The user attested to rights for public sources and APIs; this is not independent review of endpoint terms. An earlier isolated live Compose smoke collected real quotes for 24 companies and persisted a publisher-timed RSS observation across container recreation with Jev and credentialed optional providers off. The Desk remains partial: TypeSafe account authority/terms and spend ceiling, SEC contact, independent real-source Jev labels/evaluation, legacy_unknown use/billing reconciliation, and finite source coverage remain unresolved.",
   "source_request_policy": {
     "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults to false and gates all external polling, chart retrieval, Jev calls, and operator retry.",
     "source_allowlist": "EXTERNAL_SOURCE_COLLECTORS defaults to empty. A source request runs only when EXTERNAL_REQUESTS_ENABLED is true and its collector appears in both EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. The latter is an operator attestation, not independent verification of rights.",
@@ -21,7 +75,7 @@
     "status": "open; not a legal determination",
     "current_followup": {
       "reviewed_at": "2026-09-29",
-      "result": "Read-only review of current official SEC, TypeSafe, Finnhub, Reddit, and X terms confirms that source access and account credentials do not establish this project's rights to retain, display, analyze, or forward each source. SEC public EDGAR content supports a narrow reuse path subject to stated exceptions and a descriptive contact-bearing User-Agent. TypeSafe requires customer authority and input rights, consumes credits per submitted input, allows broad telemetry use, and restricts using Services or Output to develop a similar or competing product; exact account and product applicability, retention, telemetry, limits/refill, and rejected-request billing remain unverified. Finnhub terms restrict sharing data or derived results without written approval and prohibit business/internal business use of personal plans without written approval; subscription-end deletion also applies. Reddit terms limit User Content use to the app context, require a separate agreement for commercial use or other uses not expressly allowed, and restrict AI model training absent rightsholder permission. X policy restricts redistribution of content and requires removal when content is no longer available. No rights or account-owner evidence has been supplied. These observations are not a legal determination.",
+      "result": "Read-only review of current official SEC, TypeSafe, Finnhub, Reddit, and X terms confirms that source access and account credentials do not establish this project's rights to retain, display, analyze, or forward each source. SEC public EDGAR content supports a narrow reuse path subject to stated exceptions and a descriptive contact-bearing User-Agent. TypeSafe requires customer authority and input rights, consumes credits per submitted input, allows broad telemetry use, and restricts using Services or Output to develop a similar or competing product; exact account and product applicability, retention, telemetry, limits/refill, and rejected-request billing remain unverified. Finnhub terms restrict sharing data or derived results without written approval and prohibit business/internal business use of personal plans without written approval; subscription-end deletion also applies. Reddit terms limit User Content use to the app context, require a separate agreement for commercial use or other uses not expressly allowed, and restrict AI model training absent rightsholder permission. X policy restricts redistribution of content and requires removal when content is no longer available. The user-attested source-use statement is recorded separately; no endpoint-specific agreement or TypeSafe account-owner evidence has been supplied for independent review. These observations are not a legal determination.",
       "sec_conditions": [
         "For the initial path, use public EDGAR filing content only; omit SEC marks/artwork and avoid any clearly third-party material embedded in a filing.",
         "Configure a descriptive SEC User-Agent that identifies the operator and includes contact information; the SEC says automated tools must be classified.",
@@ -110,7 +164,7 @@
   },
   "intended_use": "Private, single-user research interface for investigating sourced observations and Jev judgments; not an authoritative point-in-time archive or investment signal service.",
   "delivery": "Local Docker Compose or local Node process. The public source/build does not provide a hosted data service.",
-  "sources": [
+  "source_assessments": [
     {
       "name": "Google News RSS",
       "required": true,
@@ -169,7 +223,7 @@
       "rights": "The current Reddit Data API Terms limit the granted User Content license to the app-use context, require separate agreement for commercial or otherwise unpermitted uses, and restrict AI model training without rightsholder permission. The project's approved use, inference handling, retention, and removal duties are unverified; keep disabled."
     }
   ],
-  "checks": {
+  "historical_evidence_ledger": {
     "fixture": {
       "command": "npm test",
       "covers": "Offline parser, database, API, and scoring-contract fixtures. Synthetic test examples stay isolated from the application database and are not product data or live-source quality evidence.",
@@ -421,6 +475,195 @@
       "status": "PASS",
       "evidence": "2026-09-29: the fresh-process production-build verifier intercepted all external fetches before network access. It proved global requests default off with all credentials, nine separately guarded source paths activate only when both request and source-use approval lists admit that source, a requested-but-unapproved Finnhub source makes zero fetches, a matching Jev key/budget/source list remains disabled without TYPESAFE_ACCOUNT_USE_APPROVED, mismatched source lists stay disabled, and a fully flagged configuration only exposes Jev as configured without any pending item or provider call. The full suite passed 212 tests across 28 files; TypeScript typecheck and production build passed. This proves local configuration enforcement, not rights, account authority, or actual provider behavior."
     }
+  },
+  "sources": [
+    {
+      "id": "google_news_rss",
+      "provider": "Google News RSS",
+      "endpoint": "https://news.google.com/rss/search",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "publisher_published_at", "ingested_at"],
+      "revision_policy": "Immutable revisions keyed by collector, company, publisher identity, and normalized-content digest; raw XML is not retained.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29 to rights for public sources/APIs; publisher permissions for retention, display, and Jev input are not independently evidenced.",
+      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "coverage_limit": "Company/ticker query; one response per poll; feed completeness is not guaranteed."
+    },
+    {
+      "id": "yahoo_finance_rss",
+      "provider": "Yahoo Finance RSS",
+      "endpoint": "https://feeds.finance.yahoo.com/rss/2.0/headline",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "publisher_published_at", "ingested_at"],
+      "revision_policy": "Immutable revisions keyed by feed identity and normalized-content digest; raw XML is not retained.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29; exact endpoint and publisher snippet terms remain unverified.",
+      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "coverage_limit": "Configured-symbol feed results are bounded and may omit publisher articles."
+    },
+    {
+      "id": "gdelt_doc_api",
+      "provider": "GDELT DOC 2.0",
+      "endpoint": "https://api.gdeltproject.org/api/v2/doc/doc",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "provider_observed_at", "ingested_at"],
+      "revision_policy": "Article URL/domain identity is namespaced by company and collector; normalized items are digested, raw response bodies are not retained.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29; GDELT dataset access does not grant linked-publisher-content or Jev-processing rights.",
+      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "coverage_limit": "Bounded query and 250-row cap; rate limiting and saturation remain visible as partial."
+    },
+    {
+      "id": "sec_edgar",
+      "provider": "SEC EDGAR submissions and filing documents",
+      "endpoint": "https://data.sec.gov/submissions/CIK##########.json",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "filed_at", "acceptance_time", "ingested_at"],
+      "revision_policy": "CIK/accession/form identity; amendments are separate observations; normalized excerpts and parsed-content digest are kept, not raw bytes.",
+      "rights": "retained",
+      "rights_evidence": "SEC public-filing reuse is documented subject to exceptions; forwarding text to Jev is separately blocked pending TypeSafe account-use evidence. A contact-bearing SEC_USER_AGENT is not configured.",
+      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "coverage_limit": "CIK-mapped filings only; rate and User-Agent gate applies."
+    },
+    {
+      "id": "yahoo_quote",
+      "provider": "Yahoo Finance chart quote endpoint",
+      "endpoint": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d",
+      "freshness_budget_seconds": 900,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "regularMarketTime"],
+      "revision_policy": "Latest accepted quote is keyed by provider symbol; source observation time stays separate from retrieval time.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display rights remain unverified.",
+      "consumer_paths": ["quote API", "watchlist", "selected-company header", "ticker tape"],
+      "coverage_limit": "Per-symbol snapshot; source time can be delayed or unknown; request pacing is local-process only."
+    },
+    {
+      "id": "yahoo_chart",
+      "provider": "Yahoo Finance chart-history endpoint",
+      "endpoint": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "provider_point_timestamp"],
+      "revision_policy": "Ticker and provider timestamp identify points; points remain source-timed and are never carried into synthetic buckets.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display/retention rights remain unverified.",
+      "consumer_paths": ["price-series API", "selected-company sentiment × price chart"],
+      "coverage_limit": "Only provider points inside the requested window are drawn; cache/network/local-store provenance stays visible."
+    },
+    {
+      "id": "finnhub",
+      "provider": "Finnhub company news, earnings, and calendar",
+      "endpoint": "https://finnhub.io/api/v1/company-news",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "provider_event_time", "ingested_at"],
+      "revision_policy": "Provider symbol, article URL, and event period; normalized digest and receipt are retained, not raw response.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29; plan, business use, derived-data sharing, retention, and deletion permissions are not independently evidenced.",
+      "consumer_paths": ["/api/companies/:id/mentions", "Desk mention cards and drawer"],
+      "coverage_limit": "Optional credentialed collector is disabled by default."
+    },
+    {
+      "id": "reddit",
+      "provider": "Reddit search",
+      "endpoint": "https://www.reddit.com/search.json",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "created_utc", "ingested_at"],
+      "revision_policy": "Provider post fullname is the identity; after cursor progress uses a query fingerprint; raw response is not retained.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29; commercial/use-case, inference, retention, removal, and endpoint-specific pagination terms remain unresolved.",
+      "consumer_paths": ["/api/companies/:id/mentions", "Desk mention cards and drawer"],
+      "coverage_limit": "Optional credentialed collector is disabled by default; one page per company/cycle."
+    },
+    {
+      "id": "x",
+      "provider": "X API recent search",
+      "endpoint": "https://api.x.com/2/tweets/search/recent",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "created_at", "ingested_at"],
+      "revision_policy": "Provider Post ID is the identity; next_token/since_id are validated and committed only after accepted ingestion.",
+      "rights": "restricted",
+      "rights_evidence": "User attested on 2026-09-29; project plan, display, retention, deletion, and redistribution permissions remain unverified.",
+      "consumer_paths": ["/api/companies/:id/mentions", "Desk mention cards and drawer"],
+      "coverage_limit": "Recent search covers at most seven days and requires a credentialed optional collector."
+    },
+    {
+      "id": "typesafe_jev",
+      "provider": "TypeSafe System One / Jev",
+      "endpoint": "POST https://api.typesafe.ai/v1/systemone",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": ["network", "cache"],
+      "freshness_states": ["current", "delayed", "stale", "unknown"],
+      "timing_fields": ["observation", "retrieved", "request_started_at", "responded_at"],
+      "revision_policy": "One judgment per immutable source observation; exact model version, rubric digest, usage, and response digest are stored.",
+      "rights": "restricted",
+      "rights_evidence": "User attested source rights, but TypeSafe account authority, applicable terms, input rights, telemetry, retention, billing/refill, and approved spend ceiling remain unverified.",
+      "consumer_paths": ["Jev per-item sentiment/event judgment", "score aggregates", "Desk mention detail drawer"],
+      "coverage_limit": "Dispatch defaults off and requires account approval, source intersection, key, and bounded daily budgets."
+    }
+  ],
+  "checks": [
+    {
+      "id": "fixture_suite",
+      "kind": "fixture",
+      "required": true,
+      "command": ["npm", "test", "--", "--reporter=dot", "--maxWorkers=1", "--testTimeout=20000"],
+      "timeout_seconds": 600,
+      "covers": "Offline parser, database, API, and scoring-contract fixtures. Any fictional inputs exist only inside isolated test fixtures, never the application database."
+    },
+    {
+      "id": "failure_recovery_regressions",
+      "kind": "failure",
+      "required": true,
+      "command": ["npm", "test", "--", "--reporter=dot", "tests/db.test.ts", "tests/app-unscored-mentions.test.ts", "tests/retry-workflow.test.ts", "tests/provider-pollers.test.ts", "tests/provider-cooldown.test.ts", "--maxWorkers=1", "--testTimeout=20000"],
+      "timeout_seconds": 600,
+      "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers."
+    },
+    {
+      "id": "pipeline_replay_regressions",
+      "kind": "replay",
+      "required": true,
+      "command": ["npm", "test", "--", "--reporter=dot", "tests/pipeline.test.ts", "tests/db.test.ts", "--maxWorkers=1", "--testTimeout=20000"],
+      "timeout_seconds": 600,
+      "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures."
+    },
+    {
+      "id": "offline_source_request_gates",
+      "kind": "failure",
+      "required": true,
+      "command": ["npm", "run", "verify:offline-startup"],
+      "timeout_seconds": 900,
+      "covers": "Production build, saved-data-only startup, source-specific allowlists, and Jev account/source request gates; non-loopback requests are intercepted before network."
+    },
+    {
+      "id": "authorized_keyless_live_smoke",
+      "kind": "live_smoke",
+      "required": true,
+      "command": ["env", "SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart", "DOCKER_CONTEXT=colima-sentiment-desk-verify", "./scripts/verify-live-compose.sh"],
+      "timeout_seconds": 1200,
+      "covers": "Bounded real keyless RSS/GDELT/Yahoo quote/chart read and consumer API verification in a temporary Compose database; confirms a real pending item survives container recreation, then removes its volume/network. Jev and credentialed optional providers are disabled."
+    }
+  ],
+  "gate_execution_scope": {
+    "reviewed_before_execution": "2026-09-29",
+    "safe_checks": "Test suites use isolated temporary SQLite and in-memory fixtures. verify:offline-startup builds dist and writes temp state while intercepting non-loopback fetches before network. The keyless live smoke reads only its five exact allowlisted public endpoints, uses a temporary Docker project/database volume, calls no Jev or credentialed optional provider, and removes its volume/network in cleanup.",
+    "not_run": "The TypeSafe live smoke and credentialed Reddit/X/Finnhub checks are excluded because TypeSafe account-use, billing/spend, and source-specific terms remain unresolved."
   },
   "known_gaps": [
     "Raw upstream bodies are not retained. Delivery digests cover normalized parsed items and cannot prove parser correctness or replay raw bytes; Jev replay uses normalized observation fields.",

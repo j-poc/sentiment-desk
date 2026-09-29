@@ -1,55 +1,50 @@
 # Sentiment Desk completion plan
 
-Status (2026-09-29): source-use and TypeSafe account-use runtime gates were
-added in `project-record/4-log/2026-09-29-source-approval-runtime-gate.md`.
-Every source request now needs both a request allowlist and a separate
-operator source-use approval; Jev also needs an account-use attestation and a
-three-way source allowlist intersection. The approval flags are disclosed in
-Health and do not independently verify rights or authority. The local suite
-now passes 212 tests across 28 files, typecheck and production build pass, and
-the fresh-process network-intercepted verifier proves the default-off and
-approval gates. After the user attested to rights for public sources and APIs,
-the isolated live Compose smoke collected 27 real quotes for 24 companies and
-persisted a publisher-timed RSS observation as pending across container
-recreation. Jev and credentialed optional sources stayed off; the temporary
-Compose volume was removed. The source-rights statement is user-attested, not
-independently verified. TypeSafe account terms and spend limits, SEC contact,
-historical usage reconciliation, and real-source Jev quality remain
-unresolved; overall status is partial. The Desk also discloses
-the configured collector bounds and missing public-source families in an
-expandable, keyboard-operable coverage panel; local source inventory is
-complete while overall coverage remains partial. Reaction measurements now
-require a post-publication baseline, an endpoint within five minutes before
-the target, and a fully matured horizon; 30-minute and four-hour counts remain
-separate, and four-hour-only observations cannot enter the 30-minute hit-rate
-denominator. The company endpoint aggregates the full eligible window while
-the UI discloses that it shows only the eight highest-scored measured examples.
-The post-push saved-data browser check changed the selected company from Adobe
-to Apple through the visible ticker control; the heading and mention count
-changed from 68 to 268, and the sentiment/price chart rendered. The preview
-reported local data 14 hours old, with collectors and Jev disabled; browser
-console errors were zero.
-Recent provider hardening preserves row counts and malformed-response state for
-RSS, GDELT, Reddit, and Finnhub, distinguishing clean empties, partial
-malformation, and wholly unusable responses; rejects non-advancing X
-pagination; exposes missing SEC ticker mappings and validates SEC response
-shapes; validates Yahoo chart payloads; and persists Finnhub history retries
-while atomically replacing earnings cache entries. Source health and
-comparison-empty states are visible, and movement sorting is disabled when no
-company has a prior comparison.
-The watchlist-wide reaction statistic is described as exploratory, item-level,
-and unclustered. The suite passes 208 tests across 27 files; typecheck,
-production build, offline request-gate verification, and saved-data browser
-checks pass. Selecting AMD in the isolated saved-data preview changed the
-company view and rendered both sentiment and price lines; the outcome panel
-showed `30m n=41`, `4h n=7`, and a 37% 30-minute hit rate. It disclosed `top 8
-of 41 measured items`. Browser console errors: zero. The current watchlist
-readback has 736 timely 30-minute prices among 2,732 items and item-level rank
-IC `0.032`; this is descriptive only. This does not establish live collection,
-provider/model rights, account authority, or real-source Jev quality.
-Operational usage excludes legacy-unknown rows, and the APP badge separates
-local connectivity from collector status. See the 2026-09-29 reaction-window
-trace and prior provider/usage/UI traces in `project-record/4-log`.
+## Current goal state (2026-09-29)
+
+The native Sentiment Desk goal remains **blocked**, not complete. The current
+checkout fixes server-side feed filtering/pagination and keeps all identified-
+source failed or pending Jev items reachable beyond the first 100 and beyond
+seven days. The whole-build review's stale-preview finding was corrected by a
+direct check of the current saved-data build at `127.0.0.1:8797`: selecting
+Adobe changed the company view and rendered saved sentiment and Yahoo price
+lines; selecting Apple and opening Unscored loaded 100 items, and Load older
+increased the visible list to 200. External requests and Jev were paused. The
+isolated UI database contains saved, source-attributed observations; historical
+`legacy_unknown` rows remain quarantined and are not presented as research data.
+
+Latest test, typecheck, production-build, live-data ETL-gate, final read-only
+review, and GitHub checkpoint results are recorded in
+`project-record/4-log/2026-09-29-engineering-bullshit-detector-review.md` and
+`project-record/4-log/live-data-etl-evidence.json`. The local gates can be
+closed; the overall goal cannot. Remaining external gates are authorized
+TypeSafe account use and a spend ceiling, a contact-bearing SEC User-Agent,
+independent blinded labels and a passing real-source Jev evaluation, provider
+records to reconcile historical `legacy_unknown` usage, and source coverage
+that is explicitly finite and incomplete. The user's public-source rights
+attestation is retained as such; it is not presented as independent review of
+endpoint terms. Opportunity Radar's earlier code remains downstream and must
+not be expanded or promoted until the Sentiment Desk gate passes.
+
+The TypeSafe, SEC, real-source evaluation, historical-usage, and coverage
+blockers need evidence from the authorized account owner, qualified reviewers,
+and provider/account records. No goal status change can substitute for that
+evidence.
+
+## Earlier consolidated status snapshot (historical)
+
+The 2026-09-29 source-use and TypeSafe account-use gates are in
+`project-record/4-log/2026-09-29-source-approval-runtime-gate.md`. Earlier
+checkpoints recorded 212 tests across 28 files and 208 tests across 27 files;
+those counts have been superseded by the current review trace. Earlier browser
+checks and reaction-window findings remain useful historical evidence, but do
+not prove live Jev operation or readiness. Recent provider hardening preserves
+row counts and malformed-response state for RSS, GDELT, Reddit, and Finnhub,
+rejects non-advancing X pagination, exposes missing SEC mappings, validates
+Yahoo chart payloads, and persists Finnhub history retries. Current and
+historical limits remain recorded in the traces under `project-record/4-log`.
+
+## Historical saved-data and pipeline verification snapshots
 
 Saved-data UI verification snapshot (2026-09-28): the isolated production-build
 smoke remains valid: its backup database contained 2,281 real source-backed observations, zero
@@ -134,7 +129,7 @@ evidence is recorded in
 gates and their limits are recorded in
 `project-record/4-log/2026-09-28-jev-evaluator-hardening.md`.
 
-## Durable goal state (2026-09-29)
+## Historical checkpoint snapshot (2026-09-29; superseded above)
 
 The durable goal remains incomplete. The latest code checkpoint is pushed to
 `origin/codex/real-data-rebuild` at `12472ec`, after the `76b46c2` scoring and
@@ -799,6 +794,11 @@ account, retention, billing, User-Agent, source-coverage, or release gates.
 
 ## Phase 2 acceptance criteria
 
+The initial Radar code and local acceptance were completed before the current
+phase order was reaffirmed. This is historical evidence only: the current Desk
+operational gate is not passed, so no further Radar work or promotion is in
+scope until it is.
+
 The first-release contract is frozen before implementation in
 `opportunity-radar-acceptance.md`. It defines the current/prior windows,
 publisher/headline proxies, every evidence field, missing-time behavior,
@@ -1009,7 +1009,12 @@ compatibility projection remove those failure modes. The source design is
 documented in `sentiment-desk-phase1-architecture.md`; Radar is a separate
 Phase 2 consumer.
 
-## Work phases
+## Historical work log (earlier phase acceptance)
+
+The checked items below preserve the earlier implementation history. They do
+not mean the current Sentiment Desk operational goal or release gates passed.
+The current status is the blocked goal at the top of this document; Opportunity
+Radar code from the earlier phase remains parked until that goal passes.
 
 - [x] Read project records and compare them with current branch/code.
 - [x] Trace source collection, Jev persistence/API, and dashboard workflow.

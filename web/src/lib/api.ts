@@ -77,6 +77,11 @@ export interface Mention {
   error: string | null;
 }
 
+export interface MentionPage {
+  items: Mention[];
+  nextCursor: { orderAt: number; ingestedAt: number; id: string } | null;
+}
+
 export interface ReactionEvent {
   id: string;
   title: string;

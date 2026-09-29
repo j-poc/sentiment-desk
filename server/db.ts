@@ -151,7 +151,16 @@ CREATE TABLE IF NOT EXISTS events (
 const retryRowSchema = z.object({
   status: z.string(),
   score_usage_check_required: z.number(),
+  score_attempts: z.number(),
 });
+
+export interface MentionPageCursor {
+  orderAt: number;
+  ingestedAt: number;
+  id: string;
+}
+
+export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed";
 
 export interface MentionRow {
   id: string;
@@ -518,14 +527,15 @@ export class Desk {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const row = retryRowSchema.safeParse(this.db.prepare(
-        `SELECT status, score_usage_check_required FROM mentions
+        `SELECT status, score_usage_check_required, score_attempts FROM mentions
          WHERE id = ? AND ${REAL_MENTION_FILTER}`,
       ).get(id));
       if (!row.success || row.data.status !== "failed") {
         this.db.exec("COMMIT");
         return "not_retryable";
       }
-      if (row.data.score_usage_check_required === 1 && !reviewedProviderUsage) {
+      const usageReviewRequired = row.data.score_usage_check_required === 1 || row.data.score_attempts > 0;
+      if (usageReviewRequired && !reviewedProviderUsage) {
         this.db.exec("COMMIT");
         return "usage_review_required";
       }
@@ -822,6 +832,56 @@ export class Desk {
       )
       .all(companyId, sinceMs, limit) as unknown as MentionRow[];
     return rows.map(rowToDTO);
+  }
+
+  mentionsForCompanyPage({
+    companyId,
+    sinceMs,
+    limit,
+    cursor,
+    filter,
+  }: {
+    companyId: string;
+    sinceMs: number;
+    limit: number;
+    cursor: MentionPageCursor | null;
+    filter: MentionFeedFilter;
+  }): { items: MentionDTO[]; nextCursor: MentionPageCursor | null } {
+    const filterSql: Record<MentionFeedFilter, string> = {
+      all: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'failed', 'corrupt')",
+      bull: "status = 'scored' AND sentiment = 'positive'",
+      bear: "status = 'scored' AND sentiment = 'negative'",
+      material: "status = 'scored' AND COALESCE(material, 0) >= 0.6",
+      offtarget: "status = 'off_target'",
+      failed: "status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt')",
+    };
+    const cursorFilter = cursor
+      ? `AND (
+           COALESCE(published_at, provider_observed_at, retrieved_at) < ?
+           OR (COALESCE(published_at, provider_observed_at, retrieved_at) = ? AND ingested_at < ?)
+           OR (COALESCE(published_at, provider_observed_at, retrieved_at) = ? AND ingested_at = ? AND id < ?)
+         )`
+      : "";
+    const cursorParams = cursor
+      ? [cursor.orderAt, cursor.orderAt, cursor.ingestedAt, cursor.orderAt, cursor.ingestedAt, cursor.id]
+      : [];
+    const rows = this.db.prepare(
+      `SELECT *, COALESCE(published_at, provider_observed_at, retrieved_at) AS order_at
+       FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
+         AND (${filterSql[filter]})
+         AND COALESCE(published_at, provider_observed_at, retrieved_at) >= ?
+         ${cursorFilter}
+       ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC,
+         ingested_at DESC, id DESC LIMIT ?`,
+    ).all(companyId, sinceMs, ...cursorParams, limit + 1) as unknown as Array<MentionRow & { order_at: number }>;
+    const hasMore = rows.length > limit;
+    const last = hasMore ? rows[limit - 1] : undefined;
+    return {
+      items: rows.slice(0, limit).map(rowToDTO),
+      nextCursor: last
+        ? { orderAt: last.order_at, ingestedAt: last.ingested_at, id: last.id }
+        : null,
+    };
   }
 
   scoredReactionEventsForCompany(companyId: string, sinceMs: number): Array<{
@@ -1178,7 +1238,10 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     filedAt: r.filed_at ?? null,
     status,
     scoreRetryAt: r.score_retry_at ?? null,
-    usageCheckRequired: r.score_usage_check_required === 1,
+    // Older failed judgments may predate the persisted flag. Any failed row
+    // with a recorded attempt could have reached the provider, so require an
+    // explicit usage review even when that legacy flag is false.
+    usageCheckRequired: r.score_usage_check_required === 1 || (r.status === "failed" && r.score_attempts > 0),
     score,
     error: status === "corrupt" ? (r.score_error ?? "Stored Jev judgment is incomplete and was withheld.") : r.score_error,
   };

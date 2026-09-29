@@ -1,7 +1,15 @@
 # Operational Sentiment Desk, then Opportunity Radar
 
-Status (2026-09-29): Sentiment Desk comparison-empty-state, watchlist-sort,
-usage, provider-integrity, and reaction-measurement hardening is
+Status (2026-09-29): The whole-build detector review found a missing saved-feed
+recovery path and stale phase-gate records. Server-side filter pagination and
+all-history recovery for pending/failed judgments are implemented and being
+verified; current outcome is recorded in
+`project-record/4-log/2026-09-29-engineering-bullshit-detector-review.md`.
+Opportunity Radar code exists from earlier work, but Sentiment Desk operational
+gates have not passed. Do not expand or promote Radar until they do.
+
+Historical checkpoint: Sentiment Desk comparison-empty-state, watchlist-sort,
+usage, provider-integrity, and reaction-measurement hardening was
 checkpointed at `76b46c2` on `origin/codex/real-data-rebuild`, after `2a0f199`.
 Outcome windows require a post-publication baseline, timely endpoint prices,
 and a matured horizon; four-hour-only data cannot inflate the 30-minute

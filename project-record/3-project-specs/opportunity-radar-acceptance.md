@@ -1,8 +1,11 @@
 # Opportunity Radar: supported evidence-convergence view
 
-Status: first-release contract implemented and verified on 2026-09-27 after the
-Sentiment Desk operational gate passed. Results and current input limits are in
-`project-record/4-log/2026-09-27-opportunity-radar-discovery.md`.
+Status (2026-09-29): Radar code and its local first-release checks already
+exist from earlier work, but this is only a historical implementation record.
+The current Sentiment Desk operational gate has not passed. Per the user's
+phase order, keep further Radar work, promotion, and readiness claims parked
+until Sentiment Desk is operational. The earlier discovery and its evidence are
+in `project-record/4-log/2026-09-27-opportunity-radar-discovery.md`.
 
 ## Assumptions
 
