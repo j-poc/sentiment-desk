@@ -168,8 +168,13 @@ retention/rejected-request billing terms plus an approved request/cost ceiling;
 a valid `SEC_USER_AGENT` contact; rights for each non-SEC publisher source;
 independent blinded real-source labels and a passing frozen Jev evaluation;
 audit of historical `legacy_unknown` provider/model use and billing; and
-exhaustive source-coverage review. Opportunity Radar remains downstream until
-these Sentiment Desk gates pass. See the dated verification trace for details.
+source-coverage completeness. A local inventory of all nine real external
+collector IDs now records their query bounds, pagination/cap behavior, health,
+rights state, and missing direct source families. The Desk exposes these limits
+through its expandable “Collection scope and gaps” disclosure; this closes the
+local inventory review, not the external completeness/rights gate. Opportunity
+Radar remains downstream until the remaining Sentiment Desk gates pass. See
+`project-record/4-log/2026-09-29-source-scope-disclosure.md` for details.
 
 ## Prior durable goal state (2026-09-28)
 
