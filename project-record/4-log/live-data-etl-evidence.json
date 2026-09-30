@@ -1,40 +1,30 @@
 {
-  "check_receipt": {
-    "command": "python3 /Users/jurgis/.codex/scripts/live_data_etl_gate.py check --workspace /Users/jurgis/Codex/sentiment-desk",
-    "completed_at": "2026-09-30T17:56:41Z",
-    "exit_code": 0,
-    "receipt_scope": "Supplemental capture of the gate command result; the gate validates the original evidence fields and ignores this receipt.",
-    "source_fingerprint": "9abc4653171c724104e3608158e3e61f2e29cfdc8c45309dd37e474f048b8d3f",
-    "status": "PASS",
-    "stdout": "{\n  \"age_hours\": 0.0,\n  \"applicability\": \"required\",\n  \"contract\": \"/Users/jurgis/Codex/sentiment-desk/project-record/3-project-specs/live-data-etl.json\",\n  \"evidence\": \"/Users/jurgis/Codex/sentiment-desk/project-record/4-log/live-data-etl-evidence.json\",\n  \"root\": \"/Users/jurgis/Codex/sentiment-desk\",\n  \"status\": \"PASS\",\n  \"verified_at\": \"2026-09-30T17:56:28Z\"\n}",
-    "verified_artifact_sha256_before_receipt": "9964c0e49ce6dd02215e03c688e39334e970e098141f6c93ed967790daefa457"
-  },
   "checks": [
     {
       "exit_code": 0,
       "id": "fixture_suite",
       "kind": "fixture",
-      "output_bytes": 924,
-      "output_digest": "fb4dac3b1b4500c149584555645d3e3bd9b0d884bb8fd3cb27457b2fc1665ba8",
-      "started_at": "2026-09-30T17:53:41Z",
+      "output_bytes": 940,
+      "output_digest": "4f341a1a412796149bbf4ea3899bd760aeb26f6f0d20fa1a1f610d0703b07d6c",
+      "started_at": "2026-09-30T19:12:57Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "failure_recovery_regressions",
       "kind": "failure",
-      "output_bytes": 583,
-      "output_digest": "731fc18296e3f8e3f6dcfd275db025245811890a4a9b4b9224b63ed5a25b57a4",
-      "started_at": "2026-09-30T17:54:29Z",
+      "output_bytes": 585,
+      "output_digest": "c0fb6d49b4ab61f40174f7add6dfe8874f5af0a74267931ca0229212f2f0a488",
+      "started_at": "2026-09-30T19:13:49Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "pipeline_replay_regressions",
       "kind": "replay",
-      "output_bytes": 434,
-      "output_digest": "57b10a2ef66777a5ac33ad561499861a642a8f7cb93c35e7d22492e26c31320e",
-      "started_at": "2026-09-30T17:55:00Z",
+      "output_bytes": 438,
+      "output_digest": "7eea0fa3193ec4a9c0130a259fca9e5f0ec99ce7b937b07cf9d8fc254e509340",
+      "started_at": "2026-09-30T19:14:20Z",
       "status": "PASS"
     },
     {
@@ -42,24 +32,24 @@
       "id": "offline_source_request_gates",
       "kind": "failure",
       "output_bytes": 8333,
-      "output_digest": "4b29c4a660d51129da390f22e11ba6fb26cf155e11754a3f4ea65f3660d92f11",
-      "started_at": "2026-09-30T17:55:01Z",
+      "output_digest": "d66c618c87f9f59c2c8d00e8729207971301cdc52748de0e77cf96f61f7eb5df",
+      "started_at": "2026-09-30T19:14:21Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
-      "output_bytes": 12859,
-      "output_digest": "92ed81f17c88ba6d57039abb788614d38ce9e5805df2cd5aa7f4b87c5d9f6419",
-      "started_at": "2026-09-30T17:55:20Z",
+      "output_bytes": 13003,
+      "output_digest": "9915e719d84c15dcf177e70b9ecd6120d788ad818a5a5cf976a380357c83d22d",
+      "started_at": "2026-09-30T19:14:40Z",
       "status": "PASS"
     }
   ],
-  "code_fingerprint": "9abc4653171c724104e3608158e3e61f2e29cfdc8c45309dd37e474f048b8d3f",
-  "contract_digest": "1750d52ae66b55b7368e0d5995b137a1ff86e690208b99744c1d80dff86ec406",
+  "code_fingerprint": "955e0d1da431315907dc117a3cfdc21e3222e476b4847e962f783f33684c44cf",
+  "contract_digest": "67170d76b3ef94d0e6bd9801f3875be7ae04ad3e02ea0bc7898de5eeeb119fe6",
   "schema_version": 1,
   "standard_digest": "134109b13a8217e5b33cff58999a602361c79c051080f622fc6a44b5f87c4898",
   "status": "PASS",
-  "verified_at": "2026-09-30T17:56:28Z"
+  "verified_at": "2026-09-30T19:15:49Z"
 }
