@@ -18,6 +18,7 @@
     "verify:offline-startup": "npm run build && tsx scripts/verify-offline-startup.ts",
     "verify:retry-browser": "tsx scripts/verify-retry-browser.ts",
     "verify:jev-sanity": "tsx scripts/verify-jev-sanity.ts",
+    "verify:local-read-capacity": "npm run build && python3 scripts/verify-local-read-capacity.py",
     "evaluate:jev-labels": "tsx scripts/evaluate-jev-labels.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

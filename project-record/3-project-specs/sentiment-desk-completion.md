@@ -1,9 +1,12 @@
 # Sentiment Desk completion plan
 
-## Current goal state before final checkpoint (2026-09-30)
+## Current goal state as of 2026-10-01
 
-The native goal is **active** while the frozen-source gate and GitHub checkpoint
-are completed. The broad operational goal remains incomplete: no authorized
+The native goal remains **active** while the user asks Codex to continue. A
+frozen-source gate passed at `2026-09-30T21:02:28Z`, and its subsequent
+`check` confirmed the evidence binding. This update changes only documentation;
+a final `check` confirms the same code and contract fingerprint. The broad
+operational goal remains incomplete: no authorized
 real-source Jev cohort or independent real-source label evaluation exists. The
 user attested to rights for public sources and APIs on 2026-09-29; that remains
 an operator attestation, not independent endpoint-terms evidence. TypeSafe
@@ -69,8 +72,9 @@ only the scoped public-source delivery and persistence path, not Jev quality,
 TypeSafe account approval, or complete coverage.
 
 The API keeps Opportunity Radar disabled and returns 404 for its routes while
-the Desk gate is incomplete. After this checkpoint, the same external evidence
-blockers keep the native goal **blocked**, not complete. Detailed ratings,
+the Desk gate is incomplete. The native goal remains **active** and
+incomplete. Continue authorized local work and push verified checkpoints; the
+external evidence blockers still prevent operational completion. Detailed ratings,
 rendered evidence, exact gate results, and the checkpoint decision are in
 `project-record/4-log/2026-09-30-investor-ui-review-and-gate-refresh.md`,
 `project-record/4-log/2026-09-30-final-checkpoint.tsv`, and
@@ -1125,8 +1129,9 @@ Phase 2 consumer.
 
 The checked items below preserve the earlier implementation history. They do
 not mean the current Sentiment Desk operational goal or release gates passed.
-The current status is the blocked goal at the top of this document; Opportunity
-Radar code from the earlier phase remains parked until that goal passes.
+At the time of this historical work log, the goal was blocked; see the current
+status at the top of this document. Opportunity Radar code from the earlier
+phase remains parked until the Desk gates pass.
 
 - [x] Read project records and compare them with current branch/code.
 - [x] Trace source collection, Jev persistence/API, and dashboard workflow.
@@ -1164,3 +1169,96 @@ Radar code from the earlier phase remains parked until that goal passes.
 - [x] Record 156 passing tests, typecheck, production build, named browser
   network evidence, an independent retry-gating review, fresh-process
   saved-data-only startup proof, and the source-specific request allowlist.
+
+## Current continuation state — 2026-09-30
+
+The native goal is active because the user asked to continue. This continuation
+adds a reproducible saved-data API capacity verifier and its package command;
+the app's server behavior is unchanged. The check measures the real saved
+database through an isolated online-backup clone, confirms that external
+collectors and Jev are disabled, and records latency without a pass threshold.
+The corrected eight-worker workload interleaves routes; repeated local runs
+varied, so the measurements do not establish a general capacity limit. Exact
+database/build hashes, workload results, advisor disposition, and boundaries
+are in `project-record/4-log/2026-09-30-local-read-capacity.md`.
+
+The full objective remains incomplete. No Jev request or human evaluation was
+performed. The existing evidence gaps still include account-owner confirmation
+of TypeSafe use, telemetry, retention, billing, limits, and spend ceiling; a
+contact-bearing SEC User-Agent; two independent blinded real-source reviewers
+and a passing frozen Jev evaluation; provider usage evidence for the 4,700
+`legacy_unknown` rows; and endpoint-specific rights and finite-coverage
+evidence. The user's rights statement remains an operator attestation. Keep
+Opportunity Radar disabled until the Sentiment Desk acceptance gates pass.
+
+## Agent-upgrade handoff reconciliation — 2026-10-01
+
+The source-backed handoff keeps the current single-item classifier architecture
+and does not justify a framework migration. Reconciled against the current
+code, the saved database, and the frozen evaluation contract:
+
+- **Already met:** each admitted source observation receives at most one
+  immutable Jev judgment; exact same-collector replays are idempotent; content
+  revisions are retained separately; persisted delivery receipts gate new
+  observations; ambiguous-company rules and deterministic post-rules are in
+  code; scoring claims reserve the bounded daily budget atomically; and the
+  local queue and operator retry behavior have regression coverage.
+- **Current work:** the real-data-only saved-data API capacity check and the
+  five-check frozen-source gate both pass. The keyless live smoke persists a
+  real source item across container recreation, but Jev remains disabled in
+  that smoke. It does not prove live classification quality or useful alerts.
+- **Open:** the real-source label cohort, two independent human reviewers,
+  account-authorized Jev run, baseline/model comparison, per-dimension
+  usefulness and calibration, and the real observation-to-alert path. The
+  default local database contains only three `sec_edgar` observations from one
+  company, below the frozen evaluation's 30-issuer minimum. The separate
+  database read found 1,864 same-company exact-normalized-title groups across
+  5,304 identified observations; 569 groups cross collectors. These are
+  headline matches, not verified event identities.
+- **Conditional:** evaluate exact-headline grouping or other event identity
+  only on a frozen, independently reviewed real-data task. Preserve every
+  source row, keep disagreement visible, and do not change index weights
+  without a separate versioned policy experiment. Market-reaction tests must
+  keep first-available time and incomplete price coverage explicit; they do
+  not establish alpha or causation.
+- **Superseded or out of scope:** a graph/framework rewrite, additional model
+  calls, and Opportunity Radar expansion are not prerequisites for this
+  milestone. The existing research graph proposal is not adopted for a
+  one-observation classification task.
+
+The next complete milestone is a rights-cleared, SEC-only Jev evaluation with
+at least 30 issuer clusters, two blind independent human labels per item, and
+the existing frozen rubric, sample, cost, and class-support checks. It must
+compare Jev with a deterministic baseline, then verify saved judgments in the
+actual company/feed UI and measure alert precision and missed material events.
+Before any Jev request, obtain authorized account-use, telemetry, retention,
+limit, refill, billing, and spend evidence; a descriptive SEC User-Agent
+contact; qualified reviewers and their label artifact; and provider records
+for the 4,700 historical `legacy_unknown` rows. Keep the goal active and
+continue local work while those inputs are unavailable. Do not replace them
+with synthetic observations or model-generated labels.
+
+### Handoff quiz
+
+1. **Current task and preserved work:** complete the local, real-data-only
+   Sentiment Desk before expanding Opportunity Radar. Keep the fixed rubric,
+   immutable per-observation judgments, delivery receipts, deterministic
+   post-rules, bounded scoring queue, fail-closed states, and existing UI.
+2. **Evidence, finance, permission, and publication owners:** the frozen ETL
+   `verify`/`check` and actual consumer path own source and persistence proof;
+   `rubric.ts` and `scoring.ts` own classification contract and deterministic
+   post-rules; source allowlists and finite atomic Jev budgets own request
+   admission. A model proposes labels only. The researcher retains all
+   investment decisions, and configured alerts do not authorize trades.
+3. **Decisive falsifier and comparison:** once authorized, follow one real
+   observation through receipt, Jev output, persisted judgment, selected-company
+   feed/chart, and alert handling. A wrong entity, duplicate request, missing
+   judgment, stale or missing source time, lost restart state, or missed
+   qualifying alert falsifies success. Compare Jev with a fixed deterministic
+   baseline under the existing blind-label and budget contract.
+4. **Conditional inputs:** public-source rights are the user's attestation;
+   exact endpoint terms are not independently reviewed. TypeSafe account-use
+   and spend authority, SEC contact, two qualified human labelers, sufficient
+   real-source issuer coverage, and provider records for legacy usage remain
+   absent. No Jev request, additional provider call, or framework migration is
+   authorized by the handoff.

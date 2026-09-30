@@ -5,8 +5,8 @@
       "id": "fixture_suite",
       "kind": "fixture",
       "output_bytes": 940,
-      "output_digest": "4f341a1a412796149bbf4ea3899bd760aeb26f6f0d20fa1a1f610d0703b07d6c",
-      "started_at": "2026-09-30T19:12:57Z",
+      "output_digest": "ededd34d8e638797e5128915801f21a9c014a7cfba68d5dbca22b4fb6a589b41",
+      "started_at": "2026-09-30T21:18:42Z",
       "status": "PASS"
     },
     {
@@ -14,17 +14,17 @@
       "id": "failure_recovery_regressions",
       "kind": "failure",
       "output_bytes": 585,
-      "output_digest": "c0fb6d49b4ab61f40174f7add6dfe8874f5af0a74267931ca0229212f2f0a488",
-      "started_at": "2026-09-30T19:13:49Z",
+      "output_digest": "dc5e772d350ef75d34a3486d996d6d9c06684f314b4fcd59e4dd1ed82cafbb4f",
+      "started_at": "2026-09-30T21:19:30Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "pipeline_replay_regressions",
       "kind": "replay",
-      "output_bytes": 438,
-      "output_digest": "7eea0fa3193ec4a9c0130a259fca9e5f0ec99ce7b937b07cf9d8fc254e509340",
-      "started_at": "2026-09-30T19:14:20Z",
+      "output_bytes": 439,
+      "output_digest": "40770753c0a2dc037cbee5a2ff9f8aa664aa0b969ead988f6411945e3d284213",
+      "started_at": "2026-09-30T21:20:02Z",
       "status": "PASS"
     },
     {
@@ -32,24 +32,24 @@
       "id": "offline_source_request_gates",
       "kind": "failure",
       "output_bytes": 8333,
-      "output_digest": "d66c618c87f9f59c2c8d00e8729207971301cdc52748de0e77cf96f61f7eb5df",
-      "started_at": "2026-09-30T19:14:21Z",
+      "output_digest": "c21d17792ec2a0a42346c6ad91ec72e29f79e90dee55bf961d775b168fcc7534",
+      "started_at": "2026-09-30T21:20:03Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
-      "output_bytes": 13003,
-      "output_digest": "9915e719d84c15dcf177e70b9ecd6120d788ad818a5a5cf976a380357c83d22d",
-      "started_at": "2026-09-30T19:14:40Z",
+      "output_bytes": 12864,
+      "output_digest": "c760ec5c6a7524321b116fa944a91fcc473216df297838820bff335208cbbbcd",
+      "started_at": "2026-09-30T21:20:22Z",
       "status": "PASS"
     }
   ],
-  "code_fingerprint": "955e0d1da431315907dc117a3cfdc21e3222e476b4847e962f783f33684c44cf",
-  "contract_digest": "67170d76b3ef94d0e6bd9801f3875be7ae04ad3e02ea0bc7898de5eeeb119fe6",
+  "code_fingerprint": "1e67a1f77946ca50cf135a667f053302149ef84c3625aafa3c9cdc404628393c",
+  "contract_digest": "9e9a1278ba7bde586518d7b1b8725bc519f2a1a390152a9981ae09975075f3e8",
   "schema_version": 1,
   "standard_digest": "134109b13a8217e5b33cff58999a602361c79c051080f622fc6a44b5f87c4898",
   "status": "PASS",
-  "verified_at": "2026-09-30T19:15:49Z"
+  "verified_at": "2026-09-30T21:21:29Z"
 }
