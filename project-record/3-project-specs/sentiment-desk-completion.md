@@ -1,90 +1,80 @@
 # Sentiment Desk completion plan
 
-## Goal state before the final GitHub checkpoint (2026-09-30)
+## Current goal state before final checkpoint (2026-09-30)
 
-The native goal service reported **active** before this checkpoint. The full
-Sentiment Desk goal remains incomplete: there is no authorized live Jev cohort
-or independent real-source label evaluation. The user attested to rights for public sources
-and APIs on 2026-09-29; this remains an operator attestation, not an
-independent review of endpoint terms. TypeSafe account authority, telemetry,
-retention, billing/refill behavior, limits and a spend ceiling; a
-contact-bearing SEC User-Agent; two independent blinded real-source reviewers
-and a passing evaluation; historical provider usage records; and complete,
-source-specific coverage/right evidence remain open. No Opportunity Radar
-expansion is in scope until these Sentiment Desk gates pass.
+The native goal is **active** while the frozen-source gate and GitHub checkpoint
+are completed. The broad operational goal remains incomplete: no authorized
+real-source Jev cohort or independent real-source label evaluation exists. The
+user attested to rights for public sources and APIs on 2026-09-29; that remains
+an operator attestation, not independent endpoint-terms evidence. TypeSafe
+account-owner approval, telemetry/retention, billing/refill behavior, limits
+and a spend ceiling; a contact-bearing SEC User-Agent; two independent blinded
+real-source reviewers and a passing Jev evaluation; provider records for 4,700
+`legacy_unknown` rows; and complete, source-specific coverage/right evidence
+remain open. Do not expand Opportunity Radar until the Sentiment Desk gates
+pass.
 
-The latest review pass corrects the watchlist `J/K` shortcut label, adds a
-labeled configured-company picker for narrow screens, states the Top Movers
-delta in impact points, and warns consistently about future quote timestamps.
-It also adds a provisional similar-title inspector over scored,
-identified-source records. The inspector exposes the matching rule, source
-identity, time basis, Jev mix, and raw-record drilldown; each title variant
-shows its own anchor-pair time span. It does not assert story identity or
-independent reporting, and it does not affect the chart or rankings. The
-classifier remains an unvalidated lexical heuristic. Google News RSS now
-stores the feed-reported publisher domain separately from its collection link;
-historic `news.google.com` values are hidden on research surfaces without
-rewriting immutable rows. Jev receives the collector link and publisher
-attribution as separate fields. The evidence drawer shows both identities and
-labels them as reported, not independently verified. Summary counts now state
-when they cover only the loaded first page rather than the whole window.
+The saved-data interface was rendered and driven in the Codex in-app browser
+at `http://127.0.0.1:8797/` against an isolated copy of the real saved
+database. It showed **SAVED DATA ONLY** with external requests and Jev paused.
+At 1280×720, Adobe 7D showed 58 scored source records across 23 15-minute
+score-time buckets; the latest score and collection were 2 days old and there
+were zero new source records in 24h. The fixed −100 to +100 index explains its
+8-hour modeled decay and gives scored-record counts their own aligned pane. A
+16-record bucket exposed individual impacts from −88 to +97 and a −17 index
+value. The movement is a sequence over source records, not an observed crowd
+vote or stock return. Price comparison correctly showed no saved
+lineage-eligible Yahoo points. The keyboard table exposed saved score buckets,
+source drilldowns, and an explicit empty price state. An independent whole-
+build review also drove Adobe 3D, opened a seven-record bucket, and confirmed
+that its seven historic rows had no delivery-receipt links. These sessions
+establish saved-data UI behavior only; no demo or synthetic application data
+was shown.
 
-Fresh independent ratings after the fixes are investor evidence-inspection
-workflow **9.0/10** and **8.8/10**, UI confidence **9.1/10** (visual quality
-9.3, interaction/recovery 9.5, accessibility/responsive 8.6). A separate
-whole-build review rated live investor-research readiness **2/10**. The final
-adversarial build review rated the saved-data UI **8/10**, investor evidence
-workflow **7/10**, and operational readiness **3/10**. These reviewers used
-separate rubrics; both found no further justified local code edit. The UI
-assessment has no
-current rendered-browser session because the in-app browser rejected the
-local preview URL. No investor task study was run. The scores remain below 10
-because real Jev quality, investor task value, and rendered desktop/mobile
-behavior have not been established. Detailed ratings and verification are in
-`project-record/4-log/2026-09-30-investor-ui-review-and-gate-refresh.md`.
+Current separate reviewer scopes: the investor reviewer scored the saved-data
+workflow **8.8/10** and live research readiness **2/10**. The UI reviewer
+scored hierarchy **8.5**, chart interpretation **9**, discoverability **8.5**,
+responsive/mobile **8**, and accessibility **8.5** out of 10. The whole-build
+engineering reviewer scored UI **8.5/10**, saved-data evidence workflow
+**8/10**, and live readiness **2/10**, and found no reproducible local defect
+in the paths inspected. These scores are not combined. No reviewer or user
+study establishes 10/10. The GPT-6.1 Sol advisor at extra-high effort found
+no justified local polish change: the index is order-sensitive by design, so
+large movements need validation against investor tasks and real Jev/source
+evidence rather than smoothing away. No investor task study or
+assistive-technology session has been run.
 
-The stable chart remains a fixed −100 to +100 Jev impact index on a shared
-15-minute score-time grid with an eight-hour decay half-life. It is distinct
-from the company gauge, which is the source-record weighted mean over three
-hours with a 24-hour fallback. Repeated coverage can count more than once; the
-series is not a stock return or a validated measure of investor opinion.
-Bucket evidence and source drilldown expose the records behind movements.
-New observations link to immutable request receipts; historic records without
-stored receipts remain explicitly unlinked. Existing `legacy_unknown` rows
-remain quarantined from research reads and Jev dispatch. A review counted
-4,700 such rows in the local database; they are retained for audit and their
-original provider/model usage remains unreconciled. Current product writes
-reject synthetic observations; no synthetic or demo product rows were added.
+The latest local changes preserve a separate latest-collected timestamp when
+the 24-hour source count is zero, preserve the latest Jev completion time when
+the selected chart window has no score arrivals, and show record volume in a
+separate pane. Keyboard inspection includes saved price, currency, provider
+source time, and collection time; Jev/price loading, failure, and confirmed-
+empty states are distinct. Focused regressions cover these paths. The company
+gauge remains separate: a source-record weighted mean over three hours with a
+24-hour fallback. Repeated coverage may count more than once. New observations
+require identified collectors and immutable delivery receipts. Historical
+`legacy_unknown` rows remain quarantined from research reads and Jev dispatch;
+their original provider/model use remains unreconciled. Current product writes
+reject synthetic observations. No demo or synthetic product rows were added;
+unreconciled historical unknowns are not claimed as real.
 
-The code-bound ETL verdict, timestamp, and source fingerprint are owned by
-`project-record/4-log/live-data-etl-evidence.json`. It records every declared
-check and a supplemental `check_receipt` for the same source fingerprint. The
-gate excludes only this evidence artifact from its fingerprint; changes to
-code, configuration, or project records require a fresh `verify` and `check`.
-The bounded keyless Compose
-smoke uses an isolated temporary database with no provider credentials and no
-Jev request. It establishes only the scoped live-source and persistence path;
-it cannot establish Jev quality, TypeSafe account approval, or complete source
-coverage.
-
-The decision trail for the final review and checkpoint is in
-`project-record/4-log/2026-09-30-final-checkpoint.tsv`. The same external
-evidence gates have persisted across at least three resumed goal turns. Keep
-the goal incomplete until these external gates pass; a successful local code
-checkpoint does not establish operational readiness.
+The code-bound ETL verdict, timestamp, and fingerprint are owned by
+`project-record/4-log/live-data-etl-evidence.json`. The previously recorded
+17:56 PASS predates the current changes and is stale. A valid final disposition
+requires the newest matching `verify` and `check` after all code and project-
+record edits are frozen; consult that artifact for its exact status and
+fingerprint. The bounded keyless Compose smoke uses an isolated
+temporary database with no provider credentials and no Jev request. It proves
+only the scoped public-source delivery and persistence path, not Jev quality,
+TypeSafe account approval, or complete coverage.
 
 The API keeps Opportunity Radar disabled and returns 404 for its routes while
-the Sentiment Desk gate is incomplete. Earlier saved-data browser evidence
-confirmed desktop ADBE selection changes the chart and feed with external
-requests and Jev paused. An offline preview was run at
-`http://127.0.0.1:8797/` against an isolated copy of the real saved database;
-all external requests and Jev were disabled. The preview is no longer running,
-and the in-app browser rejected the local URL under its URL policy, so the
-current render and mobile picker remain unverified. Neither preview verifies
-Jev quality or investor preference. Full
-review details and current local changes are recorded in
-`project-record/4-log/2026-09-30-investor-ui-review-and-gate-refresh.md` and
-`project-record/4-log/2026-09-30-final-checkpoint.tsv`.
+the Desk gate is incomplete. After this checkpoint, the same external evidence
+blockers keep the native goal **blocked**, not complete. Detailed ratings,
+rendered evidence, exact gate results, and the checkpoint decision are in
+`project-record/4-log/2026-09-30-investor-ui-review-and-gate-refresh.md`,
+`project-record/4-log/2026-09-30-final-checkpoint.tsv`, and
+`project-record/4-log/live-data-etl-evidence.json`.
 
 ## Historical goal state snapshot (2026-09-29; superseded)
 

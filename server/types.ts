@@ -189,8 +189,9 @@ export interface CompanySnapshot {
   indexRecordCount: number;
   /** index now minus index over the full trailing day. */
   delta: number | null;
-  mentions24h: number;
-  lastMentionAt: number | null;
+  sourceRecords24h: number;
+  /** Latest collection time across saved identified source records, independent of the 24h count. */
+  latestSourceCollectedAt: number | null;
   /** Next scheduled earnings date (ms), from the Finnhub calendar when configured. */
   earningsAt: number | null;
   /** Latest reported EPS surprise vs consensus, from Finnhub when configured. */
@@ -204,4 +205,10 @@ export interface SeriesPoint {
   itemImpactMin: number | null;
   itemImpactMax: number | null;
   lastScoredAt: number | null;
+}
+
+export interface SeriesResult {
+  points: SeriesPoint[];
+  /** Latest Jev completion time across saved identified score history, even outside the visible window. */
+  latestScoreAvailableAt: number | null;
 }

@@ -20,8 +20,8 @@ export interface CompanySnapshot {
   indexWindow: "3h" | "24h" | null;
   indexRecordCount: number;
   delta: number | null;
-  mentions24h: number;
-  lastMentionAt: number | null;
+  sourceRecords24h: number;
+  latestSourceCollectedAt: number | null;
   earningsAt: number | null;
   lastSurprise: EarningsSurprise | null;
 }
@@ -222,6 +222,11 @@ export interface SeriesPoint {
   itemImpactMin: number | null;
   itemImpactMax: number | null;
   lastScoredAt: number | null;
+}
+
+export interface SeriesResult {
+  points: SeriesPoint[];
+  latestScoreAvailableAt: number | null;
 }
 
 export interface Quote {

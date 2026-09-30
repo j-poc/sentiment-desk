@@ -1340,14 +1340,19 @@ export class Desk {
       }>;
   }
 
-  counts24h(sinceMs: number): Map<string, { count: number; lastAt: number | null }> {
+  sourceActivity24h(sinceMs: number): Map<string, { sourceRecords24h: number; latestCollectedAt: number | null }> {
     const rows = this.db
       .prepare(
-        `SELECT company_id, COUNT(*) AS n, MAX(retrieved_at) AS last_at
-         FROM mentions WHERE ${REAL_MENTION_FILTER} AND retrieved_at >= ? GROUP BY company_id`,
+        `SELECT company_id,
+                SUM(CASE WHEN retrieved_at >= ? THEN 1 ELSE 0 END) AS count_24h,
+                MAX(retrieved_at) AS latest_collected_at
+         FROM mentions WHERE ${REAL_MENTION_FILTER} GROUP BY company_id`,
       )
-      .all(sinceMs) as Array<{ company_id: string; n: number; last_at: number | null }>;
-    return new Map(rows.map((r) => [r.company_id, { count: r.n, lastAt: r.last_at }]));
+      .all(sinceMs) as Array<{ company_id: string; count_24h: number; latest_collected_at: number | null }>;
+    return new Map(rows.map((r) => [r.company_id, {
+      sourceRecords24h: r.count_24h,
+      latestCollectedAt: r.latest_collected_at,
+    }]));
   }
 
   getKv(key: string): string | undefined {

@@ -4,6 +4,7 @@ import {
   ColorType,
   createChart,
   CrosshairMode,
+  HistogramSeries,
   LineStyle,
   LineType,
   LineSeries,
@@ -36,6 +37,7 @@ export function SeriesChart({
   price,
   currency,
   latestPriceAt,
+  latestScoreAvailableAt,
   onViewHistory,
   onSelectBucket,
   bucketEvidence,
@@ -51,6 +53,7 @@ export function SeriesChart({
   price?: PricePoint[];
   currency: string | null;
   latestPriceAt: number | null;
+  latestScoreAvailableAt: number | null;
   onViewHistory?: () => void;
   onSelectBucket?: (bucketAt: number, includeFromBoundary: boolean, returnFocus?: HTMLButtonElement) => void;
   bucketEvidence?: ReactNode;
@@ -63,6 +66,7 @@ export function SeriesChart({
   const chartRef = useRef<IChartApi | null>(null);
   const indexRef = useRef<ISeriesApi<"Baseline"> | null>(null);
   const decayRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const arrivalsRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const priceRef = useRef<ISeriesApi<"Line"> | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const comparison = mode === "comparison";
@@ -95,12 +99,13 @@ export function SeriesChart({
   const insufficientPrice = comparison && drawablePrice.length === 1;
   const hasChartData = sentimentState.hasChartData || drawablePrice.length > 0;
   const waitingForPrice = comparison && priceLoading && drawablePrice.length === 0;
-  const lastScoredAt = drawableSentiment.reduce<number | null>(
+  const latestVisibleScoreAt = drawableSentiment.reduce<number | null>(
     (latest, point) => point.n > 0 && point.lastScoredAt != null
       ? Math.max(latest ?? point.lastScoredAt, point.lastScoredAt)
       : latest,
     null,
   );
+  const lastScoredAt = latestScoreAvailableAt ?? latestVisibleScoreAt;
   const hasModeledTail = lastScoredAt != null
     && drawableSentiment.some((point) => point.t > lastScoredAt && point.v != null && point.n === 0);
   const scorePointCount = drawableSentiment.filter((point) => point.v != null && point.n > 0).length;
@@ -177,7 +182,10 @@ export function SeriesChart({
       priceLineVisible: false,
       lastValueVisible: false,
     }, 0);
-    index.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 } });
+    index.priceScale().applyOptions({
+      scaleMargins: { top: 0.04, bottom: 0.04 },
+      entireTextOnly: true,
+    });
 
     let priceSeries: ISeriesApi<"Line"> | null = null;
     if (comparison) {
@@ -193,6 +201,23 @@ export function SeriesChart({
         lastValueVisible: false,
       }, 1);
     }
+
+    // Counts get their own synchronized pane so their numeric scale cannot
+    // change the fixed −100..+100 sentiment range or hide the index line.
+    const arrivalsPaneIndex = comparison ? 2 : 1;
+    chart.addPane();
+    const arrivals = chart.addSeries(HistogramSeries, {
+      priceScaleId: "right",
+      color: "rgba(148,163,184,0.58)",
+      priceFormat: { type: "volume", precision: 0 },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    }, arrivalsPaneIndex);
+    arrivals.priceScale().applyOptions({
+      scaleMargins: { top: 0.12, bottom: 0.08 },
+      visible: true,
+      borderVisible: false,
+    });
 
     chart.subscribeCrosshairMove((param) => {
       const tip = tooltipRef.current;
@@ -233,10 +258,12 @@ export function SeriesChart({
     chartRef.current = chart;
     indexRef.current = index;
     decayRef.current = decay;
+    arrivalsRef.current = arrivals;
     priceRef.current = priceSeries;
     const panes = chart.panes();
-    panes[0]?.setStretchFactor(comparison ? 2 : 1);
-    panes[1]?.setStretchFactor(1);
+    panes[0]?.setStretchFactor(4);
+    panes[1]?.setStretchFactor(comparison ? 2 : 1);
+    panes[2]?.setStretchFactor(1);
 
     return () => {
       chart.unsubscribeClick(selectScoredBucket);
@@ -244,6 +271,7 @@ export function SeriesChart({
       chartRef.current = null;
       indexRef.current = null;
       decayRef.current = null;
+      arrivalsRef.current = null;
       priceRef.current = null;
     };
   }, [comparison]);
@@ -251,9 +279,10 @@ export function SeriesChart({
   useEffect(() => {
     const index = indexRef.current;
     const decay = decayRef.current;
+    const arrivals = arrivalsRef.current;
     const priceSeries = priceRef.current;
     const chart = chartRef.current;
-    if (!index || !decay || !chart) return;
+    if (!index || !decay || !arrivals || !chart) return;
 
     index.setData(drawableSentiment.map((point) => (
       point.v != null && point.n > 0
@@ -268,6 +297,10 @@ export function SeriesChart({
         ? { time: toSec(point.t), value: point.v }
         : { time: toSec(point.t) };
     }));
+
+    arrivals.setData(drawableSentiment
+      .filter((point) => point.n > 0)
+      .map((point) => ({ time: toSec(point.t), value: point.n })));
 
     if (priceSeries) {
       priceSeries.setData(drawablePrice.map((point) => ({ time: toSec(point.t), value: point.price })));
@@ -313,7 +346,7 @@ export function SeriesChart({
       <div
         ref={containerRef}
         role="img"
-        aria-label={`Jev impact index on a fixed scale from minus 100 to plus 100. Individual impact is 100 times the difference between Jev's positive and negative probabilities, in impact points. The series updates from those scores when judgments arrive and decays toward zero with a fixed eight-hour half-life between them. The decay rule is the same across chart windows. It is a model-derived index, not a stock return or investor poll. Reconstructed by score-availability time. Solid step marks show ${scorePointCount} buckets when Jev judgments became available; hovering a bucket reveals its source-record count and the range of individual Jev impacts. Click a scored bucket or use View source records in the keyboard table to inspect saved evidence. Repeated coverage may count more than once. Dashed segments show modeled decay between scored buckets. This is not a validated measure of investor opinion. Latest Jev judgment completed ${lastScoredAt == null ? "at an unknown time" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
+        aria-label={`Sequential Jev impact index on a fixed scale from minus 100 to plus 100. Individual impact is 100 times the difference between Jev's positive and negative probabilities, in impact points. The index updates as each judgment completes and decays toward zero with a fixed eight-hour half-life. Reconstructed by score-completion time, which can cluster records that were published hours apart. Aligned bottom bars count Jev-scored source records completed per 15-minute bucket; repeated coverage may count more than once, and bars do not count distinct stories or investors. This is a model-derived index, not a stock return or validated investor opinion. Solid step marks show ${scorePointCount} buckets when Jev judgments became available; hovering a bucket reveals its source-record count and individual-impact range. Click a scored bucket or use View source records in the keyboard table to inspect saved evidence. Dashed segments show modeled decay between scored buckets. Latest Jev judgment completed ${lastScoredAt == null ? "at an unknown time" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
         className={comparison ? "chart-canvas chart-canvas-comparison" : "chart-canvas chart-canvas-sentiment"}
       />
       {comparison && (
@@ -321,11 +354,14 @@ export function SeriesChart({
           <div className="pointer-events-none absolute left-[86px] top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
             JEV IMPACT INDEX · FIXED −100 TO +100
           </div>
-          <div className="pointer-events-none absolute left-[86px] top-[calc(66.667%+2px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
+          <div className="pointer-events-none absolute left-[86px] top-[calc(57.143%+2px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
             SHARE PRICE{currency ? ` · ${currency}` : " · CURRENCY UNKNOWN"}
           </div>
+          <div className="pointer-events-none absolute left-[86px] top-[calc(85.714%+2px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
+            SCORED RECORDS / 15M
+          </div>
           {priceStatus && (
-            <div className="absolute right-[76px] top-[calc(66.667%+36px)] z-10 flex max-w-[calc(100%-100px)] items-center gap-2 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10px] text-white/60">
+            <div className="absolute right-[76px] top-[calc(57.143%+36px)] z-10 flex max-w-[calc(100%-100px)] items-center gap-2 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10px] text-white/60">
               <span>{priceStatus}</span>
               <SavedPriceHistoryControl
                 comparison={comparison}
@@ -337,6 +373,11 @@ export function SeriesChart({
             </div>
           )}
         </>
+      )}
+      {!comparison && (
+        <div className="pointer-events-none absolute left-[76px] top-[calc(80%+2px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
+          SCORED RECORDS / 15M
+        </div>
       )}
       <div
         ref={tooltipRef}
@@ -371,57 +412,94 @@ export function SeriesChart({
         <span className="sr-only">{scorePointCount} sentiment buckets contain newly scored items.</span>
       )}
       {bucketEvidence}
-      {(scoredBuckets.length > 0 || latestModeledPoint) && (
-        <details className="chart-data-disclosure">
+      {(scoredBuckets.length > 0 || latestModeledPoint || comparison) && (
+      <details className="chart-data-disclosure">
           <summary>
             Inspect plotted data by keyboard
             <span>{scoredBuckets.length} scored {scoredBuckets.length === 1 ? "bucket" : "buckets"}</span>
           </summary>
           <p className="chart-data-note">
-            Score rows show 15-minute bucket ends, not individual publication times. The index decays between scored buckets.
+            {scoredBuckets.length > 0 || latestModeledPoint
+              ? "Score rows show 15-minute bucket ends, not individual publication times. The index decays between scored buckets."
+              : seriesError
+                ? "Saved Jev score history could not be loaded; score rows are unavailable."
+                : !seriesReady
+                  ? "Loading saved Jev score history…"
+                  : "No saved Jev score buckets are available in this window."}
             {latestModeledPoint && " The modeled row is the latest saved index point without a new score."}
+            {comparison && " Share-price rows show each saved provider source time and the separate time it was collected."}
           </p>
-          <div className="chart-table-scroll" role="region" aria-label="Plotted score bucket data" tabIndex={0}>
-            <table>
-              <caption>Saved Jev score buckets in the selected chart window</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Time / state</th>
-                  <th scope="col">Index</th>
-                  <th scope="col">Records</th>
-                  <th scope="col">Item impact range</th>
-                  <th scope="col">Saved source rows</th>
-                </tr>
-              </thead>
-              <tbody>
-                {scoredBuckets.map((point) => (
-                  <tr key={`score-${point.t}`}>
-                    <th scope="row">{formatChartTimestamp(point.t)}</th>
-                    <td>{point.v! > 0 ? "+" : ""}{point.v!.toFixed(1)}</td>
-                    <td>{point.n}</td>
-                    <td>{point.itemImpactMin == null || point.itemImpactMax == null
-                      ? "Not available"
-                      : `${point.itemImpactMin > 0 ? "+" : ""}${point.itemImpactMin.toFixed(0)} to ${point.itemImpactMax > 0 ? "+" : ""}${point.itemImpactMax.toFixed(0)}`}</td>
-                    <td><button type="button" onClick={(event) => onSelectBucket?.(
-                      point.t,
-                      point.t === firstBucketAtRef.current,
-                      event.currentTarget,
-                    )}>
-                      View {point.n} source {point.n === 1 ? "record" : "records"}
-                    </button></td>
+          {(scoredBuckets.length > 0 || latestModeledPoint) && (
+            <div className="chart-table-scroll" role="region" aria-label="Plotted score bucket data" tabIndex={0}>
+              <table>
+                <caption>Saved Jev score buckets in the selected chart window</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Time / state</th>
+                    <th scope="col">Index</th>
+                    <th scope="col">Records</th>
+                    <th scope="col">Item impact range</th>
+                    <th scope="col">Saved source rows</th>
                   </tr>
-                ))}
-                {latestModeledPoint && (
-                  <tr key={`modeled-${latestModeledPoint.t}`}>
-                    <th scope="row">{formatChartTimestamp(latestModeledPoint.t)} · modeled</th>
-                    <td>{latestModeledPoint.v! > 0 ? "+" : ""}{latestModeledPoint.v!.toFixed(1)}</td>
-                    <td>0 new</td>
-                    <td>—</td>
+                </thead>
+                <tbody>
+                  {scoredBuckets.map((point) => (
+                    <tr key={`score-${point.t}`}>
+                      <th scope="row">{formatChartTimestamp(point.t)}</th>
+                      <td>{point.v! > 0 ? "+" : ""}{point.v!.toFixed(1)}</td>
+                      <td>{point.n}</td>
+                      <td>{point.itemImpactMin == null || point.itemImpactMax == null
+                        ? "Not available"
+                        : `${point.itemImpactMin > 0 ? "+" : ""}${point.itemImpactMin.toFixed(0)} to ${point.itemImpactMax > 0 ? "+" : ""}${point.itemImpactMax.toFixed(0)}`}</td>
+                      <td><button type="button" onClick={(event) => onSelectBucket?.(
+                        point.t,
+                        point.t === firstBucketAtRef.current,
+                        event.currentTarget,
+                      )}>
+                        View {point.n} source {point.n === 1 ? "record" : "records"}
+                      </button></td>
+                    </tr>
+                  ))}
+                  {latestModeledPoint && (
+                    <tr key={`modeled-${latestModeledPoint.t}`}>
+                      <th scope="row">{formatChartTimestamp(latestModeledPoint.t)} · modeled</th>
+                      <td>{latestModeledPoint.v! > 0 ? "+" : ""}{latestModeledPoint.v!.toFixed(1)}</td>
+                      <td>0 new</td>
+                      <td>—</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {comparison && drawablePrice.length > 0 && (
+            <div className="chart-table-scroll" role="region" aria-label="Plotted share-price observations" tabIndex={0}>
+              <table>
+                <caption>Saved Yahoo share-price observations</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Provider source time</th>
+                    <th scope="col">Share price</th>
+                    <th scope="col">Collected time</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {drawablePrice.map((point) => (
+                    <tr key={`price-${point.t}`}>
+                      <th scope="row"><time dateTime={new Date(point.t).toISOString()}>{formatChartTimestamp(point.t)}</time></th>
+                      <td>{point.currency} {point.price.toFixed(2)}</td>
+                      <td><time dateTime={new Date(point.retrievedAt).toISOString()}>{formatChartTimestamp(point.retrievedAt)}</time></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {comparison && drawablePrice.length === 0 && (
+            <p className="chart-data-note" role="status">
+              {priceStatus ?? "No saved Yahoo price points in this window"}
+            </p>
+          )}
         </details>
       )}
     </div>

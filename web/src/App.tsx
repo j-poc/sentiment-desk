@@ -12,6 +12,7 @@ import {
   type PricePoint,
   type PriceSeriesDTO,
   type SeriesPoint,
+  type SeriesResult,
 } from "./lib/api.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
@@ -157,6 +158,7 @@ export default function App() {
   const [evidenceBreadthPage, setEvidenceBreadthPage] = useState<EvidenceBreadthState | null>(null);
   const [scoreBucketEvidence, setScoreBucketEvidence] = useState<ScoreBucketEvidenceState | null>(null);
   const [series, setSeries] = useState<SeriesPoint[]>([]);
+  const [seriesLatestScoreAvailableAt, setSeriesLatestScoreAvailableAt] = useState<number | null>(null);
   const [seriesKey, setSeriesKey] = useState<string | null>(null);
   const [seriesLoadErrorKey, setSeriesLoadErrorKey] = useState<string | null>(null);
   const [sparks, setSparks] = useState<Record<string, SeriesPoint[]>>({});
@@ -247,6 +249,7 @@ export default function App() {
   const selectedSeriesKey = selectedId == null ? null : `${selectedId}:${windowHours}`;
   const selectedSeriesReady = selectedSeriesKey != null && seriesKey === selectedSeriesKey;
   const selectedSeries = selectedSeriesReady ? series : [];
+  const selectedSeriesHistoryLatestScoredAt = selectedSeriesReady ? seriesLatestScoreAvailableAt : null;
   const selectedSeriesError = selectedSeriesKey != null && seriesLoadErrorKey === selectedSeriesKey;
   const selectedSeriesLastScoredAt = selectedSeries.reduce<number | null>(
     (latest, point) => point.n > 0 && point.lastScoredAt != null
@@ -261,9 +264,9 @@ export default function App() {
     ? "loading scores…"
     : selectedSeriesError
       ? "score history unavailable"
-      : selectedSeriesLastScoredAt == null
+      : selectedSeriesHistoryLatestScoredAt == null
         ? "no scored items"
-        : `last scored ${timeAgo(selectedSeriesLastScoredAt)}`;
+        : `last scored ${timeAgo(selectedSeriesHistoryLatestScoredAt)}`;
   const selectedPriceReady = selectedSeriesKey != null && priceResultKey === selectedSeriesKey;
   const selectedPrice = selectedPriceReady ? price : [];
   const selectedPriceCurrency = selectedPrice[0]?.currency ?? null;
@@ -288,14 +291,15 @@ export default function App() {
       ? { ...current, expectedCountFreshness: "refreshing" }
       : current);
     try {
-      const result = await getJSON<SeriesPoint[]>(`/api/companies/${id}/series?hours=${hours}`);
+      const result = await getJSON<SeriesResult>(`/api/companies/${id}/series?hours=${hours}`);
       if (seriesRequestSeq.current === requestSeq && selectedIdRef.current === id && windowRef.current === hours) {
-        setSeries(result);
+        setSeries(result.points);
+        setSeriesLatestScoreAvailableAt(result.latestScoreAvailableAt);
         setSeriesKey(requestKey);
         setSeriesLoadErrorKey(null);
         setScoreBucketEvidence((current) => {
           if (!current || current.companyId !== id || current.hours !== hours) return current;
-          const expectedCount = result.find((point) => point.t === current.bucketAt)?.n ?? 0;
+          const expectedCount = result.points.find((point) => point.t === current.bucketAt)?.n ?? 0;
           return current.expectedCount === expectedCount && current.expectedCountFreshness === "current"
             ? current
             : { ...current, expectedCount, expectedCountFreshness: "current" };
@@ -522,6 +526,7 @@ export default function App() {
           seriesRequestSeq.current += 1;
           priceRequestSeq.current += 1;
           setSeries([]);
+          setSeriesLatestScoreAvailableAt(null);
           setSeriesKey(null);
           setSeriesLoadErrorKey(null);
           setPrice([]);
@@ -719,7 +724,8 @@ export default function App() {
       const entries = await Promise.all(
         ids.map(async (id) => {
           try {
-            return [id, await getJSON<SeriesPoint[]>(`/api/companies/${id}/series?hours=24`)] as const;
+            const result = await getJSON<SeriesResult>(`/api/companies/${id}/series?hours=24`);
+            return [id, result.points] as const;
           } catch {
             return [id, [] as SeriesPoint[]] as const;
           }
@@ -799,7 +805,7 @@ export default function App() {
     && mentionFeedPage.hours === (feedFilter === "failed" ? 0 : windowHours)
     ? mentionFeedPage
     : undefined;
-  const totalMentions = companies.reduce((acc, c) => acc + c.mentions24h, 0);
+  const totalMentions = companies.reduce((acc, c) => acc + c.sourceRecords24h, 0);
   const selectedMentions = (activeMentionFeed?.items ?? []).filter((mention) =>
     mentionIsInWindow(mention, activeMentionFeed?.hours ?? windowHours, clock),
   );
@@ -1095,7 +1101,7 @@ export default function App() {
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-white/40">
                     <span>
-                      {selected.sector} · {selected.mentions24h} source records in 24h · last {timeAgo(selected.lastMentionAt)}
+                      {selected.sector} · {selected.sourceRecords24h} source records collected in 24h · latest source record collected {timeAgo(selected.latestSourceCollectedAt)}
                     </span>
                     {selected.earningsAt != null && (
                       <span
@@ -1153,7 +1159,7 @@ export default function App() {
                 <div className="panel-head chart-panel-head">
                   <div className="chart-panel-topline">
                     <span className="micro">
-                      {chartMode === "comparison" ? "Time-decayed Jev Index + Price" : "Time-decayed Jev Index"}
+                      {chartMode === "comparison" ? "Score-time Jev Impact Index + Price" : "Score-time Jev Impact Index"}
                     </span>
                     <button
                       onClick={() => setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"))}
@@ -1169,6 +1175,9 @@ export default function App() {
                     <span className="flex items-center gap-1">
                       <span className="inline-block h-[3px] w-3 rounded-sm bg-gradient-to-r from-rose-400 to-emerald-400" />
                       Sequential index · fixed 8h decay · −100 to +100
+                    </span>
+                    <span title="Bars count Jev-scored source records completed in each 15-minute bucket. Repeated coverage may count more than once; bars do not count distinct stories or investors.">
+                      <span className="mr-1 inline-block h-[7px] w-[7px] rounded-sm bg-slate-400/70" />scored records / 15m
                     </span>
                     <span
                       className="text-white/65"
@@ -1210,6 +1219,7 @@ export default function App() {
                       price={selectedPrice}
                       currency={selectedPriceCurrency}
                       latestPriceAt={selectedPriceSource?.sourceLatestAt ?? null}
+                      latestScoreAvailableAt={selectedSeriesHistoryLatestScoredAt}
                       onViewHistory={() => setWindowHours(168)}
                       onSelectBucket={(bucketAt, includeFromBoundary, returnFocus) => {
                         const bucket = selectedSeries.find((point) => point.t === bucketAt);

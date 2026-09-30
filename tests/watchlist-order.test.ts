@@ -13,8 +13,8 @@ function company(ticker: string, delta: number | null): CompanySnapshot {
     indexWindow: null,
     indexRecordCount: 0,
     delta,
-    mentions24h: 0,
-    lastMentionAt: null,
+    sourceRecords24h: 0,
+    latestSourceCollectedAt: null,
     earningsAt: null,
     lastSurprise: null,
   };

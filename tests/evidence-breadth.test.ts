@@ -64,6 +64,22 @@ describe("evidence breadth summary", () => {
     expect(markup).toContain("Positive 1 of 1");
   });
 
+  it("shows repeated titles as a share of the scored first-page sample", () => {
+    const markup = renderToStaticMarkup(createElement(EvidenceBreadth, {
+      mentions: [
+        mention("a", "Acme wins contract", "positive", "wire.example"),
+        mention("b", "Acme wins contract", "neutral", "paper.example"),
+        mention("c", "Acme expands capacity", "neutral", "local.example"),
+      ],
+      hours: 24, loaded: true, error: false, hasMore: false, now: 1_000,
+      refreshWarning: false, onRetry: () => undefined, onRetryRefresh: () => undefined,
+      onShowRecords: () => undefined, onOpenMention: () => undefined,
+    }));
+
+    expect(markup).toContain("2 of 3 scored sample records");
+    expect(markup).toContain("Exact-title matches are only a duplicate cue");
+  });
+
   it("counts repeated exact titles, mixed Jev labels, and publisher labels without equating them to independent sources", () => {
     const summary = summarizeEvidenceBreadth([
       mention("a", "Acme wins contract", "positive", "wire.example"),

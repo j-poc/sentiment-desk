@@ -36,6 +36,26 @@ function mention(overrides: Partial<RawMention> = {}): RawMention {
 }
 
 describe("Desk observation and judgment storage", () => {
+  it("keeps the latest saved collection time visible when the 24-hour count is zero", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const collectedAt = Date.now() - 48 * 60 * 60_000;
+      db.insertObservation(mention({
+        sourceItemId: "saved-two-days-ago",
+        publishedAt: collectedAt,
+        retrievedAt: collectedAt,
+      }));
+
+      expect(db.sourceActivity24h(Date.now() - 24 * 60 * 60_000).get(company.id)).toEqual({
+        sourceRecords24h: 0,
+        latestCollectedAt: collectedAt,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("requires a known collector before storing new source observations", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-provenance-required-"));
     directories.push(directory);
@@ -115,7 +135,7 @@ describe("Desk observation and judgment storage", () => {
       expect(db.requeueFailed(failedId, true)).toBe("not_retryable");
       expect(db.scoredMentions(0)).toEqual([]);
       expect(db.scoredMentionEvents(0)).toEqual([]);
-      expect(db.counts24h(0).size).toBe(0);
+      expect(db.sourceActivity24h(0).size).toBe(0);
       const identifiedId = db.insertObservation(mention({ sourceItemId: "identified-source" })).observationId;
       db.markScored(identifiedId, score("results"), false);
       expect(db.usageSince(0)).toEqual({
@@ -167,7 +187,7 @@ describe("Desk observation and judgment storage", () => {
       expect(db.claimForScoring(engineOnlyId, Date.now())).toBeUndefined();
       expect(db.scoredMentions(0)).toEqual([]);
       expect(db.scoredMentionEvents(0)).toEqual([]);
-      expect(db.counts24h(0).size).toBe(0);
+      expect(db.sourceActivity24h(0).size).toBe(0);
       expect(db.usageSince(0)).toEqual({
         judgedItems: 0, inputTokens: 0, outputTokens: 0, estimatedInputCostUsd: 0,
       });

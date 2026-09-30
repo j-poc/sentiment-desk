@@ -14,8 +14,8 @@ const unscoredCompany = {
   indexWindow: null,
   indexRecordCount: 0,
   delta: null,
-  mentions24h: 0,
-  lastMentionAt: null,
+  sourceRecords24h: 0,
+  latestSourceCollectedAt: null,
   earningsAt: null,
   lastSurprise: null,
 } satisfies CompanySnapshot;
@@ -23,7 +23,7 @@ const unscoredCompany = {
 const scoredCompany = {
   ...unscoredCompany,
   index: 12,
-  mentions24h: 1,
+  sourceRecords24h: 1,
 } satisfies CompanySnapshot;
 
 function renderTopMovers(companies: CompanySnapshot[]): string {

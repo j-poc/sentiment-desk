@@ -79,12 +79,13 @@ export function Watchlist({
         const priceDescription = q == null
           ? "Market price unavailable"
           : `Market price ${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}; ${sourceTiming}; ${q.delivery === "cache" ? "cached" : "network"} delivery retrieved ${timeAgo(q.retrievedAt)}; ${change == null ? "price change unavailable" : `price change ${fmtDelta(change)} percent`}`;
+        const sourceFreshness = `latest saved source record collected ${timeAgo(c.latestSourceCollectedAt)}`;
         return (
           <button
             key={c.id}
             onClick={() => onSelect(c.id)}
             aria-pressed={selected}
-            aria-label={`${c.name} (${c.ticker}). ${indexDescription}. ${deltaDescription}. ${priceDescription}. Activate to show ${c.name} research.`}
+            aria-label={`${c.name} (${c.ticker}). ${indexDescription}. ${deltaDescription}. ${priceDescription}. ${sourceFreshness}. Activate to show ${c.name} research.`}
             className={`flex w-full items-center gap-2.5 border-b border-white/[0.04] px-3 py-2 text-left transition-colors ${
               selected ? "bg-white/[0.05]" : "hover:bg-white/[0.03]"
             }`}
@@ -123,8 +124,8 @@ export function Watchlist({
         );
       })}
       <div className="px-3 py-2 text-[10.5px] text-white/55">
-        {companies.length} companies · last mention {timeAgo(
-          companies.reduce<number | null>((acc, c) => (c.lastMentionAt ?? 0) > (acc ?? 0) ? c.lastMentionAt : acc, null),
+        {companies.length} companies · latest source record collected {timeAgo(
+          companies.reduce<number | null>((acc, c) => (c.latestSourceCollectedAt ?? 0) > (acc ?? 0) ? c.latestSourceCollectedAt : acc, null),
         )}
       </div>
     </div>

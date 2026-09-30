@@ -25,6 +25,7 @@ import type {
   JevState,
   MentionScore,
   SeriesPoint,
+  SeriesResult,
   SourceTier,
 } from "./types.js";
 
@@ -422,9 +423,9 @@ export class Pipeline {
     const now = Date.now();
     const companies = new Map(this.deps.db.companies().map((c) => [c.id, c] as const));
     const events = this.deps.db.scoredMentions(now - DAY_MS, now);
-    const counts = this.deps.db.counts24h(now - DAY_MS);
+    const activity = this.deps.db.sourceActivity24h(now - DAY_MS);
     const extras = this.earningsExtras();
-    return this.computeSnapshot(companies, counts, events, companyId, now, extras);
+    return this.computeSnapshot(companies, activity, events, companyId, now, extras);
   }
 
   snapshots(): CompanySnapshot[] {
@@ -432,9 +433,9 @@ export class Pipeline {
     const companies = this.deps.db.companies();
     const byId = new Map(companies.map((c) => [c.id, c] as const));
     const events = this.deps.db.scoredMentions(now - DAY_MS, now);
-    const counts = this.deps.db.counts24h(now - DAY_MS);
+    const activity = this.deps.db.sourceActivity24h(now - DAY_MS);
     const extras = this.earningsExtras();
-    return companies.map((c) => this.computeSnapshot(byId, counts, events, c.id, now, extras));
+    return companies.map((c) => this.computeSnapshot(byId, activity, events, c.id, now, extras));
   }
 
   /** Measured earnings facts (Finnhub) cached in kv, surfaced on snapshots. */
@@ -460,7 +461,7 @@ export class Pipeline {
 
   private computeSnapshot(
     companies: Map<string, { id: string; name: string; ticker: string; sector: string; color: string }>,
-    counts: Map<string, { count: number; lastAt: number | null }>,
+    activity: Map<string, { sourceRecords24h: number; latestCollectedAt: number | null }>,
     events: Array<{ companyId: string; availableAt: number; impact: number; weight: number }>,
     companyId: string,
     now: number,
@@ -474,7 +475,7 @@ export class Pipeline {
     const index = current ?? baseline;
     const indexWindow = current != null ? "3h" : baseline != null ? "24h" : null;
     const indexEvents = indexWindow === "3h" ? currentEvents : indexWindow === "24h" ? own : [];
-    const count = counts.get(companyId);
+    const companyActivity = activity.get(companyId);
     return {
       id: companyId,
       name: meta?.name ?? companyId,
@@ -485,19 +486,25 @@ export class Pipeline {
       indexWindow,
       indexRecordCount: indexEvents.filter((event) => event.weight > 0).length,
       delta: current != null && baseline != null ? Math.round((current - baseline) * 100) / 100 : null,
-      mentions24h: count?.count ?? 0,
-      lastMentionAt: count?.lastAt ?? null,
+      sourceRecords24h: companyActivity?.sourceRecords24h ?? 0,
+      latestSourceCollectedAt: companyActivity?.latestCollectedAt ?? null,
       earningsAt: extras.get(companyId)?.earningsAt ?? null,
       lastSurprise: extras.get(companyId)?.lastSurprise ?? null,
     };
   }
 
-  series(companyId: string, windowHours: number): SeriesPoint[] {
+  series(companyId: string, windowHours: number): SeriesResult {
     const now = Date.now();
     const windowMs = windowHours * 60 * 60 * 1000;
     // Rebuild from the company's full identified history so an older event
     // still seeds the same index when the user changes the visible window.
     const items = this.deps.db.scoredMentions(0, now, companyId);
-    return smoothedSeries(items, windowMs, bucketMsFor(windowHours), now);
+    return {
+      points: smoothedSeries(items, windowMs, bucketMsFor(windowHours), now),
+      latestScoreAvailableAt: items.reduce<number | null>(
+        (latest, item) => Math.max(latest ?? item.availableAt, item.availableAt),
+        null,
+      ),
+    };
   }
 }

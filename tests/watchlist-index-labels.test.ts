@@ -14,8 +14,8 @@ const company = {
   indexWindow: "3h",
   indexRecordCount: 2,
   delta: 8.5,
-  mentions24h: 2,
-  lastMentionAt: 0,
+  sourceRecords24h: 2,
+  latestSourceCollectedAt: Date.now(),
   earningsAt: null,
   lastSurprise: null,
 } satisfies CompanySnapshot;
@@ -34,7 +34,8 @@ describe("watchlist Jev mean labels", () => {
   it("gives each company selection button a complete name for its Jev metrics and missing quote", () => {
     const html = renderWatchlist();
 
-    expect(html).toContain('aria-label="Apple (AAPL). Jev weighted item mean +18.0 impact points from 2 scored source records over the latest 3 hours. Current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean: +8.5 impact points. Market price unavailable. Activate to show Apple research."');
+    expect(html).toContain('aria-label="Apple (AAPL). Jev weighted item mean +18.0 impact points from 2 scored source records over the latest 3 hours. Current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean: +8.5 impact points. Market price unavailable. latest saved source record collected now. Activate to show Apple research."');
+    expect(html).toContain("latest source record collected");
     expect(html).toContain('aria-pressed="true"');
   });
 

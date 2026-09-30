@@ -78,6 +78,31 @@ function setup(
 }
 
 describe("Jev pipeline recovery", () => {
+  it("keeps history freshness when the selected chart window has no score arrivals", async () => {
+    const scoreAt = Date.parse("2026-09-28T10:00:00.000Z");
+    const now = Date.parse("2026-09-30T10:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(scoreAt);
+    const { db, pipeline, source } = setup(async () => ({
+      answers: fixtureAnswers(), model: "jev-latest", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }));
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      vi.setSystemTime(now);
+
+      const activity = pipeline.snapshot(company.id);
+      const series = pipeline.series(company.id, 24);
+      expect(activity.sourceRecords24h).toBe(0);
+      expect(activity.latestSourceCollectedAt).toBe(scoreAt);
+      expect(series.latestScoreAvailableAt).toBe(scoreAt);
+      expect(series.points.some((point) => point.n > 0)).toBe(false);
+      expect(series.points.some((point) => point.v != null)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
   it("passes publisher identity separately from a Google News collection redirect", async () => {
     const judgedStates: JevState[] = [];
     const { db, pipeline, source } = setup(async (state) => {

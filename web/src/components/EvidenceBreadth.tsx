@@ -91,7 +91,7 @@ export function EvidenceBreadth({
                 aria-controls="mention-feed-panel"
                 onClick={() => onShowRecords("repeated")}
               >
-                {summary.repeatedHeadlineGroupCount} repeated exact-title {summary.repeatedHeadlineGroupCount === 1 ? "group" : "groups"} · {summary.recordsInRepeatedHeadlineGroups} source {summary.recordsInRepeatedHeadlineGroups === 1 ? "record" : "records"} <span aria-hidden="true">↘</span>
+                {summary.repeatedHeadlineGroupCount} repeated exact-title {summary.repeatedHeadlineGroupCount === 1 ? "group" : "groups"} · {summary.recordsInRepeatedHeadlineGroups} of {summary.scoredRecordCount} scored sample {summary.recordsInRepeatedHeadlineGroups === 1 ? "record" : "records"} <span aria-hidden="true">↘</span>
               </button>
             ) : (
               <span>0 repeated exact-title groups</span>

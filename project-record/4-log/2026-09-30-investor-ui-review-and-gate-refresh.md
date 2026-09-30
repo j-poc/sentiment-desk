@@ -12,33 +12,44 @@ not narrow or complete that goal.
 
 ## Independent reviews and fixes
 
-The initial and intermediate ratings (8.3/9.2, then 8.5/9.0) are historical.
-Fresh independent reratings after the latest fixes scored the saved-data
-investor evidence workflow **9.0/10** and **8.8/10**; the UI scored **9.1/10**
-(visual quality 9.3, interaction/recovery 9.5, accessibility/responsive 8.6).
-The whole-build engineering review remains **FAIL** for operational readiness;
-the independent investor reviewer rates full live research readiness **2/10**.
-Reviewers inspected the current source and focused tests but did not observe a
-rendered-browser session or conduct an investor task study. None rated the
-build 10/10. They found no remaining justified local code edit. Jev's real-
-source quality, the usefulness of the related-title heuristic, and the actual
-investor/mobile journeys remain unvalidated.
+Fresh scores are separate reviewer scopes. The investor reviewer scored the
+saved-data evidence workflow **8.8/10** and live research readiness **2/10**.
+The UI reviewer scored hierarchy **8.5/10**, chart interpretation **9/10**,
+discoverability **8.5/10**, responsive/mobile **8/10**, and accessibility
+**8.5/10**. The current whole-build engineering-bullshit-detector review
+independently drove the app and scored the saved-data UI **8.5/10**, evidence
+workflow **8/10**, and live research readiness **2/10**. It found no
+reproducible local defect in the inspected paths. These rubrics are not
+combined; none establishes 10/10, and no investor task study or
+assistive-technology session has been run.
 
-The requested GPT-6.1 Sol advisor reviewed the current trace and completion
-contract at extra-high effort. It found no further code change supported by
-evidence and recommended pushing the verified checkpoint before marking the
-goal blocked on external evidence.
+The requested GPT-6.1 Sol advisor worked at extra-high effort and found no
+additional UI change justified by current evidence. It highlighted that the
+sequential index is order-sensitive by design: equal-weight +100 then −100
+events differ from the reverse order. This is an analytical validation
+question, not grounds to smooth the series without investor and real-label
+evidence.
 
-A final whole-build engineering-bullshit-detector review found no reproducible
-local code defect. It rated the saved-data UI **8/10**, investor evidence
-workflow **7/10**, and operational readiness **3/10**. These are separate
-reviewer rubrics, not a composite score; the full ratings remain bounded by the
-unobserved rendered UI and investor task outcomes. The review also found that
-the offline preview process had stopped, so this trace now describes it in the
-past tense.
+Current parent and independent browser checks showed the fixed scale, modeled
+decay, 15-minute record-count pane, repeat disclosure, stale-data labels,
+keyboard source drilldown, and honest empty price state. Parent-rendered
+1280×720 Adobe 7D showed 58 scored records in 23 buckets, latest source/score
+about 2 days old, zero new source rows in 24h, and no saved lineage-eligible
+Yahoo points. The whole-build reviewer selected Adobe 3D, inspected 20 buckets,
+opened the keyboard table and exact seven-record source bucket, and confirmed
+those historic rows were not linked to source delivery receipts. The preview at
+`http://127.0.0.1:8797/` uses an isolated copy of the real saved database with
+external requests and Jev disabled. This is rendered saved-data evidence; it
+does not establish live Jev quality, rights, or investor task value.
 
-The first review pass returned different category scores. The fresh rerate
-above is the current score snapshot; earlier values are not current ratings.
+This continuation preserves separate latest-collection and latest-score
+freshness when the current interval has no new rows, adds an aligned record-
+arrival histogram without changing the fixed index scale, and extends keyboard
+inspection with source time, collected time, currency, and price. Jev/price
+loading, failure, and confirmed-empty states remain distinct, including
+price-only comparison. Focused regressions cover these conditions. The
+watchlist also names the age of the latest saved source record when its 24-hour
+count is zero.
 
 The final review pass fixed two additional investor-facing clarity gaps. The
 MentionDrawer now shows reported publisher and domain separately from the
@@ -130,32 +141,24 @@ are available to validate precision or recall.
 
 ## Verification evidence
 
-- `npm test -- --reporter=dot --maxWorkers=1 --testTimeout=20000` — **PASS**,
-  294 tests across 43 files, including the `.tsx` component suite.
-- The focused related-title run — **PASS**, 9 tests across two files.
-- `npm run typecheck` — **PASS** after the final source and UI changes.
-- `npm run build` — **PASS**. Vite reports a 591.45 kB client JavaScript
-  chunk, above its 500 kB advisory threshold.
-- `npm audit --omit=dev --audit-level=high` — **PASS**, zero production
-  vulnerabilities reported at run time.
-- `git diff --check` — **PASS**.
-- `gitleaks dir . --redact --no-banner` — **PASS**, no leaks found.
-- The latest frozen-source gate status, timestamp, fingerprint, five check
-  outcomes, and supplemental `check_receipt` are recorded in
-  `project-record/4-log/live-data-etl-evidence.json`. For reference, the
-  preceding 17:49:39Z `verify` and 17:49:52Z `check` passed for fingerprint
-  `839573c4bd9111204ea4996edd89ced8143dd1e71ed988b933852b537ff2fcc3`;
-  this record update supersedes that fingerprint, so the artifact carries the
-  result for the newly frozen records. The five checks cover fixtures, recovery, replay,
-  offline request gates, and a bounded authorized keyless live smoke. That
-  smoke uses an isolated temporary Compose database with no credentials or Jev
-  request and verifies that a real pending item survives container recreation.
-  It cannot prove TypeSafe approval, Jev quality, or source completeness.
-- A production server was run at `http://127.0.0.1:8797/` against an isolated
-  copy of the 81 MB saved SQLite database. External requests and Jev were
-  explicitly disabled; no demo rows were added. The final review found the
-  preview process stopped. The in-app browser policy rejected navigation to
-  the local URL, so no current rendered UI or interaction is claimed.
+- `npm run typecheck`, `npm audit --omit=dev --audit-level=high`,
+  `gitleaks dir . --redact --no-banner`, and `git diff --check` passed before
+  the final project-record edits. The frozen-source ETL gate covers fixtures,
+  recovery/replay, offline startup gates, production build, and bounded keyless
+  live smoke. Exact latest results and source fingerprint are recorded in
+  `project-record/4-log/live-data-etl-evidence.json`.
+- The previously recorded 17:56:28Z PASS / 17:56:41Z check predates this
+  checkpoint and is not current evidence. A valid final disposition requires
+  the newest matching `verify` and `check` after all source files and records
+  are frozen; consult the evidence artifact for its exact status.
+- The parent browser read used the local production build at
+  `http://127.0.0.1:8797/` against an isolated copy of the saved SQLite
+  database. It displayed `SAVED DATA ONLY`; external requests and Jev were
+  paused. It showed the score index, arrival counts, stale-source age, and
+  correct no-lineage-eligible-price state. The independent whole-build
+  reviewer separately exercised Adobe 3D selection and score-bucket drilldown.
+  Neither session claims live provider-to-Jev operation or classification
+  quality.
 
 ## Real-data and operational limits
 
@@ -199,3 +202,26 @@ turns. Decision: keep the goal incomplete after the code checkpoint and mark
 it **blocked**, not complete. Operational and research validation gates remain
 open, and the current build is not 10/10. The final review and checkpoint
 decisions are in `project-record/4-log/2026-09-30-final-checkpoint.tsv`.
+
+## Final source-bound checkpoint continuation — 2026-09-30
+
+The current engineering-bullshit-detector verdict is **FAIL for full operational
+readiness**, with no additional reproducible local defect in the reviewed
+paths. The saved-data workflow is functional, while live Jev quality and the
+source-to-judgment path remain unverified. The advisor recommends a finite,
+rights-cleared real-source → Jev → persisted judgment → visible-evidence
+cohort, followed by investor tasks that trace a swing, distinguish repeated
+coverage from independent developments, identify stale/modelled values, and
+explain whether evidence changes a thesis. Do not chase agent ratings with
+more visual polish; keep Opportunity Radar parked.
+
+A read-only aggregate over isolated saved Adobe history found no exact
+score-timestamp ties in the 58 displayed scored records. Thus those large
+movements were not caused by a same-millisecond ID tie-break in that sample.
+This does not establish that repeated records are independent or that the
+index is a validated investor signal.
+
+The final frozen-source `verify` and `check`, checkpoint commit, remote branch
+readback, and goal disposition are recorded in the live ETL evidence artifact,
+final checkpoint TSV, and the task completion report. The previous 17:56
+evidence is superseded.
