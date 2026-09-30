@@ -9,7 +9,8 @@ const minute = 60_000;
 function appWithReactionRows(rows: Array<{
   id: string;
   title: string;
-  publishedAt: number;
+  publishedAt: number | null;
+  availableAt: number;
   sentiment: string;
   eventScore: number;
   eventType: string;
@@ -19,8 +20,8 @@ function appWithReactionRows(rows: Array<{
     companies: vi.fn(() => [{ id: "acme", name: "Acme", ticker: "ACME", sector: "Technology", aliases: [], color: "#123456" }]),
     scoredReactionEventsForCompany: vi.fn(() => rows),
     priceWindow: vi.fn(() => [
-      { t: eventAt + minute, price: 100 },
-      { t: eventAt + 30 * minute, price: 101 },
+      { t: eventAt + minute, price: 100, retrievedAt: eventAt + minute + 1_000 },
+      { t: eventAt + 30 * minute, price: 101, retrievedAt: eventAt + 30 * minute + 1_000 },
     ]),
   };
   const app = createApp({
@@ -53,7 +54,8 @@ describe("reaction endpoint", () => {
     const rows = Array.from({ length: 250 }, (_, index) => ({
       id: `event-${index}`,
       title: `Event ${index}`,
-      publishedAt: eventAt,
+      publishedAt: eventAt - 6 * 60 * minute,
+      availableAt: eventAt,
       sentiment: "positive",
       eventScore: index,
       eventType: "results",
@@ -62,17 +64,19 @@ describe("reaction endpoint", () => {
 
     const response = await app.request("/api/companies/acme/reactions?hours=24");
     const body = await response.json() as {
-      events: Array<{ eventScore: number; r30: number | null }>;
+      events: Array<{ eventScore: number; availableAt: number; r30: number | null }>;
       measuredEventCount: number;
       all: { n30m: number; n4h: number; hitRate: number | null };
     };
 
     expect(response.status).toBe(200);
-    expect(db.scoredReactionEventsForCompany).toHaveBeenCalledWith("acme", now - 24 * 60 * minute);
+    expect(db.scoredReactionEventsForCompany).toHaveBeenCalledWith("acme", now - 24 * 60 * minute, now);
+    expect(db.priceWindow).toHaveBeenCalledWith("ACME", now - 25 * 60 * minute, now);
     expect(body.all).toEqual({ n30m: 250, n4h: 0, median30m: 1, median4h: null, hitRate: 100 });
     expect(body.events).toHaveLength(8);
     expect(body.measuredEventCount).toBe(250);
     expect(body.events[0]?.eventScore).toBe(249);
+    expect(body.events[0]?.availableAt).toBe(eventAt);
     expect(body.events.every((event) => event.r30 === 1)).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ export type CollectorId =
   | "yahoo_chart";
 export type EvidenceChannel = "news" | "filing" | "social" | "market_context";
 export type TimeBasis = "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown";
-export type DeliveryHealthState = "current" | "overdue" | "failed" | "partial" | "never" | "disabled";
+export type DeliveryHealthState = "current" | "processing" | "overdue" | "failed" | "partial" | "never" | "disabled";
 
 /**
  * Source tiers rank publishing venues by expected reliability for business
@@ -54,6 +54,8 @@ export interface RawMention {
   publisherName?: string;
   publisherDomain?: string | null;
   sourceItemId?: string | null;
+  /** Immutable request receipt that first delivered this observation. */
+  deliveryId?: string | null;
   adapterVersion?: string;
   responseDigest?: string | null;
   /** SEC only: the filing date declared by EDGAR (distinct from acceptance). */
@@ -73,7 +75,14 @@ export interface JevState {
   mention: {
     title: string;
     snippet: string;
-    source: { name: string; url: string; tier: SourceTier };
+    source: {
+      collector: CollectorId;
+      /** The collected item link; it may be an aggregator redirect rather than the publisher site. */
+      collectionUrl: string;
+      tier: SourceTier;
+      publisherName: string;
+      publisherDomain: string | null;
+    };
     publishedAt: string;
   };
   /** TradingAgents-style reflection: measured 30-minute reactions after this
@@ -123,6 +132,8 @@ export interface MentionDTO {
   source: {
     name: string; url: string; kind: SourceKind; tier: SourceTier;
     collector: CollectorId; publisher: string; publisherDomain: string | null;
+    /** Null for retained legacy rows collected before request receipts were linked. */
+    deliveryId: string | null;
   };
   title: string;
   snippet: string;
@@ -170,8 +181,12 @@ export interface CompanySnapshot {
   ticker: string;
   sector: string;
   color: string;
-  /** Weighted sentiment index over the current window; null with too little data. */
+  /** Weighted Jev-impact mean; the active window is 3h, falling back to 24h. */
   index: number | null;
+  /** Window used for index, or null when there are no scored records. */
+  indexWindow: "3h" | "24h" | null;
+  /** Positive-weight scored source records included in index. Repeats can occur. */
+  indexRecordCount: number;
   /** index now minus index over the full trailing day. */
   delta: number | null;
   mentions24h: number;
@@ -186,4 +201,7 @@ export interface SeriesPoint {
   t: number;
   v: number | null;
   n: number;
+  itemImpactMin: number | null;
+  itemImpactMax: number | null;
+  lastScoredAt: number | null;
 }

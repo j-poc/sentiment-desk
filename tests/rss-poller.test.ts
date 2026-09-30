@@ -3,7 +3,8 @@ import { Desk } from "../server/db.js";
 import { HealthTracker } from "../server/health.js";
 import { ProviderRateLimitError } from "../server/provider-cooldown.js";
 import { startRssPoller } from "../server/schedule.js";
-import type { Pipeline } from "../server/pipeline.js";
+import { Hub } from "../server/hub.js";
+import { Pipeline } from "../server/pipeline.js";
 import type { Company } from "../server/types.js";
 
 const companies: Company[] = [
@@ -98,6 +99,7 @@ describe("RSS rate-limit recovery", () => {
         title: "Alpha Inc reports quarterly results",
         url: "https://news.example/story",
         sourceName: "news.example",
+        publisherDomain: "news.example",
         publishedAt: Date.now(),
         sourceItemId: "alpha-story",
         snippet: "",
@@ -106,9 +108,14 @@ describe("RSS rate-limit recovery", () => {
       providerItemCount: 2,
       malformedItemCount: 1,
     }));
+    const pipeline = new Pipeline({
+      db, judge: null, hub: new Hub(), health, engineLabel: "jev-latest", inputPricePerMTok: 0.042,
+      concurrency: 1, allowedCollectors: new Set(["google_news_rss"]),
+      dailyBudget: { utcDay: () => "2026-09-29", maxRequests: 100, maxRequestBytes: 1_000_000 },
+    });
     const control = startRssPoller({
       companies: companies.slice(0, 1),
-      pipeline: { ingest: vi.fn(() => true) } as unknown as Pipeline,
+      pipeline,
       db,
       health,
       intervalSeconds: 120,
@@ -126,6 +133,91 @@ describe("RSS rate-limit recovery", () => {
       latestError: "RSS discarded 1 malformed item",
     });
     expect(health.snapshot().rss).toMatchObject({ ok: 1, fail: 0 });
+    const stored = db.mentionsForCompany("alpha", 0, 10)[0];
+    expect(stored?.source.deliveryId).toEqual(expect.any(String));
+    db.close();
+  });
+
+  it("does not report current health when an observation fails after a successful fetch", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies(companies);
+    const health = new HealthTracker(false, false, "unconfigured");
+    const pipeline = {
+      ingest: vi.fn(() => { throw new Error("observation persistence failed"); }),
+    } as unknown as Pipeline;
+    const control = startRssPoller({
+      companies: companies.slice(0, 1),
+      pipeline,
+      db,
+      health,
+      intervalSeconds: 120,
+      concurrency: 1,
+      enabledCollectors: new Set(["google_news_rss"]),
+      fetchFeed: vi.fn(async () => ({
+        items: [{
+          title: "Alpha Inc reports quarterly results",
+          url: "https://news.example/story",
+          sourceName: "news.example",
+          publisherDomain: "news.example",
+          publishedAt: Date.now(),
+          sourceItemId: "alpha-storage-failure",
+          snippet: "",
+          tier: "trade" as const,
+        }],
+        providerItemCount: 1,
+        malformedItemCount: 0,
+      })),
+      pause: async () => {},
+    });
+    await control.stop();
+
+    expect(db.deliverySummary()[0]).toMatchObject({ result: "success", parsedItemCount: 1 });
+    expect(db.deliveryHealth([{
+      collector: "google_news_rss", enabled: true, intervalSeconds: 120, targetCount: 1,
+    }], Date.now())[0]).toMatchObject({ state: "failed", latestError: "observation persistence failed" });
+    db.close();
+  });
+
+  it("records a partial ingestion outcome when a later item fails in the same fetched batch", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies(companies);
+    const items = ["alpha-first", "alpha-second"].map((id) => ({
+      title: "Alpha Inc reports quarterly results",
+      url: `https://news.example/${id}`,
+      sourceName: "news.example",
+      publisherDomain: "news.example",
+      publishedAt: Date.now(),
+      sourceItemId: id,
+      snippet: "",
+      tier: "trade" as const,
+    }));
+    const pipeline = {
+      ingest: vi.fn()
+        .mockReturnValueOnce(true)
+        .mockImplementationOnce(() => { throw new Error("second item could not be saved"); }),
+    } as unknown as Pipeline;
+    const control = startRssPoller({
+      companies: companies.slice(0, 1),
+      pipeline,
+      db,
+      health: new HealthTracker(false, false, "unconfigured"),
+      intervalSeconds: 120,
+      concurrency: 1,
+      enabledCollectors: new Set(["google_news_rss"]),
+      fetchFeed: vi.fn(async () => ({ items, providerItemCount: 2, malformedItemCount: 0 })),
+      pause: async () => {},
+    });
+    await control.stop();
+
+    const [source] = db.deliveryHealth([{
+      collector: "google_news_rss", enabled: true, intervalSeconds: 120, targetCount: 1,
+    }], Date.now());
+    expect(source).toMatchObject({
+      state: "partial", latestResult: "success", coverageCount: 0,
+      latestIngestionState: "partial", latestIngestionExpectedCount: 2,
+      latestIngestionProcessedCount: 1, latestIngestionInsertedCount: 1,
+      latestError: "second item could not be saved",
+    });
     db.close();
   });
 

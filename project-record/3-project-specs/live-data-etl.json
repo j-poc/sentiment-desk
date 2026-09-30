@@ -9,7 +9,7 @@
   "evidence_path": "project-record/4-log/live-data-etl-evidence.json",
   "max_evidence_age_hours": 24,
   "documentation_review": {
-    "reviewed_at": "2026-09-29",
+    "reviewed_at": "2026-09-30",
     "runtime": "Local Node.js v26.10.0; npm 11.19.1; package engine requires Node >=22.",
     "references": [
       {
@@ -50,12 +50,22 @@
       {
         "source": "Google News RSS and Yahoo Finance RSS/chart",
         "url": "https://policies.google.com/terms?hl=en-US",
-        "finding": "No official API contract was found for the exact RSS/chart endpoints. Public reachability and the user's rights attestation do not independently establish exact retention/display/model-processing terms."
+        "finding": "A bounded official-doc search did not locate an API contract for the exact Google News RSS, Yahoo Finance RSS, or Yahoo Finance chart endpoints. Public reachability and the user's rights attestation do not independently establish endpoint-specific retention, display, or model-processing terms."
+      },
+      {
+        "source": "TypeSafe Master Customer Agreement",
+        "url": "https://typesafe.ai/legal/mca",
+        "finding": "The current page shows a 2026-09-23 revision. Only a representative with authority may accept for a Customer. Telemetry includes classifications and may be processed without restriction. TypeSafe makes no Customer Data retention promise; account-specific usage limits and billing settings depend on the unavailable Order/account records."
       }
     ]
   },
   "status": "partial",
-  "operational_status": "2026-09-29 detector-review continuation: company mention filters now run in SQLite with keyset pagination, and saved pending/failed/scoring/corrupt Jev records remain reachable across all identified-source history. The current production preview at 127.0.0.1:8797 used an isolated saved-data database with external requests and Jev disabled; direct browser interaction changed AAPL to ADBE and rendered both sentiment and saved Yahoo price lines, then loaded 100 to 200 Apple unscored records through the older-page control. The prior suite passed 216 tests across 29 files, typecheck, and build; the final code-bound live-data gate evidence is stored at the declared evidence_path. Each live source still requires both request allowlisting and operator-attested source use; Jev additionally requires account-use attestation and a three-way allowlist intersection. The user attested to rights for public sources and APIs; this is not independent review of endpoint terms. An earlier isolated live Compose smoke collected real quotes for 24 companies and persisted a publisher-timed RSS observation across container recreation with Jev and credentialed optional providers off. The Desk remains partial: TypeSafe account authority/terms and spend ceiling, SEC contact, independent real-source Jev labels/evaluation, legacy_unknown use/billing reconciliation, and finite source coverage remain unresolved.",
+  "operational_status": "2026-09-30 final investor/UI continuation: fresh independent ratings on the corrected code are 9.0/10 and 8.8/10 for the saved-data investor evidence workflow; UI confidence is 9.1/10 (visual 9.3, interaction/recovery 9.5, accessibility/responsive 8.6). Full live research readiness remains 2/10. No reviewer rates the build 10/10. The final pass fixes ordinary load/retry and price-history recovery, verifies Yahoo ticker identity, separates Google News publisher attribution from collection links in RSS, Jev input, research DTOs, and the evidence drawer, hides only the legacy aggregator domain without mutating history, and makes loaded-page metric scope prominent. A read-only audit found all 4,349 local Google News rows had news.google.com as publisher_domain across 673 publisher labels; adapter v3 reads source URL metadata and historical values remain masked, not rewritten. Jev rubric wording/hash now reflects this attribution boundary; no live Jev call was made. The full test suite passes 294 tests across 43 files; typecheck, production build, gitleaks, and git diff checks pass. The 591.45 kB web bundle is above Vite\u2019s 500 kB advisory. Rerun live-data-etl-gate verify then check after this record/code freeze; its artifact is the authority for exact source fingerprint and verdict. The keyless live smoke remains limited to five allowlisted public endpoints and leaves Jev disabled; it cannot prove Jev quality or account approval. No demo or synthetic application data was added. The user attested to public-source/API rights, but source-specific terms/coverage remain incompletely evidenced. Remaining external evidence: authorized TypeSafe account-owner confirmation of use, telemetry/retention, billing/refill, limits, and spend ceiling; a contact-bearing SEC User-Agent; two independent blinded real-source label reviewers and a passing frozen Jev evaluation; provider records for 4,700 legacy_unknown rows; current rendered desktop/mobile UI and real investor task outcomes. The lexical similar-title aid remains unvalidated and does not affect scores/charts/rankings. Opportunity Radar remains disabled. The native goal service remains active while the final gate and checkpoint are pending. After the verified push, the same external evidence gates have persisted across at least three resumed goal turns, so this run will mark the goal blocked rather than complete.",
+  "observation_lineage": {
+    "new_observations": "Must reference an immutable source_deliveries.id recorded before pipeline ingestion; collector, company, and adapter version must match.",
+    "historical_unlinked": "Retained rows without a stored delivery_id are not backfilled with invented lineage and are identified as unlinked historical records in the detail UI.",
+    "enforcement": "Pipeline rejects missing receipt IDs; the database checks the referenced receipt and its source identity."
+  },
   "source_request_policy": {
     "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults to false and gates all external polling, chart retrieval, Jev calls, and operator retry.",
     "source_allowlist": "EXTERNAL_SOURCE_COLLECTORS defaults to empty. A source request runs only when EXTERNAL_REQUESTS_ENABLED is true and its collector appears in both EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. The latter is an operator attestation, not independent verification of rights.",
@@ -63,11 +73,12 @@
     "verification": "The offline-startup verifier proves default-off startup makes zero fetches; verifies each of nine isolated collectors reaches only its guarded path when both source lists admit it; proves missing approval makes zero fetches; and checks Jev blocked without account attestation or matching three-way source lists. All outbound fetches in this verifier are intercepted before network access. The separate user-attested live Compose smoke result and scope are recorded below.",
     "live_smoke": {
       "reviewed_at": "2026-09-29",
-      "status": "PASS",
+      "status": "SUPERSEDED",
+      "historical_result": "PASS",
       "command": "SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh",
       "scope": "Isolated temporary Compose project; five keyless public collector paths only; TypeSafe, Finnhub, Reddit, and X disabled.",
       "evidence": "Live API reported 27 quotes across 24 companies and a publisher-timed Google News RSS observation in pending status. The same observation remained pending after container recreation; host health returned HTTP 200 before and after recovery. Cleanup removed the temporary project and volume.",
-      "limitation": "This proves a scoped live ingestion and persistence/recovery path, not legal rights, complete source coverage, Jev quality, or production readiness."
+      "limitation": "Historical result only: this earlier smoke proves a scoped live ingestion and persistence/recovery path, not legal rights, complete source coverage, Jev quality, or production readiness. It is superseded by the current FAIL in project-record/4-log/live-data-etl-evidence.json."
     }
   },
   "rights_review": {
@@ -300,7 +311,7 @@
       "command": "npm run verify:jev-sanity",
       "covers": "Historical ten-case fictional sanity pilot using isolated test databases; reports only test-fixture agreement and is not real-source quality, classifier calibration, or release evidence.",
       "status": "PASS",
-      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234\u2013370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     },
     "no_synthetic_runtime": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run verify:offline-startup; production browser and API readback at http://127.0.0.1:8795/ against isolated saved data",
@@ -365,7 +376,7 @@
         ],
         "evidence": "All nine real external collector IDs were checked against config, adapter/poller bounds, delivery health, allowlist probes, rights records, and user-visible scope. The Sentiment Desk now exposes one-response RSS uncertainty, GDELT cap behavior, SEC/Finnhub/Reddit/X time windows, price-only endpoints, missing direct source families, optional social collectors, and per-source rights caveat. Trace: project-record/4-log/2026-09-29-source-scope-disclosure.md."
       },
-      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays “Configured feeds only. This desk does not cover the entire public web or all investor activity.” Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
+      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays \u201cConfigured feeds only. This desk does not cover the entire public web or all investor activity.\u201d Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
     },
     "legacy_provider_usage_audit": {
       "command": "Reconcile legacy TypeSafe request payloads and provider usage for the previously stopped loopback process",
@@ -482,13 +493,30 @@
       "provider": "Google News RSS",
       "endpoint": "https://news.google.com/rss/search",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "publisher_published_at", "ingested_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "publisher_published_at",
+        "ingested_at"
+      ],
       "revision_policy": "Immutable revisions keyed by collector, company, publisher identity, and normalized-content digest; raw XML is not retained.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29 to rights for public sources/APIs; publisher permissions for retention, display, and Jev input are not independently evidenced.",
-      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "consumer_paths": [
+        "/api/companies/:id/mentions",
+        "/api/tape",
+        "Desk mention cards and drawer"
+      ],
       "coverage_limit": "Company/ticker query; one response per poll; feed completeness is not guaranteed."
     },
     {
@@ -496,13 +524,30 @@
       "provider": "Yahoo Finance RSS",
       "endpoint": "https://feeds.finance.yahoo.com/rss/2.0/headline",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "publisher_published_at", "ingested_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "publisher_published_at",
+        "ingested_at"
+      ],
       "revision_policy": "Immutable revisions keyed by feed identity and normalized-content digest; raw XML is not retained.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29; exact endpoint and publisher snippet terms remain unverified.",
-      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "consumer_paths": [
+        "/api/companies/:id/mentions",
+        "/api/tape",
+        "Desk mention cards and drawer"
+      ],
       "coverage_limit": "Configured-symbol feed results are bounded and may omit publisher articles."
     },
     {
@@ -510,13 +555,30 @@
       "provider": "GDELT DOC 2.0",
       "endpoint": "https://api.gdeltproject.org/api/v2/doc/doc",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "provider_observed_at", "ingested_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "provider_observed_at",
+        "ingested_at"
+      ],
       "revision_policy": "Article URL/domain identity is namespaced by company and collector; normalized items are digested, raw response bodies are not retained.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29; GDELT dataset access does not grant linked-publisher-content or Jev-processing rights.",
-      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "consumer_paths": [
+        "/api/companies/:id/mentions",
+        "/api/tape",
+        "Desk mention cards and drawer"
+      ],
       "coverage_limit": "Bounded query and 250-row cap; rate limiting and saturation remain visible as partial."
     },
     {
@@ -524,13 +586,31 @@
       "provider": "SEC EDGAR submissions and filing documents",
       "endpoint": "https://data.sec.gov/submissions/CIK##########.json",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "filed_at", "acceptance_time", "ingested_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "filed_at",
+        "acceptance_time",
+        "ingested_at"
+      ],
       "revision_policy": "CIK/accession/form identity; amendments are separate observations; normalized excerpts and parsed-content digest are kept, not raw bytes.",
       "rights": "retained",
       "rights_evidence": "SEC public-filing reuse is documented subject to exceptions; forwarding text to Jev is separately blocked pending TypeSafe account-use evidence. A contact-bearing SEC_USER_AGENT is not configured.",
-      "consumer_paths": ["/api/companies/:id/mentions", "/api/tape", "Desk mention cards and drawer"],
+      "consumer_paths": [
+        "/api/companies/:id/mentions",
+        "/api/tape",
+        "Desk mention cards and drawer"
+      ],
       "coverage_limit": "CIK-mapped filings only; rate and User-Agent gate applies."
     },
     {
@@ -538,13 +618,30 @@
       "provider": "Yahoo Finance chart quote endpoint",
       "endpoint": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d",
       "freshness_budget_seconds": 900,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "regularMarketTime"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "regularMarketTime"
+      ],
       "revision_policy": "Latest accepted quote is keyed by provider symbol; source observation time stays separate from retrieval time.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display rights remain unverified.",
-      "consumer_paths": ["quote API", "watchlist", "selected-company header", "ticker tape"],
+      "consumer_paths": [
+        "quote API",
+        "watchlist",
+        "selected-company header",
+        "ticker tape"
+      ],
       "coverage_limit": "Per-symbol snapshot; source time can be delayed or unknown; request pacing is local-process only."
     },
     {
@@ -552,13 +649,28 @@
       "provider": "Yahoo Finance chart-history endpoint",
       "endpoint": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "provider_point_timestamp"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "provider_point_timestamp"
+      ],
       "revision_policy": "Ticker and provider timestamp identify points; points remain source-timed and are never carried into synthetic buckets.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display/retention rights remain unverified.",
-      "consumer_paths": ["price-series API", "selected-company sentiment × price chart"],
+      "consumer_paths": [
+        "price-series API",
+        "selected-company sentiment \u00d7 price chart"
+      ],
       "coverage_limit": "Only provider points inside the requested window are drawn; cache/network/local-store provenance stays visible."
     },
     {
@@ -566,13 +678,29 @@
       "provider": "Finnhub company news, earnings, and calendar",
       "endpoint": "https://finnhub.io/api/v1/company-news",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "provider_event_time", "ingested_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "provider_event_time",
+        "ingested_at"
+      ],
       "revision_policy": "Provider symbol, article URL, and event period; normalized digest and receipt are retained, not raw response.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29; plan, business use, derived-data sharing, retention, and deletion permissions are not independently evidenced.",
-      "consumer_paths": ["/api/companies/:id/mentions", "Desk mention cards and drawer"],
+      "consumer_paths": [
+        "/api/companies/:id/mentions",
+        "Desk mention cards and drawer"
+      ],
       "coverage_limit": "Optional credentialed collector is disabled by default."
     },
     {
@@ -580,13 +708,29 @@
       "provider": "Reddit search",
       "endpoint": "https://www.reddit.com/search.json",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "created_utc", "ingested_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "created_utc",
+        "ingested_at"
+      ],
       "revision_policy": "Provider post fullname is the identity; after cursor progress uses a query fingerprint; raw response is not retained.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29; commercial/use-case, inference, retention, removal, and endpoint-specific pagination terms remain unresolved.",
-      "consumer_paths": ["/api/companies/:id/mentions", "Desk mention cards and drawer"],
+      "consumer_paths": [
+        "/api/companies/:id/mentions",
+        "Desk mention cards and drawer"
+      ],
       "coverage_limit": "Optional credentialed collector is disabled by default; one page per company/cycle."
     },
     {
@@ -594,13 +738,29 @@
       "provider": "X API recent search",
       "endpoint": "https://api.x.com/2/tweets/search/recent",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "created_at", "ingested_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "created_at",
+        "ingested_at"
+      ],
       "revision_policy": "Provider Post ID is the identity; next_token/since_id are validated and committed only after accepted ingestion.",
       "rights": "restricted",
       "rights_evidence": "User attested on 2026-09-29; project plan, display, retention, deletion, and redistribution permissions remain unverified.",
-      "consumer_paths": ["/api/companies/:id/mentions", "Desk mention cards and drawer"],
+      "consumer_paths": [
+        "/api/companies/:id/mentions",
+        "Desk mention cards and drawer"
+      ],
       "coverage_limit": "Recent search covers at most seven days and requires a credentialed optional collector."
     },
     {
@@ -608,13 +768,30 @@
       "provider": "TypeSafe System One / Jev",
       "endpoint": "POST https://api.typesafe.ai/v1/systemone",
       "freshness_budget_seconds": 604800,
-      "delivery_states": ["network", "cache"],
-      "freshness_states": ["current", "delayed", "stale", "unknown"],
-      "timing_fields": ["observation", "retrieved", "request_started_at", "responded_at"],
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "delayed",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "request_started_at",
+        "responded_at"
+      ],
       "revision_policy": "One judgment per immutable source observation; exact model version, rubric digest, usage, and response digest are stored.",
       "rights": "restricted",
       "rights_evidence": "User attested source rights, but TypeSafe account authority, applicable terms, input rights, telemetry, retention, billing/refill, and approved spend ceiling remain unverified.",
-      "consumer_paths": ["Jev per-item sentiment/event judgment", "score aggregates", "Desk mention detail drawer"],
+      "consumer_paths": [
+        "Jev per-item sentiment/event judgment",
+        "score aggregates",
+        "Desk mention detail drawer"
+      ],
       "coverage_limit": "Dispatch defaults off and requires account approval, source intersection, key, and bounded daily budgets."
     }
   ],
@@ -623,7 +800,14 @@
       "id": "fixture_suite",
       "kind": "fixture",
       "required": true,
-      "command": ["npm", "test", "--", "--reporter=dot", "--maxWorkers=1", "--testTimeout=20000"],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "--maxWorkers=1",
+        "--testTimeout=20000"
+      ],
       "timeout_seconds": 600,
       "covers": "Offline parser, database, API, and scoring-contract fixtures. Any fictional inputs exist only inside isolated test fixtures, never the application database."
     },
@@ -631,7 +815,19 @@
       "id": "failure_recovery_regressions",
       "kind": "failure",
       "required": true,
-      "command": ["npm", "test", "--", "--reporter=dot", "tests/db.test.ts", "tests/app-unscored-mentions.test.ts", "tests/retry-workflow.test.ts", "tests/provider-pollers.test.ts", "tests/provider-cooldown.test.ts", "--maxWorkers=1", "--testTimeout=20000"],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "tests/db.test.ts",
+        "tests/app-unscored-mentions.test.ts",
+        "tests/retry-workflow.test.ts",
+        "tests/provider-pollers.test.ts",
+        "tests/provider-cooldown.test.ts",
+        "--maxWorkers=1",
+        "--testTimeout=20000"
+      ],
       "timeout_seconds": 600,
       "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers."
     },
@@ -639,7 +835,16 @@
       "id": "pipeline_replay_regressions",
       "kind": "replay",
       "required": true,
-      "command": ["npm", "test", "--", "--reporter=dot", "tests/pipeline.test.ts", "tests/db.test.ts", "--maxWorkers=1", "--testTimeout=20000"],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "tests/pipeline.test.ts",
+        "tests/db.test.ts",
+        "--maxWorkers=1",
+        "--testTimeout=20000"
+      ],
       "timeout_seconds": 600,
       "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures."
     },
@@ -647,7 +852,11 @@
       "id": "offline_source_request_gates",
       "kind": "failure",
       "required": true,
-      "command": ["npm", "run", "verify:offline-startup"],
+      "command": [
+        "npm",
+        "run",
+        "verify:offline-startup"
+      ],
       "timeout_seconds": 900,
       "covers": "Production build, saved-data-only startup, source-specific allowlists, and Jev account/source request gates; non-loopback requests are intercepted before network."
     },
@@ -655,7 +864,12 @@
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
       "required": true,
-      "command": ["env", "SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart", "DOCKER_CONTEXT=colima-sentiment-desk-verify", "./scripts/verify-live-compose.sh"],
+      "command": [
+        "env",
+        "SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart",
+        "DOCKER_CONTEXT=colima-sentiment-desk-verify",
+        "./scripts/verify-live-compose.sh"
+      ],
       "timeout_seconds": 1200,
       "covers": "Bounded real keyless RSS/GDELT/Yahoo quote/chart read and consumer API verification in a temporary Compose database; confirms a real pending item survives container recreation, then removes its volume/network. Jev and credentialed optional providers are disabled."
     }

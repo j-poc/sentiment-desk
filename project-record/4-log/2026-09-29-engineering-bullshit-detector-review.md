@@ -1,5 +1,72 @@
 # Whole-build engineering bullshit detector review — 2026-09-29
 
+## Latest read-only re-review — 2026-09-29
+
+The latest reviewer pass keeps the full-build verdict at **FAIL for
+operational readiness**. It inspected the current code, database/API behavior,
+and the 72-hour AAPL series, but did not run tests or control the browser. The
+primary agent separately ran the browser check and current local suite.
+
+The pass found that the gauge and chart used different formulas without
+disclosing the difference. The gauge is a three-hour source-record weighted
+mean with a 24-hour fallback; the chart is a sequential score-time index with
+decay. It also found no reduced-motion rule, and that the README still called
+the value sentiment in published coverage. This checkpoint addresses those
+fixable UI defects: API snapshots expose the gauge window and contributing
+record count, the UI labels the weighted mean and repeated-coverage caveat,
+the app honors `prefers-reduced-motion`, and README wording now describes a
+Jev-derived source-record index. A regression checks the three-hour and
+24-hour fallback metadata.
+
+The reviewer also found a deeper interpretation limit that remains open:
+the 72-hour AAPL API returned 245 scored records across nine buckets. One
+bucket contained 50 mixed-impact records (−100 to +97) and rendered −55.75;
+another contained 26 (−100 to +100) and rendered +0.07. The current chart says
+repeats are included, but does not group underlying stories. This supports
+event/story-level breadth as the strongest product candidate for comparative
+testing; it does not justify changing the score grain without real task and
+label evidence.
+
+The reviewer confirmed the API gate hides Radar and returns 404 for both Radar
+routes while Desk readiness remains false. Its earlier statement that the
+Adobe preview showed saved Yahoo price lines is superseded: after legacy price
+quarantine, the current ADBE preview correctly reports no verified Yahoo
+points. The primary browser selected ADBE and confirmed the heading, gauge,
+chart, and feed changed; the price comparison remains an empty, provenance
+honest state. The preview used an isolated database with external requests
+and Jev disabled and was not a live-quality test.
+
+The new 223-test suite, typecheck, production build, final code-bound ETL gate,
+and GitHub push are recorded as they complete. The previous ETL evidence and
+previous reviewer sentence “no remaining fixable defect” predate this pass and
+are superseded for the current working tree. The 10/10 claim remains
+unsupported: no task-based investor study, authorized live-source-to-Jev
+result, blinded real-source labels, or passing Jev evaluation exists.
+
+## Implementation follow-up to the whole-build re-review — 2026-09-29
+
+The later read-only whole-build pass identified three remaining fixable gaps:
+source observations had no foreign-key link to the delivery receipt, individual
+impact values were easy to read as the sentiment class, and the ETL contract
+still described price lines in the current preview. The implementation now
+records an immutable receipt before each live observation is ingested,
+validates the receipt's collector/company/adapter, and rejects pipeline
+observations without a receipt ID. RSS, X, GDELT, Finnhub news, Reddit, and SEC
+filing-document observations use that path. Historical rows remain
+unlinked and are explicitly labeled as such in the detail drawer. SEC filing
+documents receive their own document-delivery receipt in addition to the
+submissions-list receipt.
+
+The item detail and chart accessibility text now distinguish the most-likely
+sentiment class from directional impact (`P(positive) - P(negative)`) and say
+that the chart updates on scored events and decays between them. Mention cards
+label signed scores as impact. The stale current-preview price-line claim was
+superseded in the machine-readable ETL record; the active goal wording now
+distinguishes its lifecycle status from blocked external acceptance gates.
+Focused tests and typecheck passed before the final documentation and broader
+gate refresh; the authoritative final suite and five-check ETL result will be
+recorded after the working tree is frozen.
+
 ## Verdict
 
 **FAIL.** The requested fully operational Sentiment Desk and 10/10 readiness
@@ -29,7 +96,7 @@ ran the declared test/data-pipeline checks afterward.
 | Finish the Desk and establish operational readiness | **MISSING** | Source operation can be exercised without Jev, but no authorized TypeSafe account/spend ceiling or successful real-source Jev evaluation is available. The core live source → Jev → persisted judgment path is therefore unverified. |
 | Real data only; no demo or synthetic product data | **PARTIAL** | Current saved-data research reads exclude `demo_simulation` and `legacy_unknown` rows (`server/db.ts`). The saved-data preview uses persisted source-backed rows. Historical `legacy_unknown` records still have unverified source and model-use lineage, so the broader “all data ever used” claim cannot be made. Test/evaluation fixtures are not presented as product observations. |
 | Jev is the per-item sentiment classifier | **PARTIAL** | `server/pipeline.ts` calls Jev for source observations and applies deterministic post-processing, but Jev remained disabled during the real-source smoke and no passing blinded real-source evaluation exists. |
-| Company selection, chart, and older-feed recovery work | **MET for verified local paths** | Browser interaction on `127.0.0.1:8797` selected Adobe and rendered saved sentiment and Yahoo price lines; Apple Unscored loaded 100 records and “Load older” increased the list to 200. The current API returned HTTP 200 JSON with two items and a next cursor for `/api/companies/apple/mentions-page?filter=failed&limit=2`. These checks prove the saved-data UI/API path, not Jev quality. |
+| Company selection, chart, and older-feed recovery work | **MET for verified local paths** | Current in-app-browser interaction selected Adobe and changed the gauge, chart, and feed. The revised database correctly supplies no verified Yahoo price point for ADBE, so the default view stays index-only. Earlier pagination evidence remains valid for saved failed/unscored rows. These checks prove saved-data interaction, not Jev quality. |
 | Defer further Opportunity Radar work until Desk readiness | **MET for current scope** | Radar code exists from earlier work; current records say the Desk gate has not passed and further Radar work/promotion is parked. No Radar expansion was part of this checkpoint. |
 | Checkpoint the work to GitHub | **PENDING AT REVIEW; closed by follow-up checkpoint** | The reviewer found the pagination, tests, and records uncommitted. The resulting commit and remote SHA are recorded below after push. |
 | Keep project records accurate | **MET after reconciliation** | This trace replaces the prior “review not run” statement; the completion plan now labels old phase checkboxes as historical; the source-approval record points to the actual fallback verdict and later verification. |
@@ -115,11 +182,12 @@ endpoint agreement or TypeSafe account-owner authorization.
 
 ## Goal and checkpoint
 
-The existing native goal already has status **blocked** and its objective
-already requires real-source Jev evaluation, operational acceptance evidence,
-and GitHub checkpoints. No status change is justified: mark it complete only
-after the external evidence above closes, and do not begin further Opportunity
-Radar work before then.
+The native goal's status at this historical checkpoint was **active**, confirmed
+by a live goal-service readback then. A later live readback on 2026-09-29 reports
+the goal **blocked** on the same external authorization, real-label, SEC-contact,
+usage-reconciliation, and coverage inputs. Continue local implementation where
+possible; do not begin further Opportunity Radar work before the Sentiment Desk
+gate passes.
 
 The local implementation, regression tests, and project records are being
 checkpointed to `origin/codex/real-data-rebuild` after this review. A checkpoint

@@ -176,14 +176,14 @@ export function applyPostRules(
 }
 
 /* ------------------------------------------------------------------ */
-/* Outcome verification: measure the market's actual reaction against  */
-/* every judgment. We compute forward returns from stored price points */
-/* and report hit rates honestly (reaction is evidence, not causation).*/
+/* Exploratory reaction comparison. Only source prices captured close to    */
+/* their observation time can support a post-score reaction calculation.  */
 /* ------------------------------------------------------------------ */
 
 export interface PriceLike {
   t: number;
   price: number;
+  retrievedAt: number;
 }
 
 const OUTCOME_PRICE_MAX_GAP_MS = 5 * 60_000;
@@ -204,10 +204,10 @@ export function priceAt(points: PriceLike[], t: number): number | null {
 }
 
 /**
- * Forward return in % from a price point in the first 90 seconds after `t` to a
- * timely observation near `t + windowMs`, once that window has matured as of
- * `asOf`. A pre-publication price or prior close must not be carried forward
- * and counted as a measured reaction.
+ * Forward return in % from timely source prices after signal availability at
+ * `t`. Both bars must have been retrieved within the allowed market-data lag;
+ * a later historical backfill cannot masquerade as an observation captured
+ * near the event.
  */
 export function forwardReturn(points: PriceLike[], t: number, windowMs: number, asOf = Date.now()): number | null {
   if (!Number.isFinite(t) || !Number.isFinite(windowMs) || windowMs <= 0 || !Number.isFinite(asOf)) return null;
@@ -219,6 +219,11 @@ export function forwardReturn(points: PriceLike[], t: number, windowMs: number, 
   if (p0 == null || p1 == null || !Number.isFinite(p0.price) || !Number.isFinite(p1.price) || p0.price <= 0) return null;
   if (p0.t < t) return null;
   if (baselineAt - p0.t > OUTCOME_PRICE_MAX_GAP_MS || outcomeAt - p1.t > OUTCOME_PRICE_MAX_GAP_MS) return null;
+  if (!Number.isFinite(p0.retrievedAt) || p0.retrievedAt < p0.t
+    || p0.retrievedAt - p0.t > OUTCOME_PRICE_MAX_GAP_MS
+    || !Number.isFinite(p1.retrievedAt) || p1.retrievedAt < p1.t
+    || p1.retrievedAt - p1.t > OUTCOME_PRICE_MAX_GAP_MS
+    || p0.retrievedAt > asOf || p1.retrievedAt > asOf) return null;
   return Math.round(((p1.price - p0.price) / p0.price) * 1_000_000) / 10_000;
 }
 
@@ -410,9 +415,10 @@ export function shouldAlert(p: AlertCheck): boolean {
 }
 
 export interface WeightedMention {
-  publishedAt: number;
+  availableAt: number;
   impact: number;
   weight: number;
+  scoredAt?: number;
 }
 
 /** Weighted mean impact in [-100, 100]; null when there is nothing to average. */
@@ -431,58 +437,96 @@ export interface SeriesBucket {
   t: number;
   v: number | null;
   n: number;
+  itemImpactMin: number | null;
+  itemImpactMax: number | null;
+  lastScoredAt: number | null;
 }
 
+/** Keep the score-time index comparable when users change the visible range. */
+export const SERIES_DECAY_HALF_LIFE_MS = 8 * 60 * 60_000;
+export const SERIES_BUCKET_MS = 15 * 60_000;
+
 /**
- * Smoothed sentiment index over a window: a leaky integrator over events.
- * Each mention pulls the index toward its impact with strength proportional
- * to its weight; between events the index decays toward neutral with a
- * half-life proportional to the window. This is how professional event-driven
- * sentiment indices behave: they move on news and fade without it, and the
- * curve is continuous, so the chart reads like an index instead of a
- * seismograph of isolated buckets.
+ * Reconstructed score-availability index over a window. A judgment enters the
+ * series only when its completed score became available; between judgments the
+ * displayed index decays toward neutral with one fixed half-life, independent
+ * of the selected window. Prior events seed the visible range so zooming does
+ * not reset the state. This is a model-derived summary, not an observed market
+ * measure or an independently validated crowd-sentiment series.
  */
 export function smoothedSeries(
   mentions: WeightedMention[],
   windowMs: number,
   bucketMs: number,
   nowMs: number,
-  halfLifeMs = windowMs / 3,
+  halfLifeMs = SERIES_DECAY_HALF_LIFE_MS,
 ): SeriesBucket[] {
   const start = nowMs - windowMs;
-  const decay = Math.exp(-bucketMs / Math.max(bucketMs, halfLifeMs));
+  const safeBucketMs = Math.max(1, bucketMs);
+  const safeHalfLifeMs = Math.max(1, halfLifeMs);
   const sorted = mentions
-    .filter((m) => m.publishedAt >= start && m.publishedAt <= nowMs)
-    .sort((a, b) => a.publishedAt - b.publishedAt);
+    .filter((m) => m.availableAt <= nowMs)
+    .sort((a, b) => a.availableAt - b.availableAt);
 
-  const first = Math.floor(start / bucketMs) * bucketMs;
-  const last = Math.floor(nowMs / bucketMs) * bucketMs;
+  const first = Math.floor(start / safeBucketMs) * safeBucketMs;
+  const last = Math.ceil(nowMs / safeBucketMs) * safeBucketMs;
   const out: SeriesBucket[] = [];
   let v = 0;
-  let started = false;
+  let stateAt: number | null = null;
   let mi = 0;
 
-  for (let t = first; t <= last; t += bucketMs) {
-    const bucketEnd = t + bucketMs;
-    if (started) v *= decay;
-    let n = 0;
-    while (mi < sorted.length && (sorted[mi]?.publishedAt ?? Infinity) < bucketEnd) {
-      const m = sorted[mi++]!;
-      started = true;
-      const w = Math.min(1, Math.max(0.05, m.weight));
-      const alpha = Math.min(1, 0.2 + 0.8 * w) * 0.8;
-      v = v + alpha * (m.impact - v);
-      n += 1;
+  const applyEvent = (event: WeightedMention): void => {
+    if (stateAt != null && event.availableAt > stateAt) {
+      v *= Math.exp(-((event.availableAt - stateAt) * Math.LN2) / safeHalfLifeMs);
     }
-    if (started) out.push({ t, v: round2(v), n });
-    else out.push({ t, v: null, n: 0 });
+    const w = Math.min(1, Math.max(0.05, event.weight));
+    const alpha = Math.min(1, 0.2 + 0.8 * w) * 0.8;
+    v = v + alpha * (event.impact - v);
+    stateAt = event.availableAt;
+  };
+
+  // Reconstruct the exact state before the displayed window instead of
+  // treating every zoom level as a fresh index that starts at neutral.
+  while (mi < sorted.length && (sorted[mi]?.availableAt ?? Infinity) < first) {
+    applyEvent(sorted[mi++]!);
+  }
+
+  for (let t = first; t < last; t += safeBucketMs) {
+    const sampleAt = Math.min(t + safeBucketMs, nowMs);
+    let n = 0;
+    let itemImpactMin: number | null = null;
+    let itemImpactMax: number | null = null;
+    let lastScoredAt: number | null = null;
+    while (mi < sorted.length && (sorted[mi]?.availableAt ?? Infinity) <= sampleAt) {
+      const m = sorted[mi++]!;
+      applyEvent(m);
+      n += 1;
+      itemImpactMin = itemImpactMin == null ? m.impact : Math.min(itemImpactMin, m.impact);
+      itemImpactMax = itemImpactMax == null ? m.impact : Math.max(itemImpactMax, m.impact);
+      if (Number.isFinite(m.scoredAt)) {
+        lastScoredAt = lastScoredAt == null ? m.scoredAt! : Math.max(lastScoredAt, m.scoredAt!);
+      }
+    }
+    if (stateAt != null && sampleAt > stateAt) {
+      v *= Math.exp(-((sampleAt - stateAt) * Math.LN2) / safeHalfLifeMs);
+      stateAt = sampleAt;
+    }
+    const hasState = stateAt != null;
+    out.push({
+      t: sampleAt,
+      v: hasState ? round2(v) : null,
+      n,
+      itemImpactMin,
+      itemImpactMax,
+      lastScoredAt,
+    });
   }
   return out;
 }
 
-/** Shared bucket rule so the sentiment series and the price series align point-for-point. */
-export function bucketMsFor(hours: number): number {
-  return hours <= 6 ? 5 * 60_000 : hours <= 48 ? 15 * 60_000 : 60 * 60_000;
+/** A single UTC-aligned bucket grid keeps shared timestamps identical at every zoom. */
+export function bucketMsFor(_hours: number): number {
+  return SERIES_BUCKET_MS;
 }
 
 function noul(answers: Record<string, unknown>, key: string): number {

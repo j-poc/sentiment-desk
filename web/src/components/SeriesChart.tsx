@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   BaselineSeries,
   ColorType,
   createChart,
   CrosshairMode,
   LineStyle,
+  LineType,
   LineSeries,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { PricePoint, SeriesPoint } from "../lib/api.js";
+import { formatChartTimestamp } from "../lib/chart-time.js";
+import { sentimentSeriesState } from "../lib/series-chart-state.js";
+import { SavedPriceHistoryControl } from "./SavedPriceHistoryControl.js";
 
 function toSec(ms: number): UTCTimestamp {
   const seconds = Math.floor(ms / 1000);
@@ -33,6 +37,8 @@ export function SeriesChart({
   currency,
   latestPriceAt,
   onViewHistory,
+  onSelectBucket,
+  bucketEvidence,
   priceLoading = false,
   priceError = false,
   seriesError = false,
@@ -46,6 +52,8 @@ export function SeriesChart({
   currency: string | null;
   latestPriceAt: number | null;
   onViewHistory?: () => void;
+  onSelectBucket?: (bucketAt: number, includeFromBoundary: boolean, returnFocus?: HTMLButtonElement) => void;
+  bucketEvidence?: ReactNode;
   priceLoading?: boolean;
   priceError?: boolean;
   seriesError?: boolean;
@@ -69,6 +77,10 @@ export function SeriesChart({
   );
   const sentimentByTimeRef = useRef(sentimentByTime);
   sentimentByTimeRef.current = sentimentByTime;
+  const firstBucketAtRef = useRef<number | null>(drawableSentiment[0]?.t ?? null);
+  firstBucketAtRef.current = drawableSentiment[0]?.t ?? null;
+  const onSelectBucketRef = useRef(onSelectBucket);
+  onSelectBucketRef.current = onSelectBucket;
   const currencyRef = useRef(currency);
   currencyRef.current = currency;
   const drawablePrice = useMemo(
@@ -77,15 +89,24 @@ export function SeriesChart({
       : [],
     [comparison, price],
   );
-  const hasSentiment = drawableSentiment.some((point) => point.v != null && point.n > 0);
+  const sentimentState = sentimentSeriesState(drawableSentiment);
+  const { hasSentiment, hasModeledHistory } = sentimentState;
   const hasPrice = drawablePrice.length >= 2;
   const insufficientPrice = comparison && drawablePrice.length === 1;
-  const hasChartData = hasSentiment || drawablePrice.length > 0;
+  const hasChartData = sentimentState.hasChartData || drawablePrice.length > 0;
   const waitingForPrice = comparison && priceLoading && drawablePrice.length === 0;
-  const lastScoredAt = [...drawableSentiment].reverse().find((point) => point.v != null && point.n > 0)?.t ?? null;
+  const lastScoredAt = drawableSentiment.reduce<number | null>(
+    (latest, point) => point.n > 0 && point.lastScoredAt != null
+      ? Math.max(latest ?? point.lastScoredAt, point.lastScoredAt)
+      : latest,
+    null,
+  );
   const hasModeledTail = lastScoredAt != null
     && drawableSentiment.some((point) => point.t > lastScoredAt && point.v != null && point.n === 0);
   const scorePointCount = drawableSentiment.filter((point) => point.v != null && point.n > 0).length;
+  const scoredBuckets = drawableSentiment.filter((point) => point.v != null && point.n > 0);
+  const lastPoint = drawableSentiment.at(-1) ?? null;
+  const latestModeledPoint = lastPoint?.v != null && lastPoint.n === 0 ? lastPoint : null;
 
   // A new chart per mode gives comparison its own price pane while keeping the
   // sentiment-only view at full height. The two panes share one time scale.
@@ -131,6 +152,7 @@ export function SeriesChart({
       bottomLineColor: "#f87171",
       lineWidth: 2,
       lineStyle: LineStyle.Solid,
+      lineType: LineType.WithSteps,
       baseLineVisible: true,
       baseLineColor: "rgba(255,255,255,0.35)",
       baseLineStyle: LineStyle.Dashed,
@@ -185,9 +207,12 @@ export function SeriesChart({
       const parts: string[] = [];
       if (score?.v != null) {
         const value = `${score.v > 0 ? "+" : ""}${score.v.toFixed(1)}`;
+        const impactRange = score.itemImpactMin != null && score.itemImpactMax != null
+          ? ` · item impacts ${score.itemImpactMin.toFixed(0)} to ${score.itemImpactMax.toFixed(0)}`
+          : "";
         parts.push(score.n > 0
-          ? `Jev index ${value} · ${score.n} scored ${score.n === 1 ? "item" : "items"}`
-          : `Modeled decay ${value} · no new scored items`);
+          ? `Jev impact index ${value} · ${score.n} scored source ${score.n === 1 ? "record" : "records"}${impactRange}`
+          : `Modeled decay ${value} · no new scored source records`);
       }
       const priceValue = priceSeries ? seriesValue(param.seriesData.get(priceSeries)) : null;
       const activeCurrency = currencyRef.current;
@@ -195,6 +220,15 @@ export function SeriesChart({
       tip.textContent = parts.join("  ·  ");
       tip.style.opacity = parts.length > 0 ? "1" : "0";
     });
+
+    const selectScoredBucket = (param: { point?: { x: number; y: number } | null; time?: unknown }) => {
+      if (param.point == null || typeof param.time !== "number") return;
+      const point = sentimentByTimeRef.current.get(param.time);
+      if (point?.n) {
+        onSelectBucketRef.current?.(point.t, point.t === firstBucketAtRef.current);
+      }
+    };
+    chart.subscribeClick(selectScoredBucket);
 
     chartRef.current = chart;
     indexRef.current = index;
@@ -205,6 +239,7 @@ export function SeriesChart({
     panes[1]?.setStretchFactor(1);
 
     return () => {
+      chart.unsubscribeClick(selectScoredBucket);
       chart.remove();
       chartRef.current = null;
       indexRef.current = null;
@@ -254,15 +289,15 @@ export function SeriesChart({
   const noDataMessage = requestError
     ? "Chart data could not be loaded. Check the source status above."
     : mode === "sentiment"
-      ? "No Jev scores in this window."
+      ? "No Jev scores or modeled history in this window."
       : insufficientPrice
         ? "One saved price observation; at least two are needed for a line."
         : "No saved Yahoo prices or Jev scores in this window.";
   const noScoreMessage = seriesError
     ? "Sentiment history could not be loaded. Check the source status above."
-    : "No Jev-scored items in this window";
-  const hasOlderPriceHistory = latestPriceAt != null
-    && latestPriceAt < Date.now() - hours * 60 * 60 * 1000;
+    : hasModeledHistory
+      ? "No new Jev scores in this window · dashed line shows modeled decay from earlier scores"
+      : "No Jev-scored items in this window";
   const priceStatus = priceError
     ? drawablePrice.length > 0 ? "Refresh failed · showing saved prices" : "Price history unavailable"
     : priceLoading
@@ -278,20 +313,27 @@ export function SeriesChart({
       <div
         ref={containerRef}
         role="img"
-        aria-label={`Jev sentiment index on a fixed scale from minus 100 to plus 100. Solid colored marks show ${scorePointCount} buckets with newly scored items; dashed segments show modeled decay between scored buckets. Last scored ${lastScoredAt == null ? "time unknown" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
+        aria-label={`Jev impact index on a fixed scale from minus 100 to plus 100. Individual impact is 100 times the difference between Jev's positive and negative probabilities, in impact points. The series updates from those scores when judgments arrive and decays toward zero with a fixed eight-hour half-life between them. The decay rule is the same across chart windows. It is a model-derived index, not a stock return or investor poll. Reconstructed by score-availability time. Solid step marks show ${scorePointCount} buckets when Jev judgments became available; hovering a bucket reveals its source-record count and the range of individual Jev impacts. Click a scored bucket or use View source records in the keyboard table to inspect saved evidence. Repeated coverage may count more than once. Dashed segments show modeled decay between scored buckets. This is not a validated measure of investor opinion. Latest Jev judgment completed ${lastScoredAt == null ? "at an unknown time" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
         className={comparison ? "chart-canvas chart-canvas-comparison" : "chart-canvas chart-canvas-sentiment"}
       />
       {comparison && (
         <>
           <div className="pointer-events-none absolute left-[86px] top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
-            JEV INDEX · −100 TO +100
+            JEV IMPACT INDEX · FIXED −100 TO +100
           </div>
           <div className="pointer-events-none absolute left-[86px] top-[calc(66.667%+2px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
             SHARE PRICE{currency ? ` · ${currency}` : " · CURRENCY UNKNOWN"}
           </div>
           {priceStatus && (
-            <div className="pointer-events-none absolute right-[76px] top-[calc(66.667%+36px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10px] text-white/45">
-              {priceStatus}
+            <div className="absolute right-[76px] top-[calc(66.667%+36px)] z-10 flex max-w-[calc(100%-100px)] items-center gap-2 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10px] text-white/60">
+              <span>{priceStatus}</span>
+              <SavedPriceHistoryControl
+                comparison={comparison}
+                savedPriceCount={drawablePrice.length}
+                latestPriceAt={latestPriceAt}
+                hours={hours}
+                onViewHistory={onViewHistory}
+              />
             </div>
           )}
         </>
@@ -305,31 +347,82 @@ export function SeriesChart({
           loading chart data…
         </div>
       )}
-      {!loading && !waitingForPrice && comparison && !hasSentiment && drawablePrice.length > 0 && (
+      {!loading && !waitingForPrice && comparison && !hasSentiment && hasModeledHistory && (
         <div role="status" className="pointer-events-none absolute left-[86px] top-9 z-10 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/55">
           {noScoreMessage}
+        </div>
+      )}
+      {!loading && !waitingForPrice && !comparison && !hasSentiment && hasModeledHistory && (
+        <div role="status" className="pointer-events-none absolute left-[86px] top-2 z-10 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/55">
+          No new Jev scores in this window · dashed line shows modeled decay from earlier scores
         </div>
       )}
       {!loading && !waitingForPrice && !hasChartData && (
         <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-[11px] text-white/55">
           <span>{noDataMessage}</span>
-          {!requestError && hours < 168 && hasOlderPriceHistory && onViewHistory && (
-            <button
-              onClick={onViewHistory}
-              className="rounded border border-white/10 px-2 py-1 text-white/70 hover:bg-white/[0.05]"
-            >
-              View 7D saved price history
-            </button>
-          )}
         </div>
       )}
       {comparison && hasModeledTail && !loading && (
         <span className="sr-only">
-          The dashed sentiment segment is modelled decay after the last scored item at {new Date(lastScoredAt ?? 0).toISOString()}.
+          Score-availability timeline · modelled decay follows the last completed Jev judgment at {new Date(lastScoredAt ?? 0).toISOString()}.
         </span>
       )}
       {comparison && scorePointCount > 0 && (
         <span className="sr-only">{scorePointCount} sentiment buckets contain newly scored items.</span>
+      )}
+      {bucketEvidence}
+      {(scoredBuckets.length > 0 || latestModeledPoint) && (
+        <details className="chart-data-disclosure">
+          <summary>
+            Inspect plotted data by keyboard
+            <span>{scoredBuckets.length} scored {scoredBuckets.length === 1 ? "bucket" : "buckets"}</span>
+          </summary>
+          <p className="chart-data-note">
+            Score rows show 15-minute bucket ends, not individual publication times. The index decays between scored buckets.
+            {latestModeledPoint && " The modeled row is the latest saved index point without a new score."}
+          </p>
+          <div className="chart-table-scroll" role="region" aria-label="Plotted score bucket data" tabIndex={0}>
+            <table>
+              <caption>Saved Jev score buckets in the selected chart window</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Time / state</th>
+                  <th scope="col">Index</th>
+                  <th scope="col">Records</th>
+                  <th scope="col">Item impact range</th>
+                  <th scope="col">Saved source rows</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scoredBuckets.map((point) => (
+                  <tr key={`score-${point.t}`}>
+                    <th scope="row">{formatChartTimestamp(point.t)}</th>
+                    <td>{point.v! > 0 ? "+" : ""}{point.v!.toFixed(1)}</td>
+                    <td>{point.n}</td>
+                    <td>{point.itemImpactMin == null || point.itemImpactMax == null
+                      ? "Not available"
+                      : `${point.itemImpactMin > 0 ? "+" : ""}${point.itemImpactMin.toFixed(0)} to ${point.itemImpactMax > 0 ? "+" : ""}${point.itemImpactMax.toFixed(0)}`}</td>
+                    <td><button type="button" onClick={(event) => onSelectBucket?.(
+                      point.t,
+                      point.t === firstBucketAtRef.current,
+                      event.currentTarget,
+                    )}>
+                      View {point.n} source {point.n === 1 ? "record" : "records"}
+                    </button></td>
+                  </tr>
+                ))}
+                {latestModeledPoint && (
+                  <tr key={`modeled-${latestModeledPoint.t}`}>
+                    <th scope="row">{formatChartTimestamp(latestModeledPoint.t)} · modeled</th>
+                    <td>{latestModeledPoint.v! > 0 ? "+" : ""}{latestModeledPoint.v!.toFixed(1)}</td>
+                    <td>0 new</td>
+                    <td>—</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
     </div>
   );

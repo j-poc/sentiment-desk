@@ -67,11 +67,77 @@ function setup(
     tier: "wire", title: "Acme announces a product launch", snippet: "A new product is available.",
     publishedAt: Date.now() - 5_000, retrievedAt: Date.now(), collector: "google_news_rss",
     sourceItemId: "reuters-acme-product", publisherName: "Reuters", publisherDomain: "reuters.com",
+    adapterVersion: "google_news_rss/1",
   };
+  source.deliveryId = db.recordDelivery({
+    collector: "google_news_rss", companyId: company.id, requestKey: "test:source-receipt",
+    startedAt: source.retrievedAt - 1_000, completedAt: source.retrievedAt + 1_000,
+    result: "success", parsedItemCount: 1, responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
+  });
   return { db, pipeline, source, health };
 }
 
 describe("Jev pipeline recovery", () => {
+  it("passes publisher identity separately from a Google News collection redirect", async () => {
+    const judgedStates: JevState[] = [];
+    const { db, pipeline, source } = setup(async (state) => {
+      judgedStates.push(state);
+      return { answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
+    });
+    source.sourceUrl = "https://news.google.com/rss/articles/example";
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+
+      expect(judgedStates.at(-1)?.mention.source).toEqual({
+        collector: "google_news_rss",
+        collectionUrl: "https://news.google.com/rss/articles/example",
+        tier: "wire",
+        publisherName: "Reuters",
+        publisherDomain: "reuters.com",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("requires a matching persisted source receipt before queuing a live observation", async () => {
+    const { db, pipeline, source } = setup(null);
+    try {
+      const { deliveryId: _deliveryId, ...unlinked } = source;
+      expect(() => pipeline.ingest(unlinked)).toThrow(/delivery receipt is required/i);
+      expect(pipeline.ingest(source)).toBe(true);
+      const stored = db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(stored.source.deliveryId).toBe(source.deliveryId);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reports the source-record window used by the company gauge, including its 24-hour fallback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-29T12:00:00.000Z"));
+    const { db, pipeline, source } = setup(async () => ({
+      answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }));
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      expect(pipeline.snapshot(company.id)).toMatchObject({
+        indexWindow: "3h",
+        indexRecordCount: 1,
+      });
+
+      vi.setSystemTime(Date.now() + 4 * 60 * 60 * 1000);
+      expect(pipeline.snapshot(company.id)).toMatchObject({
+        indexWindow: "24h",
+        indexRecordCount: 1,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps real observations pending without treating disabled Jev as a failure", async () => {
     const { db, pipeline, source, health } = setup(null);
     try {

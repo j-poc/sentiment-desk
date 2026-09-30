@@ -112,7 +112,13 @@ function setup(
     sourceItemId: "retry-fixture-item",
     publisherName: "Synthetic fixture",
     publisherDomain: "example.invalid",
+    adapterVersion: "google_news_rss/1",
   };
+  source.deliveryId = db.recordDelivery({
+    collector: "google_news_rss", companyId: company.id, requestKey: "fixture:retry-source",
+    startedAt: source.retrievedAt - 1_000, completedAt: source.retrievedAt + 1_000,
+    result: "success", parsedItemCount: 1, responseDigest: "test-fixture-only", adapterVersion: "google_news_rss/1",
+  });
   const postRetry = (id: string, body: unknown) => app.fetch(new Request(
     `http://127.0.0.1/api/mentions/${id}/retry`,
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },

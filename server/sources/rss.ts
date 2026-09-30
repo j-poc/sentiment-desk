@@ -14,6 +14,8 @@ export interface FeedItem {
   title: string;
   url: string;
   sourceName: string;
+  /** Publisher domain from the RSS source URL, or the direct item URL when it is not an aggregator redirect. */
+  publisherDomain: string | null;
   publishedAt: number | null;
   sourceItemId: string | null;
   snippet: string;
@@ -73,8 +75,17 @@ function parseRssResponse(xml: string): { feed: boolean; result: FeedFetchResult
     if (!title || !link) continue;
 
     const sourceNode = item["source"] as Record<string, unknown> | undefined;
-    const sourceName =
-      cleanText(asText(sourceNode?.["#text"] ?? sourceNode ?? "")) || hostOf(link);
+    const sourceMetadataUrl = asText(sourceNode?.["@_url"]);
+    const sourceMetadataHost = sourceMetadataUrl ? hostOf(sourceMetadataUrl) : "unknown";
+    const sourceMetadataDomain = sourceMetadataHost === "unknown" || sourceMetadataHost === "news.google.com"
+      ? null
+      : sourceMetadataHost;
+    const itemLinkDomain = hostOf(link);
+    const publisherDomain = sourceMetadataDomain
+      ?? (itemLinkDomain !== "news.google.com" && itemLinkDomain !== "unknown" ? itemLinkDomain : null);
+    const sourceName = cleanText(asText(sourceNode?.["#text"] ?? sourceNode ?? ""))
+      || publisherDomain
+      || "Unknown publisher";
 
     let clean = title;
     const suffix = ` - ${sourceName}`;
@@ -88,10 +99,11 @@ function parseRssResponse(xml: string): { feed: boolean; result: FeedFetchResult
       title: clean,
       url: link,
       sourceName,
+      publisherDomain,
       publishedAt: Number.isFinite(publishedAt) ? publishedAt : null,
       sourceItemId,
       snippet: cleanText(asText(item["description"])).slice(0, 600),
-      tier: tierForHost(sourceNode && typeof sourceNode["@_url"] === "string" ? sourceNode["@_url"] : link),
+      tier: tierForHost(sourceMetadataUrl || publisherDomain || link),
     });
   }
   return {
@@ -155,7 +167,9 @@ function cleanText(s: string): string {
 
 function hostOf(url: string): string {
   try {
-    return new URL(url).hostname.replace(/^www\./, "");
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "unknown";
+    return parsed.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "") || "unknown";
   } catch {
     return "unknown";
   }

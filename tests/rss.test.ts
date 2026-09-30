@@ -26,6 +26,7 @@ describe("parseRss", () => {
     const first = items[0];
     expect(first?.title).toBe("NVIDIA beats quarterly estimates");
     expect(first?.sourceName).toBe("Reuters");
+    expect(first?.publisherDomain).toBe("reuters.com");
     expect(first?.tier).toBe("wire");
     expect(first?.publishedAt).toBe(Date.parse("Wed, 23 Sep 2026 10:00:00 GMT"));
     expect(first?.snippet).toContain("record data-center revenue");
@@ -34,6 +35,16 @@ describe("parseRss", () => {
     const second = items[1];
     expect(second?.sourceName).toBe("example.com");
     expect(second?.tier).toBe("trade");
+  });
+
+  it("does not mislabel a Google News redirect host as the publisher domain", () => {
+    const [item] = parseRss(`<rss><channel><item>
+      <title>Acme article</title><link>https://news.google.com/rss/articles/abc</link>
+      <source>Reuters</source>
+    </item></channel></rss>`);
+
+    expect(item?.sourceName).toBe("Reuters");
+    expect(item?.publisherDomain).toBeNull();
   });
 
   it("returns empty for junk input", () => {

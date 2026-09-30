@@ -17,6 +17,8 @@ export interface CompanySnapshot {
   sector: string;
   color: string;
   index: number | null;
+  indexWindow: "3h" | "24h" | null;
+  indexRecordCount: number;
   delta: number | null;
   mentions24h: number;
   lastMentionAt: number | null;
@@ -58,7 +60,7 @@ export interface MentionScore {
 export interface Mention {
   id: string;
   companyId: string;
-  source: { name: string; url: string; kind: "rss" | "x" | "sec" | "finnhub" | "reddit"; tier: SourceTier; collector: CollectorId; publisher: string; publisherDomain: string | null };
+  source: { name: string; url: string; kind: "rss" | "x" | "sec" | "finnhub" | "reddit"; tier: SourceTier; collector: CollectorId; publisher: string; publisherDomain: string | null; deliveryId?: string | null };
   title: string;
   snippet: string;
   publishedAt: number | null;
@@ -82,10 +84,19 @@ export interface MentionPage {
   nextCursor: { orderAt: number; ingestedAt: number; id: string } | null;
 }
 
+export interface ScoreBucketEvidencePage {
+  bucketFromMs: number;
+  bucketThroughMs: number;
+  includeFromBoundary: boolean;
+  items: Mention[];
+  nextCursor: { scoredAt: number; id: string } | null;
+}
+
 export interface ReactionEvent {
   id: string;
   title: string;
-  publishedAt: number;
+  publishedAt: number | null;
+  availableAt: number;
   sentiment: string;
   eventScore: number;
   eventType: string;
@@ -208,6 +219,9 @@ export interface SeriesPoint {
   t: number;
   v: number | null;
   n: number;
+  itemImpactMin: number | null;
+  itemImpactMax: number | null;
+  lastScoredAt: number | null;
 }
 
 export interface Quote {
@@ -229,6 +243,11 @@ export interface MarketSnapshot {
 export interface PricePoint {
   t: number;
   price: number;
+  currency: string;
+  collector: "yahoo_chart";
+  retrievedAt: number;
+  adapterVersion: string;
+  deliveryId: string;
 }
 
 export interface PriceSeriesDTO {
@@ -237,6 +256,7 @@ export interface PriceSeriesDTO {
   servedAt: number;
   sourceLatestAt: number | null;
   cacheAgeMs: number | null;
+  refreshError: string | null;
   resampling: "source_observations_in_window";
 }
 
@@ -252,6 +272,7 @@ export interface SourceHealth {
 export interface HealthDTO {
   ok: boolean;
   externalRequestsEnabled: boolean;
+  opportunityRadarEnabled: boolean;
   version: string;
   runtimeId: string;
   uptimeSec: number;
@@ -287,7 +308,7 @@ export interface HealthDTO {
   deliveryHealth: Array<{
     collector: CollectorId;
     enabled: boolean;
-    state: "current" | "overdue" | "failed" | "partial" | "never" | "disabled";
+    state: "current" | "processing" | "overdue" | "failed" | "partial" | "never" | "disabled";
     intervalSeconds: number;
     targetCount: number;
     coverageCount: number;
@@ -296,6 +317,11 @@ export interface HealthDTO {
     latestItemCount: number | null;
     latestError: string | null;
     adapterVersion: string | null;
+    latestIngestionRequired: boolean;
+    latestIngestionState: "processing" | "success" | "partial" | "failed" | null;
+    latestIngestionExpectedCount: number | null;
+    latestIngestionProcessedCount: number | null;
+    latestIngestionInsertedCount: number | null;
     latestObservationAt: number | null;
     latestObservationBasis: "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown" | null;
     latestObservationRetrievedAt: number | null;
@@ -314,6 +340,18 @@ export async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   return (await res.json()) as T;
+}
+
+export async function lookupMentionsByIds(companyId: string, ids: string[]): Promise<Mention[]> {
+  if (ids.length === 0) return [];
+  const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}/mentions/lookup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!response.ok) throw new Error(`POST mention lookup -> ${response.status}`);
+  const body = await response.json() as { items: Mention[] };
+  return body.items;
 }
 
 const retryErrorSchema = z.object({ error: z.string() });

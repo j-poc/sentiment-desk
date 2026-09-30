@@ -139,6 +139,7 @@ async function main(): Promise<void> {
     hub,
     health,
     version: VERSION,
+    opportunityRadarEnabled: false,
     deliverySources: [
       { collector: "google_news_rss", enabled: collectorEnabled("google_news_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "yahoo_finance_rss", enabled: collectorEnabled("yahoo_finance_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },

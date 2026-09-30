@@ -9,7 +9,12 @@ const POS = "#34d399";
 const NEG = "#f87171";
 const NEU = "#94a3b8";
 
-export function Gauge({ value, size = 120 }: { value: number | null; size?: number }) {
+export function Gauge({ value, detail, description, size = 120 }: {
+  value: number | null;
+  detail?: string;
+  description?: string;
+  size?: number;
+}) {
   const v = Math.max(-100, Math.min(100, value ?? 0));
   const hasValue = value != null;
 
@@ -80,6 +85,7 @@ export function Gauge({ value, size = 120 }: { value: number | null; size?: numb
               transformOrigin: `${CX}px ${CY}px`,
               transition: "transform 900ms cubic-bezier(0.22, 1, 0.36, 1)",
             }}
+            className="gauge-needle"
           >
             <line x1={CX} y1={CY} x2={CX} y2={CY - (R - 7)} stroke="#e8ebf2" strokeWidth="2" strokeLinecap="round" />
             <line
@@ -102,6 +108,15 @@ export function Gauge({ value, size = 120 }: { value: number | null; size?: numb
       >
         {hasValue ? `${v > 0 ? "+" : ""}${v.toFixed(1)}` : "--"}
       </div>
+      {detail && (
+        <div
+          className="mt-1 w-[116px] text-center text-[8px] leading-tight text-white/45"
+          title={description}
+          aria-label={description}
+        >
+          {detail}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,44 +1,153 @@
 # Sentiment Desk completion plan
 
-## Current goal state (2026-09-29)
+## Goal state before the final GitHub checkpoint (2026-09-30)
 
-The native Sentiment Desk goal remains **blocked**, not complete. The current
-checkout fixes server-side feed filtering/pagination and keeps all identified-
-source failed or pending Jev items reachable beyond the first 100 and beyond
-seven days. The whole-build review's stale-preview finding was corrected by a
-direct check of the current saved-data build at `127.0.0.1:8797`: selecting
-Adobe changed the company view and rendered saved sentiment and Yahoo price
-lines; selecting Apple and opening Unscored loaded 100 items, and Load older
-increased the visible list to 200. External requests and Jev were paused. The
-isolated UI database contains saved, source-attributed observations; historical
-`legacy_unknown` rows remain quarantined and are not presented as research data.
+The native goal service reported **active** before this checkpoint. The full
+Sentiment Desk goal remains incomplete: there is no authorized live Jev cohort
+or independent real-source label evaluation. The user attested to rights for public sources
+and APIs on 2026-09-29; this remains an operator attestation, not an
+independent review of endpoint terms. TypeSafe account authority, telemetry,
+retention, billing/refill behavior, limits and a spend ceiling; a
+contact-bearing SEC User-Agent; two independent blinded real-source reviewers
+and a passing evaluation; historical provider usage records; and complete,
+source-specific coverage/right evidence remain open. No Opportunity Radar
+expansion is in scope until these Sentiment Desk gates pass.
 
-The chart now defaults to a fixed −100 to +100 Jev index in the main pane, with
-saved share-price history in a smaller time-aligned pane on its own scale.
-Scored buckets and modeled decay are visually distinct, and saved-data age and
-unknown price currency are disclosed. This is the current design hypothesis,
-not a claim of “absolute best”: no task-based investor usability study has been
-run. The 2026-09-29 in-app-browser check showed 10 scored AAPL buckets, last
-scored 21 hours earlier, with external requests paused; it verifies the saved
-chart path, not live operation or Jev quality.
+The latest review pass corrects the watchlist `J/K` shortcut label, adds a
+labeled configured-company picker for narrow screens, states the Top Movers
+delta in impact points, and warns consistently about future quote timestamps.
+It also adds a provisional similar-title inspector over scored,
+identified-source records. The inspector exposes the matching rule, source
+identity, time basis, Jev mix, and raw-record drilldown; each title variant
+shows its own anchor-pair time span. It does not assert story identity or
+independent reporting, and it does not affect the chart or rankings. The
+classifier remains an unvalidated lexical heuristic. Google News RSS now
+stores the feed-reported publisher domain separately from its collection link;
+historic `news.google.com` values are hidden on research surfaces without
+rewriting immutable rows. Jev receives the collector link and publisher
+attribution as separate fields. The evidence drawer shows both identities and
+labels them as reported, not independently verified. Summary counts now state
+when they cover only the loaded first page rather than the whole window.
 
-Latest test, typecheck, production-build, live-data ETL-gate, final read-only
-review, and GitHub checkpoint results are recorded in
-`project-record/4-log/2026-09-29-engineering-bullshit-detector-review.md` and
-`project-record/4-log/live-data-etl-evidence.json`. The local gates can be
-closed; the overall goal cannot. Remaining external gates are authorized
-TypeSafe account use and a spend ceiling, a contact-bearing SEC User-Agent,
-independent blinded labels and a passing real-source Jev evaluation, provider
-records to reconcile historical `legacy_unknown` usage, and source coverage
-that is explicitly finite and incomplete. The user's public-source rights
-attestation is retained as such; it is not presented as independent review of
-endpoint terms. Opportunity Radar's earlier code remains downstream and must
-not be expanded or promoted until the Sentiment Desk gate passes.
+Fresh independent ratings after the fixes are investor evidence-inspection
+workflow **9.0/10** and **8.8/10**, UI confidence **9.1/10** (visual quality
+9.3, interaction/recovery 9.5, accessibility/responsive 8.6). A separate
+whole-build review rated live investor-research readiness **2/10**. The final
+adversarial build review rated the saved-data UI **8/10**, investor evidence
+workflow **7/10**, and operational readiness **3/10**. These reviewers used
+separate rubrics; both found no further justified local code edit. The UI
+assessment has no
+current rendered-browser session because the in-app browser rejected the
+local preview URL. No investor task study was run. The scores remain below 10
+because real Jev quality, investor task value, and rendered desktop/mobile
+behavior have not been established. Detailed ratings and verification are in
+`project-record/4-log/2026-09-30-investor-ui-review-and-gate-refresh.md`.
+
+The stable chart remains a fixed −100 to +100 Jev impact index on a shared
+15-minute score-time grid with an eight-hour decay half-life. It is distinct
+from the company gauge, which is the source-record weighted mean over three
+hours with a 24-hour fallback. Repeated coverage can count more than once; the
+series is not a stock return or a validated measure of investor opinion.
+Bucket evidence and source drilldown expose the records behind movements.
+New observations link to immutable request receipts; historic records without
+stored receipts remain explicitly unlinked. Existing `legacy_unknown` rows
+remain quarantined from research reads and Jev dispatch. A review counted
+4,700 such rows in the local database; they are retained for audit and their
+original provider/model usage remains unreconciled. Current product writes
+reject synthetic observations; no synthetic or demo product rows were added.
+
+The code-bound ETL verdict, timestamp, and source fingerprint are owned by
+`project-record/4-log/live-data-etl-evidence.json`. It records every declared
+check and a supplemental `check_receipt` for the same source fingerprint. The
+gate excludes only this evidence artifact from its fingerprint; changes to
+code, configuration, or project records require a fresh `verify` and `check`.
+The bounded keyless Compose
+smoke uses an isolated temporary database with no provider credentials and no
+Jev request. It establishes only the scoped live-source and persistence path;
+it cannot establish Jev quality, TypeSafe account approval, or complete source
+coverage.
+
+The decision trail for the final review and checkpoint is in
+`project-record/4-log/2026-09-30-final-checkpoint.tsv`. The same external
+evidence gates have persisted across at least three resumed goal turns. Keep
+the goal incomplete until these external gates pass; a successful local code
+checkpoint does not establish operational readiness.
+
+The API keeps Opportunity Radar disabled and returns 404 for its routes while
+the Sentiment Desk gate is incomplete. Earlier saved-data browser evidence
+confirmed desktop ADBE selection changes the chart and feed with external
+requests and Jev paused. An offline preview was run at
+`http://127.0.0.1:8797/` against an isolated copy of the real saved database;
+all external requests and Jev were disabled. The preview is no longer running,
+and the in-app browser rejected the local URL under its URL policy, so the
+current render and mobile picker remain unverified. Neither preview verifies
+Jev quality or investor preference. Full
+review details and current local changes are recorded in
+`project-record/4-log/2026-09-30-investor-ui-review-and-gate-refresh.md` and
+`project-record/4-log/2026-09-30-final-checkpoint.tsv`.
+
+## Historical goal state snapshot (2026-09-29; superseded)
+
+The native Sentiment Desk goal is **blocked** (confirmed from the goal service
+on 2026-09-29). Local engineering and review can still address code and UI
+defects; full readiness remains unverified pending external evidence.
+Server-side feed filtering and keyset pagination
+keep identified-source failed/pending Jev items reachable beyond the first 100
+and beyond seven days. The saved-data browser check confirmed company selection
+and older-page loading with source and Jev requests paused. Historical
+`legacy_unknown` observations remain quarantined from research reads.
+
+The chart now defaults to the fixed −100 to +100 Jev impact index, rendered on
+one 15-minute score-time grid with one fixed eight-hour decay half-life across
+all selected windows. The visible history is reconstructed from all previously
+scored records for that company, so changing 6H/24H/3D/7D neither resets the
+index nor changes a shared timestamp's value. Buckets expose counts and
+within-bucket item ranges; dashed segments remain explicitly modeled decay.
+Price comparison is opt-in. A new
+SQLite migration labels old price rows with missing source lineage as
+`legacy_unknown` and excludes them from the chart and reaction calculations.
+New Yahoo chart/quote points require provider collector, currency, source time,
+retrieval time, adapter version, and a matching immutable delivery receipt.
+The gauge is explicitly distinct from the chart: the gauge displays a
+source-record weighted mean over three hours, falling back to 24 hours, and
+reports its contributing-record count. Repeated and syndicated coverage can
+still count more than once. New live observations now link to the immutable request receipt that produced them; the pipeline rejects receiptless inserts and validates collector, company, and adapter against the receipt. Historical observations remain unlinked because their original receipt IDs were never stored; the detail drawer labels them as historical rather than inventing lineage. Item detail now distinguishes the most-likely sentiment class from directional impact, defined as P(positive) minus P(negative). The app respects reduced-motion preferences. This
+is a defensible current design hypothesis, not a claim of “absolute best” or
+10/10: no task-based investor usability study has been run. The latest AAPL
+72-hour review found that repeated mixed-impact publisher records can move the
+series materially; story/event clustering and real task comparison remain
+open product work. Public forum feedback is anecdotal only. The isolated
+saved-data preview checks presentation and selection behavior, not live
+delivery or Jev quality.
+
+The latest 1280×720 saved-data browser preview used the isolated temporary
+SQLite copy with all external requests and Jev disabled. It selected ADBE and
+confirmed the gauge, chart, and feed changed together. The view showed 10 ADBE
+source records in 24h, four scored records in the 24h gauge fallback, and
+three chart buckets; there was no lineage-verified ADBE price point. The API
+reports Radar disabled and both Radar routes return 404 until the Desk gate
+passes. No synthetic product data was added.
+
+Current tests, typecheck, build, browser readback, and whole-build review are
+recorded in
+`project-record/4-log/2026-09-29-engineering-bullshit-detector-review.md`,
+and `project-record/4-log/2026-09-29-sentiment-price-chart-product-decision.md`.
+The final gate refreshes
+`project-record/4-log/live-data-etl-evidence.json`; the code-bound result is
+reported from that artifact. Remaining external
+gates are authorized TypeSafe account use and a spend ceiling, a contact-bearing
+SEC User-Agent, independent blinded labels and a passing real-source Jev
+evaluation, provider records to reconcile historical `legacy_unknown` usage,
+and source coverage that is explicitly finite and incomplete. The user's
+public-source rights attestation is retained as such; it is not presented as
+independent review of endpoint terms. Opportunity Radar remains downstream and
+must not be expanded or promoted until the Sentiment Desk gate passes.
 
 The TypeSafe, SEC, real-source evaluation, historical-usage, and coverage
-blockers need evidence from the authorized account owner, qualified reviewers,
-and provider/account records. No goal status change can substitute for that
-evidence.
+gates need evidence from the authorized account owner, qualified reviewers,
+and provider/account records. The goal remains blocked until those external
+inputs arrive and the required paths pass. Local fixes may continue without
+changing that status.
 
 ## Earlier consolidated status snapshot (historical)
 
@@ -88,6 +197,10 @@ document and body widths at 390px. Screenshots are kept locally in
 `output/playwright/2026-09-28-offline-adobe-chart.png`,
 `output/playwright/2026-09-28-offline-drawer-chart.png`, and the earlier
 `2026-09-28-offline-saved-data-mobile.png`.
+Those 2,853 saved price points predate the price-lineage migration and are not
+verified Yahoo history; the migration later classified them as
+`legacy_unknown`, and current research/chart reads exclude them. That earlier
+two-line screenshot must not be cited as verified price-data evidence.
 
 The application now also defaults to saved-data-only mode when
 `EXTERNAL_REQUESTS_ENABLED` is absent. The repeatable

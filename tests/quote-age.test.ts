@@ -15,4 +15,8 @@ describe("quote source age labels", () => {
   it("identifies a quote whose provider observation time is unknown", () => {
     expect(quoteSourceAgeLabel(null, now)).toBe("source time unknown");
   });
+
+  it("warns when the provider observation timestamp is ahead of the current time", () => {
+    expect(quoteSourceAgeLabel(now + 1, now)).toBe("source time is in the future");
+  });
 });

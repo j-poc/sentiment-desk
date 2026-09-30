@@ -4,6 +4,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { JevError } from "./jev.js";
 import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
+import { researchPublisherDomain } from "./publisher-domain.js";
 import {
   applyPostRules,
   bucketMsFor,
@@ -90,6 +91,7 @@ export class Pipeline {
 
   /** Insert a normalized source observation; exact replays do not reach Jev. */
   ingest(m: RawMentionInput): boolean {
+    if (!m.deliveryId) throw new Error("A persisted source delivery receipt is required before an observation can be ingested");
     const stored = this.deps.db.insertObservation(m);
     const collector = m.collector ?? "legacy_unknown";
     if (stored.inserted && this.deps.judge && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
@@ -208,9 +210,11 @@ export class Pipeline {
         title: queuedRow.title,
         snippet: queuedRow.snippet,
         source: {
-          name: queuedRow.source_name,
-          url: queuedRow.source_url,
+          collector: queuedRow.collector as CollectorId,
+          collectionUrl: queuedRow.source_url,
           tier: queuedRow.source_tier as SourceTier,
+          publisherName: queuedRow.publisher_name,
+          publisherDomain: researchPublisherDomain(queuedRow.collector, queuedRow.publisher_domain),
         },
         publishedAt: queuedRow.published_at == null
           ? "Unknown (publisher did not provide a timestamp)"
@@ -348,8 +352,8 @@ export class Pipeline {
   }
 
   /**
-   * TradingAgents-style reflection: measured 30-minute reactions after this
-   * desk's own past judgments on this company, cached for 10 minutes and
+   * Reflection context: timely 30-minute reactions after this desk's own past
+   * judgments became available, cached for 10 minutes and
    * attached to scoring state for calibration. Omitted below 5 measured
    * events — no memory is better than a noisy one.
    */
@@ -359,12 +363,13 @@ export class Pipeline {
     let block: JevState["deskMemory"] | undefined;
     try {
       const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const events = this.deps.db.scoredMentionEvents(since).filter((e) => e.companyId === companyId);
-      const series = this.deps.db.priceWindow(ticker, since - 60 * 60 * 1000);
+      const now = Date.now();
+      const events = this.deps.db.scoredMentionEvents(since, now).filter((e) => e.companyId === companyId);
+      const series = this.deps.db.priceWindow(ticker, since - 60 * 60 * 1000, now);
       const rows = events.map((e) => ({
         sentiment: e.sentiment,
         eventType: e.eventType,
-        r30: forwardReturn(series, e.publishedAt, 30 * 60_000),
+        r30: forwardReturn(series, e.availableAt, 30 * 60_000, now),
         r240: null,
       }));
       const overall = summarizeReactions(rows);
@@ -373,10 +378,10 @@ export class Pipeline {
         const byType: Record<string, string> = {};
         for (const t of new Set(rows.map((r) => r.eventType))) {
           const s = summarizeReactions(rows.filter((r) => r.eventType === t));
-          if (s.n30m >= 3) byType[t] = `n30m=${s.n30m}, median30m=${fmt(s.median30m)}, hit=${s.hitRate ?? "-"}%`;
+          if (s.n30m >= 3) byType[t] = `n30m=${s.n30m}, median30m=${fmt(s.median30m)}, direction_match=${s.hitRate ?? "-"}%`;
         }
         block = {
-          overall: `n30m=${overall.n30m}, median30m=${fmt(overall.median30m)}, hit=${overall.hitRate ?? "-"}%`,
+          overall: `n30m=${overall.n30m}, median30m=${fmt(overall.median30m)}, direction_match=${overall.hitRate ?? "-"}%`,
           byType,
         };
         this.deps.db.logEvent("info", "memory", `${ticker}: ${block.overall}`);
@@ -416,7 +421,7 @@ export class Pipeline {
   snapshot(companyId: string): CompanySnapshot {
     const now = Date.now();
     const companies = new Map(this.deps.db.companies().map((c) => [c.id, c] as const));
-    const events = this.deps.db.scoredMentions(now - DAY_MS);
+    const events = this.deps.db.scoredMentions(now - DAY_MS, now);
     const counts = this.deps.db.counts24h(now - DAY_MS);
     const extras = this.earningsExtras();
     return this.computeSnapshot(companies, counts, events, companyId, now, extras);
@@ -426,7 +431,7 @@ export class Pipeline {
     const now = Date.now();
     const companies = this.deps.db.companies();
     const byId = new Map(companies.map((c) => [c.id, c] as const));
-    const events = this.deps.db.scoredMentions(now - DAY_MS);
+    const events = this.deps.db.scoredMentions(now - DAY_MS, now);
     const counts = this.deps.db.counts24h(now - DAY_MS);
     const extras = this.earningsExtras();
     return companies.map((c) => this.computeSnapshot(byId, counts, events, c.id, now, extras));
@@ -456,15 +461,19 @@ export class Pipeline {
   private computeSnapshot(
     companies: Map<string, { id: string; name: string; ticker: string; sector: string; color: string }>,
     counts: Map<string, { count: number; lastAt: number | null }>,
-    events: Array<{ companyId: string; publishedAt: number; impact: number; weight: number }>,
+    events: Array<{ companyId: string; availableAt: number; impact: number; weight: number }>,
     companyId: string,
     now: number,
     extras: Map<string, { earningsAt: number | null; lastSurprise: EarningsSurprise | null }> = new Map(),
   ): CompanySnapshot {
     const meta = companies.get(companyId);
     const own = events.filter((m) => m.companyId === companyId);
-    const current = weightedIndex(own.filter((m) => m.publishedAt >= now - CURRENT_WINDOW_MS));
+    const currentEvents = own.filter((m) => m.availableAt >= now - CURRENT_WINDOW_MS);
+    const current = weightedIndex(currentEvents);
     const baseline = weightedIndex(own);
+    const index = current ?? baseline;
+    const indexWindow = current != null ? "3h" : baseline != null ? "24h" : null;
+    const indexEvents = indexWindow === "3h" ? currentEvents : indexWindow === "24h" ? own : [];
     const count = counts.get(companyId);
     return {
       id: companyId,
@@ -472,7 +481,9 @@ export class Pipeline {
       ticker: meta?.ticker ?? companyId,
       sector: meta?.sector ?? "",
       color: meta?.color ?? "#64748b",
-      index: current ?? baseline,
+      index,
+      indexWindow,
+      indexRecordCount: indexEvents.filter((event) => event.weight > 0).length,
       delta: current != null && baseline != null ? Math.round((current - baseline) * 100) / 100 : null,
       mentions24h: count?.count ?? 0,
       lastMentionAt: count?.lastAt ?? null,
@@ -484,7 +495,9 @@ export class Pipeline {
   series(companyId: string, windowHours: number): SeriesPoint[] {
     const now = Date.now();
     const windowMs = windowHours * 60 * 60 * 1000;
-    const items = this.deps.db.scoredMentions(now - windowMs).filter((m) => m.companyId === companyId);
+    // Rebuild from the company's full identified history so an older event
+    // still seeds the same index when the user changes the visible window.
+    const items = this.deps.db.scoredMentions(0, now, companyId);
     return smoothedSeries(items, windowMs, bucketMsFor(windowHours), now);
   }
 }

@@ -16,6 +16,7 @@ const sourceHealth: SourceHealth = {
 const blockedHealth: HealthDTO = {
   ok: true,
   externalRequestsEnabled: true,
+  opportunityRadarEnabled: false,
   version: "test",
   runtimeId: "runtime-test",
   uptimeSec: 1,

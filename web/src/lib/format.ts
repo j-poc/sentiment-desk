@@ -39,6 +39,7 @@ export function timeAgo(ms: number | null | undefined, now = Date.now()): string
 
 export function quoteSourceAgeLabel(at: number | null, now = Date.now()): string | null {
   if (at == null) return "source time unknown";
+  if (at > now) return "source time is in the future";
   if (now - at <= 15 * 60_000) return null;
   return `source ${timeAgo(at, now)}`;
 }

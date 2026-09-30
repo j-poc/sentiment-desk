@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Desk } from "../server/db.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
@@ -19,12 +20,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function chartResponse() {
+function chartResponse(symbol = "ACME") {
   const nowSec = Math.floor(Date.now() / 1000);
   return new Response(JSON.stringify({
     chart: {
       result: [{
-        meta: { regularMarketPrice: 125.5, chartPreviousClose: 120, regularMarketTime: nowSec, currency: "EUR" },
+        meta: { symbol, regularMarketPrice: 125.5, chartPreviousClose: 120, regularMarketTime: nowSec, currency: "EUR" },
         timestamp: [nowSec - 3600, nowSec - 1800, nowSec],
         indicators: { quote: [{ close: [123, 124, 125.5] }] },
       }],
@@ -40,6 +41,79 @@ function market(db: Desk, externalRequestsEnabled = true) {
 }
 
 describe("market quote provenance", () => {
+  it("rejects legacy price rows without source and currency lineage", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-price-lineage-"));
+    const path = join(directory, "desk.db");
+    const oldDb = new DatabaseSync(path);
+    oldDb.exec(`CREATE TABLE price_points (
+      ticker TEXT NOT NULL, t INTEGER NOT NULL, price REAL NOT NULL, PRIMARY KEY (ticker, t)
+    )`);
+    oldDb.prepare("INSERT INTO price_points (ticker, t, price) VALUES (?, ?, ?)")
+      .run("ACME", 1_000, 125);
+    oldDb.close();
+
+    const db = new Desk(path);
+    try {
+      expect(db.priceWindow("ACME", 0)).toEqual([]);
+      const deliveryId = db.recordDelivery({
+        collector: "yahoo_chart", companyId: null, requestKey: "test-price-lineage",
+        startedAt: 1_900, completedAt: 2_000, result: "success", parsedItemCount: 1,
+        adapterVersion: "yahoo-chart/1", responseDigest: "fixture-digest",
+      });
+      db.upsertPricePoint({
+        ticker: "ACME", t: 1_000, price: 125, collector: "yahoo_chart",
+        currency: "USD", retrievedAt: 2_000, adapterVersion: "yahoo-chart/1", deliveryId,
+      });
+      expect(db.priceWindow("ACME", 0)).toEqual([{
+        t: 1_000, price: 125, currency: "USD", collector: "yahoo_chart",
+        retrievedAt: 2_000, adapterVersion: "yahoo-chart/1", deliveryId,
+      }]);
+    } finally {
+      db.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers a sourced chart candle when a quote has the same timestamp", () => {
+    const db = new Desk(":memory:");
+    const quoteReceipt = db.recordDelivery({
+      collector: "yahoo_quote", companyId: null, requestKey: "test-quote-collision",
+      startedAt: 1_900, completedAt: 2_000, result: "success", parsedItemCount: 1,
+      adapterVersion: "yahoo-quote/1", responseDigest: "quote-digest",
+    });
+    const chartReceipt = db.recordDelivery({
+      collector: "yahoo_chart", companyId: null, requestKey: "test-chart-collision",
+      startedAt: 2_100, completedAt: 2_200, result: "success", parsedItemCount: 1,
+      adapterVersion: "yahoo-chart/1", responseDigest: "chart-digest",
+    });
+    db.upsertPricePoint({
+      ticker: "ACME", t: 3_000, price: 125, collector: "yahoo_quote",
+      currency: "USD", retrievedAt: 2_000, adapterVersion: "yahoo-quote/1", deliveryId: quoteReceipt,
+    });
+    db.upsertPricePoint({
+      ticker: "ACME", t: 3_000, price: 124.5, collector: "yahoo_chart",
+      currency: "USD", retrievedAt: 2_200, adapterVersion: "yahoo-chart/1", deliveryId: chartReceipt,
+    });
+
+    expect(db.priceWindow("ACME", 0)).toEqual([{
+      t: 3_000, price: 124.5, currency: "USD", collector: "yahoo_chart",
+      retrievedAt: 2_200, adapterVersion: "yahoo-chart/1", deliveryId: chartReceipt,
+    }]);
+    db.close();
+  });
+
+  it("does not invent a currency when Yahoo omits it", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      chart: { result: [{
+        meta: { symbol: "ACME", regularMarketPrice: 125.5, chartPreviousClose: 120, regularMarketTime: 1 },
+        timestamp: [1], indicators: { quote: [{ close: [125.5] }] },
+      }], error: null },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(fetchQuote("ACME")).rejects.toThrow("currency missing or invalid");
+    await expect(fetchPriceSeries("ACME", 24)).rejects.toThrow("currency missing or invalid");
+  });
+
   it("rejects malformed Yahoo chart payloads instead of caching them as empty", async () => {
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
       chart: { result: null, error: null },
@@ -48,9 +122,21 @@ describe("market quote provenance", () => {
     await expect(fetchPriceSeries("ACME", 24)).rejects.toThrow("omitted its result list");
   });
 
+  it("rejects quote and chart data whose provider-reported ticker differs from the request", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      chart: { result: [{
+        meta: { symbol: "OTHER", regularMarketPrice: 125.5, chartPreviousClose: 120, currency: "USD" },
+        timestamp: [1], indicators: { quote: [{ close: [125.5] }] },
+      }], error: null },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(fetchQuote("ACME")).rejects.toThrow("symbol missing or mismatched");
+    await expect(fetchPriceSeries("ACME", 24)).rejects.toThrow("symbol missing or mismatched");
+  });
+
   it("rejects misaligned Yahoo timestamps and close values", async () => {
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
-      chart: { result: [{ timestamp: [1, 2], indicators: { quote: [{ close: [125] }] } }], error: null },
+      chart: { result: [{ meta: { symbol: "ACME", currency: "USD" }, timestamp: [1, 2], indicators: { quote: [{ close: [125] }] } }], error: null },
     }), { status: 200, headers: { "content-type": "application/json" } }));
 
     await expect(fetchPriceSeries("ACME", 24)).rejects.toThrow("inconsistent lengths");
@@ -114,12 +200,38 @@ describe("market quote provenance", () => {
     db.close();
   });
 
+  it("does not report current chart health when Yahoo fetch succeeds but price persistence fails", async () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([company]);
+    const data = market(db);
+    globalThis.fetch = vi.fn(async () => chartResponse());
+    vi.spyOn(db, "upsertPricePoint").mockImplementation(() => { throw new Error("price sink unavailable"); });
+
+    await expect(data.priceSeries("ACME", 24)).rejects.toThrow("price sink unavailable");
+    expect(db.deliverySummary()).toMatchObject([{ collector: "yahoo_chart", result: "success" }]);
+    expect(db.deliverySummary()).toHaveLength(1);
+    expect(db.priceWindow("ACME", 0)).toEqual([]);
+    expect(db.deliveryHealth([{
+      collector: "yahoo_chart", enabled: true, intervalSeconds: 60, targetCount: 1,
+    }], Date.now())[0]).toMatchObject({
+      state: "failed", latestResult: "success", coverageCount: 0,
+      latestIngestionState: "failed", latestIngestionExpectedCount: 3,
+      latestIngestionProcessedCount: 0, latestError: "price sink unavailable",
+    });
+    db.close();
+  });
+
   it("serves only persisted points while external requests are disabled", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies([company]);
     const now = Date.now();
-    db.upsertPricePoint("ACME", now - 60_000, 124);
-    db.upsertPricePoint("ACME", now, 125);
+    const deliveryId = db.recordDelivery({
+      collector: "yahoo_chart", companyId: "acme", requestKey: "test-price-cache",
+      startedAt: now - 1, completedAt: now, result: "success", parsedItemCount: 2,
+      adapterVersion: "yahoo-chart/1", responseDigest: "fixture-digest",
+    });
+    db.upsertPricePoint({ ticker: "ACME", t: now - 60_000, price: 124, collector: "yahoo_chart", currency: "EUR", retrievedAt: now, adapterVersion: "yahoo-chart/1", deliveryId });
+    db.upsertPricePoint({ ticker: "ACME", t: now, price: 125, collector: "yahoo_chart", currency: "EUR", retrievedAt: now, adapterVersion: "yahoo-chart/1", deliveryId });
     const latestStoredAt = Math.floor(now / 1_000) * 1_000;
     const data = market(db, false);
     const request = vi.fn(async () => { throw new Error("network must remain disabled"); });
@@ -131,11 +243,11 @@ describe("market quote provenance", () => {
 
     expect(result).toMatchObject({ delivery: "local_store", sourceLatestAt: latestStoredAt });
     expect(result.points).toEqual([
-      { t: latestStoredAt - 60_000, price: 124 },
-      { t: latestStoredAt, price: 125 },
+      { t: latestStoredAt - 60_000, price: 124, currency: "EUR", collector: "yahoo_chart", retrievedAt: now, adapterVersion: "yahoo-chart/1", deliveryId },
+      { t: latestStoredAt, price: 125, currency: "EUR", collector: "yahoo_chart", retrievedAt: now, adapterVersion: "yahoo-chart/1", deliveryId },
     ]);
     expect(request).not.toHaveBeenCalled();
-    expect(db.deliverySummary()).toHaveLength(0);
+    expect(db.deliverySummary()).toHaveLength(1);
     db.close();
   });
 
@@ -249,7 +361,7 @@ describe("market quote provenance", () => {
         health: new HealthTracker(false, false, "unconfigured"), db,
         externalRequestsEnabled: true, quoteRequestsEnabled: true, chartRequestsEnabled: false,
       });
-      globalThis.fetch = vi.fn(async () => chartResponse());
+      globalThis.fetch = vi.fn(async () => chartResponse("^GSPC"));
       await restarted.refresh();
       expect(db.recentEvents(5)).toContainEqual(expect.objectContaining({
         level: "info", source: "yahoo_index_quote", message: "^GSPC: index quote recovered",

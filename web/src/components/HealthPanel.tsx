@@ -89,9 +89,12 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
               </div>
               <div className="ml-1 flex items-baseline justify-between gap-2 text-[9px] text-white/25">
                 <span>recent coverage {delivery.coverageCount}/{delivery.targetCount} companies</span>
-                <span>{delivery.latestItemCount == null ? "no response" : `${delivery.latestItemCount} provider rows`}</span>
+                <span>
+                  {delivery.latestItemCount == null ? "no response" : `${delivery.latestItemCount} provider rows`}
+                  {delivery.latestIngestionRequired && ` · ingestion ${delivery.latestIngestionState ?? "not started"} ${delivery.latestIngestionProcessedCount ?? 0}/${delivery.latestIngestionExpectedCount ?? 0}`}
+                </span>
               </div>
-              {delivery.latestError && (delivery.state === "partial" || delivery.state === "failed" || delivery.state === "overdue") && (
+              {delivery.latestError && (delivery.state === "partial" || delivery.state === "failed" || delivery.state === "overdue" || delivery.state === "processing") && (
                 <div
                   role="status"
                   aria-live="polite"

@@ -1,7 +1,7 @@
 import type { CompanySnapshot } from "../lib/api.js";
 import { fmtDelta, sentimentColor } from "../lib/format.js";
 
-/** Biggest sentiment movers on the watchlist, ranked by absolute delta. */
+/** Largest current-3h versus trailing-24h weighted Jev mean differences. */
 export function TopMovers({
   companies,
   selectedId,
@@ -18,11 +18,15 @@ export function TopMovers({
   const hasScores = companies.some((company) => company.index != null);
 
   return (
-    <div>
+    <div
+      role="group"
+      aria-label="Companies ranked by the difference between the current 3-hour and trailing 24-hour weighted Jev means, in impact points"
+      title="Current 3-hour weighted mean minus the trailing 24-hour weighted mean; the baseline includes the current three hours. This is not a share-price return."
+    >
       {movers.length === 0 && (
         <div className="px-4 py-4 text-[11px] text-white/30">
           {hasScores
-            ? "Current scores are available; no prior 24h comparison yet."
+            ? "Current Jev scores exist; no eligible 3h-versus-24h weighted-mean comparison yet."
             : "No scored sentiment is available yet."}
         </div>
       )}
@@ -33,6 +37,7 @@ export function TopMovers({
           <button
             key={c.id}
             onClick={() => onSelect(c.id)}
+            aria-pressed={c.id === selectedId}
             className={`flex w-full items-center gap-2.5 border-b border-white/[0.04] px-4 py-2.5 text-left transition-colors ${
               c.id === selectedId ? "bg-white/[0.05]" : "hover:bg-white/[0.03]"
             }`}

@@ -1,8 +1,9 @@
 # Sentiment Desk
 
-Sentiment Desk is a private, single-user research product that runs against live
-public sources. The repository is visible for inspection and is not a hosted
-multi-user data service.
+Sentiment Desk is a private, single-user research product that can collect from
+explicitly enabled public-source adapters. It starts in saved-data-only mode;
+live requests require per-source configuration. The repository is visible for
+inspection and is not a hosted multi-user data service.
 
 **Jev** (TypeSafe AI System One) is the per-item sentiment and event judge and
 uses one fixed rubric. Live items stay pending by default. A key alone never
@@ -30,7 +31,8 @@ fact-checking.
   at that cap as partial coverage because older matches may be omitted.
   Every item keeps publisher identity, source identity, and source, provider,
   retrieval, and ingestion clocks separately. Missing source time stays
-  unknown.
+  unknown. New observations link to an immutable delivery receipt; older saved
+  observations without a stored receipt remain labeled unlinked historical data.
 - **Market data**: explicitly allowlisted Yahoo Finance endpoints supply quotes
   and historical price context. Quote currency, provider observation time, retrieval time,
   and cache/network state stay separate. Quotes older than 15 minutes, or
@@ -59,23 +61,35 @@ clones), applied to sentiment.
 - **Watchlist**: sparkline, quote and source age, index, delta; sortable by
   movement or alphabet. `j`/`k` or arrow keys to walk it.
 - **Company panel**: sentiment index and comparison windows.
-- **Chart**: sentiment area with honest gaps (no interpolation) and an optional
-  normalized price overlay (`c`) so divergence between narrative and price is
-  readable directly.
+- **Chart**: defaults to the fixed-scale Jev impact index on one 15-minute grid
+  and one eight-hour decay half-life across every time range. It rebuilds from
+  prior company scores so zooming does not reset or stretch the same historical
+  index point. Buckets expose their item count and impact range on hover, and
+  the chart distinguishes scored judgments from modeled decay. Comparison is
+  opt-in and places only provenance- and currency-identified share-price history
+  in a separate aligned pane with its own scale (`c`); legacy price rows without
+  lineage are excluded.
 - **Mention feed**: filter chips for sentiment, investor relevance, off-target,
   and unscored items. Rows link to their source and expose Jev judgment,
-  publisher time, collection time, and scoring metadata.
-- **Right rail**: top movers by absolute 24 h delta, the live tape, desk health
-  (source failures, Jev errors, cost today).
+  publisher time, collection time, and scoring metadata. The separate
+  similar-title review shows provisional record matches, publisher domains,
+  collection sources, time span, and Jev disagreement; it is an inspection aid
+  and never changes the chart or rankings.
+- **Right rail**: top movers by the difference between 3 h and trailing 24 h
+  Jev weighted-mean impact, the recent tape, and desk health (source failures,
+  Jev errors, cost today).
 - **Status bar**: engine state, p50 score latency, market session (open /
   pre-market / after hours / closed in ET), stream state, SSE clients, DB size.
 - **Opportunity Radar**: per-company comparison of Jev event categories across
   equal current and prior windows, with exact-normalized headline groups,
   distinct publisher counts, directional mix, source links, and delivery
-  coverage. It is a sourced research view, not an opportunity or alpha signal.
+  coverage. It remains disabled until Sentiment Desk operational gates pass and
+  is not currently an operational feature.
 
-Nothing here is investment advice. The meter measures sentiment in published
-coverage; it does not price securities.
+Nothing here is investment advice. The meter is a Jev-derived, weighted mean of
+scored source records in the recent window, with a 24-hour fallback when that
+window is empty. Repeated or syndicated coverage can count more than once; it
+does not measure independent investor opinion or price securities.
 
 ## Repository rights
 
@@ -88,7 +102,19 @@ permission from the copyright holder before doing so.
 ```bash
 npm install
 cp .env.example .env
-npm run dev:web            # Vite dev UI on :5173 (proxies /api)
+```
+
+Start the local API in one terminal. It uses saved real data only by default:
+
+```bash
+npm run dev
+```
+
+In a second terminal, start the Vite interface, which proxies `/api` to the
+local server:
+
+```bash
+npm run dev:web
 ```
 
 To enable Jev only after confirming the exact source and account terms, set the
@@ -254,7 +280,7 @@ saved event type and sentiment; it makes no additional model call.
 | --- | --- |
 | `GET /api/companies` | watchlist snapshots: index, delta, counts |
 | `GET /api/companies/:id/series?hours=` | bucketed sentiment series |
-| `GET /api/companies/:id/price?ticker=&hours=` | intraday price series (overlay) |
+| `GET /api/companies/:id/price?ticker=&hours=` | intraday price series for the aligned comparison pane |
 | `GET /api/companies/:id/mentions?hours=&limit=` | mentions with full scores |
 | `GET /api/companies/:id/radar?hours=` | current/prior equal-window event and source summary |
 | `GET /api/companies/:id/radar/evidence?hours=&period=&eventType=&offset=&limit=` | paginated source evidence for a Radar category |

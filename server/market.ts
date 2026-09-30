@@ -3,7 +3,7 @@ import { fetchPriceSeries, fetchQuote, RateLimitedError, type PricePoint, type Q
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { Desk } from "./db.js";
-import { classifyDeliveryError, recordDelivery } from "./delivery.js";
+import { classifyDeliveryError, processDeliveryItems, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 import {
   clearProviderRateLimit,
@@ -79,15 +79,27 @@ export class MarketData {
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
       const startedAt = Date.now();
       const company = this.deps.companies.find((c) => c.ticker === ticker) ?? null;
+      let deliveryId: string | null = null;
       try {
         const received = await fetchQuote(ticker);
         const retrievedAt = Date.now();
         quotes[ticker] = { ...received, retrievedAt, lastAttemptAt: retrievedAt, delivery: "network" };
-        recordDelivery({
+        const recordedDeliveryId = recordDelivery({
           db: this.deps.db, collector: "yahoo_quote", companyId: company?.id ?? null,
-          requestKey: `yahoo-chart:quote:${ticker}`, startedAt, adapterVersion: "yahoo-chart/1",
+          requestKey: `yahoo-quote:${ticker}`, startedAt, adapterVersion: "yahoo-quote/1",
           result: "success", parsedItemCount: 1, normalizedItems: received,
+          processingExpected: company != null && received.at != null,
         });
+        deliveryId = recordedDeliveryId;
+        if (company && received.at != null) {
+          processDeliveryItems({ db: this.deps.db, deliveryId: recordedDeliveryId, expectedCount: 1, process: (itemProcessed) => {
+            const inserted = this.deps.db.upsertPricePoint({
+              ticker: company.ticker, t: received.at!, price: received.price, collector: "yahoo_quote",
+              currency: received.currency, retrievedAt, adapterVersion: "yahoo-quote/1", deliveryId: recordedDeliveryId,
+            });
+            itemProcessed(inserted);
+          } });
+        }
         clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
         ok += 1;
         if (company) companyOk += 1;
@@ -102,9 +114,9 @@ export class MarketData {
       } catch (err) {
         const prior = this.snapshot.quotes[ticker];
         if (prior) quotes[ticker] = { ...prior, lastAttemptAt: Date.now(), delivery: "cache" };
-        recordDelivery({
+        if (deliveryId == null) recordDelivery({
           db: this.deps.db, collector: "yahoo_quote", companyId: company?.id ?? null,
-          requestKey: `yahoo-chart:quote:${ticker}`, startedAt, adapterVersion: "yahoo-chart/1",
+          requestKey: `yahoo-quote:${ticker}`, startedAt, adapterVersion: "yahoo-quote/1",
           result: classifyDeliveryError(err), parsedItemCount: 0, error: err,
         });
         const message = err instanceof Error ? err.message : String(err);
@@ -136,14 +148,8 @@ export class MarketData {
       quotes: { ...this.snapshot.quotes, ...quotes },
       updatedAt: ok > 0 ? Date.now() : this.snapshot.updatedAt,
     };
-    // Persist source observations only. While markets are closed, repeated
-    // successful fetches keep the exchange-reported timestamp and INSERT OR
-    // IGNORE prevents them becoming new time-series points. Company tickers
-    // only; indices are context.
-    for (const company of this.deps.companies) {
-      const q = quotes[company.ticker];
-      if (q?.at != null) this.deps.db.upsertPricePoint(company.ticker, q.at, q.price);
-    }
+    // Company price points are persisted and their receipt outcomes finalized
+    // inside the per-ticker request boundary above. Index quotes stay in memory.
     if (this.chartRequestsAllowed()) this.startBackfill();
     if (companyOk > 0) this.deps.health.recordQuotes(true);
     if (companyFail > 0) this.deps.health.recordQuotes(false, companyError ?? "company quote fetch failures");
@@ -174,19 +180,30 @@ export class MarketData {
       if (this.backfilled.has(company.ticker)) continue;
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
       const startedAt = Date.now();
+      let deliveryId: string | null = null;
       try {
         const points = await fetchPriceSeries(company.ticker, 72);
-        for (const p of points) this.deps.db.upsertPricePoint(company.ticker, p.t, p.price);
-        this.backfilled.add(company.ticker);
-        clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
-        recordDelivery({
+        const retrievedAt = Date.now();
+        const recordedDeliveryId = recordDelivery({
           db: this.deps.db, collector: "yahoo_chart", companyId: company.id,
           requestKey: `yahoo-chart:series:${company.ticker}:72h`, startedAt,
           adapterVersion: "yahoo-chart/1", result: points.length === 0 ? "empty" : "success",
-          parsedItemCount: points.length, normalizedItems: points,
+          parsedItemCount: points.length, normalizedItems: points, processingExpected: true,
         });
+        deliveryId = recordedDeliveryId;
+        processDeliveryItems({ db: this.deps.db, deliveryId: recordedDeliveryId, expectedCount: points.length, process: (itemProcessed) => {
+          for (const p of points) {
+            const inserted = this.deps.db.upsertPricePoint({
+              ticker: company.ticker, t: p.t, price: p.price, collector: "yahoo_chart",
+              currency: p.currency, retrievedAt, adapterVersion: "yahoo-chart/1", deliveryId: recordedDeliveryId,
+            });
+            itemProcessed(inserted);
+          }
+        } });
+        this.backfilled.add(company.ticker);
+        clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
       } catch (err) {
-        recordDelivery({
+        if (deliveryId == null) recordDelivery({
           db: this.deps.db, collector: "yahoo_chart", companyId: company.id,
           requestKey: `yahoo-chart:series:${company.ticker}:72h`, startedAt,
           adapterVersion: "yahoo-chart/1", result: classifyDeliveryError(err),
@@ -249,20 +266,35 @@ export class MarketData {
       throw new RateLimitedError(cooldownUntil - Date.now(), "Yahoo Finance cooldown active", true);
     }
     const startedAt = Date.now();
+    let deliveryId: string | null = null;
     try {
       const points = await fetchPriceSeries(ticker, bucket);
       const retrievedAt = Date.now();
-      this.seriesCache.set(key, { retrievedAt, points });
-      clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
       const company = this.deps.companies.find((item) => item.ticker === ticker);
-      recordDelivery({
+      const recordedDeliveryId = recordDelivery({
         db: this.deps.db, collector: "yahoo_chart", companyId: company?.id ?? null,
         requestKey: `yahoo-chart:series:${ticker}:${bucket}h`, startedAt,
         adapterVersion: "yahoo-chart/1", result: points.length === 0 ? "empty" : "success",
-        parsedItemCount: points.length, normalizedItems: points,
+        parsedItemCount: points.length, normalizedItems: points, processingExpected: true,
       });
+      deliveryId = recordedDeliveryId;
+      processDeliveryItems({ db: this.deps.db, deliveryId: recordedDeliveryId, expectedCount: points.length, process: (itemProcessed) => {
+        for (const point of points) {
+          const inserted = this.deps.db.upsertPricePoint({
+            ticker, t: point.t, price: point.price, collector: "yahoo_chart",
+            currency: point.currency, retrievedAt, adapterVersion: "yahoo-chart/1", deliveryId: recordedDeliveryId,
+          });
+          itemProcessed(inserted);
+        }
+      } });
+      const sourcedPoints = points.map((point) => ({
+        ...point, collector: "yahoo_chart" as const, retrievedAt,
+        adapterVersion: "yahoo-chart/1", deliveryId: recordedDeliveryId,
+      }));
+      clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
+      this.seriesCache.set(key, { retrievedAt, points: sourcedPoints });
       return {
-        points,
+        points: sourcedPoints,
         delivery: "network",
         servedAt: retrievedAt,
         sourceLatestAt: points.at(-1)?.t ?? null,
@@ -279,7 +311,7 @@ export class MarketData {
       }
       const company = this.deps.companies.find((item) => item.ticker === ticker);
       if (!(error instanceof RateLimitedError && error.deferred)) {
-        recordDelivery({
+        if (deliveryId == null) recordDelivery({
           db: this.deps.db, collector: "yahoo_chart", companyId: company?.id ?? null,
           requestKey: `yahoo-chart:series:${ticker}:${bucket}h`, startedAt,
           adapterVersion: "yahoo-chart/1", result: classifyDeliveryError(error),

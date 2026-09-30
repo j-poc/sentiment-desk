@@ -166,10 +166,24 @@ describe("Opportunity Radar evidence comparison", () => {
     const app = createApp({
       db, dbPath: join(directory, "desk.db"), pipeline, market, hub, health,
       version: "test",
+      opportunityRadarEnabled: true,
+      deliverySources: [{ collector: "google_news_rss", enabled: true, intervalSeconds: 30, targetCount: 1 }],
+    });
+    const disabledApp = createApp({
+      db, dbPath: join(directory, "desk.db"), pipeline, market, hub, health,
+      version: "test",
       deliverySources: [{ collector: "google_news_rss", enabled: true, intervalSeconds: 30, targetCount: 1 }],
     });
 
     try {
+      const disabledHealth = await disabledApp.fetch(new Request("http://localhost/api/health"));
+      expect(disabledHealth.status).toBe(200);
+      expect(await disabledHealth.json()).toEqual(expect.objectContaining({ opportunityRadarEnabled: false }));
+      const disabledRadar = await disabledApp.fetch(new Request("http://localhost/api/companies/acme/radar?hours=24"));
+      const disabledEvidence = await disabledApp.fetch(new Request("http://localhost/api/companies/acme/radar/evidence?eventType=product"));
+      expect(disabledRadar.status).toBe(404);
+      expect(disabledEvidence.status).toBe(404);
+
       const response = await app.fetch(new Request("http://localhost/api/companies/acme/radar?hours=24"));
       const body: unknown = await response.json();
       expect(response.status).toBe(200);

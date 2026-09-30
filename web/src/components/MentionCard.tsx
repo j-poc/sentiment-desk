@@ -78,11 +78,12 @@ export function MentionCard({
 }) {
   const s = m.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
+  const impactColor = s ? (s.impact > 0 ? "#34d399" : s.impact < 0 ? "#f87171" : NEU) : NEU;
   const offTarget = m.status === "off_target";
 
   const body = (
     <>
-      <div className="flex items-center gap-2 text-[11px] text-desk-dim">
+      <div className="flex items-center gap-2 text-[11.5px] text-desk-dim">
         <span
           className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
           style={{ background: TIER_DOT[m.source.tier] ?? NEU }}
@@ -97,10 +98,15 @@ export function MentionCard({
               ? `observed ${shortTime(m.providerObservedAt)}`
               : "source time unknown"}
         </span>
-        <span className="truncate text-[9px] text-white/25">collected {timeAgo(m.retrievedAt)}</span>
+        <span className="truncate text-[10.5px] text-white/55">collected {timeAgo(m.retrievedAt)}</span>
         {s && (
-          <span className="tabnum ml-auto shrink-0 font-medium" style={{ color: dir }}>
-            {fmtIndex(s.impact)}
+          <span
+            className="tabnum ml-auto shrink-0 font-medium"
+            style={{ color: impactColor }}
+            title="Directional impact is 100 × [Jev P(positive) − P(negative)] impact points. It can be positive or negative even when the most likely class is neutral."
+            aria-label={`Jev directional impact ${fmtIndex(s.impact)}; most likely sentiment class ${s.sentiment}. Impact is 100 times positive probability minus negative probability, in impact points.`}
+          >
+            impact {fmtIndex(s.impact)}
           </span>
         )}
       </div>

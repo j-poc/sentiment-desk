@@ -2,10 +2,8 @@ import { useEffect, useState } from "react";
 import { getJSON, type ValidationBucket } from "../lib/api.js";
 
 /**
- * Signal validation: the "show me it works" table. Judged events bucketed by
- * event strength, measured against realized 30-minute price reactions. The
- * claim under test is monotonicity: stronger event scores should come with
- * larger absolute reactions and higher hit rates. Small n stays visible.
+ * Exploratory comparison of scored events and timely post-score price moves.
+ * This is not out-of-sample classifier evaluation or a prediction test.
  */
 export function ValidationPanel() {
   const [data, setData] = useState<{
@@ -66,7 +64,7 @@ export function ValidationPanel() {
               <th className="pb-1 text-right font-medium">n</th>
               <th className="pb-1 text-right font-medium">med |30m|</th>
               <th className="pb-1 text-right font-medium">med 30m</th>
-              <th className="pb-1 text-right font-medium">hit rate</th>
+              <th className="pb-1 text-right font-medium">direction match</th>
             </tr>
           </thead>
           <tbody className="tabnum">

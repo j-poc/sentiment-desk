@@ -11,6 +11,8 @@ const unscoredCompany = {
   sector: "Consumer Electronics",
   color: "#cbd5e1",
   index: null,
+  indexWindow: null,
+  indexRecordCount: 0,
   delta: null,
   mentions24h: 0,
   lastMentionAt: null,
@@ -33,10 +35,16 @@ function renderTopMovers(companies: CompanySnapshot[]): string {
 }
 
 describe("Top Movers empty state", () => {
+  it("identifies movement as Jev index change rather than stock-price movement", () => {
+    expect(renderTopMovers([{ ...scoredCompany, delta: 12 }])).toContain(
+      "Companies ranked by the difference between the current 3-hour and trailing 24-hour weighted Jev means, in impact points",
+    );
+  });
+
   it("distinguishes an unscored watchlist from scores without a comparison window", () => {
     expect(renderTopMovers([unscoredCompany])).toContain("No scored sentiment is available yet.");
     expect(renderTopMovers([scoredCompany])).toContain(
-      "Current scores are available; no prior 24h comparison yet.",
+      "Current Jev scores exist; no eligible 3h-versus-24h weighted-mean comparison yet.",
     );
   });
 });

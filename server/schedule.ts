@@ -10,7 +10,7 @@ import { fetchFeed, googleNewsUrl, yahooFinanceUrl, type FeedFetchResult } from 
 import { searchRecent, XPaginationTokenRejectedError, XNonAdvancingPaginationTokenError, xQuery } from "./sources/x.js";
 import { isFinanceRelevant } from "./scoring.js";
 import { fetchPrimaryDocText, fetchRecent8Ks, fetchTickerCikMap, titleForItems } from "./sources/sec.js";
-import { classifyDeliveryError, recordDelivery } from "./delivery.js";
+import { classifyDeliveryError, processDeliveryItems, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 import {
   clearProviderRateLimit,
@@ -79,56 +79,67 @@ export function startRssPoller(deps: {
           }
           const startedAt = Date.now();
           let feedResult: FeedFetchResult = { items: [], providerItemCount: 0, malformedItemCount: 0 };
+          let deliveryId: string | null = null;
           try {
             feedResult = await fetch(feed.url);
             const hasNoUsableRows = feedResult.providerItemCount > 0 && feedResult.items.length === 0;
             const malformedNotice = feedResult.malformedItemCount > 0
               ? `RSS discarded ${feedResult.malformedItemCount} malformed item${feedResult.malformedItemCount === 1 ? "" : "s"}`
               : undefined;
-            let added = 0;
-            let dropped = 0;
-            for (const item of feedResult.items) {
-              if (!matchesCompany(company, item.title, item.snippet)) continue;
-              if (
-                !isFinanceRelevant({
-                  title: item.title,
-                  snippet: item.snippet,
-                  tier: item.tier,
-                  kind: "rss",
-                  ticker: company.ticker,
-                })
-              ) {
-                dropped += 1;
-                continue;
-              }
-              const inserted = deps.pipeline.ingest({
-                companyId: company.id,
-                kind: "rss",
-                sourceName: item.sourceName || feed.fallbackName,
-                publisherName: item.sourceName || feed.fallbackName,
-                sourceUrl: item.url,
-                sourceItemId: item.sourceItemId,
-                collector: feed.collector,
-                adapterVersion: `${feed.collector}/2`,
-                tier: item.tier,
-                title: item.title,
-                snippet: item.snippet,
-                publishedAt: item.publishedAt,
-                retrievedAt: Date.now(),
-                scoped: feed.fallbackName === "Yahoo Finance",
-              });
-              if (inserted) added += 1;
-            }
-            recordDelivery({
+            deliveryId = recordDelivery({
               db: deps.db, collector: feed.collector, companyId: company.id,
-              requestKey: feed.url, startedAt, adapterVersion: `${feed.collector}/2`,
+              requestKey: feed.url, startedAt, adapterVersion: `${feed.collector}/3`,
               result: hasNoUsableRows ? "invalid"
                 : malformedNotice ? "partial"
                   : feedResult.providerItemCount === 0 ? "empty" : "success",
               parsedItemCount: feedResult.providerItemCount,
               normalizedItems: feedResult.items,
               error: malformedNotice,
+              processingExpected: true,
             });
+            let added = 0;
+            let dropped = 0;
+            processDeliveryItems({ db: deps.db, deliveryId, expectedCount: feedResult.items.length, process: (itemProcessed) => {
+              for (const item of feedResult.items) {
+                if (!matchesCompany(company, item.title, item.snippet)) {
+                  itemProcessed();
+                  continue;
+                }
+                if (
+                  !isFinanceRelevant({
+                    title: item.title,
+                    snippet: item.snippet,
+                    tier: item.tier,
+                    kind: "rss",
+                    ticker: company.ticker,
+                  })
+                ) {
+                  dropped += 1;
+                  itemProcessed();
+                  continue;
+                }
+                const inserted = deps.pipeline.ingest({
+                  companyId: company.id,
+                  kind: "rss",
+                  sourceName: item.sourceName || feed.fallbackName,
+                  publisherName: item.sourceName || feed.fallbackName,
+                  sourceUrl: item.url,
+                  sourceItemId: item.sourceItemId,
+                  deliveryId,
+                  collector: feed.collector,
+                  adapterVersion: `${feed.collector}/3`,
+                  tier: item.tier,
+                  publisherDomain: item.publisherDomain,
+                  title: item.title,
+                  snippet: item.snippet,
+                  publishedAt: item.publishedAt,
+                  retrievedAt: Date.now(),
+                  scoped: feed.fallbackName === "Yahoo Finance",
+                });
+                if (inserted) added += 1;
+                itemProcessed(inserted);
+              }
+            } });
             deps.health.recordRss(!hasNoUsableRows, hasNoUsableRows
               ? `${company.ticker}: RSS response contained no usable item rows`
               : undefined);
@@ -144,13 +155,15 @@ export function startRssPoller(deps: {
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            recordDelivery({
-              db: deps.db, collector: feed.collector, companyId: company.id,
-              requestKey: feed.url, startedAt, adapterVersion: `${feed.collector}/2`,
-              result: feedResult.items.length > 0 ? "partial" : classifyDeliveryError(err),
-              parsedItemCount: feedResult.providerItemCount,
-              normalizedItems: feedResult.items, error: err,
-            });
+            if (deliveryId == null) {
+              recordDelivery({
+                db: deps.db, collector: feed.collector, companyId: company.id,
+                requestKey: feed.url, startedAt, adapterVersion: `${feed.collector}/3`,
+                result: feedResult.items.length > 0 ? "partial" : classifyDeliveryError(err),
+                parsedItemCount: feedResult.providerItemCount,
+                normalizedItems: feedResult.items, error: err,
+              });
+            }
             deps.health.recordRss(false, `${company.ticker}: ${message}`);
             deps.db.logEvent("warn", "rss", `${company.ticker}: ${message}`);
             if (err instanceof ProviderRateLimitError) {
@@ -269,6 +282,7 @@ export function startXPoller(deps: {
         const sinceId = checkpoint ? checkpoint.sinceId : committedSinceId;
         const page = checkpoint?.page ?? 1;
         const requestKey = `x:${company.id}:${sinceId ?? "initial"}:page:${page}`;
+        let deliveryId: string | null = null;
         try {
           const res = await searchRecent({
             bearer: deps.bearer,
@@ -295,46 +309,54 @@ export function startXPoller(deps: {
             });
             break;
           }
-          let added = 0;
-          for (const post of res.posts) {
-            if (!matchesCompany(company, post.text)) continue;
-            if (
-              !isFinanceRelevant({
-                title: post.text,
-                snippet: "",
-                tier: "social",
-                kind: "x",
-                ticker: company.ticker,
-              })
-            ) {
-              continue;
-            }
-            const url = `https://x.com/${post.handle}/status/${post.id}`;
-            const inserted = deps.pipeline.ingest({
-              companyId: company.id,
-              kind: "x",
-              sourceName: `@${post.handle}`,
-              sourceUrl: url,
-              tier: "social",
-              title: post.text.slice(0, 140),
-              snippet: post.text.slice(0, 600),
-              publishedAt: Number.isFinite(post.createdAt) ? post.createdAt : null,
-              collector: "x",
-              sourceItemId: post.id,
-              publisherName: `@${post.handle}`,
-              publisherDomain: "x.com",
-              adapterVersion: "x-search/1",
-              retrievedAt: Date.now(),
-              scoped: true,
-            });
-            if (inserted) added += 1;
-          }
-          recordDelivery({
+          deliveryId = recordDelivery({
             db: deps.db, collector: "x", companyId: company.id,
             requestKey, startedAt,
             adapterVersion: "x-search/1", result: res.nextToken ? "partial" : posts.length === 0 ? "empty" : "success",
-            parsedItemCount: posts.length, normalizedItems: posts,
+            parsedItemCount: posts.length, normalizedItems: posts, processingExpected: true,
           });
+          let added = 0;
+          processDeliveryItems({ db: deps.db, deliveryId, expectedCount: res.posts.length, process: (itemProcessed) => {
+            for (const post of res.posts) {
+              if (!matchesCompany(company, post.text)) {
+                itemProcessed();
+                continue;
+              }
+              if (
+                !isFinanceRelevant({
+                  title: post.text,
+                  snippet: "",
+                  tier: "social",
+                  kind: "x",
+                  ticker: company.ticker,
+                })
+              ) {
+                itemProcessed();
+                continue;
+              }
+              const url = `https://x.com/${post.handle}/status/${post.id}`;
+              const inserted = deps.pipeline.ingest({
+                companyId: company.id,
+                kind: "x",
+                sourceName: `@${post.handle}`,
+                sourceUrl: url,
+                tier: "social",
+                title: post.text.slice(0, 140),
+                snippet: post.text.slice(0, 600),
+                publishedAt: Number.isFinite(post.createdAt) ? post.createdAt : null,
+                collector: "x",
+                sourceItemId: post.id,
+                deliveryId,
+                publisherName: `@${post.handle}`,
+                publisherDomain: "x.com",
+                adapterVersion: "x-search/1",
+                retrievedAt: Date.now(),
+                scoped: true,
+              });
+              if (inserted) added += 1;
+              itemProcessed(inserted);
+            }
+          } });
           const newestSeenId = newestId(checkpoint?.newestId, res.newestId, ...posts.map((post) => post.id));
           if (res.nextToken) {
             deps.db.setKv(checkpointKey(company.id), JSON.stringify({
@@ -365,14 +387,16 @@ export function startXPoller(deps: {
             // from the last fully drained search window.
             deps.db.setKv(checkpointKey(company.id), "");
           }
-          recordDelivery({
-            db: deps.db, collector: "x", companyId: company.id,
-            requestKey, startedAt, adapterVersion: "x-search/1",
-            result: posts.length > 0 ? "partial"
-              : err instanceof XNonAdvancingPaginationTokenError ? "invalid" : classifyDeliveryError(err),
-            parsedItemCount: posts.length,
-            normalizedItems: posts, error: err,
-          });
+          if (deliveryId == null) {
+            recordDelivery({
+              db: deps.db, collector: "x", companyId: company.id,
+              requestKey, startedAt, adapterVersion: "x-search/1",
+              result: posts.length > 0 ? "partial"
+                : err instanceof XNonAdvancingPaginationTokenError ? "invalid" : classifyDeliveryError(err),
+              parsedItemCount: posts.length,
+              normalizedItems: posts, error: err,
+            });
+          }
           deps.health.recordX(false, `${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "x", `${company.ticker}: ${message}`);
         }
@@ -431,34 +455,55 @@ export function startSecPoller(deps: {
           let unavailableDocuments = 0;
           for (const f of filings) {
             let snippet = "";
+            const documentStartedAt = Date.now();
+            const url = f.primaryDocUrl || `https://www.sec.gov/Archives/edgar/data/${Number(f.cik)}/${f.accessionNo.replace(/-/g, "")}/`;
+            let deliveryId: string;
             try {
               snippet = await fetchPrimaryDocText(f.primaryDocUrl, deps.userAgent);
+              deliveryId = recordDelivery({
+                db: deps.db, collector: "sec_edgar", companyId: company.id,
+                requestKey: `sec:${cik}:8-k-document:${f.accessionNo}`, startedAt: documentStartedAt,
+                adapterVersion: "sec-primary-document/1", result: snippet ? "success" : "empty",
+                parsedItemCount: snippet ? 1 : 0, normalizedItems: { url, snippet }, processingExpected: Boolean(snippet),
+              });
             } catch (err) {
               if (err instanceof ProviderRateLimitError) throw err;
+              recordDelivery({
+                db: deps.db, collector: "sec_edgar", companyId: company.id,
+                requestKey: `sec:${cik}:8-k-document:${f.accessionNo}`, startedAt: documentStartedAt,
+                adapterVersion: "sec-primary-document/1", result: classifyDeliveryError(err),
+                parsedItemCount: 0, error: err,
+              });
+              unavailableDocuments += 1;
+              continue;
             }
             if (!snippet) {
               unavailableDocuments += 1;
               continue;
             }
-            const url = f.primaryDocUrl || `https://www.sec.gov/Archives/edgar/data/${Number(f.cik)}/${f.accessionNo.replace(/-/g, "")}/`;
-            const inserted = deps.pipeline.ingest({
-              companyId: company.id,
-              kind: "sec",
-              scoped: true,
-              sourceName: "SEC EDGAR",
-              sourceUrl: url,
-              tier: "filing",
-              title: titleForItems(f.formType, f.items),
-              snippet,
-              publishedAt: f.acceptanceAt,
-              collector: "sec_edgar",
-              sourceItemId: f.accessionNo,
-              publisherName: "SEC EDGAR",
-              publisherDomain: "sec.gov",
-              adapterVersion: "sec-submissions/1",
-              filedAt: f.filedAt ?? undefined,
-              retrievedAt: Date.now(),
-            });
+            const inserted = processDeliveryItems({ db: deps.db, deliveryId, expectedCount: 1, process: (itemProcessed) => {
+              const didInsert = deps.pipeline.ingest({
+                companyId: company.id,
+                kind: "sec",
+                scoped: true,
+                sourceName: "SEC EDGAR",
+                sourceUrl: url,
+                tier: "filing",
+                title: titleForItems(f.formType, f.items),
+                snippet,
+                publishedAt: f.acceptanceAt,
+                collector: "sec_edgar",
+                sourceItemId: f.accessionNo,
+                deliveryId,
+                publisherName: "SEC EDGAR",
+                publisherDomain: "sec.gov",
+                adapterVersion: "sec-primary-document/1",
+                filedAt: f.filedAt ?? undefined,
+                retrievedAt: Date.now(),
+              });
+              itemProcessed(didInsert);
+              return didInsert;
+            } });
             if (inserted) added += 1;
           }
           const partialError = unavailableDocuments > 0
@@ -619,12 +664,13 @@ export function startGdeltPoller(deps: {
 
       for (const company of deps.companies) {
         const startedAt = now();
+        const query = `"${company.name}" OR "${company.ticker}"`;
         let result: GdeltFetchResult = {
           articles: [], providerResultCount: 0, malformedRowCount: 0,
           requestedLimit: GDELT_ARTICLE_LIMIT, saturated: false,
         };
+        let deliveryId: string | null = null;
         try {
-          const query = `"${company.name}" OR "${company.ticker}"`;
           result = await fetchArticles(query);
           const hasNoUsableRows = result.providerResultCount > 0 && result.articles.length === 0;
           const deliveryNotices = [
@@ -636,50 +682,60 @@ export function startGdeltPoller(deps: {
               : undefined,
           ].filter((notice): notice is string => notice != null);
           const deliveryNotice = deliveryNotices.length > 0 ? deliveryNotices.join("; ") : undefined;
-          let added = 0;
-          let dropped = 0;
-          for (const a of result.articles) {
-            if (!matchesCompany(company, a.title)) continue;
-            if (
-              !isFinanceRelevant({
-                title: a.title,
-                snippet: "",
-                tier: tierForHost(a.url),
-                kind: "rss",
-                ticker: company.ticker,
-              })
-            ) {
-              dropped += 1;
-              continue;
-            }
-            const inserted = deps.pipeline.ingest({
-              companyId: company.id,
-              kind: "rss",
-              sourceName: a.domain,
-              sourceUrl: a.url,
-              tier: tierForHost(a.url),
-              title: a.title,
-              snippet: "",
-              publishedAt: null,
-              providerObservedAt: a.seenAt,
-              collector: "gdelt_doc_api",
-              sourceItemId: a.url,
-              publisherName: a.domain,
-              publisherDomain: a.domain,
-              adapterVersion: "gdelt-doc/1",
-              retrievedAt: Date.now(),
-              scoped: false,
-            });
-            if (inserted) added += 1;
-          }
-          recordDelivery({
+          const requestKey = `gdelt:${query}`;
+          deliveryId = recordDelivery({
             db: deps.db, collector: "gdelt_doc_api", companyId: company.id,
-            requestKey: `gdelt:${query}`, startedAt, adapterVersion: "gdelt-doc/1",
+            requestKey, startedAt, adapterVersion: "gdelt-doc/1",
             result: hasNoUsableRows ? "invalid"
               : deliveryNotice ? "partial"
                 : result.providerResultCount === 0 ? "empty" : "success",
             parsedItemCount: result.providerResultCount, normalizedItems: result.articles, error: deliveryNotice,
+            processingExpected: true,
           });
+          let added = 0;
+          let dropped = 0;
+          processDeliveryItems({ db: deps.db, deliveryId, expectedCount: result.articles.length, process: (itemProcessed) => {
+            for (const a of result.articles) {
+              if (!matchesCompany(company, a.title)) {
+                itemProcessed();
+                continue;
+              }
+              if (
+                !isFinanceRelevant({
+                  title: a.title,
+                  snippet: "",
+                  tier: tierForHost(a.url),
+                  kind: "rss",
+                  ticker: company.ticker,
+                })
+              ) {
+                dropped += 1;
+                itemProcessed();
+                continue;
+              }
+              const inserted = deps.pipeline.ingest({
+                companyId: company.id,
+                kind: "rss",
+                sourceName: a.domain,
+                sourceUrl: a.url,
+                tier: tierForHost(a.url),
+                title: a.title,
+                snippet: "",
+                publishedAt: null,
+                providerObservedAt: a.seenAt,
+                collector: "gdelt_doc_api",
+                sourceItemId: a.url,
+                deliveryId,
+                publisherName: a.domain,
+                publisherDomain: a.domain,
+                adapterVersion: "gdelt-doc/1",
+                retrievedAt: Date.now(),
+                scoped: false,
+              });
+              if (inserted) added += 1;
+              itemProcessed(inserted);
+            }
+          } });
           deps.health.recordGdelt(!hasNoUsableRows, hasNoUsableRows
             ? `gdelt ${company.ticker}: no usable article rows in ${result.providerResultCount}-row response`
             : undefined);
@@ -692,12 +748,14 @@ export function startGdeltPoller(deps: {
           if (dropped > 0) deps.db.logEvent("info", "relevance", `gdelt ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          recordDelivery({
-            db: deps.db, collector: "gdelt_doc_api", companyId: company.id,
-            requestKey: `gdelt:${company.id}`, startedAt, adapterVersion: "gdelt-doc/1",
-            result: result.providerResultCount > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: result.providerResultCount,
-            normalizedItems: result.articles, error: err,
-          });
+          if (deliveryId == null) {
+            recordDelivery({
+              db: deps.db, collector: "gdelt_doc_api", companyId: company.id,
+              requestKey: `gdelt:${query}`, startedAt, adapterVersion: "gdelt-doc/1",
+              result: result.providerResultCount > 0 ? "partial" : classifyDeliveryError(err), parsedItemCount: result.providerResultCount,
+              normalizedItems: result.articles, error: err,
+            });
+          }
           deps.health.recordGdelt(false, `gdelt ${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "gdelt", `${company.ticker}: ${message}`);
           if (err instanceof GdeltHttpError && err.status === 429) {
@@ -764,51 +822,61 @@ export function startFinnhubPoller(deps: {
       if (providerCoolingDown(deps.db, "finnhub")) break;
       const startedAt = Date.now();
       let news: FinnhubNewsFetchResult = { items: [], providerItemCount: 0, malformedItemCount: 0 };
+      let deliveryId: string | null = null;
       try {
         news = await fetchNews(company.ticker, deps.token, deps.backfillDays);
-        let added = 0;
-        for (const n of news.items) {
-          if (!matchesCompany(company, n.headline, n.summary)) continue;
-          if (
-            !isFinanceRelevant({
-              title: n.headline,
-              snippet: n.summary,
-              tier: tierForHost(n.url),
-              kind: "finnhub",
-              ticker: company.ticker,
-            })
-          ) {
-            continue;
-          }
-          const inserted = deps.pipeline.ingest({
-            companyId: company.id,
-            kind: "finnhub",
-            sourceName: n.source,
-            sourceUrl: n.url,
-            tier: tierForHost(n.url),
-            title: n.headline,
-            snippet: n.summary,
-            publishedAt: n.datetime,
-            collector: "finnhub",
-            sourceItemId: n.url,
-            publisherName: n.source,
-            adapterVersion: "finnhub-news/1",
-            retrievedAt: Date.now(),
-          });
-          if (inserted) added += 1;
-        }
         const hasNoUsableRows = news.providerItemCount > 0 && news.items.length === 0;
         const malformedNotice = news.malformedItemCount > 0
           ? `Finnhub discarded ${news.malformedItemCount} malformed news item${news.malformedItemCount === 1 ? "" : "s"}`
           : undefined;
-        recordDelivery({
+        deliveryId = recordDelivery({
           db: deps.db, collector: "finnhub", companyId: company.id,
           requestKey: `finnhub:${company.ticker}:backfill:${deps.backfillDays}`, startedAt,
           adapterVersion: "finnhub-news/1",
           result: hasNoUsableRows ? "invalid" : malformedNotice ? "partial"
             : news.providerItemCount === 0 ? "empty" : "success",
           parsedItemCount: news.providerItemCount, normalizedItems: news.items, error: malformedNotice,
+          processingExpected: true,
         });
+        let added = 0;
+        processDeliveryItems({ db: deps.db, deliveryId, expectedCount: news.items.length, process: (itemProcessed) => {
+          for (const n of news.items) {
+            if (!matchesCompany(company, n.headline, n.summary)) {
+              itemProcessed();
+              continue;
+            }
+            if (
+              !isFinanceRelevant({
+                title: n.headline,
+                snippet: n.summary,
+                tier: tierForHost(n.url),
+                kind: "finnhub",
+                ticker: company.ticker,
+              })
+            ) {
+              itemProcessed();
+              continue;
+            }
+            const inserted = deps.pipeline.ingest({
+              companyId: company.id,
+              kind: "finnhub",
+              sourceName: n.source,
+              sourceUrl: n.url,
+              tier: tierForHost(n.url),
+              title: n.headline,
+              snippet: n.summary,
+              publishedAt: n.datetime,
+              collector: "finnhub",
+              sourceItemId: n.url,
+              deliveryId,
+              publisherName: n.source,
+              adapterVersion: "finnhub-news/1",
+              retrievedAt: Date.now(),
+            });
+            if (inserted) added += 1;
+            itemProcessed(inserted);
+          }
+        } });
         // Malformed responses remain retryable, but only after a delay so a
         // broken provider row cannot trigger another backfill each cycle.
         deps.db.setKv(completionKey, hasNoUsableRows || malformedNotice != null
@@ -820,12 +888,14 @@ export function startFinnhubPoller(deps: {
         deps.db.logEvent("info", "backfill", `${company.ticker}: ${added} historical mentions`);
       } catch (err) {
         deps.db.setKv(completionKey, String(Date.now() + backfillRetryDelayMs));
-        recordDelivery({
-          db: deps.db, collector: "finnhub", companyId: company.id,
-          requestKey: `finnhub:${company.ticker}:backfill:${deps.backfillDays}`, startedAt,
-          adapterVersion: "finnhub-news/1", result: news.items.length > 0 ? "partial" : classifyDeliveryError(err),
-          parsedItemCount: news.providerItemCount, normalizedItems: news.items, error: err,
-        });
+        if (deliveryId == null) {
+          recordDelivery({
+            db: deps.db, collector: "finnhub", companyId: company.id,
+            requestKey: `finnhub:${company.ticker}:backfill:${deps.backfillDays}`, startedAt,
+            adapterVersion: "finnhub-news/1", result: news.items.length > 0 ? "partial" : classifyDeliveryError(err),
+            parsedItemCount: news.providerItemCount, normalizedItems: news.items, error: err,
+          });
+        }
         deps.db.logEvent("warn", "backfill", `${company.ticker}: ${err instanceof Error ? err.message : String(err)}`);
         if (err instanceof ProviderRateLimitError) {
           recordProviderRateLimit({
@@ -928,54 +998,64 @@ export function startFinnhubPoller(deps: {
         if (providerCoolingDown(deps.db, "finnhub")) break;
         const startedAt = Date.now();
         let news: FinnhubNewsFetchResult = { items: [], providerItemCount: 0, malformedItemCount: 0 };
+        let deliveryId: string | null = null;
         try {
           news = await fetchNews(company.ticker, deps.token);
-          let added = 0;
-          let dropped = 0;
-          for (const n of news.items) {
-            if (!matchesCompany(company, n.headline, n.summary)) continue;
-            if (
-              !isFinanceRelevant({
-                title: n.headline,
-                snippet: n.summary,
-                tier: tierForHost(n.url),
-                kind: "finnhub",
-                ticker: company.ticker,
-              })
-            ) {
-              dropped += 1;
-              continue;
-            }
-            const inserted = deps.pipeline.ingest({
-              companyId: company.id,
-              kind: "finnhub",
-              sourceName: n.source,
-              sourceUrl: n.url,
-              tier: tierForHost(n.url),
-              title: n.headline,
-              snippet: n.summary,
-              publishedAt: n.datetime,
-              collector: "finnhub",
-              sourceItemId: n.url,
-              publisherName: n.source,
-              adapterVersion: "finnhub-news/1",
-              retrievedAt: Date.now(),
-              scoped: true,
-            });
-            if (inserted) added += 1;
-          }
           const hasNoUsableRows = news.providerItemCount > 0 && news.items.length === 0;
           const malformedNotice = news.malformedItemCount > 0
             ? `Finnhub discarded ${news.malformedItemCount} malformed news item${news.malformedItemCount === 1 ? "" : "s"}`
             : undefined;
-          recordDelivery({
+          deliveryId = recordDelivery({
             db: deps.db, collector: "finnhub", companyId: company.id,
             requestKey: `finnhub:${company.ticker}:recent`, startedAt,
             adapterVersion: "finnhub-news/1",
             result: hasNoUsableRows ? "invalid" : malformedNotice ? "partial"
               : news.providerItemCount === 0 ? "empty" : "success",
             parsedItemCount: news.providerItemCount, normalizedItems: news.items, error: malformedNotice,
+            processingExpected: true,
           });
+          let added = 0;
+          let dropped = 0;
+          processDeliveryItems({ db: deps.db, deliveryId, expectedCount: news.items.length, process: (itemProcessed) => {
+            for (const n of news.items) {
+              if (!matchesCompany(company, n.headline, n.summary)) {
+                itemProcessed();
+                continue;
+              }
+              if (
+                !isFinanceRelevant({
+                  title: n.headline,
+                  snippet: n.summary,
+                  tier: tierForHost(n.url),
+                  kind: "finnhub",
+                  ticker: company.ticker,
+                })
+              ) {
+                dropped += 1;
+                itemProcessed();
+                continue;
+              }
+              const inserted = deps.pipeline.ingest({
+                companyId: company.id,
+                kind: "finnhub",
+                sourceName: n.source,
+                sourceUrl: n.url,
+                tier: tierForHost(n.url),
+                title: n.headline,
+                snippet: n.summary,
+                publishedAt: n.datetime,
+                collector: "finnhub",
+                sourceItemId: n.url,
+                deliveryId,
+                publisherName: n.source,
+                adapterVersion: "finnhub-news/1",
+                retrievedAt: Date.now(),
+                scoped: true,
+              });
+              if (inserted) added += 1;
+              itemProcessed(inserted);
+            }
+          } });
           deps.health.recordFinnhub(!hasNoUsableRows, hasNoUsableRows
             ? `${company.ticker}: response contained no usable news items`
             : undefined);
@@ -987,12 +1067,14 @@ export function startFinnhubPoller(deps: {
           if (dropped > 0) deps.db.logEvent("info", "relevance", `finnhub ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          recordDelivery({
-            db: deps.db, collector: "finnhub", companyId: company.id,
-            requestKey: `finnhub:${company.ticker}:recent`, startedAt,
-            adapterVersion: "finnhub-news/1", result: news.items.length > 0 ? "partial" : classifyDeliveryError(err),
-            parsedItemCount: news.providerItemCount, normalizedItems: news.items, error: err,
-          });
+          if (deliveryId == null) {
+            recordDelivery({
+              db: deps.db, collector: "finnhub", companyId: company.id,
+              requestKey: `finnhub:${company.ticker}:recent`, startedAt,
+              adapterVersion: "finnhub-news/1", result: news.items.length > 0 ? "partial" : classifyDeliveryError(err),
+              parsedItemCount: news.providerItemCount, normalizedItems: news.items, error: err,
+            });
+          }
           deps.health.recordFinnhub(false, `${company.ticker}: ${message}`);
           deps.db.logEvent("warn", "finnhub", `${company.ticker}: ${message}`);
           if (err instanceof ProviderRateLimitError) {
@@ -1077,6 +1159,7 @@ export function startRedditPoller(deps: {
         const startedAt = Date.now();
         let result: RedditSearchResult = { posts: [], nextAfter: null, providerChildCount: 0, malformedChildCount: 0 };
         let requestKey = `reddit:${company.id}:${company.ticker}`;
+        let deliveryId: string | null = null;
         try {
           const query = `"${company.name}" OR "$${company.ticker}"`;
           const checkpoint = readCheckpoint(company.id, query);
@@ -1086,41 +1169,6 @@ export function startRedditPoller(deps: {
             after: checkpoint?.after,
             limit: pageSize,
           });
-          let added = 0;
-          let dropped = 0;
-          for (const p of result.posts) {
-            if (!matchesCompany(company, p.title, p.selftext)) continue;
-            if (
-              !isFinanceRelevant({
-                title: p.title,
-                snippet: p.selftext,
-                tier: "social",
-                kind: "reddit",
-                ticker: company.ticker,
-              })
-            ) {
-              dropped += 1;
-              continue;
-            }
-            const inserted = deps.pipeline.ingest({
-              companyId: company.id,
-              kind: "reddit",
-              sourceName: `r/${p.subreddit}`,
-              sourceUrl: p.permalink,
-              tier: "social",
-              title: p.title,
-              snippet: p.selftext,
-              publishedAt: p.createdAt,
-              collector: "reddit",
-              sourceItemId: p.id,
-              publisherName: `r/${p.subreddit}`,
-              publisherDomain: "reddit.com",
-              adapterVersion: "reddit-search/1",
-              retrievedAt: Date.now(),
-              scoped: true,
-            });
-            if (inserted) added += 1;
-          }
           const hasNoUsableRows = result.providerChildCount > 0 && result.posts.length === 0;
           const malformedNotice = result.malformedChildCount > 0
             ? `Reddit discarded ${result.malformedChildCount} malformed listing item${result.malformedChildCount === 1 ? "" : "s"}`
@@ -1128,7 +1176,7 @@ export function startRedditPoller(deps: {
           const paginationNotice = result.nextAfter ? `Reddit listing page ${page}; more results remain` : undefined;
           const deliveryNotices = [paginationNotice, malformedNotice].filter((notice): notice is string => notice != null);
           const deliveryNotice = deliveryNotices.length > 0 ? deliveryNotices.join("; ") : undefined;
-          recordDelivery({
+          deliveryId = recordDelivery({
             db: deps.db, collector: "reddit", companyId: company.id,
             requestKey, startedAt,
             adapterVersion: "reddit-search/1",
@@ -1136,7 +1184,51 @@ export function startRedditPoller(deps: {
               : deliveryNotice ? "partial"
                 : result.providerChildCount === 0 ? "empty" : "success",
             parsedItemCount: result.providerChildCount, normalizedItems: result.posts, error: deliveryNotice,
+            processingExpected: true,
           });
+          let added = 0;
+          let dropped = 0;
+          processDeliveryItems({ db: deps.db, deliveryId, expectedCount: result.posts.length, process: (itemProcessed) => {
+            for (const p of result.posts) {
+              if (!matchesCompany(company, p.title, p.selftext)) {
+                itemProcessed();
+                continue;
+              }
+              if (
+                !isFinanceRelevant({
+                  title: p.title,
+                  snippet: p.selftext,
+                  tier: "social",
+                  kind: "reddit",
+                  ticker: company.ticker,
+                })
+              ) {
+                dropped += 1;
+                itemProcessed();
+                continue;
+              }
+              const inserted = deps.pipeline.ingest({
+                companyId: company.id,
+                kind: "reddit",
+                sourceName: `r/${p.subreddit}`,
+                sourceUrl: p.permalink,
+                tier: "social",
+                title: p.title,
+                snippet: p.selftext,
+                publishedAt: p.createdAt,
+                collector: "reddit",
+                sourceItemId: p.id,
+                deliveryId,
+                publisherName: `r/${p.subreddit}`,
+                publisherDomain: "reddit.com",
+                adapterVersion: "reddit-search/1",
+                retrievedAt: Date.now(),
+                scoped: true,
+              });
+              if (inserted) added += 1;
+              itemProcessed(inserted);
+            }
+          } });
           if (result.nextAfter) {
             deps.db.setKv(checkpointKey(company.id), JSON.stringify({
               after: result.nextAfter,
@@ -1161,13 +1253,15 @@ export function startRedditPoller(deps: {
           if (err instanceof RedditPaginationRestartError) {
             deps.db.setKv(checkpointKey(company.id), "");
           }
-          recordDelivery({
-            db: deps.db, collector: "reddit", companyId: company.id,
-            requestKey, startedAt, adapterVersion: "reddit-search/1",
-            result: result.posts.length > 0 ? "partial" : classifyDeliveryError(err),
-            parsedItemCount: result.providerChildCount,
-            normalizedItems: result.posts, error: err,
-          });
+          if (deliveryId == null) {
+            recordDelivery({
+              db: deps.db, collector: "reddit", companyId: company.id,
+              requestKey, startedAt, adapterVersion: "reddit-search/1",
+              result: result.posts.length > 0 ? "partial" : classifyDeliveryError(err),
+              parsedItemCount: result.providerChildCount,
+              normalizedItems: result.posts, error: err,
+            });
+          }
           deps.health.recordReddit(false, `${company.ticker}: ${message}`);
           client = null; // force token refresh next cycle
           deps.db.logEvent("warn", "reddit", `${company.ticker}: ${message}`);

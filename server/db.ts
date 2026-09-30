@@ -17,6 +17,7 @@ import type {
   TimeBasis,
 } from "./types.js";
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
+import { researchPublisherDomain } from "./publisher-domain.js";
 
 // Historical simulation and unverified legacy rows stay in place for audit,
 // but only observations with an identified collector can enter live research
@@ -64,7 +65,8 @@ CREATE TABLE IF NOT EXISTS source_observations (
   filed_at INTEGER,
   scoped INTEGER NOT NULL DEFAULT 0,
   response_digest TEXT,
-  adapter_version TEXT NOT NULL
+  adapter_version TEXT NOT NULL,
+  delivery_id TEXT REFERENCES source_deliveries(id)
 );
 CREATE INDEX IF NOT EXISTS observations_company_source_time ON source_observations(company_id, publisher_published_at);
 CREATE INDEX IF NOT EXISTS observations_company_observed_time ON source_observations(company_id, provider_observed_at);
@@ -109,6 +111,7 @@ CREATE TABLE IF NOT EXISTS jev_judgments (
   score_usage_check_required INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS judgments_status ON jev_judgments(status);
+CREATE INDEX IF NOT EXISTS judgments_status_scored_at ON jev_judgments(status, scored_at, observation_id);
 CREATE TABLE IF NOT EXISTS source_deliveries (
   id TEXT PRIMARY KEY,
   collector TEXT NOT NULL,
@@ -121,6 +124,7 @@ CREATE TABLE IF NOT EXISTS source_deliveries (
   response_digest TEXT,
   adapter_version TEXT NOT NULL,
   error TEXT,
+  processing_required INTEGER NOT NULL DEFAULT 0 CHECK (processing_required IN (0, 1)),
   CHECK (parsed_item_count >= 0),
   CHECK (result IN ('success', 'empty', 'partial', 'failed', 'rate_limited', 'invalid'))
 );
@@ -129,6 +133,27 @@ CREATE TRIGGER IF NOT EXISTS source_deliveries_no_update BEFORE UPDATE ON source
 BEGIN SELECT RAISE(ABORT, 'source deliveries are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS source_deliveries_no_delete BEFORE DELETE ON source_deliveries
 BEGIN SELECT RAISE(ABORT, 'source deliveries are immutable'); END;
+CREATE TABLE IF NOT EXISTS source_ingestions (
+  delivery_id TEXT PRIMARY KEY REFERENCES source_deliveries(id),
+  started_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('processing', 'success', 'partial', 'failed')),
+  expected_count INTEGER NOT NULL,
+  processed_count INTEGER NOT NULL DEFAULT 0,
+  inserted_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  CHECK (expected_count >= 0 AND processed_count >= 0 AND inserted_count >= 0),
+  CHECK (processed_count <= expected_count AND inserted_count <= processed_count),
+  CHECK ((status = 'processing' AND completed_at IS NULL) OR (status <> 'processing' AND completed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS source_ingestions_status ON source_ingestions(status, started_at DESC);
+CREATE TRIGGER IF NOT EXISTS source_ingestions_terminal_immutable BEFORE UPDATE ON source_ingestions
+WHEN OLD.status <> 'processing' OR NEW.status = 'processing'
+  OR NEW.delivery_id <> OLD.delivery_id OR NEW.started_at <> OLD.started_at
+  OR NEW.expected_count <> OLD.expected_count
+BEGIN SELECT RAISE(ABORT, 'source ingestion outcome is immutable once finalized'); END;
+CREATE TRIGGER IF NOT EXISTS source_ingestions_no_delete BEFORE DELETE ON source_ingestions
+BEGIN SELECT RAISE(ABORT, 'source ingestion outcomes are immutable'); END;
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -137,6 +162,11 @@ CREATE TABLE IF NOT EXISTS price_points (
   ticker TEXT NOT NULL,
   t INTEGER NOT NULL,
   price REAL NOT NULL,
+  collector TEXT NOT NULL DEFAULT 'legacy_unknown',
+  currency TEXT,
+  retrieved_at INTEGER,
+  adapter_version TEXT NOT NULL DEFAULT 'legacy-unknown',
+  delivery_id TEXT REFERENCES source_deliveries(id),
   PRIMARY KEY (ticker, t)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -160,11 +190,17 @@ export interface MentionPageCursor {
   id: string;
 }
 
+export interface ScoreBucketCursor {
+  scoredAt: number;
+  id: string;
+}
+
 export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed";
 
 export interface MentionRow {
   id: string;
   company_id: string;
+  delivery_id: string | null;
   source_name: string;
   source_url: string;
   source_kind: string;
@@ -230,6 +266,16 @@ export interface SourceDeliveryInput {
   responseDigest?: string | null;
   adapterVersion: string;
   error?: string | null;
+  /** True when each fetched item must pass through its domain-specific processor. */
+  processingRequired?: boolean;
+}
+
+export interface SourceIngestionOutcomeInput {
+  status: "success" | "partial" | "failed";
+  processedCount: number;
+  insertedCount: number;
+  completedAt?: number;
+  error?: string | null;
 }
 
 export interface DeliverySourceSchedule {
@@ -257,6 +303,34 @@ export class Desk {
 
   /** Migrate the v1 combined table atomically, retaining it for audit/rollback. */
   private migrate(): void {
+    const observationCols = new Set(
+      (this.db.prepare("PRAGMA table_info(source_observations)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!observationCols.has("delivery_id")) {
+      this.db.exec("ALTER TABLE source_observations ADD COLUMN delivery_id TEXT REFERENCES source_deliveries(id)");
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS observations_delivery ON source_observations(delivery_id)");
+    const deliveryCols = new Set(
+      (this.db.prepare("PRAGMA table_info(source_deliveries)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!deliveryCols.has("processing_required")) {
+      this.db.exec("ALTER TABLE source_deliveries ADD COLUMN processing_required INTEGER NOT NULL DEFAULT 0 CHECK (processing_required IN (0, 1))");
+    }
+
+    const priceCols = new Set(
+      (this.db.prepare("PRAGMA table_info(price_points)").all() as Array<{ name: string }>).map((r) => r.name),
+    );
+    const priceAdditions: Array<[string, string]> = [
+      ["collector", "TEXT NOT NULL DEFAULT 'legacy_unknown'"],
+      ["currency", "TEXT"],
+      ["retrieved_at", "INTEGER"],
+      ["adapter_version", "TEXT NOT NULL DEFAULT 'legacy-unknown'"],
+      ["delivery_id", "TEXT"],
+    ];
+    for (const [name, ddl] of priceAdditions) {
+      if (!priceCols.has(name)) this.db.exec(`ALTER TABLE price_points ADD COLUMN ${name} ${ddl}`);
+    }
+
     const companyCols = new Set(
       (this.db.prepare("PRAGMA table_info(companies)").all() as Array<{ name: string }>).map(
         (r) => r.name,
@@ -339,7 +413,7 @@ export class Desk {
           score_error = 'Scoring was interrupted; provider outcome is unknown. Check provider usage before retrying.',
           score_usage_check_required = 1 WHERE status = 'scoring'`);
         this.createMentionsView();
-        this.db.exec("PRAGMA user_version = 4");
+        this.db.exec("PRAGMA user_version = 7");
         this.db.exec("COMMIT");
       } catch (err) {
         this.db.exec("ROLLBACK");
@@ -366,7 +440,7 @@ export class Desk {
         'Scoring was interrupted; provider outcome is unknown. Check provider usage before retrying.', score_usage_check_required = 1
         WHERE status = 'scoring'`);
       this.createMentionsView();
-      this.db.exec("PRAGMA user_version = 4");
+      this.db.exec("PRAGMA user_version = 7");
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
@@ -378,7 +452,7 @@ export class Desk {
     this.db.exec(`CREATE VIEW mentions AS
       SELECT o.id, o.company_id, o.source_name, o.source_url, o.source_kind, o.source_tier,
         o.title, o.snippet, o.publisher_published_at AS published_at, o.publisher_published_at,
-        o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector,
+        o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector, o.delivery_id,
         o.publisher_name, o.publisher_domain, o.filed_at, o.scoped,
         j.status, j.sentiment, j.confidence, j.p_pos, j.p_neu, j.p_neg, j.about, j.material,
         j.novel, j.credible, j.investor_relevant, j.event_type, j.takeaway, j.magnitude,
@@ -423,6 +497,20 @@ export class Desk {
     const publisherDomain = m.publisherDomain === undefined ? domainOf(m.sourceUrl) : m.publisherDomain;
     const providerObservedAt = m.providerObservedAt ?? null;
     const publisherPublishedAt = m.publishedAt ?? null;
+    const adapterVersion = m.adapterVersion ?? `${collector}/1`;
+    const deliveryId = m.deliveryId ?? null;
+    if (deliveryId != null) {
+      const delivery = this.db.prepare(
+        `SELECT collector, company_id, adapter_version, result FROM source_deliveries WHERE id = ?`,
+      ).get(deliveryId) as { collector: string; company_id: string | null; adapter_version: string; result: string } | undefined;
+      if (!delivery) throw new Error("Source observation references a missing delivery receipt");
+      if (delivery.collector !== collector || delivery.company_id !== m.companyId || delivery.adapter_version !== adapterVersion) {
+        throw new Error("Source observation does not match its delivery receipt");
+      }
+      if (!["success", "partial"].includes(delivery.result)) {
+        throw new Error("Source observation cannot reference an unsuccessful delivery receipt");
+      }
+    }
     const stableRevision = JSON.stringify({
       title: m.title.trim(), snippet: m.snippet.trim(), url: canonicalUrl(m.sourceUrl),
       publisherPublishedAt, filedAt: m.filedAt ?? null,
@@ -439,13 +527,13 @@ export class Desk {
          (id, company_id, identity_key, revision_digest, collector, channel, publisher_name,
           publisher_domain, source_item_id, source_name, source_url, source_kind, source_tier,
           title, snippet, publisher_published_at, provider_observed_at, retrieved_at, ingested_at,
-          time_basis, legacy_published_at, filed_at, scoped, response_digest, adapter_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`
+          time_basis, legacy_published_at, filed_at, scoped, response_digest, adapter_version, delivery_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
       ).run(
         observationId, m.companyId, identityKey, revisionDigest, collector, channelFor(m.kind), publisherName,
         publisherDomain, sourceItemId, m.sourceName, m.sourceUrl, m.kind, m.tier, m.title, m.snippet,
         publisherPublishedAt, providerObservedAt, m.retrievedAt, Date.now(), timeBasis, m.filedAt ?? null,
-        m.scoped ? 1 : 0, m.responseDigest ?? null, m.adapterVersion ?? `${collector}/1`,
+        m.scoped ? 1 : 0, m.responseDigest ?? null, adapterVersion, deliveryId,
       );
       if (Number(res.changes) > 0) {
         this.db.prepare("INSERT INTO jev_judgments (id, observation_id, status) VALUES (?, ?, 'pending')")
@@ -667,20 +755,66 @@ export class Desk {
     }
   }
 
-  recordDelivery(delivery: SourceDeliveryInput): void {
+  recordDelivery(delivery: SourceDeliveryInput): string {
     if (delivery.collector === "demo_simulation") throw new Error("Synthetic deliveries cannot be recorded by the application");
     if (delivery.collector === "legacy_unknown") throw new Error("Source collector provenance is required before recording a delivery");
+    const id = randomUUID();
     this.db.prepare(
       `INSERT OR IGNORE INTO source_deliveries
        (id, collector, company_id, request_key_hash, started_at, completed_at, result,
-        parsed_item_count, response_digest, adapter_version, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        parsed_item_count, response_digest, adapter_version, error, processing_required)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      randomUUID(), delivery.collector, delivery.companyId,
+      id, delivery.collector, delivery.companyId,
       createHash("sha256").update(delivery.requestKey).digest("hex"), delivery.startedAt,
       delivery.completedAt, delivery.result, delivery.parsedItemCount,
       delivery.responseDigest ?? null, delivery.adapterVersion,
-      delivery.error ? delivery.error.slice(0, 500) : null,
+      delivery.error ? delivery.error.slice(0, 500) : null, delivery.processingRequired ? 1 : 0,
+    );
+    return id;
+  }
+
+  startDeliveryIngestion(deliveryId: string, expectedCount: number, startedAt = Date.now()): void {
+    if (!Number.isSafeInteger(expectedCount) || expectedCount < 0 || !Number.isSafeInteger(startedAt) || startedAt < 0) {
+      throw new Error("Delivery ingestion counts and start time must be non-negative integers");
+    }
+    const delivery = this.db.prepare(
+      `SELECT processing_required AS processingRequired, result FROM source_deliveries WHERE id = ?`,
+    ).get(deliveryId) as { processingRequired: number; result: string } | undefined;
+    if (!delivery) throw new Error("Cannot process an unknown source delivery");
+    if (delivery.processingRequired !== 1) throw new Error("Source delivery is not marked for observation ingestion");
+    if (!["success", "empty", "partial", "invalid"].includes(delivery.result)) {
+      throw new Error("Only parsed source deliveries can enter observation ingestion");
+    }
+    this.db.prepare(
+      `INSERT INTO source_ingestions (delivery_id, started_at, status, expected_count)
+       VALUES (?, ?, 'processing', ?)`,
+    ).run(deliveryId, startedAt, expectedCount);
+  }
+
+  finishDeliveryIngestion(deliveryId: string, outcome: SourceIngestionOutcomeInput): void {
+    const completedAt = outcome.completedAt ?? Date.now();
+    if (!Number.isSafeInteger(outcome.processedCount) || outcome.processedCount < 0 ||
+      !Number.isSafeInteger(outcome.insertedCount) || outcome.insertedCount < 0 ||
+      !Number.isSafeInteger(completedAt) || completedAt < 0) {
+      throw new Error("Delivery ingestion counts and completion time must be non-negative integers");
+    }
+    const current = this.db.prepare(
+      `SELECT expected_count AS expectedCount, status FROM source_ingestions WHERE delivery_id = ?`,
+    ).get(deliveryId) as { expectedCount: number; status: string } | undefined;
+    if (!current || current.status !== "processing") throw new Error("Source delivery has no active ingestion to finalize");
+    if (outcome.processedCount > current.expectedCount || outcome.insertedCount > outcome.processedCount) {
+      throw new Error("Delivery ingestion counts exceed the declared batch size");
+    }
+    if (outcome.status === "success" && outcome.processedCount !== current.expectedCount) {
+      throw new Error("A successful ingestion must account for every normalized source item");
+    }
+    this.db.prepare(
+      `UPDATE source_ingestions SET completed_at = ?, status = ?, processed_count = ?,
+        inserted_count = ?, error = ? WHERE delivery_id = ? AND status = 'processing'`,
+    ).run(
+      completedAt, outcome.status, outcome.processedCount, outcome.insertedCount,
+      outcome.error ? outcome.error.slice(0, 500) : null, deliveryId,
     );
   }
 
@@ -710,6 +844,11 @@ export class Desk {
     latestItemCount: number | null;
     latestError: string | null;
     adapterVersion: string | null;
+    latestIngestionRequired: boolean;
+    latestIngestionState: "processing" | "success" | "partial" | "failed" | null;
+    latestIngestionExpectedCount: number | null;
+    latestIngestionProcessedCount: number | null;
+    latestIngestionInsertedCount: number | null;
     latestObservationAt: number | null;
     latestObservationBasis: TimeBasis | null;
     latestObservationRetrievedAt: number | null;
@@ -722,16 +861,30 @@ export class Desk {
       parsedItemCount: number;
       error: string | null;
       adapterVersion: string;
+      processingRequired: number;
+      ingestionState: "processing" | "success" | "partial" | "failed" | null;
+      ingestionStartedAt: number | null;
+      ingestionExpectedCount: number | null;
+      ingestionProcessedCount: number | null;
+      ingestionInsertedCount: number | null;
+      ingestionError: string | null;
     };
     const attempts = this.db.prepare(
       `WITH ranked AS (
-        SELECT collector, company_id AS companyId, completed_at AS completedAt, result,
-          parsed_item_count AS parsedItemCount, error, adapter_version AS adapterVersion,
-          ROW_NUMBER() OVER (PARTITION BY collector, COALESCE(company_id, ''), adapter_version
-            ORDER BY completed_at DESC, started_at DESC, rowid DESC) AS rn
-        FROM source_deliveries WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')
+        SELECT d.collector, d.company_id AS companyId, d.completed_at AS completedAt, d.result,
+          d.parsed_item_count AS parsedItemCount, d.error, d.adapter_version AS adapterVersion,
+          d.processing_required AS processingRequired, i.status AS ingestionState,
+          i.started_at AS ingestionStartedAt, i.expected_count AS ingestionExpectedCount,
+          i.processed_count AS ingestionProcessedCount, i.inserted_count AS ingestionInsertedCount,
+          i.error AS ingestionError,
+          ROW_NUMBER() OVER (PARTITION BY d.collector, COALESCE(d.company_id, ''), d.adapter_version
+            ORDER BY d.completed_at DESC, d.started_at DESC, d.rowid DESC) AS rn
+        FROM source_deliveries d LEFT JOIN source_ingestions i ON i.delivery_id = d.id
+        WHERE d.collector NOT IN ('demo_simulation', 'legacy_unknown')
       )
-      SELECT collector, companyId, completedAt, result, parsedItemCount, error, adapterVersion
+      SELECT collector, companyId, completedAt, result, parsedItemCount, error, adapterVersion,
+        processingRequired, ingestionState, ingestionStartedAt, ingestionExpectedCount,
+        ingestionProcessedCount, ingestionInsertedCount, ingestionError
       FROM ranked WHERE rn = 1`,
     ).all() as unknown as DeliveryRow[];
     const byCollector = new Map<CollectorId, DeliveryRow[]>();
@@ -766,10 +919,16 @@ export class Desk {
       const dueAfterMs = Math.max(source.intervalSeconds * 3_000, 180_000);
       const recent = rows.filter((row) => now - row.completedAt <= dueAfterMs);
       const coverageCount = new Set(recent.filter((row) =>
-        row.companyId !== null && (row.result === "success" || row.result === "empty")
+        row.companyId !== null && (row.result === "success" || row.result === "empty") &&
+        (row.processingRequired !== 1 || row.ingestionState === "success")
       ).map((row) => row.companyId)).size;
-      const recentFailureCount = recent.filter((row) => ["failed", "rate_limited", "invalid"].includes(row.result)).length;
-      const recentPartialCount = recent.filter((row) => row.result === "partial").length;
+      const recentFailureCount = recent.filter((row) =>
+        ["failed", "rate_limited", "invalid"].includes(row.result) ||
+        (row.processingRequired === 1 && (row.ingestionState === "failed" || row.ingestionState == null))
+      ).length;
+      const recentPartialCount = recent.filter((row) =>
+        row.result === "partial" || (row.processingRequired === 1 && row.ingestionState === "partial")
+      ).length;
       const degradedFilters = [
         "collector = ?",
         "completed_at >= ?",
@@ -797,6 +956,9 @@ export class Desk {
         hasDelivery: latest != null,
         latestDeliveryAt: latest?.completedAt ?? null,
         latestResult: latest?.result ?? null,
+        ingestionRequired: latest?.processingRequired === 1,
+        ingestionState: latest?.ingestionState ?? null,
+        ingestionStartedAt: latest?.ingestionStartedAt ?? null,
         recentFailureCount,
         recentPartialCount,
         coverageCount,
@@ -804,6 +966,15 @@ export class Desk {
         now,
         intervalSeconds: source.intervalSeconds,
       });
+      const latestIngestionError = latest?.processingRequired === 1
+        ? latest.ingestionState == null ? "Observation ingestion did not start"
+          : latest.ingestionState === "processing"
+            ? now - (latest.ingestionStartedAt ?? latest.completedAt) > dueAfterMs
+              ? "Observation ingestion stopped before completion"
+              : "Observation ingestion is still in progress"
+            : latest.ingestionState === "failed" || latest.ingestionState === "partial" ? latest.ingestionError ?? `Observation ingestion ${latest.ingestionState}`
+              : null
+        : null;
       return {
         collector: source.collector,
         enabled: source.enabled,
@@ -814,8 +985,13 @@ export class Desk {
         latestDeliveryAt: latest?.completedAt ?? null,
         latestResult: latest?.result ?? null,
         latestItemCount: latest?.parsedItemCount ?? null,
-        latestError: recentDegradationError ?? (state === "overdue" ? latest?.error ?? null : null),
+        latestError: latestIngestionError ?? recentDegradationError ?? (state === "overdue" ? latest?.error ?? null : null),
         adapterVersion: latest?.adapterVersion ?? null,
+        latestIngestionRequired: latest?.processingRequired === 1,
+        latestIngestionState: latest?.ingestionState ?? null,
+        latestIngestionExpectedCount: latest?.ingestionExpectedCount ?? null,
+        latestIngestionProcessedCount: latest?.ingestionProcessedCount ?? null,
+        latestIngestionInsertedCount: latest?.ingestionInsertedCount ?? null,
         latestObservationAt: observation?.publisherPublishedAt ?? observation?.providerObservedAt ?? null,
         latestObservationBasis: observation?.timeBasis ?? null,
         latestObservationRetrievedAt: observation?.retrievedAt ?? null,
@@ -831,6 +1007,16 @@ export class Desk {
          ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
       )
       .all(companyId, sinceMs, limit) as unknown as MentionRow[];
+    return rows.map(rowToDTO);
+  }
+
+  mentionsByIds(companyId: string, ids: string[]): MentionDTO[] {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.db.prepare(
+      `SELECT * FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
+         AND id IN (${placeholders})`,
+    ).all(companyId, ...ids) as unknown as MentionRow[];
     return rows.map(rowToDTO);
   }
 
@@ -884,26 +1070,62 @@ export class Desk {
     };
   }
 
-  scoredReactionEventsForCompany(companyId: string, sinceMs: number): Array<{
+  mentionsForScoreBucket({
+    companyId,
+    fromMs,
+    throughMs,
+    includeFromBoundary,
+    limit,
+    cursor,
+  }: {
+    companyId: string;
+    fromMs: number;
+    throughMs: number;
+    includeFromBoundary: boolean;
+    limit: number;
+    cursor: ScoreBucketCursor | null;
+  }): { items: MentionDTO[]; nextCursor: ScoreBucketCursor | null } {
+    const fromOperator = includeFromBoundary ? ">=" : ">";
+    const cursorClause = cursor
+      ? "AND (scored_at < ? OR (scored_at = ? AND id < ?))"
+      : "";
+    const cursorParams = cursor ? [cursor.scoredAt, cursor.scoredAt, cursor.id] : [];
+    const rows = this.db.prepare(
+      `SELECT * FROM mentions
+       WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
+         AND scored_at ${fromOperator} ? AND scored_at <= ? AND impact IS NOT NULL
+         ${cursorClause}
+       ORDER BY scored_at DESC, id DESC LIMIT ?`,
+    ).all(companyId, fromMs, throughMs, ...cursorParams, limit + 1) as unknown as MentionRow[];
+    const hasMore = rows.length > limit;
+    const last = hasMore ? rows[limit - 1] : undefined;
+    return {
+      items: rows.slice(0, limit).map(rowToDTO),
+      nextCursor: last?.scored_at == null ? null : { scoredAt: last.scored_at, id: last.id },
+    };
+  }
+
+  scoredReactionEventsForCompany(companyId: string, sinceMs: number, asOfMs = Date.now()): Array<{
     id: string;
     title: string;
-    publishedAt: number;
+    publishedAt: number | null;
+    availableAt: number;
     sentiment: string;
     eventScore: number;
     eventType: string;
   }> {
     return this.db.prepare(
-      `SELECT id, title, published_at AS publishedAt, sentiment, event_score AS eventScore,
+      `SELECT id, title, published_at AS publishedAt, scored_at AS availableAt, sentiment, event_score AS eventScore,
          COALESCE(event_type, 'other') AS eventType
        FROM mentions
        WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
-         AND published_at IS NOT NULL AND time_basis = 'publisher_declared' AND impact IS NOT NULL
-         AND published_at >= ?
-       ORDER BY published_at DESC, ingested_at DESC`,
-    ).all(companyId, sinceMs) as unknown as Array<{
+         AND scored_at IS NOT NULL AND scored_at >= ? AND scored_at <= ? AND impact IS NOT NULL
+       ORDER BY scored_at DESC, id DESC`,
+    ).all(companyId, sinceMs, asOfMs) as unknown as Array<{
       id: string;
       title: string;
-      publishedAt: number;
+      publishedAt: number | null;
+      availableAt: number;
       sentiment: string;
       eventScore: number;
       eventType: string;
@@ -911,7 +1133,7 @@ export class Desk {
   }
 
   radarEvidence(companyId: string, fromMs: number, toMs: number, asOf = Number.MAX_SAFE_INTEGER): RadarItemEvidence[] {
-    return this.db.prepare(
+    const rows = this.db.prepare(
       `SELECT id, title, source_url AS sourceUrl, publisher_name AS publisherName,
         publisher_domain AS publisherDomain, publisher_published_at AS publishedAt,
         retrieved_at AS retrievedAt, collector, event_type AS eventType,
@@ -922,6 +1144,10 @@ export class Desk {
          AND publisher_published_at < ? AND ingested_at <= ? AND scored_at <= ?
        ORDER BY publisher_published_at DESC, ingested_at DESC`,
     ).all(companyId, fromMs, toMs, asOf, asOf) as unknown as RadarItemEvidence[];
+    return rows.map((row) => ({
+      ...row,
+      publisherDomain: researchPublisherDomain(row.collector, row.publisherDomain),
+    }));
   }
 
   radarUncounted(companyId: string, retrievedFromMs: number, retrievedToMs: number, asOf = Number.MAX_SAFE_INTEGER): {
@@ -958,24 +1184,28 @@ export class Desk {
     return rows.map(rowToDTO);
   }
 
-  /** Scored, non-excluded mentions for index math over a window. */
-  scoredMentions(sinceMs: number): Array<{
+  /** Identified scored mentions keyed to the time the Jev result became available. */
+  scoredMentions(sinceMs: number, asOfMs = Date.now(), companyId?: string): Array<{
     companyId: string;
-    publishedAt: number;
+    availableAt: number;
     impact: number;
     weight: number;
+    scoredAt: number;
     eventType: string;
     takeaway: string;
   }> {
+    const companyClause = companyId == null ? "" : " AND company_id = ?";
+    const params = companyId == null ? [sinceMs, asOfMs] : [sinceMs, asOfMs, companyId];
     const rows = this.db
       .prepare(
-        `SELECT company_id, published_at, impact, weight, event_type, takeaway FROM mentions
-         WHERE ${REAL_MENTION_FILTER} AND status = 'scored' AND published_at IS NOT NULL AND time_basis = 'publisher_declared'
-           AND published_at >= ? AND impact IS NOT NULL`,
+        `SELECT company_id, scored_at, impact, weight, event_type, takeaway FROM mentions
+         WHERE ${REAL_MENTION_FILTER} AND status = 'scored' AND scored_at IS NOT NULL
+           AND scored_at >= ? AND scored_at <= ? AND impact IS NOT NULL${companyClause}
+         ORDER BY scored_at, id`,
       )
-      .all(sinceMs) as unknown as Array<{
+      .all(...params) as unknown as Array<{
         company_id: string;
-        published_at: number;
+        scored_at: number;
         impact: number;
         weight: number;
         event_type: string;
@@ -983,24 +1213,80 @@ export class Desk {
       }>;
     return rows.map((r) => ({
       companyId: r.company_id,
-      publishedAt: r.published_at,
+      availableAt: r.scored_at,
       impact: r.impact,
       weight: r.weight,
+      scoredAt: r.scored_at,
       eventType: r.event_type,
       takeaway: r.takeaway,
     }));
   }
 
-  upsertPricePoint(ticker: string, t: number, price: number): void {
-    this.db
-      .prepare("INSERT OR IGNORE INTO price_points (ticker, t, price) VALUES (?, ?, ?)")
-      .run(ticker, Math.floor(t / 1000) * 1000, price);
+  upsertPricePoint(input: {
+    ticker: string;
+    t: number;
+    price: number;
+    collector: "yahoo_quote" | "yahoo_chart";
+    currency: string;
+    retrievedAt: number;
+    adapterVersion: string;
+    deliveryId: string;
+  }): boolean {
+    if (!Number.isFinite(input.t) || input.t <= 0
+      || !Number.isFinite(input.price) || input.price <= 0
+      || !/^[A-Z]{3}$/.test(input.currency)
+      || !Number.isFinite(input.retrievedAt) || input.retrievedAt <= 0
+      || !input.adapterVersion.trim() || !input.deliveryId.trim()) {
+      throw new Error("Price point requires source time, value, currency, retrieval time, adapter version, and delivery receipt");
+    }
+    const receipt = this.db.prepare(`SELECT collector, result, adapter_version FROM source_deliveries WHERE id = ?`)
+      .get(input.deliveryId) as { collector: string; result: string; adapter_version: string } | undefined;
+    if (!receipt || receipt.collector !== input.collector
+      || !["success", "partial"].includes(receipt.result)
+      || receipt.adapter_version !== input.adapterVersion) {
+      throw new Error("Price point delivery receipt does not match its source collector and adapter");
+    }
+    const result = this.db
+      .prepare(`INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ticker, t) DO UPDATE SET price = excluded.price, collector = excluded.collector,
+          currency = excluded.currency, retrieved_at = excluded.retrieved_at,
+          adapter_version = excluded.adapter_version, delivery_id = excluded.delivery_id
+        WHERE (price_points.collector = 'legacy_unknown' OR price_points.collector = 'yahoo_quote')
+          AND excluded.collector = 'yahoo_chart'`)
+      .run(input.ticker, Math.floor(input.t / 1000) * 1000, input.price, input.collector,
+        input.currency, Math.floor(input.retrievedAt), input.adapterVersion, input.deliveryId);
+    return result.changes > 0;
   }
 
-  priceWindow(ticker: string, sinceMs: number): Array<{ t: number; price: number }> {
+  priceWindow(ticker: string, sinceMs: number, asOfMs = Date.now()): Array<{
+    t: number;
+    price: number;
+    currency: string;
+    collector: "yahoo_chart";
+    retrievedAt: number;
+    adapterVersion: string;
+    deliveryId: string;
+  }> {
     return this.db
-      .prepare("SELECT t, price FROM price_points WHERE ticker = ? AND t >= ? ORDER BY t")
-      .all(ticker, sinceMs) as unknown as Array<{ t: number; price: number }>;
+      .prepare(`SELECT p.t, p.price, p.currency, p.collector, p.retrieved_at AS retrievedAt,
+          p.adapter_version AS adapterVersion, p.delivery_id AS deliveryId
+        FROM price_points p WHERE p.ticker = ? AND p.t >= ? AND p.retrieved_at <= ? AND p.collector = 'yahoo_chart'
+          AND p.currency GLOB '[A-Z][A-Z][A-Z]' AND p.retrieved_at > 0 AND p.price > 0
+          AND p.delivery_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM source_deliveries d WHERE d.id = p.delivery_id
+              AND d.collector = p.collector AND d.adapter_version = p.adapter_version
+              AND d.result IN ('success', 'partial'))
+        ORDER BY p.t`)
+      .all(ticker, sinceMs, asOfMs) as unknown as Array<{
+        t: number;
+        price: number;
+        currency: string;
+        collector: "yahoo_chart";
+        retrievedAt: number;
+        adapterVersion: string;
+        deliveryId: string;
+      }>;
   }
 
   pendingIds(limit: number, allowedCollectors: readonly CollectorId[]): string[] {
@@ -1019,10 +1305,12 @@ export class Desk {
   /** Scored, non-excluded events across the watchlist with ticker identity. */
   scoredMentionEvents(
     sinceMs: number,
+    asOfMs = Date.now(),
   ): Array<{
     companyId: string;
     ticker: string;
-    publishedAt: number;
+    publishedAt: number | null;
+    availableAt: number;
     sentiment: string;
     eventScore: number;
     eventType: string;
@@ -1031,18 +1319,20 @@ export class Desk {
     return this.db
       .prepare(
         `SELECT m.company_id AS companyId, c.ticker AS ticker, m.published_at AS publishedAt,
+                m.scored_at AS availableAt,
                 m.sentiment AS sentiment, m.event_score AS eventScore,
                 COALESCE(m.event_type, 'other') AS eventType, m.title AS title
          FROM mentions m JOIN companies c ON c.id = m.company_id
          WHERE m.collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(m.engine, '') <> 'demo-sim'
-           AND m.status = 'scored' AND m.published_at IS NOT NULL
-           AND m.time_basis = 'publisher_declared' AND m.published_at >= ? AND m.impact IS NOT NULL
-         ORDER BY m.published_at`,
+           AND m.status = 'scored' AND m.scored_at IS NOT NULL
+           AND m.scored_at >= ? AND m.scored_at <= ? AND m.impact IS NOT NULL
+         ORDER BY m.scored_at, m.id`,
       )
-      .all(sinceMs) as unknown as Array<{
+      .all(sinceMs, asOfMs) as unknown as Array<{
         companyId: string;
         ticker: string;
-        publishedAt: number;
+        publishedAt: number | null;
+        availableAt: number;
         sentiment: string;
         eventScore: number;
         eventType: string;
@@ -1218,7 +1508,7 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     companyId: r.company_id,
     collector: r.collector as CollectorId,
     publisherName: r.publisher_name,
-    publisherDomain: r.publisher_domain,
+    publisherDomain: researchPublisherDomain(r.collector, r.publisher_domain),
     source: {
       name: r.source_name,
       url: r.source_url,
@@ -1226,7 +1516,8 @@ export function rowToDTO(r: MentionRow): MentionDTO {
       tier: r.source_tier as SourceTier,
       collector: r.collector as CollectorId,
       publisher: r.publisher_name,
-      publisherDomain: r.publisher_domain,
+      publisherDomain: researchPublisherDomain(r.collector, r.publisher_domain),
+      deliveryId: r.delivery_id ?? null,
     },
     title: r.title,
     snippet: r.snippet,

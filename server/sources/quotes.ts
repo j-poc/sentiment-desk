@@ -23,9 +23,15 @@ export interface Quote {
 export interface PricePoint {
   t: number;
   price: number;
+  currency: string;
+  collector?: "yahoo_chart";
+  retrievedAt?: number;
+  adapterVersion?: string;
+  deliveryId?: string;
 }
 
 interface ChartMeta {
+  symbol?: string;
   regularMarketPrice?: number;
   chartPreviousClose?: number;
   previousClose?: number;
@@ -91,17 +97,24 @@ export async function fetchQuote(ticker: string, timeoutMs = 10_000): Promise<Qu
     timeoutMs,
   );
   const meta = chartResult(body)?.meta;
+  if (typeof meta?.symbol !== "string" || meta.symbol.toUpperCase() !== ticker.toUpperCase()) {
+    throw new Error(`Yahoo quote symbol missing or mismatched for ${ticker}`);
+  }
   const price = meta?.regularMarketPrice;
   const prev = meta?.chartPreviousClose ?? meta?.previousClose;
   if (price == null || !Number.isFinite(price) || price <= 0
     || prev == null || !Number.isFinite(prev) || prev <= 0) {
     throw new Error(`quote incomplete for ${ticker}`);
   }
+  const currency = meta?.currency;
+  if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) {
+    throw new Error(`quote currency missing or invalid for ${ticker}`);
+  }
   return {
     ticker,
     price,
     changePct: Math.round(((price - prev) / prev) * 10000) / 100,
-    currency: meta?.currency ?? "USD",
+    currency,
     at: typeof meta?.regularMarketTime === "number" && Number.isFinite(meta.regularMarketTime)
       ? meta.regularMarketTime * 1000
       : null,
@@ -127,6 +140,13 @@ export async function fetchPriceSeries(
   );
   const result = chartResult(body);
   if (result === null) return [];
+  if (typeof result.meta?.symbol !== "string" || result.meta.symbol.toUpperCase() !== ticker.toUpperCase()) {
+    throw new Error(`Yahoo chart symbol missing or mismatched for ${ticker}`);
+  }
+  const currency = result.meta?.currency;
+  if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) {
+    throw new Error(`Yahoo chart currency missing or invalid for ${ticker}`);
+  }
   const ts = result.timestamp;
   const closes = result.indicators?.quote?.[0]?.close;
   if (!Array.isArray(ts) || !Array.isArray(closes)) {
@@ -146,7 +166,7 @@ export async function fetchPriceSeries(
     if (typeof c !== "number" || !Number.isFinite(c) || c <= 0) {
       throw new Error("Yahoo chart result contains an invalid close value");
     }
-    out.push({ t: rawTimestamp * 1000, price: c });
+    out.push({ t: rawTimestamp * 1000, price: c, currency });
   }
   return out;
 }

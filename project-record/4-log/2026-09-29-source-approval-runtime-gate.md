@@ -150,4 +150,4 @@ disabled; the live smoke left its real-source observation pending; no approved
 TypeSafe account/spend ceiling, contact-bearing SEC User-Agent, independently
 blinded real-source Jev evaluation, or provider records for historical
 `legacy_unknown` usage are available. RSS/GDELT coverage is finite and
-explicitly incomplete. The overall operational goal remains blocked.
+explicitly incomplete. The native goal remains active and incomplete; the operational acceptance gates remain blocked pending the specified external evidence.

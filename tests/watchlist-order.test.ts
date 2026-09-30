@@ -10,6 +10,8 @@ function company(ticker: string, delta: number | null): CompanySnapshot {
     sector: "Test sector",
     color: "#ffffff",
     index: null,
+    indexWindow: null,
+    indexRecordCount: 0,
     delta,
     mentions24h: 0,
     lastMentionAt: null,

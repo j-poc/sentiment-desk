@@ -34,6 +34,18 @@ const RUBRIC_ROWS: Array<{ key: ScoreKey; label: string }> = [
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+function linkHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
+  } catch {
+    return "host unavailable";
+  }
+}
+
+function collectorLabel(collector: string): string {
+  return collector === "google_news_rss" ? "Google News RSS" : collector;
+}
+
 type RetryState =
   | { type: "idle" }
   | { type: "confirming"; chargeConfirmed: boolean; usageReviewed: boolean }
@@ -49,10 +61,14 @@ export function MentionDrawer({
   mention,
   onClose,
   retryAvailability,
+  refreshWarning = false,
+  onRetryRefresh,
 }: {
   mention: Mention | null;
   onClose: () => void;
   retryAvailability: RetryAvailability;
+  refreshWarning?: boolean;
+  onRetryRefresh?: () => void;
 }) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -105,6 +121,7 @@ export function MentionDrawer({
   if (!mention) return null;
   const s = mention.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
+  const impactColor = s ? (s.impact > 0 ? "#34d399" : s.impact < 0 ? "#f87171" : NEU) : NEU;
 
   return (
     <>
@@ -131,6 +148,12 @@ export function MentionDrawer({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
+          {refreshWarning && (
+            <p className="mb-3 rounded border border-amber-300/20 bg-amber-200/[0.04] px-2.5 py-2 text-[11px] text-amber-100/80" role="alert">
+              Some saved records could not be refreshed after reconnect. This detail may be out of date.{" "}
+              <button type="button" className="underline underline-offset-2" onClick={onRetryRefresh}>Retry refresh</button>
+            </p>
+          )}
           <div className="flex items-center gap-2 text-[11px] text-desk-dim">
             <span
               className="inline-block h-1.5 w-1.5 rounded-full"
@@ -148,6 +171,34 @@ export function MentionDrawer({
             <span className="text-white/20">·</span>
             <span>collected {timeAgo(mention.retrievedAt)}</span>
           </div>
+          <div className="mt-1 text-[10px] text-white/35">
+            source request receipt · {mention.source.deliveryId == null ? "unlinked · historical record" : mention.source.deliveryId.slice(0, 12)}
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-md border border-white/[0.07] bg-white/[0.02] px-2.5 py-2" role="group" aria-label="Source attribution">
+            <div className="min-w-0">
+              <div className="micro">reported publisher</div>
+              <div className="truncate text-[10.5px] text-white/75" title={mention.publisherName || mention.source.publisher || mention.source.name}>
+                {mention.publisherName || mention.source.publisher || mention.source.name}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <div className="micro">reported domain</div>
+              <div className="truncate text-[10.5px] text-white/75" title={mention.publisherDomain || mention.source.publisherDomain || "domain unavailable"}>
+                {mention.publisherDomain || mention.source.publisherDomain || "domain unavailable"}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <div className="micro">collector</div>
+              <div className="truncate text-[10.5px] text-white/75" title={mention.collector}>{collectorLabel(mention.collector)}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="micro">saved link host</div>
+              <div className="truncate text-[10.5px] text-white/75" title={mention.source.url}>{linkHost(mention.source.url)}</div>
+            </div>
+            <p className="col-span-2 text-[9.5px] leading-relaxed text-white/35">
+              Publisher details are stored feed/provider attribution, not independent verification. The saved link may route through the collector.
+            </p>
+          </div>
 
           {s && s.takeaway !== "routine" && (
             <div className="mt-2 text-[12px] font-semibold uppercase tracking-wide" style={{ color: dir }}>
@@ -164,11 +215,14 @@ export function MentionDrawer({
           {s ? (
             <>
               <div className="mt-4 flex items-center gap-3">
-                <div className="tabnum text-[26px] font-semibold" style={{ color: dir }}>
-                  {fmtIndex(s.impact)}
+                <div>
+                  <div className="micro">directional impact</div>
+                  <div className="tabnum text-[26px] font-semibold" style={{ color: impactColor }}>
+                    {fmtIndex(s.impact)}
+                  </div>
                 </div>
                 <div className="text-[11px] leading-tight text-white/45">
-                  <div style={{ color: dir }}>{s.sentiment.toUpperCase()}</div>
+                  <div style={{ color: dir }}>most likely class · {s.sentiment.toUpperCase()}</div>
                   <div>
                     event strength <span className="tabnum text-white/70">{Math.round(s.eventScore)}</span>
                   </div>
@@ -178,6 +232,9 @@ export function MentionDrawer({
                   <div className="tabnum">est. input ${s.estimatedInputCostUsd.toFixed(5)}</div>
                 </div>
               </div>
+              <p className="mt-2 text-[10.5px] leading-relaxed text-white/40">
+                Impact is 100 × [P(positive) − P(negative)] impact points; the class is the most likely category. A neutral class can still carry directional impact.
+              </p>
 
               <div className="mt-3 border-t border-white/[0.05] pt-2">
                 {RUBRIC_ROWS.map((r) => {
@@ -335,7 +392,7 @@ export function MentionDrawer({
             rel="noreferrer"
             className="block rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-center text-[11.5px] font-medium text-white/80 hover:bg-white/[0.07]"
           >
-            Open original source ↗
+            {mention.collector === "google_news_rss" ? "Open Google News result ↗" : "Open saved source link ↗"}
           </a>
         </div>
       </aside>

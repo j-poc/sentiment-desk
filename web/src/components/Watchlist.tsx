@@ -21,12 +21,22 @@ export function Sparkline({ points, width = 76, height = 24 }: { points?: Series
   );
 }
 
-export function DeltaChip({ delta }: { delta: number | null }) {
-  if (delta == null) return <span className="text-[10px] text-white/25">--</span>;
+export function DeltaChip({ delta, label }: { delta: number | null; label?: string }) {
+  if (delta == null) {
+    return (
+      <span className="text-[10px] text-white/25" aria-label={label ? `${label}: unavailable` : undefined}>
+        --
+      </span>
+    );
+  }
   const color = delta > 0.5 ? "#34d399" : delta < -0.5 ? "#f87171" : NEU;
   const arrow = delta > 0.5 ? "▲" : delta < -0.5 ? "▼" : "·";
   return (
-    <span className="tabnum inline-flex items-center gap-0.5 text-[10px]" style={{ color }}>
+    <span
+      className="tabnum inline-flex items-center gap-0.5 text-[10px]"
+      style={{ color }}
+      aria-label={label ? `${label}: ${fmtDelta(delta)} impact points` : undefined}
+    >
       {arrow} {fmtDelta(delta)}
     </span>
   );
@@ -53,12 +63,28 @@ export function Watchlist({
         const q = quotes[c.ticker];
         const change = q?.changePct;
         const sourceAge = q ? quoteSourceAgeLabel(q.at) : null;
-        const freshness = sourceAge ?? (q?.delivery === "cache" ? `cached ${timeAgo(q.retrievedAt)}` : null);
+        const sourceTiming = q == null
+          ? null
+          : sourceAge ?? "source time within the last 15 minutes";
+        const freshness = q?.delivery === "cache"
+          ? `cached ${timeAgo(q.retrievedAt)} · ${sourceTiming}`
+          : sourceAge;
         const changeColor = change == null ? NEU : change > 0.001 ? "#34d399" : change < -0.001 ? "#f87171" : NEU;
+        const indexDescription = c.index == null
+          ? "Jev weighted item mean unavailable"
+          : `Jev weighted item mean ${fmtIndex(c.index)} impact points from ${c.indexRecordCount} scored source records over ${c.indexWindow === "24h" ? "the trailing 24 hours (fallback)" : "the latest 3 hours"}`;
+        const deltaDescription = c.delta == null
+          ? "Current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean is unavailable"
+          : `Current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean: ${fmtDelta(c.delta)} impact points`;
+        const priceDescription = q == null
+          ? "Market price unavailable"
+          : `Market price ${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}; ${sourceTiming}; ${q.delivery === "cache" ? "cached" : "network"} delivery retrieved ${timeAgo(q.retrievedAt)}; ${change == null ? "price change unavailable" : `price change ${fmtDelta(change)} percent`}`;
         return (
           <button
             key={c.id}
             onClick={() => onSelect(c.id)}
+            aria-pressed={selected}
+            aria-label={`${c.name} (${c.ticker}). ${indexDescription}. ${deltaDescription}. ${priceDescription}. Activate to show ${c.name} research.`}
             className={`flex w-full items-center gap-2.5 border-b border-white/[0.04] px-3 py-2 text-left transition-colors ${
               selected ? "bg-white/[0.05]" : "hover:bg-white/[0.03]"
             }`}
@@ -69,22 +95,26 @@ export function Watchlist({
                 <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.color }} />
                 <span className="text-[12px] font-semibold tracking-wide">{c.ticker}</span>
               </span>
-              <span className="clamp-1 mt-0.5 block text-[9.5px] text-white/30">{c.name}</span>
+              <span className="clamp-1 mt-0.5 block text-[10.5px] text-white/60">{c.name}</span>
             </span>
 
             <Sparkline points={sparks[c.id]} />
 
             <span className="w-[58px] shrink-0 text-right">
-              <span className={`tabnum block text-[11.5px] ${q?.delivery === "cache" ? "text-amber-300/80" : "text-white/85"}`} title={q ? `${q.currency}; source time ${q.at == null ? "unknown" : new Date(q.at).toISOString()}; retrieved ${timeAgo(q.retrievedAt)}` : undefined}>
+              <span className={`tabnum block text-[11.5px] ${q?.delivery === "cache" ? "text-amber-300/80" : "text-white/85"}`} title={q ? priceDescription : undefined}>
                 {q ? `${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}` : "--"}
               </span>
-              <span className="tabnum block truncate text-[9.5px]" style={{ color: freshness ? "#fbbf24" : changeColor }}>
+              <span className="tabnum block truncate text-[10.5px]" style={{ color: freshness ? "#fbbf24" : changeColor }}>
                 {freshness ?? (change != null ? `${fmtDelta(change)}%` : "--")}
               </span>
             </span>
 
             <span className="w-[52px] shrink-0 text-right">
-              <span className="tabnum block text-[12.5px] font-semibold" style={{ color }}>
+              <span
+                className="tabnum block text-[12.5px] font-semibold"
+                style={{ color }}
+                title={indexDescription}
+              >
                 {fmtIndex(c.index)}
               </span>
               <DeltaChip delta={c.delta} />
@@ -92,7 +122,7 @@ export function Watchlist({
           </button>
         );
       })}
-      <div className="px-3 py-2 text-[9.5px] text-white/25">
+      <div className="px-3 py-2 text-[10.5px] text-white/55">
         {companies.length} companies · last mention {timeAgo(
           companies.reduce<number | null>((acc, c) => (c.lastMentionAt ?? 0) > (acc ?? 0) ? c.lastMentionAt : acc, null),
         )}

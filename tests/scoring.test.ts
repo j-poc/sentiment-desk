@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPostRules,
+  bucketMsFor,
   forwardReturn,
   isFinanceRelevant,
   parseJudgment,
@@ -129,15 +130,15 @@ describe("weightedIndex", () => {
   it("computes the weighted mean", () => {
     expect(
       weightedIndex([
-        { publishedAt: 0, impact: 100, weight: 1 },
-        { publishedAt: 0, impact: -100, weight: 3 },
+        { availableAt: 0, impact: 100, weight: 1 },
+        { availableAt: 0, impact: -100, weight: 3 },
       ]),
     ).toBe(-50);
   });
 
   it("returns null with no usable weight", () => {
     expect(weightedIndex([])).toBeNull();
-    expect(weightedIndex([{ publishedAt: 0, impact: 10, weight: 0 }])).toBeNull();
+    expect(weightedIndex([{ availableAt: 0, impact: 10, weight: 0 }])).toBeNull();
   });
 });
 
@@ -145,9 +146,9 @@ describe("smoothedSeries", () => {
   const fiveMin = 5 * 60_000;
 
   it("jumps toward the event impact, then decays toward neutral", () => {
-    const now = 4 * fiveMin;
-    const items = [{ publishedAt: 2.5 * fiveMin, impact: 80, weight: 1 }];
-    const s = smoothedSeries(items, 4 * fiveMin, fiveMin, now);
+    const now = 5 * fiveMin;
+    const items = [{ availableAt: 2.5 * fiveMin, impact: 80, weight: 1 }];
+    const s = smoothedSeries(items, 5 * fiveMin, fiveMin, now);
     expect(s[0]?.v).toBeNull();
     expect(s[1]?.v).toBeNull();
     const at = s[2]?.v ?? 0; // alpha = (0.2 + 0.8) * 0.8 -> 80% of the way to 80
@@ -159,18 +160,58 @@ describe("smoothedSeries", () => {
   it("is continuous after the first event: no null gaps for the chart", () => {
     const now = 8 * fiveMin;
     const items = [
-      { publishedAt: 1 * fiveMin, impact: -60, weight: 0.8 },
-      { publishedAt: 6 * fiveMin, impact: 70, weight: 0.9 },
+      { availableAt: 1 * fiveMin, impact: -60, weight: 0.8 },
+      { availableAt: 6 * fiveMin, impact: 70, weight: 0.9 },
     ];
     const s = smoothedSeries(items, 8 * fiveMin, fiveMin, now);
     for (const p of s.slice(1)) expect(p.v).not.toBeNull();
   });
 
+  it("exposes bucket item count, impact spread, and actual scoring completion time", () => {
+    const now = 4 * fiveMin;
+    const s = smoothedSeries([
+      { availableAt: 2.1 * fiveMin, impact: -80, weight: 0.7, scoredAt: 9_000 },
+      { availableAt: 2.8 * fiveMin, impact: 45, weight: 0.9, scoredAt: 12_000 },
+    ], 4 * fiveMin, fiveMin, now);
+
+    expect(s[2]).toMatchObject({
+      n: 2,
+      itemImpactMin: -80,
+      itemImpactMax: 45,
+      lastScoredAt: 12_000,
+    });
+    expect(s[3]?.lastScoredAt).toBeNull();
+  });
+
   it("weights how hard an event pulls the index", () => {
     const now = 2 * fiveMin;
-    const strong = smoothedSeries([{ publishedAt: fiveMin, impact: 80, weight: 1 }], 2 * fiveMin, fiveMin, now);
-    const weak = smoothedSeries([{ publishedAt: fiveMin, impact: 80, weight: 0.05 }], 2 * fiveMin, fiveMin, now);
+    const strong = smoothedSeries([{ availableAt: fiveMin, impact: 80, weight: 1 }], 2 * fiveMin, fiveMin, now);
+    const weak = smoothedSeries([{ availableAt: fiveMin, impact: 80, weight: 0.05 }], 2 * fiveMin, fiveMin, now);
     expect(strong[1]?.v ?? 0).toBeGreaterThan(weak[1]?.v ?? 0);
+  });
+
+  it("keeps an overlapping timestamp stable when the selected window changes", () => {
+    const hour = 60 * 60_000;
+    const now = 14 * 24 * hour;
+    const items = [
+      { availableAt: now - 50 * hour, impact: -70, weight: 0.9 },
+      { availableAt: now - 20 * hour, impact: 40, weight: 0.8 },
+      { availableAt: now - 9 * hour, impact: 25, weight: 0.7 },
+    ];
+    const narrow = smoothedSeries(items, 6 * hour, bucketMsFor(6), now);
+    const wide = smoothedSeries(items, 7 * 24 * hour, bucketMsFor(168), now);
+    const sharedTime = narrow.find((point) => point.t === wide.find((candidate) => candidate.t === point.t)?.t
+      && point.t >= now - 2 * hour);
+
+    expect(sharedTime).toBeDefined();
+    expect(sharedTime?.v).not.toBeNull();
+    expect(sharedTime?.v).toBeCloseTo(wide.find((point) => point.t === sharedTime?.t)?.v ?? NaN, 6);
+  });
+
+  it("uses one display bucket size across all selected windows", () => {
+    expect(bucketMsFor(6)).toBe(bucketMsFor(24));
+    expect(bucketMsFor(24)).toBe(bucketMsFor(72));
+    expect(bucketMsFor(72)).toBe(bucketMsFor(168));
   });
 });
 
@@ -185,13 +226,13 @@ describe("applyPostRules event composite", () => {
 
 describe("forwardReturn", () => {
   const points = [
-    { t: 0, price: 100 },
-    { t: 120_000, price: 101 },
-    { t: 600_000, price: 99 },
-    { t: 1_830_000, price: 96.57 },
+    { t: 0, price: 100, retrievedAt: 1_000 },
+    { t: 120_000, price: 101, retrievedAt: 121_000 },
+    { t: 600_000, price: 99, retrievedAt: 601_000 },
+    { t: 1_830_000, price: 96.57, retrievedAt: 1_831_000 },
   ];
-  it("measures the forward move from a timely post-publication price", () => {
-    // p0 = 101 (t=2m, within the 90s post-publication window),
+  it("measures the forward move from a timely post-score price", () => {
+    // p0 = 101 (t=2m, within the 90s after score availability),
     // p1 = 96.57 (t=30.5m, last point within the 30m window).
     expect(forwardReturn(points, 60_000, 30 * 60_000)).toBe(-4.3861);
   });
@@ -201,21 +242,21 @@ describe("forwardReturn", () => {
   });
   it("rejects a stale baseline even when a later outcome point exists", () => {
     expect(forwardReturn([
-      { t: -10 * 60_000, price: 100 },
-      { t: 30 * 60_000, price: 102 },
+      { t: -10 * 60_000, price: 100, retrievedAt: -10 * 60_000 + 1_000 },
+      { t: 30 * 60_000, price: 102, retrievedAt: 30 * 60_000 + 1_000 },
     ], 0, 30 * 60_000)).toBeNull();
   });
   it("rejects a pre-publication baseline even when it is within the freshness tolerance", () => {
     expect(forwardReturn([
-      { t: -2 * 60_000, price: 100 },
-      { t: 30 * 60_000, price: 102 },
+      { t: -2 * 60_000, price: 100, retrievedAt: -2 * 60_000 + 1_000 },
+      { t: 30 * 60_000, price: 102, retrievedAt: 30 * 60_000 + 1_000 },
     ], 0, 30 * 60_000)).toBeNull();
   });
   it.each([30 * 60_000, 4 * 60 * 60_000])("does not score an immature %i ms reaction window", (windowMs) => {
     const outcomeAt = windowMs;
     const observations = [
-      { t: 60_000, price: 100 },
-      { t: outcomeAt - 60_000, price: 101 },
+      { t: 60_000, price: 100, retrievedAt: 61_000 },
+      { t: outcomeAt - 60_000, price: 101, retrievedAt: outcomeAt - 59_000 },
     ];
 
     expect(forwardReturn(observations, 0, windowMs, outcomeAt - 1)).toBeNull();
@@ -223,15 +264,27 @@ describe("forwardReturn", () => {
   });
   it("rejects a stale terminal quote instead of counting a carried-forward zero", () => {
     expect(forwardReturn([
-      { t: 90_000, price: 100 },
-      { t: 25 * 60_000 - 1, price: 100 },
+      { t: 90_000, price: 100, retrievedAt: 91_000 },
+      { t: 25 * 60_000 - 1, price: 100, retrievedAt: 25 * 60_000 },
     ], 0, 30 * 60_000)).toBeNull();
+  });
+  it("rejects prices retrieved long after their observation time", () => {
+    expect(forwardReturn([
+      { t: 90_000, price: 100, retrievedAt: 90_000 + 60 * 60_000 },
+      { t: 30 * 60_000, price: 102, retrievedAt: 30 * 60_000 + 60 * 60_000 },
+    ], 0, 30 * 60_000, 2 * 60 * 60_000)).toBeNull();
   });
   it("retains a zero return when both price observations are timely", () => {
     expect(forwardReturn([
-      { t: 90_000, price: 100 },
-      { t: 30 * 60_000, price: 100 },
+      { t: 90_000, price: 100, retrievedAt: 91_000 },
+      { t: 30 * 60_000, price: 100, retrievedAt: 30 * 60_000 + 1_000 },
     ], 0, 30 * 60_000)).toBe(0);
+  });
+  it("rejects a historical backfill fetched long after its price observation", () => {
+    expect(forwardReturn([
+      { t: 90_000, price: 100, retrievedAt: 90_000 + 60 * 60_000 },
+      { t: 30 * 60_000, price: 102, retrievedAt: 30 * 60_000 + 60 * 60_000 },
+    ], 0, 30 * 60_000, 2 * 60 * 60_000)).toBeNull();
   });
 });
 

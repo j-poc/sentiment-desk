@@ -5,12 +5,12 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
-import type { Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor } from "./db.js";
+import type { Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor, ScoreBucketCursor } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { forwardReturn, rankIC, summarizeReactions, validateSignal } from "./scoring.js";
+import { forwardReturn, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 
 /**
@@ -27,11 +27,13 @@ export interface AppDeps {
   hub: Hub;
   health: HealthTracker;
   version: string;
+  opportunityRadarEnabled?: boolean;
   webRoot?: string;
   deliverySources: DeliverySourceSchedule[];
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PRICE_SERIES_REFRESH_AGE_MS = 5 * 60 * 1000;
 const retryConfirmationSchema = z.object({
   confirmNewCharge: z.literal(true),
   reviewedProviderUsage: z.boolean(),
@@ -41,7 +43,15 @@ const unscoredCursorSchema = z.object({
   ingestedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   id: z.string().min(1).max(200),
 });
+const scoreBucketCursorSchema = z.object({
+  scoredAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  id: z.string().min(1).max(200),
+});
 const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed"]);
+const mentionLookupSchema = z.object({
+  ids: z.array(z.string().min(1).max(200)).min(1).max(900)
+    .refine((ids) => new Set(ids).size === ids.length),
+});
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
@@ -65,6 +75,7 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({
       ok: true,
       externalRequestsEnabled: healthSnapshot.externalRequestsEnabled,
+      opportunityRadarEnabled: deps.opportunityRadarEnabled === true,
       version: deps.version,
       runtimeId,
       uptimeSec: Math.floor(process.uptime()),
@@ -116,6 +127,14 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(deps.db.mentionsForCompanyPage({ companyId: id, sinceMs, limit, cursor, filter }));
   });
 
+  app.post("/api/companies/:id/mentions/lookup", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown company" }, 404);
+    const input = mentionLookupSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_mention_lookup" }, 400);
+    return c.json({ items: deps.db.mentionsByIds(id, input.data.ids) });
+  });
+
   app.post("/api/mentions/:id/retry", async (c) => {
     const input = retryConfirmationSchema.safeParse(await c.req.json().catch(() => null));
     if (!input.success) return c.json({ error: "retry_confirmation_required" }, 400);
@@ -140,6 +159,7 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.get("/api/companies/:id/radar", (c) => {
+    if (deps.opportunityRadarEnabled !== true) return c.json({ error: "opportunity_radar_not_enabled" }, 404);
     const id = c.req.param("id");
     if (!deps.db.companies().some((company) => company.id === id)) {
       return c.json({ error: "unknown company" }, 404);
@@ -176,6 +196,7 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.get("/api/companies/:id/radar/evidence", (c) => {
+    if (deps.opportunityRadarEnabled !== true) return c.json({ error: "opportunity_radar_not_enabled" }, 404);
     const id = c.req.param("id");
     if (!deps.db.companies().some((company) => company.id === id)) {
       return c.json({ error: "unknown company" }, 404);
@@ -215,9 +236,9 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   /**
-   * Outcome description: timely forward price reactions for publisher-timed,
-   * source-identified judgments. Aggregates cover every eligible event in the
-   * window; only the eight highest-scored measured examples are returned.
+   * Exploratory reaction description: timely forward prices after a
+   * source-identified judgment became available. Publisher time remains for
+   * context; it is not used as the reaction baseline.
    */
   app.get("/api/companies/:id/reactions", (c) => {
     const id = c.req.param("id");
@@ -226,8 +247,8 @@ export function createApp(deps: AppDeps): Hono {
     if (!ticker) return c.json({ error: "unknown company" }, 404);
     const now = Date.now();
     const since = now - hours * 60 * 60 * 1000;
-    const mentions = deps.db.scoredReactionEventsForCompany(id, since);
-    const series = deps.db.priceWindow(ticker, since - 60 * 60 * 1000);
+    const mentions = deps.db.scoredReactionEventsForCompany(id, since, now);
+    const series = deps.db.priceWindow(ticker, since - 60 * 60 * 1000, now);
     const events = mentions.map((m) => ({
       id: m.id,
       title: m.title,
@@ -235,15 +256,16 @@ export function createApp(deps: AppDeps): Hono {
       sentiment: m.sentiment,
       eventScore: m.eventScore,
       eventType: m.eventType,
-      r30: forwardReturn(series, m.publishedAt, 30 * 60_000, now),
-      r240: forwardReturn(series, m.publishedAt, 4 * 60 * 60_000, now),
+      availableAt: m.availableAt,
+      r30: forwardReturn(series, m.availableAt, 30 * 60_000, now),
+      r240: forwardReturn(series, m.availableAt, 4 * 60 * 60_000, now),
     }));
     const bull = summarizeReactions(events.filter((e) => e.sentiment === "positive"));
     const bear = summarizeReactions(events.filter((e) => e.sentiment === "negative"));
     const all = summarizeReactions(events);
     const measured = events.filter((e) => e.r30 != null || e.r240 != null);
     const examples = [...measured]
-      .sort((a, b) => b.eventScore - a.eventScore || b.publishedAt - a.publishedAt || a.id.localeCompare(b.id))
+      .sort((a, b) => b.eventScore - a.eventScore || b.availableAt - a.availableAt || a.id.localeCompare(b.id))
       .slice(0, 8);
     return c.json({ ticker, events: examples, measuredEventCount: measured.length, bull, bear, all });
   });
@@ -252,6 +274,51 @@ export function createApp(deps: AppDeps): Hono {
     const id = c.req.param("id");
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
     return c.json(deps.pipeline.series(id, hours));
+  });
+
+  app.get("/api/companies/:id/score-bucket", (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown company" }, 404);
+    const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
+    const throughMs = Number(c.req.query("through"));
+    const now = Date.now();
+    if (!Number.isSafeInteger(throughMs) || throughMs < now - hours * 60 * 60_000 - SERIES_BUCKET_MS || throughMs > now) {
+      return c.json({ error: "invalid_score_bucket" }, 400);
+    }
+    const rawIncludeFromBoundary = c.req.query("includeFromBoundary");
+    if (rawIncludeFromBoundary != null && rawIncludeFromBoundary !== "true" && rawIncludeFromBoundary !== "false") {
+      return c.json({ error: "invalid_score_bucket_boundary" }, 400);
+    }
+    const includeFromBoundary = rawIncludeFromBoundary === "true";
+    const rawCursor = c.req.query("cursor");
+    let cursor: ScoreBucketCursor | null = null;
+    if (rawCursor != null) {
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(rawCursor);
+      } catch {
+        return c.json({ error: "invalid_cursor" }, 400);
+      }
+      const parsed = scoreBucketCursorSchema.safeParse(decoded);
+      if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
+      if (parsed.data.scoredAt > throughMs) return c.json({ error: "invalid_cursor" }, 400);
+      cursor = parsed.data;
+    }
+    const page = deps.db.mentionsForScoreBucket({
+      companyId: id,
+      fromMs: throughMs - SERIES_BUCKET_MS,
+      throughMs,
+      includeFromBoundary,
+      limit: clampNumber(c.req.query("limit"), 1, 100, 50),
+      cursor,
+    });
+    return c.json({
+      bucketFromMs: throughMs - SERIES_BUCKET_MS,
+      bucketThroughMs: throughMs,
+      includeFromBoundary,
+      items: page.items,
+      nextCursor: page.nextCursor,
+    });
   });
 
   app.get("/api/companies/:id/price", async (c) => {
@@ -264,40 +331,80 @@ export function createApp(deps: AppDeps): Hono {
     const hours = clampNumber(c.req.query("hours"), 1, 720, 24);
     const now = Date.now();
     const since = now - hours * 60 * 60 * 1000;
-    // Our own accumulated price history first (poller points + Yahoo backfill);
-    // Yahoo is the fallback when local history is thin.
-    let pts: Array<{ t: number; price: number }> = deps.db.priceWindow(ticker, since);
+    // Only source-attributed Yahoo chart history is eligible for this pane;
+    // legacy points with unknown origin or currency are quarantined in SQLite.
+    let pts: Array<{
+      t: number;
+      price: number;
+      currency: string;
+      collector?: "yahoo_chart" | "yahoo_quote";
+      retrievedAt?: number;
+      adapterVersion?: string;
+      deliveryId?: string;
+    }> = deps.db.priceWindow(ticker, since);
+    const savedHistoryLatestAt = deps.db.priceWindow(ticker, now - 168 * 60 * 60 * 1000, now).at(-1)?.t ?? null;
     let seriesDelivery: "network" | "memory_cache" | "local_store" = "local_store";
     let seriesServedAt = Date.now();
-    let sourceLatestAt = pts.at(-1)?.t ?? null;
+    let refreshError: string | null = null;
     let cacheAgeMs: number | null = null;
-    if (pts.length < 8) {
+    const latestRetrievedAt = pts.reduce<number | null>((latest, point) =>
+      typeof point.retrievedAt === "number" && Number.isFinite(point.retrievedAt)
+        && point.retrievedAt > 0 && point.retrievedAt <= now
+        ? Math.max(latest ?? point.retrievedAt, point.retrievedAt)
+        : latest, null);
+    const seriesNeedsRefresh = pts.length < 8
+      || latestRetrievedAt == null
+      || now - latestRetrievedAt > PRICE_SERIES_REFRESH_AGE_MS;
+    if (seriesNeedsRefresh) {
       try {
         const result = await deps.market.priceSeries(ticker, hours);
-        pts = result.points;
-        seriesDelivery = result.delivery;
+        if (result.points.length > 0) {
+          const byTimestamp = new Map(pts.map((point) => [point.t, point]));
+          for (const point of result.points) byTimestamp.set(point.t, point);
+          pts = [...byTimestamp.values()].sort((a, b) => a.t - b.t);
+        }
+        seriesDelivery = result.points.length === 0 && pts.length > 0 ? "local_store" : result.delivery;
         seriesServedAt = result.servedAt;
-        sourceLatestAt = result.sourceLatestAt;
         cacheAgeMs = result.cacheAgeMs;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return c.json({ error: message }, 502);
+        if (pts.length === 0 && savedHistoryLatestAt == null) return c.json({ error: message }, 502);
+        refreshError = message;
+        seriesDelivery = "local_store";
+        seriesServedAt = Date.now();
       }
     }
     // Price values and timestamps are provider observations. Do not carry a
     // stale close into later buckets or relabel it as an observation at a
     // generated display timestamp; closed-market windows can be empty.
     const observed = pts
-      .filter((point) => Number.isFinite(point.t) && Number.isFinite(point.price) && point.price > 0 && point.t > 0 && point.t <= now)
+      .filter((point) => Number.isFinite(point.t) && Number.isFinite(point.price) && point.price > 0
+        && typeof point.currency === "string" && /^[A-Z]{3}$/.test(point.currency)
+        && typeof point.retrievedAt === "number" && Number.isFinite(point.retrievedAt)
+        && point.retrievedAt > 0 && point.retrievedAt <= now
+        && typeof point.adapterVersion === "string" && point.adapterVersion.length > 0
+        && typeof point.deliveryId === "string" && point.deliveryId.length > 0
+        && point.t > 0 && point.t <= now)
       .sort((a, b) => a.t - b.t);
     const inWindow = observed.filter((point) => point.t >= since);
-    sourceLatestAt = observed.at(-1)?.t ?? null;
+    const currencies = new Set(inWindow.map((point) => point.currency));
+    if (currencies.size > 1) return c.json({ error: "price_currency_mismatch" }, 502);
+    const observedLatestAt = observed.at(-1)?.t ?? null;
+    const sourceLatestAt = [savedHistoryLatestAt, observedLatestAt]
+      .filter((value): value is number => value != null && value > 0 && value <= now)
+      .reduce<number | null>((latest, value) => Math.max(latest ?? value, value), null);
     return c.json({
-      points: inWindow,
+      points: inWindow.map((point) => ({
+        ...point,
+        collector: point.collector ?? "yahoo_chart",
+        adapterVersion: point.adapterVersion ?? "yahoo-chart/1",
+        deliveryId: point.deliveryId,
+      })),
       delivery: seriesDelivery,
       servedAt: seriesServedAt,
       sourceLatestAt,
       cacheAgeMs,
+      refreshError,
       resampling: "source_observations_in_window",
     });
   });
@@ -310,17 +417,17 @@ export function createApp(deps: AppDeps): Hono {
     const hours = clampNumber(c.req.query("hours"), 24, 168, 120);
     const now = Date.now();
     const since = now - hours * 60 * 60 * 1000;
-    const events = deps.db.scoredMentionEvents(since);
-    const seriesByTicker = new Map<string, Array<{ t: number; price: number }>>();
+    const events = deps.db.scoredMentionEvents(since, now);
+    const seriesByTicker = new Map<string, Array<{ t: number; price: number; retrievedAt: number }>>();
     for (const e of events) {
       if (!seriesByTicker.has(e.ticker)) {
-        seriesByTicker.set(e.ticker, deps.db.priceWindow(e.ticker, since - 60 * 60 * 1000));
+        seriesByTicker.set(e.ticker, deps.db.priceWindow(e.ticker, since - 60 * 60 * 1000, now));
       }
     }
     const rows = events.map((e) => ({
       eventScore: e.eventScore,
       sentiment: e.sentiment,
-      r30: forwardReturn(seriesByTicker.get(e.ticker) ?? [], e.publishedAt, 30 * 60_000, now),
+      r30: forwardReturn(seriesByTicker.get(e.ticker) ?? [], e.availableAt, 30 * 60_000, now),
     }));
     const measured = rows
       .filter((r) => r.r30 != null)

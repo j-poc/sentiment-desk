@@ -25,6 +25,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 const STATE_STYLES: Record<RadarDTO["coverage"][number]["state"], string> = {
   current: "text-emerald-300",
+  processing: "text-sky-300",
   overdue: "text-amber-300",
   failed: "text-rose-300",
   partial: "text-amber-300",

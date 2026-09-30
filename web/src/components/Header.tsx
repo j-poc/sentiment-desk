@@ -3,8 +3,8 @@ import { clockTime, fmtCost } from "../lib/format.js";
 
 /**
  * Engine chip states, so the desk never pretends:
- *  - JEV LIVE: real scoring active
- *  - ADD API KEY: real ingestion, no scoring until TYPESAFE_API_KEY lands in .env
+ *  - JEV ENABLED: configured scoring requests may be sent for approved records
+ *  - JEV PAUSED: the request path is unavailable; check its explicit gates
  */
 function engineChip(health: HealthDTO | null) {
   if (!health) return null;
@@ -19,16 +19,16 @@ function engineChip(health: HealthDTO | null) {
     return (
       <span className="flex items-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-emerald-300">
         <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />
-        JEV LIVE
+        JEV ENABLED
       </span>
     );
   }
   return (
     <span
-      className="live-dot rounded-md border border-red-400/30 bg-red-400/[0.08] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-red-300"
-      title="Add TYPESAFE_API_KEY to .env, then restart"
+      className="rounded-md border border-amber-300/25 bg-amber-300/[0.07] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.12em] text-amber-200/90"
+      title="Jev dispatch is unavailable. Check credentials, account-use approval, approved source overlap, and configured daily request/byte limits."
     >
-      ADD API KEY
+      JEV PAUSED
     </span>
   );
 }
@@ -68,7 +68,7 @@ export function Header({
           </span>
         )}
         <span className="tabnum hidden sm:inline">
-          {totalMentions} mentions/24h
+          {totalMentions} source records/24h
         </span>
         <span
           className="flex items-center gap-1.5 font-medium tracking-wider"

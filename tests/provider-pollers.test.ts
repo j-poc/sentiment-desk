@@ -130,8 +130,10 @@ describe("optional provider rate limits", () => {
       expect(ingest).toHaveBeenCalledWith(expect.objectContaining({
         sourceItemId: "0000000001-26-000003",
         snippet: "Actual SEC filing text",
+        deliveryId: expect.any(String),
+        adapterVersion: "sec-primary-document/1",
       }));
-      expect(db.deliverySummary().find((row) => row.collector === "sec_edgar"))
+      expect(db.deliverySummary().find((row) => row.collector === "sec_edgar" && row.adapterVersion === "sec-submissions/1"))
         .toMatchObject({ result: "partial", parsedItemCount: 3, error: "2 SEC filing document(s) unavailable; omitted from Jev input" });
     } finally {
       db.close();

@@ -51,6 +51,32 @@ describe("Desk observation and judgment storage", () => {
     }
   });
 
+  it("does not report the Google News redirect host as the publisher domain for retained observations", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const stored = db.insertObservation(mention({
+        sourceItemId: "google-redirect-domain",
+        sourceUrl: "https://news.google.com/rss/articles/abc123",
+        publisherName: "Reuters",
+        publisherDomain: "news.google.com",
+      }));
+      db.markScored(stored.observationId, score("results"), false);
+
+      const listed = db.mentionsForCompany(company.id, Date.now() - 5 * 60_000, 20)
+        .find((row) => row.id === stored.observationId);
+      const radar = db.radarEvidence(company.id, Date.now() - 5 * 60_000, Date.now())
+        .find((row) => row.id === stored.observationId);
+
+      expect(listed?.publisherName).toBe("Reuters");
+      expect(listed?.publisherDomain).toBeNull();
+      expect(listed?.source.publisherDomain).toBeNull();
+      expect(radar?.publisherDomain).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
   it("quarantines migrated unverified observations from operational usage totals", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-unverified-legacy-"));
     directories.push(directory);
@@ -315,7 +341,9 @@ describe("Desk observation and judgment storage", () => {
       db.markScored(revised.observationId, score("product"), true);
 
       const events = db.scoredMentionEvents(publishedAt - 1);
-      expect(events.map((event) => event.eventType)).toEqual(["results", "results"]);
+      expect(events).toHaveLength(4);
+      expect(events.filter((event) => event.eventType === "results")).toHaveLength(2);
+      expect(events.every((event) => event.availableAt >= Date.now() - 60_000)).toBe(true);
       expect(events.every((event) => event.ticker === "ACME")).toBe(true);
       const rows = db.mentionsForCompany(company.id, Date.now() - 5 * 60_000, 20);
       expect(rows).toHaveLength(5);
@@ -353,7 +381,7 @@ describe("Desk observation and judgment storage", () => {
 
       expect(events).toHaveLength(205);
       expect(events[0]?.eventScore).toBe(70);
-      expect(events.every((event) => event.publishedAt >= since)).toBe(true);
+      expect(events.every((event) => event.availableAt >= since && event.availableAt <= Date.now())).toBe(true);
     } finally {
       db.close();
     }
@@ -396,6 +424,51 @@ describe("Desk observation and judgment storage", () => {
       expect(db.deliveryHealth([
         { collector: "reddit", enabled: false, intervalSeconds: 180, targetCount: 1 },
       ], startedAt + 100)[0]?.state).toBe("disabled");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps transport success separate from an incomplete observation-ingestion outcome", () => {
+    const db = new Desk(":memory:");
+    db.seedCompanies([company]);
+    const startedAt = Date.now() - 100;
+    const schedule = [{ collector: "google_news_rss" as const, enabled: true, intervalSeconds: 120, targetCount: 1 }];
+    try {
+      const deliveryId = db.recordDelivery({
+        collector: "google_news_rss", companyId: company.id, requestKey: "test-feed",
+        startedAt, completedAt: startedAt + 1, result: "success", parsedItemCount: 2,
+        adapterVersion: "google_news_rss/2", processingRequired: true,
+      });
+      expect(db.deliveryHealth(schedule, startedAt + 2)[0]).toMatchObject({
+        state: "failed", coverageCount: 0, latestResult: "success",
+        latestIngestionRequired: true, latestIngestionState: null,
+        latestError: "Observation ingestion did not start",
+      });
+
+      db.startDeliveryIngestion(deliveryId, 2, startedAt + 2);
+      expect(db.deliveryHealth(schedule, startedAt + 3)[0]).toMatchObject({
+        state: "processing", coverageCount: 0, latestIngestionState: "processing",
+        latestIngestionExpectedCount: 2, latestIngestionProcessedCount: 0,
+      });
+      expect(db.deliveryHealth(schedule, startedAt + 500_000)[0]).toMatchObject({
+        state: "failed", latestIngestionState: "processing",
+        latestError: "Observation ingestion stopped before completion",
+      });
+
+      db.finishDeliveryIngestion(deliveryId, {
+        status: "partial", processedCount: 1, insertedCount: 1,
+        completedAt: startedAt + 4, error: "second item could not be saved",
+      });
+      expect(db.deliveryHealth(schedule, startedAt + 5)[0]).toMatchObject({
+        state: "partial", coverageCount: 0, latestResult: "success",
+        latestIngestionState: "partial", latestIngestionExpectedCount: 2,
+        latestIngestionProcessedCount: 1, latestIngestionInsertedCount: 1,
+        latestError: "second item could not be saved",
+      });
+      expect(() => db.finishDeliveryIngestion(deliveryId, {
+        status: "success", processedCount: 2, insertedCount: 2,
+      })).toThrow(/no active ingestion/);
     } finally {
       db.close();
     }
@@ -490,6 +563,43 @@ describe("Desk observation and judgment storage", () => {
       expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("failed");
     } finally {
       db.close();
+    }
+  });
+
+  it("adds the delivery lineage column before creating its index on an older database", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-v5-lineage-migration-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    const current = new Desk(path);
+    current.close();
+
+    const priorVersion = new DatabaseSync(path);
+    priorVersion.exec(`
+      DROP VIEW mentions;
+      DROP INDEX observations_delivery;
+      DROP TRIGGER source_observations_no_update;
+      DROP TRIGGER source_observations_no_delete;
+      ALTER TABLE source_observations DROP COLUMN delivery_id;
+      PRAGMA user_version = 5;
+    `);
+    priorVersion.close();
+
+    const migrated = new Desk(path);
+    try {
+      const columns = migrated.mentionRow("missing") ?? null;
+      expect(columns).toBeNull();
+    } finally {
+      migrated.close();
+    }
+
+    const verify = new DatabaseSync(path);
+    try {
+      expect(verify.prepare("PRAGMA table_info(source_observations)").all())
+        .toEqual(expect.arrayContaining([expect.objectContaining({ name: "delivery_id" })]));
+      expect(verify.prepare("PRAGMA index_list(source_observations)").all())
+        .toEqual(expect.arrayContaining([expect.objectContaining({ name: "observations_delivery" })]));
+    } finally {
+      verify.close();
     }
   });
 

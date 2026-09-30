@@ -59,7 +59,7 @@ export const RUBRIC: Rubric = {
   credible: {
     type: "noul",
     instructions:
-      "The publishing source demonstrates professional editorial standards and a track record of factual accuracy for business reporting, rather than anonymous aggregation, unverified accounts, or promotion.",
+      "The publishing source demonstrates professional editorial standards and a track record of factual accuracy for business reporting, rather than anonymous aggregation, unverified accounts, or promotion. Treat publisherName and publisherDomain in the state as attributed source metadata, not independent verification. collectionUrl is the collected item link and may be an aggregator redirect; never infer the publisher from that URL when the collector is Google News. If publisher identity is unavailable or ambiguous, reflect that uncertainty rather than assuming credibility.",
   },
   event_type: {
     type: "choice",
