@@ -47,6 +47,7 @@ function setup(
   options: {
     allowedCollectors?: ReadonlySet<CollectorId>;
     dailyBudget?: { utcDay: () => string; maxRequests: number; maxRequestBytes: number };
+    alert?: { webhookUrl: string; eventScore: number; impact: number; freshMinutes: number };
   } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-pipeline-"));
@@ -61,6 +62,7 @@ function setup(
     dailyBudget: options.dailyBudget ?? {
       utcDay: () => "2026-09-28", maxRequests: 100, maxRequestBytes: 1_000_000,
     },
+    alert: options.alert,
   });
   const source: RawMention = {
     companyId: company.id, kind: "rss", sourceName: "Reuters", sourceUrl: "https://reuters.com/acme",
@@ -78,6 +80,52 @@ function setup(
 }
 
 describe("Jev pipeline recovery", () => {
+  it("does not send a webhook for a judgment excluded from investor research", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.about = { type: "noul", noul: 0.1 };
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({
+      answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }), { alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 } });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("off_target");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not send a webhook for a source timestamp in the future", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({
+      answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }), { alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 } });
+    source.publishedAt = Date.now() + 60_000;
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("scored");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps history freshness when the selected chart window has no score arrivals", async () => {
     const scoreAt = Date.parse("2026-09-28T10:00:00.000Z");
     const now = Date.parse("2026-09-30T10:00:00.000Z");
