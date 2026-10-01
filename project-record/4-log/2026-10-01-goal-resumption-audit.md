@@ -307,3 +307,31 @@ typecheck passed, and the focused first-run suite passed all 12 tests. Vite
 continues to warn that the current JavaScript chunk is 614.48 kB after
 minification; the existing build has no enforced size limit. Final acceptance
 still depends on the remaining whole-build and operational gates below.
+
+
+## Reviewed source checkpoint — 2026-10-01T11:55:15Z
+
+The first-run implementation and its version-2 acceptance/ETL declarations are
+committed and pushed to `https://github.com/j-poc/sentiment-desk`, which
+currently reports public visibility and default branch
+`codex/real-data-rebuild`. The reviewed source checkpoint is
+`17feb459f792b027c5f1e71a9756546a2dcfe765`; `git ls-remote` matched the local
+HEAD after push. No LICENSE was added, per the user's earlier choice. The local
+runtime database remains ignored and was not staged.
+
+Pre-checkpoint `git diff --check`, production dependency audit (0
+vulnerabilities), and Gitleaks scan (no leaks in about 10 MB scanned) passed.
+Gitleaks skipped the ignored 86 MB runtime database due to the 20 MB scan cap;
+that database was not uploaded. The source checkpoint includes the clean
+offline first-run UI, exact recorded-reference caveat, ticker selection, and
+chart/gauge suppression when no local points exist. The UI/API focused 12-test
+slice, typecheck, and build passed before commit, with Vite's existing
+614.48 kB minified JavaScript chunk warning.
+
+The five-check live-data ETL verifier and final engineering gate are now
+pending against the pushed candidate. The ETL declaration remains
+`live_claim=false`; its keyless public-source smoke is isolated in a disposable
+Compose database and does not call Jev. Full operational acceptance remains
+incomplete on the independent real-source Jev evaluation and external account,
+source-rights, reviewer, SEC-contact, and historical-usage evidence described
+above.
