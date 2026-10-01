@@ -1,5 +1,38 @@
 # Sentiment Desk completion plan
 
+## Final local disposition — 2026-10-01T01:02:05Z
+
+The schema-2 ETL receipt passed all five required checks at
+`2026-10-01T00:58:07Z`, and a subsequent `live_data_etl_gate.py check`
+confirmed a current matching fingerprint. The scope includes real Yahoo quote
+and chart observations, real RSS/GDELT source delivery into a disposable
+Compose database, fixture/failure/replay regressions, offline default-off
+source gates, and saved-volume recovery. It does not claim general live
+operation: optional credentialed sources and Jev were disabled in the smoke,
+and the product remains **SAVED DATA ONLY** with external requests paused.
+
+The first reviewed implementation checkpoint, `8d7a21a`, was pushed to
+`origin/codex/real-data-rebuild` and its remote SHA matched local HEAD. The
+separate `engineering_gate.py check` still fails with `missing evidence
+receipt`. There is no independent real-source Jev run or blinded label set to
+support the contract's evaluation acceptance item, so no alignment review or
+passing engineering receipt has been manufactured. The investor review scored
+saved-data workflow 8.6/10 and live readiness 2/10; UI was 8.6/10 overall and
+8.5/10 for health/alert discovery; whole-build review was 8.5/10 UX, 7.5/10
+operations, and 2/10 live. Nothing here establishes 10/10, broad scalability,
+or production robustness.
+
+The repository is getting this final gate/disposition record and a trace-only
+checkpoint after the frozen check; its exact pushed SHA is given in the handoff.
+The outstanding work requires authorized TypeSafe account-use, retention,
+telemetry, billing/refill, limit, and spend-ceiling evidence; a contact-bearing
+SEC User-Agent; two independent blinded real-source reviewers; a frozen,
+provenance-backed sample covering at least 30 issuers and its authorized Jev
+run; exact source-specific permission terms; and provider usage/billing records
+to reconcile 4,700 `legacy_unknown` rows. User rights attestation is preserved
+but does not replace those account and endpoint records. Opportunity Radar
+remains disabled.
+
 ## Final local continuation — 2026-10-01T00:34:59Z
 
 This continuation fixed the actionable alert and health gaps from the fresh
