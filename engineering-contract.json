@@ -10,7 +10,7 @@
     "The live-data contract and code-bound evidence are current and passing for the scoped live source/persistence path.",
     "Opportunity Radar remains disabled until Sentiment Desk operational acceptance passes.",
     "The verified cohesive checkpoint is pushed to the existing codex/real-data-rebuild GitHub branch.",
-    "A fresh installation with zero eligible saved observations can inspect a real, read-only SEC-to-Jev archive with its filing link and recorded run fields. Receipt and digest values are explicitly labeled as references that cannot be resolved from this installation; the archive is excluded from local Desk data and metrics, makes no provider requests, and states that classification quality is unvalidated. The empty state never plots archive data or shows an empty gauge/chart, uses eligible-observation wording when quarantined rows exist, and shows a visible next operator step based on SEC collection and SEC-specific Jev authorization. Loading and errors remain distinct from confirmed empty and never fall back to an empty gauge/chart; stale saved history suppresses the archive, and the archive disappears as soon as local observations arrive. When its history count moves from zero to positive while company snapshots have not caught up, the Desk refreshes the company snapshot and selected evidence feeds once."
+    "A fresh installation with zero eligible saved observations can inspect a real, read-only SEC-to-Jev archive with its filing link and recorded run fields. Receipt and digest values are explicitly labeled as references that cannot be resolved from this installation; the archive is excluded from local Desk data and metrics, makes no provider requests, and states that classification quality is unvalidated. The empty state never plots archive data or shows an empty gauge/chart, uses eligible-observation wording when quarantined rows exist, and shows a visible next operator step based on SEC collection and SEC-specific Jev authorization. Loading and errors remain distinct from confirmed empty and never fall back to an empty gauge/chart; stale saved history suppresses the archive, and the archive disappears as soon as local observations arrive. When its history count moves from zero to positive while company snapshots have not caught up, the Desk refreshes the company snapshot and selected evidence feeds once. If the company snapshot fails, a later history poll retries it without repeating the first-arrival feed refresh or requiring a reload; successful company application ends recovery."
   ],
   "owner": "Jurgis owns the product decision and local deployment; source/account operators own their access attestations.",
   "design": {
@@ -105,7 +105,7 @@
     {
       "id": "first-run-evidence",
       "covers": ["workflow_success", "integration_failure", "change_review"],
-      "command": ["npm", "test", "--", "--reporter=dot", "--maxWorkers=1", "--testTimeout=20000", "tests/app-first-run-evidence.test.ts", "tests/first-run-evidence-brief.test.tsx"],
+      "command": ["npm", "test", "--", "--reporter=dot", "--maxWorkers=1", "--testTimeout=20000", "tests/app-first-run-evidence.test.ts", "tests/first-run-evidence-brief.test.tsx", "tests/first-run-evidence-refresh.test.ts", "tests/backend-snapshot-recovery.test.ts"],
       "timeout_seconds": 120
     }
   ],

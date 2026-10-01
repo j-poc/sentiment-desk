@@ -39,7 +39,7 @@ import { FirstRunEvidenceBrief, FirstRunNoLocalData } from "./components/FirstRu
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
-import { shouldRefreshDeskOnFirstEvidence } from "./lib/firstRunEvidence.js";
+import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
 import { hasComparableDeltas, orderWatchlistCompanies } from "./lib/watchlist-order.js";
 import { mentionIsInWindow, mentionPageParams, mentionWindowHours } from "./lib/mention-window.js";
@@ -178,7 +178,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [reconnectLookupFailedIds, setReconnectLookupFailedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [snapshotRevision, setSnapshotRevision] = useState(0);
-  const firstRunEligibleCountRef = useRef<number | null>(null);
+  const firstEvidenceRecoveryRef = useRef(new FirstEvidenceRecovery());
   const [outcomeRefreshRevision, setOutcomeRefreshRevision] = useState(0);
   const [windowHours, setWindowHours] = useState(24);
   const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("sentiment");
@@ -425,12 +425,14 @@ export default function App() {
       setHealthLoadState("failed");
     }
     if (cs) {
+      firstEvidenceRecoveryRef.current.snapshotApplied();
       setCompanies(cs);
       setCompaniesLoadState("ready");
       setSelectedId((current) => current && cs.some((company) => company.id === current)
         ? current
         : cs[0]?.id ?? null);
     } else {
+      firstEvidenceRecoveryRef.current.snapshotFailed();
       setCompaniesLoadState("failed");
     }
 
@@ -527,12 +529,13 @@ export default function App() {
 
   useEffect(() => {
     if (firstRunEvidence.state !== "ready") return;
-    const previousCount = firstRunEligibleCountRef.current;
-    firstRunEligibleCountRef.current = firstRunEvidence.eligibleObservationCount;
+    const recovery = firstEvidenceRecoveryRef.current;
     const companyHistoryVisible = companies.some((company) => company.latestSourceCollectedAt != null);
-    if (!shouldRefreshDeskOnFirstEvidence(previousCount, firstRunEvidence.eligibleObservationCount, companyHistoryVisible)) return;
-    setSnapshotRevision((revision) => revision + 1);
-    void refreshBackendSnapshot();
+    const next = recovery.observe(firstRunEvidence.eligibleObservationCount, companyHistoryVisible);
+    if (next.refreshFeeds) setSnapshotRevision((revision) => revision + 1);
+    if (next.refreshSnapshot) {
+      void refreshBackendSnapshot().catch(() => undefined).finally(() => recovery.snapshotSettled());
+    }
   }, [companies, firstRunEvidence, refreshBackendSnapshot]);
 
   useEffect(() => {
