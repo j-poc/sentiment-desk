@@ -146,6 +146,7 @@ export default function App() {
   const [reconnectLookupFailedIds, setReconnectLookupFailedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const firstEvidenceRecoveryRef = useRef(new FirstEvidenceRecovery());
+  const companyHistoryVisibleRef = useRef(false);
   const [outcomeRefreshRevision, setOutcomeRefreshRevision] = useState(0);
   const [windowHours, setWindowHours] = useState(168);
   const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("sentiment");
@@ -392,7 +393,9 @@ export default function App() {
       setHealthLoadState("failed");
     }
     if (cs) {
-      firstEvidenceRecoveryRef.current.snapshotApplied();
+      const companyHistoryVisible = cs.some((company) => company.latestSourceCollectedAt != null);
+      companyHistoryVisibleRef.current = companyHistoryVisible;
+      firstEvidenceRecoveryRef.current.snapshotApplied(companyHistoryVisible);
       setCompanies(cs);
       setCompaniesLoadState("ready");
       setSelectedId((current) => current && cs.some((company) => company.id === current)
@@ -497,13 +500,13 @@ export default function App() {
   useEffect(() => {
     if (firstRunEvidence.state !== "ready") return;
     const recovery = firstEvidenceRecoveryRef.current;
-    const companyHistoryVisible = companies.some((company) => company.latestSourceCollectedAt != null);
+    const companyHistoryVisible = companyHistoryVisibleRef.current;
     const next = recovery.observe(firstRunEvidence.eligibleObservationCount, companyHistoryVisible);
     if (next.refreshFeeds) setSnapshotRevision((revision) => revision + 1);
     if (next.refreshSnapshot) {
       void refreshBackendSnapshot().catch(() => undefined).finally(() => recovery.snapshotSettled());
     }
-  }, [companies, firstRunEvidence, refreshBackendSnapshot]);
+  }, [firstRunEvidence, refreshBackendSnapshot]);
 
   useEffect(() => {
     if (chartMode === "comparison") void refreshPrice();

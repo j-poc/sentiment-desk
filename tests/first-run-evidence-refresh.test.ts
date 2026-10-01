@@ -29,7 +29,7 @@ describe("first evidence snapshot recovery", () => {
     expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
     recovery.snapshotSettled();
     expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: true });
-    recovery.snapshotApplied();
+    recovery.snapshotApplied(true);
     recovery.snapshotSettled();
     expect(recovery.observe(12, true)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
     expect(recovery.observe(13, true)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
@@ -42,11 +42,39 @@ describe("first evidence snapshot recovery", () => {
     expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: true });
   });
 
+  it("keeps recovery pending after a stale successful snapshot and retries only on the next history poll", () => {
+    const recovery = new FirstEvidenceRecovery();
+    expect(recovery.observe(0, false)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
+    expect(recovery.observe(12, false)).toEqual({ refreshFeeds: true, refreshSnapshot: true });
+    recovery.snapshotApplied(false);
+    recovery.snapshotSettled();
+
+    expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: true });
+    recovery.snapshotApplied(true);
+    recovery.snapshotSettled();
+    expect(recovery.observe(12, true)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
+  });
+
+  it("retries after a failed read followed by a stale successful snapshot, then clears on caught-up data", () => {
+    const recovery = new FirstEvidenceRecovery();
+    expect(recovery.observe(12, false)).toEqual({ refreshFeeds: true, refreshSnapshot: true });
+    recovery.snapshotFailed();
+    recovery.snapshotSettled();
+    expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: true });
+    recovery.snapshotApplied(false);
+    recovery.snapshotSettled();
+
+    expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: true });
+    recovery.snapshotApplied(true);
+    recovery.snapshotSettled();
+    expect(recovery.observe(12, true)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
+  });
+
   it("accepts a successful overlapping snapshot and stops pending retries", () => {
     const recovery = new FirstEvidenceRecovery();
     recovery.observe(0, false);
     recovery.observe(12, false);
-    recovery.snapshotApplied();
+    recovery.snapshotApplied(true);
     recovery.snapshotSettled();
     expect(recovery.observe(12, true)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
   });
@@ -64,12 +92,12 @@ describe("first evidence snapshot recovery", () => {
   it("recovers a later failed snapshot after successful history without another feed refresh", () => {
     const recovery = new FirstEvidenceRecovery();
     recovery.observe(12, false);
-    recovery.snapshotApplied();
+    recovery.snapshotApplied(true);
     recovery.snapshotSettled();
     recovery.snapshotFailed();
     expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: true });
     expect(recovery.observe(12, false)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
-    recovery.snapshotApplied();
+    recovery.snapshotApplied(true);
     recovery.snapshotSettled();
     expect(recovery.observe(12, true)).toEqual({ refreshFeeds: false, refreshSnapshot: false });
   });
