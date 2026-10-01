@@ -14,7 +14,7 @@ function engineChip(health: HealthDTO | null) {
   const engine = health.health.classifier?.provider === "openai_luna" ? "LUNA" : "JEV";
   if (classifier.enabled) {
     return (
-        <span className="flex whitespace-nowrap items-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-[0.08em] text-emerald-300 sm:px-2 sm:tracking-[0.14em]">
+      <span className="flex whitespace-nowrap items-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-[0.08em] text-emerald-300 sm:px-2 sm:tracking-[0.14em]">
         <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />
         {engine} ENABLED
       </span>
