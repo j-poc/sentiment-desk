@@ -102,7 +102,7 @@
     },
     {
       "path": "server/app.ts",
-      "sha256": "7f4c1d60a4081889bc971f104cd5731284ee5400def86833dcbc6f37d46c3d58",
+      "sha256": "b6d95e11e4f85876dc09b6b3110c672b395b671b6fe46c2aeef91047b7463621",
       "source_id": "yahoo_chart"
     },
     {
@@ -127,7 +127,7 @@
     },
     {
       "path": "server/app.ts",
-      "sha256": "7f4c1d60a4081889bc971f104cd5731284ee5400def86833dcbc6f37d46c3d58",
+      "sha256": "b6d95e11e4f85876dc09b6b3110c672b395b671b6fe46c2aeef91047b7463621",
       "source_id": "yahoo_quote"
     },
     {
@@ -146,8 +146,8 @@
       "exit_code": 0,
       "id": "fixture_suite",
       "kind": "fixture",
-      "output_bytes": 1002,
-      "output_digest": "c80f53550817ec22c7cc80c11a51e479fb25d666cbadcde9b80e0b6c5d9cd37a",
+      "output_bytes": 1026,
+      "output_digest": "8750a900af8ebf7eb3c671832dc4c9e3d2a78f56aaceb92e8af68da9ba399fdc",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -160,7 +160,7 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T09:12:22Z",
+      "started_at": "2026-10-01T11:56:03Z",
       "status": "PASS"
     },
     {
@@ -168,7 +168,7 @@
       "id": "failure_recovery_regressions",
       "kind": "failure",
       "output_bytes": 1107,
-      "output_digest": "e0f0cc10383a5638cd8bc0f0831bb55f89afe4366af6e80c8505d5b1cf45cca1",
+      "output_digest": "d0c3822233781916d6484723035fdf87aff0b6c76ed08d391b24c615b9c455a0",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -181,7 +181,7 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T09:13:17Z",
+      "started_at": "2026-10-01T11:57:09Z",
       "status": "PASS"
     },
     {
@@ -189,7 +189,7 @@
       "id": "pipeline_replay_regressions",
       "kind": "replay",
       "output_bytes": 638,
-      "output_digest": "a03f9ea7d28fee1a9f579848ba2beb961c458ad7d7dbbb2c8dadd8bc2f5d197b",
+      "output_digest": "567caa226c8c4b01e7158714f9ec0de8b92a27fcaea0b2f236212dff9854e644",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -202,7 +202,7 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T09:14:02Z",
+      "started_at": "2026-10-01T11:57:58Z",
       "status": "PASS"
     },
     {
@@ -210,7 +210,7 @@
       "id": "offline_source_request_gates",
       "kind": "failure",
       "output_bytes": 8334,
-      "output_digest": "a4c99a2f5a142bca5576d540c85280af5ac1caa5a245f261ff765134c2a4c166",
+      "output_digest": "bdd533597ef3d1d7c86883399598f384f3b1d910e1e9f99a55c75d03e19763cc",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -223,15 +223,15 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T09:14:33Z",
+      "started_at": "2026-10-01T11:58:32Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
-      "output_bytes": 12853,
-      "output_digest": "0d4f94234090952b4dd173b06ffa3d20f735aa15fce69201baa486c31a001c4a",
+      "output_bytes": 13128,
+      "output_digest": "235c0e5c65e30c71404d2b12fb2ce541fb9909ebbce2c18812ae08f4d39ceb1a",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -239,14 +239,14 @@
         "yahoo_quote",
         "yahoo_chart"
       ],
-      "started_at": "2026-10-01T09:14:52Z",
+      "started_at": "2026-10-01T11:58:53Z",
       "status": "PASS"
     }
   ],
-  "code_fingerprint": "34d805abfcfd30e59ff239cdd845e9b7e6f1c033a3bd47a69614956b0a8dc14a",
-  "contract_digest": "6627428ee1241fdf040fcbcd310ad5b74cd29fc343a19362f2f301a854c501a0",
+  "code_fingerprint": "8e27f10bcee47b53d9cb444e8a1ba13a617fef7fbeef9fa5c9b37a2d994cfff5",
+  "contract_digest": "57951761ad42479cdfcdf72b04685b1082589dd9a7934bacc90f614df0a90e45",
   "schema_version": 1,
-  "standard_digest": "02b3a9ea75ea9e82981cac988f021a78b440bbc0407f3759a62405ffff5bf1a8",
+  "standard_digest": "0705643f9c2fe75e6cac32527741200fc200ad745e3904add39e62c6accf9b3d",
   "status": "PASS",
-  "verified_at": "2026-10-01T09:15:58Z"
+  "verified_at": "2026-10-01T12:00:24Z"
 }
