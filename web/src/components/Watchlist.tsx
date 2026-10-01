@@ -1,11 +1,10 @@
+import { useEffect, useRef } from "react";
 import type { CompanySnapshot, Quote, SeriesPoint } from "../lib/api.js";
-import { NEU, fmtDelta, fmtIndex, quoteSourceAgeLabel, sentimentColor, timeAgo } from "../lib/format.js";
+import { fmtDelta, fmtIndex, quoteSourceAgeLabel, sentimentColor, timeAgo } from "../lib/format.js";
 
 export function Sparkline({ points, width = 76, height = 24 }: { points?: SeriesPoint[]; width?: number; height?: number }) {
   const vals = (points ?? []).map((p) => p.v).filter((v): v is number => v != null);
-  if (vals.length < 2) {
-    return <div style={{ width, height }} className="rounded bg-white/[0.03]" />;
-  }
+  if (vals.length < 2) return null;
   const step = width / (vals.length - 1);
   const y = (v: number) => height - ((Math.max(-100, Math.min(100, v)) + 100) / 200) * height;
   const path = vals.map((v, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
@@ -18,27 +17,6 @@ export function Sparkline({ points, width = 76, height = 24 }: { points?: Series
       <line x1="0" x2={width} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.09)" strokeDasharray="2 3" />
       <path d={path} fill="none" stroke={color} strokeWidth="1.3" strokeLinejoin="round" />
     </svg>
-  );
-}
-
-export function DeltaChip({ delta, label }: { delta: number | null; label?: string }) {
-  if (delta == null) {
-    return (
-      <span className="text-[10px] text-white/25" aria-label={label ? `${label}: unavailable` : undefined}>
-        --
-      </span>
-    );
-  }
-  const color = delta > 0.5 ? "#34d399" : delta < -0.5 ? "#f87171" : NEU;
-  const arrow = delta > 0.5 ? "▲" : delta < -0.5 ? "▼" : "·";
-  return (
-    <span
-      className="tabnum inline-flex items-center gap-0.5 text-[10px]"
-      style={{ color }}
-      aria-label={label ? `${label}: ${fmtDelta(delta)} impact points` : undefined}
-    >
-      {arrow} {fmtDelta(delta)}
-    </span>
   );
 }
 
@@ -55,6 +33,16 @@ export function Watchlist({
   quotes: Record<string, Quote>;
   onSelect: (id: string) => void;
 }) {
+  const selectedRowRef = useRef<HTMLButtonElement | null>(null);
+  const latestSourceCollectedAt = companies.reduce<number | null>(
+    (latest, company) => (company.latestSourceCollectedAt ?? 0) > (latest ?? 0) ? company.latestSourceCollectedAt : latest,
+    null,
+  );
+  useEffect(() => {
+    const row = selectedRowRef.current;
+    if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedId]);
+
   return (
     <div className="flex flex-col">
       {companies.map((c) => {
@@ -69,29 +57,34 @@ export function Watchlist({
         const freshness = q?.delivery === "cache"
           ? `cached ${timeAgo(q.retrievedAt)} · ${sourceTiming}`
           : sourceAge;
-        const changeColor = change == null ? NEU : change > 0.001 ? "#34d399" : change < -0.001 ? "#f87171" : NEU;
-        const indexDescription = c.index == null
-          ? "Jev weighted item mean unavailable"
-          : `Jev weighted item mean ${fmtIndex(c.index)} impact points from ${c.indexRecordCount} scored source records over ${c.indexWindow === "24h" ? "the trailing 24 hours (fallback)" : "the latest 3 hours"}`;
-        const deltaDescription = c.delta == null
-          ? "Current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean is unavailable"
-          : `Current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean: ${fmtDelta(c.delta)} impact points`;
         const priceDescription = q == null
           ? "Market price unavailable"
           : `Market price ${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}; ${sourceTiming}; ${q.delivery === "cache" ? "cached" : "network"} delivery retrieved ${timeAgo(q.retrievedAt)}; ${change == null ? "price change unavailable" : `price change ${fmtDelta(change)} percent`}`;
-        const sourceFreshness = `latest saved source record collected ${timeAgo(c.latestSourceCollectedAt)}`;
+        const historyStatus = c.indexRecordCount > 0
+          ? `${c.indexRecordCount} scored records${c.indexWindow ? ` in ${c.indexWindow}` : ""}`
+          : c.sourceRecords24h > 0
+            ? `${c.sourceRecords24h} saved · no scored index`
+            : c.latestSourceCollectedAt != null
+              ? `Saved history · latest ${timeAgo(c.latestSourceCollectedAt)}`
+              : "No saved history";
+        const indexDescription = c.index == null
+          ? historyStatus
+          : `Jev impact mean ${fmtIndex(c.index)} points from ${c.indexRecordCount} scored records`;
+        const accessibleData = [q ? priceDescription : null, indexDescription, c.delta == null ? null : `3-hour versus 24-hour mean difference ${fmtDelta(c.delta)} impact points`]
+          .filter(Boolean).join(". ");
         return (
           <button
             key={c.id}
             onClick={() => onSelect(c.id)}
             aria-pressed={selected}
-            aria-label={`${c.name} (${c.ticker}). ${indexDescription}. ${deltaDescription}. ${priceDescription}. ${sourceFreshness}. Activate to show ${c.name} research.`}
+            ref={selected ? selectedRowRef : undefined}
+            aria-label={`${c.name} (${c.ticker}). ${accessibleData}. Activate to show ${c.name} research.`}
             className={`flex w-full items-center gap-1.5 border-b border-white/[0.04] px-2 py-2 text-left transition-colors ${
               selected ? "bg-white/[0.05]" : "hover:bg-white/[0.03]"
             }`}
             style={{ borderLeft: `2px solid ${selected ? c.color : "transparent"}` }}
           >
-            <span className="w-[56px] shrink-0">
+            <span className="w-[66px] shrink-0">
               <span className="flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.color }} />
                 <span className="text-[12px] font-semibold tracking-wide">{c.ticker}</span>
@@ -101,32 +94,33 @@ export function Watchlist({
 
             <Sparkline points={sparks[c.id]} width={32} height={20} />
 
-            <span className="w-[50px] shrink-0 text-right">
-              <span className={`tabnum block text-[11.5px] ${q?.delivery === "cache" ? "text-amber-300/80" : "text-white/85"}`} title={q ? priceDescription : undefined}>
-                {q ? `${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}` : "--"}
-              </span>
-              <span className="tabnum block truncate text-[10.5px]" style={{ color: freshness ? "#fbbf24" : changeColor }}>
-                {freshness ?? (change != null ? `${fmtDelta(change)}%` : "--")}
-              </span>
-            </span>
-
-            <span className="w-[42px] shrink-0 text-right">
-              <span
-                className="tabnum block text-[12.5px] font-semibold"
-                style={{ color }}
-                title={indexDescription}
-              >
-                {fmtIndex(c.index)}
-              </span>
-              <DeltaChip delta={c.delta} />
+            <span className="min-w-0 flex-1 text-right">
+              {q && (
+                <span className={`tabnum block truncate text-[11px] ${q.delivery === "cache" ? "text-amber-300/85" : "text-white/85"}`} title={priceDescription}>
+                  {q.currency} {q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)}{change == null ? "" : ` · ${change > 0 ? "+" : ""}${fmtDelta(change)}%`}
+                </span>
+              )}
+              {c.index != null ? (
+                <span className="tabnum block truncate text-[10.5px]" style={{ color }} title={indexDescription}>
+                  {fmtIndex(c.index)} impact · {c.indexRecordCount} scored
+                </span>
+              ) : (
+                <span className="block clamp-2 text-[10.5px] leading-[1.3] text-white/55" title={historyStatus}>
+                  {historyStatus}
+                </span>
+              )}
+              {c.delta != null && (
+                <span className="tabnum block truncate text-[9.5px] text-white/45" title={`3-hour minus 24-hour weighted mean: ${fmtDelta(c.delta)} impact points`}>
+                  3h / 24h {fmtDelta(c.delta)}
+                </span>
+              )}
+              {freshness && q && <span className="block truncate text-[9.5px] text-amber-200/65" title={`Quote source time: ${sourceTiming}; retrieved ${timeAgo(q.retrievedAt)}`}>{freshness}</span>}
             </span>
           </button>
         );
       })}
       <div className="px-3 py-2 text-[10.5px] text-white/55">
-        {companies.length} companies · latest source record collected {timeAgo(
-          companies.reduce<number | null>((acc, c) => (c.latestSourceCollectedAt ?? 0) > (acc ?? 0) ? c.latestSourceCollectedAt : acc, null),
-        )}
+        {companies.length} companies · {latestSourceCollectedAt == null ? "no saved history yet" : `latest source collected ${timeAgo(latestSourceCollectedAt)}`}
       </div>
     </div>
   );

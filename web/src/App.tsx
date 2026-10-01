@@ -19,7 +19,7 @@ import {
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
 import { MobileCompanyPicker } from "./components/MobileCompanyPicker.js";
-import { Watchlist, DeltaChip } from "./components/Watchlist.js";
+import { Watchlist } from "./components/Watchlist.js";
 import { SeriesChart } from "./components/SeriesChart.js";
 import { MentionFeed } from "./components/MentionFeed.js";
 import { EvidenceBreadth } from "./components/EvidenceBreadth.js";
@@ -35,7 +35,7 @@ import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { FirstRunEvidenceBrief, FirstRunNoLocalData } from "./components/FirstRunEvidenceBrief.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
-import { quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
+import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
@@ -862,6 +862,23 @@ export default function App() {
     && firstRunEvidence.state === "ready"
     && firstRunEvidence.eligibleObservationCount === 0
     && !localObservationArrived;
+  const healthSources = health
+    ? [health.health.rss, health.health.gdelt, health.health.x, health.health.quotes, health.health.sec,
+      health.health.finnhub, health.health.reddit, health.health.jev]
+    : [];
+  const healthSourceErrors = healthSources.filter((source) =>
+    source.lastErrorAt != null && (source.lastOkAt == null || source.lastErrorAt > source.lastOkAt),
+  ).length;
+  const degradedDeliveries = health?.deliveryHealth.filter((delivery) =>
+    ["partial", "overdue", "failed", "processing"].includes(delivery.state)
+    || delivery.latestIngestionState === "partial"
+    || delivery.latestIngestionState === "failed",
+  ).length ?? 0;
+  const alertAttentionCount = health
+    ? Object.values(health.alertDelivery.counts).reduce((total, count) => total + count, 0)
+    : 0;
+  const healthAttentionCount = healthSourceErrors + degradedDeliveries + alertAttentionCount;
+  const webhookNotConfigured = health != null && !health.alertDelivery.configured;
   const selectedMentions = (activeMentionFeed?.items ?? []).filter((mention) =>
     mentionIsInWindow(mention, activeMentionFeed?.hours ?? windowHours, clock),
   );
@@ -1090,12 +1107,24 @@ export default function App() {
               </button>
             ))}
           </div>
+          {researchView === "desk" && firstRunActive && (
+            <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />
+          )}
           {researchView === "desk" && (
             <details className="desk-operations">
               <summary>
                 <span>Sources &amp; operations</span>
-                <span className={health?.externalRequestsEnabled ? "text-emerald-200/70" : "text-amber-200/80"}>
-                  {health == null ? healthLoadState === "failed" ? "status unavailable" : "checking status" : health.externalRequestsEnabled ? "external requests enabled" : "saved data only"}
+                <span className="desk-operations-summary">
+                  <span className={healthLoadState === "failed" || healthAttentionCount > 0 || webhookNotConfigured ? "text-amber-200/85" : "text-white/60"}>
+                    {health == null
+                      ? healthLoadState === "failed" ? "status unavailable" : "checking status"
+                      : healthLoadState === "failed"
+                        ? `refresh failed · last received status${health.externalRequestsEnabled ? " · external requests enabled" : " · saved data only"}`
+                        : health.externalRequestsEnabled ? "external requests enabled" : "saved data only"}
+                  </span>
+                  {healthAttentionCount > 0 && healthLoadState !== "failed" && <span className="text-amber-200/80">{healthAttentionCount} health or alert signals</span>}
+                  {webhookNotConfigured && <span className="text-amber-200/85">webhook not configured</span>}
+                  <span className="text-white/50">Jev output independently unvalidated</span>
                 </span>
                 <span className="desk-operations-detail">details</span>
               </summary>
@@ -1105,7 +1134,7 @@ export default function App() {
                 {healthLoadState === "failed" && <p role="status" className="px-1 py-2 text-[11px] text-amber-200/80">Operations status unavailable. Waiting for the next server update.</p>}
                 {healthLoadState === "loading" && !health && <p role="status" className="px-1 py-2 text-[11px] text-white/55">Checking source, Jev, and webhook status…</p>}
                 <HealthPanel health={health} />
-                <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />
+                {!firstRunActive && <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />}
                 <details className="desk-market-activity">
                   <summary>Market activity</summary>
                   <div className="panel-head">
@@ -1186,7 +1215,13 @@ export default function App() {
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-white/40">
                     <span>
-                      {selected.sector} · {selected.sourceRecords24h} source records collected in 24h · latest source record collected {timeAgo(selected.latestSourceCollectedAt)}
+                      {selected.sector} · {windowLabel(windowHours)} saved window · {selectedSeriesError
+                        ? "score history unavailable"
+                          : !selectedSeriesReady
+                            ? "loading saved history"
+                            : selectedSeriesScoredItemCount > 0
+                            ? `${selectedSeriesScoredItemCount} scored records · ${selectedSeriesLastScoredAt == null ? "latest time unavailable" : `latest ${timeAgo(selectedSeriesLastScoredAt)}`}`
+                            : `No scored records in ${windowLabel(windowHours)}`}
                     </span>
                     {selected.earningsAt != null && (
                       <span
@@ -1211,15 +1246,15 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <div className="mt-1.5 flex items-center gap-2 text-[11.5px]">
-                    <DeltaChip
-                      delta={selected.delta}
-                      label={`${selected.name}: current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean`}
-                    />
-                    <span className="text-white/55" title="Current three-hour Jev-scored item mean minus the trailing 24-hour item mean, in impact points. The baseline includes the latest three hours; this is neither share-price return nor investor opinion.">
-                      Secondary · 3h vs 24h Jev mean difference in impact points
-                    </span>
-                  </div>
+                  {(selected.indexWindow === "24h" || selected.indexWindow === "3h") && (
+                    <div className="mt-1.5 text-[11.5px] text-white/55" title="Jev's per-record impact mean is a research label, not share-price return or investor opinion. The 24-hour baseline includes the latest three hours.">
+                      {selected.indexWindow === "24h"
+                        ? "No scored activity in the latest 3 hours · 24-hour history available"
+                        : selected.delta == null
+                          ? "Recent 3-hour scored activity"
+                          : `Recent 3h vs 24h mean: ${fmtDelta(selected.delta)} impact points`}
+                    </div>
+                  )}
                 </div>
                 <div className="flex w-full flex-row justify-between gap-1 pt-2 sm:ml-auto sm:w-auto sm:shrink-0 sm:justify-start sm:pt-0">
                   {WINDOWS.map((w, i) => (
