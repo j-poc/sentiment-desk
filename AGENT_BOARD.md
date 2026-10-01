@@ -33,12 +33,13 @@ by its declared ETL gate and writes to a disposable Compose database.
 | `/root/first_run_design_judge` | GPT-6.1 Sol, xhigh, read-only judge | Compare first-run proposals and acceptance criteria | Complete; Candidate A 23/25, Candidate B 22/25; design judgment, not usability validation |
 | `/root/first_run_advisor` | GPT-6.1 Sol, xhigh, read-only advisor | Real-data/no-demo and publication boundary for retained SEC-to-Jev result | Complete; confirmed retained artifact fields against SQLite; flagged and coordinator corrected one request-digest typo; noted separate unverified account terms |
 | `/root/comment_sicko_audit` | Read-only comment audit | Added comments and suppressions in changed scope | Complete; no dead comments, added suppressions, or misleading code comments |
-| `/root` | Coordinator | Acceptance contract, integration, records, final checks, Git checkpoint, and verdict | Candidate from `f40c8877c8bf4667e632fa5f6d5d97f6a0810541` reviewed. Focused evidence 30/30 and recovery 25/25 pass; typecheck/build pass. Final clean broad run passed389/389 tests across52 files, exit0, in311.34s after event-loop yielding; earlier non-pass logs are preserved. Real-source Jev evidence remains absent. Source checkpoint and final frozen receipts follow. |
+| `/root` | Coordinator | Acceptance contract, integration, records, final checks, Git checkpoint, and verdict | Candidate from `f40c8877c8bf4667e632fa5f6d5d97f6a0810541` reviewed. Focused evidence 30/30 and recovery 25/25 pass; typecheck/build pass. Final clean broad run passed389/389 tests across52 files, exit0, in311.34s after event-loop yielding; earlier non-pass logs are preserved. Real-source Jev evidence remains absent. Reviewed source checkpoint `7b1ce1c97d19fe8c092dd6f32c506550331afb0d` is pushed and matched to the remote branch. Latest final ETL status is recorded in the tracked receipt; engineering receipt remains private and full readiness remains blocked on real evidence. |
 
 The alert implementation and evaluator correction were edited concurrently in
 the shared checkout under disjoint file ownership. The shared filesystem was
 not an enforced isolation boundary. No further concurrent writers are assigned.
 The latest repair and proof gaps are recorded in
-`project-record/4-log/2026-10-01-jev-evidence-gate-repair.md`. Final checkpoint
-and frozen receipts are pending; real-source classification and human-label
-evidence remain absent.
+`project-record/4-log/2026-10-01-jev-evidence-gate-repair.md`. The reviewed source checkpoint is pushed. Final frozen ETL status is
+recorded in `project-record/4-log/live-data-etl-evidence.json`; the private
+engineering receipt records the acceptance result. Real-source classification
+and human-label evidence remain absent.

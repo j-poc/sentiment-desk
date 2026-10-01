@@ -214,3 +214,61 @@ pre-checkpoint secret scan found no leaks in about 11.94 MB; the ignored
 Git. Whitespace checks passed. This is local repair proof; the real Jev
 evaluation/account/source evidence remains blocked, and no rendered viewport
 proof is added. Frozen ETL and engineering receipts follow the checkpoint.
+
+Reviewed source checkpoint `7b1ce1c97d19fe8c092dd6f32c506550331afb0d`
+was pushed to `https://github.com/j-poc/sentiment-desk`, branch
+`codex/real-data-rebuild`. Local HEAD and the exact `git ls-remote` branch
+matched. Repository visibility remains PUBLIC and authenticated permission
+is ADMIN; no visibility, access, license, merge, or deployment change was made.
+Private evidence and the runtime database remain excluded. These records are
+now frozen for final ETL verification. The authoritative scoped ETL status is
+in `project-record/4-log/live-data-etl-evidence.json`; the private engineering
+receipt holds the full acceptance result. Each must bind to this final
+source/configuration. The real Jev and independent-evidence commands are
+expected to remain non-pass until actual missing evidence is supplied.
+
+The first frozen ETL verification passed its fixture, failure/recovery, replay,
+and offline source-gate checks. Its keyless live smoke failed. A diagnostic
+retry preserved the same complete-sweep requirement and timed out after
+120 seconds with 27 real quotes, 60 delivery receipts, and 100 pending
+observations. Captured health showed Google RSS coverage 14/24 and Yahoo RSS
+13/24 with CRM/ADBE request timeouts, GDELT HTTP429, quotes 24/24 current, and
+chart coverage 17/24 partial. The smoke database was disposable and cleaned
+up. This is real partial collection, not evidence of a healthy complete
+sweep or model quality; no Jev request was sent.
+
+Engineering alignment validation also exposed the coordinator's invalid
+outer full-suite budget: the installed gate caps each check at 120 seconds,
+so both 300 and 600 exceed that cap. No global harness file was changed. The
+advisor selected the ETL receipt as the primary full-suite proof: its required
+fixture_suite command is exactly the original full-suite argv and retains
+all tests and 20-second behavior limits. The engineering contract removes
+only duplicate execution, assigns workflow/resource/persistence coverage to
+etl-artifact-check, deduplicates the alignment mapping, and includes the
+actual ETL receipt as an alignment artifact. Native alignment-inputs now
+validates the version-2 contract. The changed contract invalidates the prior
+ETL receipt and requires a final verify/check against frozen files.
+
+The live-smoke deadline is now 600 seconds for initial readiness; recovery
+remains bounded to 120 seconds and the outer ETL command to 1,200 seconds.
+The advisor checked the actual scheduler: 48 RSS feed jobs, two workers,
+15-second HTTP deadlines, and a one-second job pause permit roughly
+384 seconds before pacing and processing overhead. The sequential GDELT
+sweep permits roughly 408 seconds. The former 120-second smoke could expire
+before a configured sweep completed. All complete-coverage, current-source,
+real-pending-observation, and persistence predicates remain unchanged.
+The previous RSS timeouts and GDELT HTTP429 remain genuine provider failures;
+a longer budget does not turn those runs into passes or establish two-minute
+detection latency. The final frozen ETL receipt, including its timestamp,
+source fingerprint, and per-check statuses, is the authority for this run.
+Only a healthy full-coverage public text collector plus healthy quote coverage
+and preserved real pending observations can pass this bounded smoke. This
+scope does not imply that every provider is healthy or that Jev is evaluated.
+
+The final engineering check uses the exact ETL receipt for full-suite proof,
+then independently runs its remaining declared checks. Its private receipt
+and alignment review retain any missing real-source/model/account evidence
+as non-pass. Source records are frozen before ETL execution; private gate
+logs and receipts may change without altering the tracked candidate. Final
+GitHub identity must be read back from the exact branch after the reviewed
+record/configuration checkpoint.

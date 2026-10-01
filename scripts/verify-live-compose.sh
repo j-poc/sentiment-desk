@@ -82,7 +82,7 @@ run_api_check() {
 const mode = process.env.SMOKE_MODE;
 const minDbBytes = Number(process.env.SMOKE_DB_MIN_BYTES ?? 0);
 const expectedObservationId = process.env.SMOKE_OBSERVATION_ID ?? "";
-const deadline = Date.now() + 120_000;
+const deadline = Date.now() + (mode === "live" ? 600_000 : 120_000);
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let last = "API is not ready";
 
