@@ -2,17 +2,82 @@
 
 ## Latest native goal status check — 2026-10-01
 
-The goal service currently reports the existing Sentiment Desk goal as
-**blocked**. Its objective still matches the acceptance contract, so it was
-not replaced. The user asked to continue; work continues in this turn, but the
-available goal controls provide no resume-to-active action, so automatic
-continuation after this turn is not established. The current evaluation and
-remaining inputs are recorded in
+The goal service reports the existing Sentiment Desk goal as **blocked**. Its
+objective still matches the acceptance contract, so it was not replaced. The
+user asked to continue, and this turn continued the work. The available goal
+controls provide no resume-to-active action, so automatic continuation after
+this turn is not established. The current evaluation, bounded real-source
+smoke, and remaining inputs are recorded in
 `project-record/4-log/2026-10-01-goal-resumption-audit.md`. The product remains
-incomplete pending the independently verified real-source evaluation and
-account/source evidence; Opportunity Radar stays disabled.
+incomplete pending an independently reviewed real-source evaluation and
+account/source evidence. Opportunity Radar stays disabled.
 
-## Final local disposition — 2026-10-01T01:02:05Z
+## Current continuation — 2026-10-01
+
+The user explicitly authorized TypeSafe use for Sentiment Desk and said a
+balance should remain. A single real-source SEC-to-Jev request then ran through
+the application in a fresh process and isolated temporary SQLite database. The
+run used a contact-bearing SEC User-Agent for that process, allowed only
+`sec_edgar` text into Jev, pinned `jev-1.13.0`, capped the run at one request
+and 40,000 request bytes per UTC day, and disabled other feeds and webhooks.
+It collected 27 SEC receipts, which produced two filings from two issuers.
+Jev returned one HTTP 200 classification. The other filing remained pending.
+
+The scored Tesla 8-K was neutral, classified as `corporate_action`, with
+`about=0.95`, `investor_relevant=0.97`, and directional impact `+29.0`. The
+request used 2,978 input tokens and 387 output tokens. The app's estimated
+input cost was `$0.000125076`; this is not invoice or balance evidence. The
+separate saved-data UI preview showed the source receipt, classification, and
+one chart point. The main `data/desk.db` was unchanged. The smoke proves one
+real integration path, not classifier quality, 30-issuer coverage, or ongoing
+live operation.
+
+The whole-build engineering-bullshit-detector returned **FAIL** for the full
+goal and found no new reproducible local defect. It confirmed unresolved
+delivery links for the main database's identified legacy records, the lack of a
+30-issuer real SEC cohort and independent human labels, no final spend artifact,
+and no provider records for historical usage reconciliation. The GPT-6.1 Sol
+xhigh advisor agreed that the TypeSafe permission is granted while the account's
+Order, refill, telemetry/retention, limits, rejected-request billing, and
+numeric spend ceiling remain unverified. No demo or synthetic product data was
+added. Do not send more Jev input until the account spending exposure is
+verified.
+
+The exact smoke record and current goal gaps are in
+`project-record/4-log/2026-10-01-goal-resumption-audit.md`. The ETL contract
+still has `live_claim=false`; the one-request smoke does not change that claim.
+
+## Zero-input continuation note — 2026-10-01
+
+The whole-build review rated UX 8/10, local robustness 7.5/10, live readiness
+2/10, and overall readiness 4/10. The investor/UI review rated investor
+usefulness 6.5/10 and the reviewed empty-state UI 8.8/10. These are bounded
+reviewer judgments, not customer validation or a 10/10 claim. The reviewer
+found no further code-local issue in the current first-run slice; its external
+evaluation, account, source-rights, SEC contact, and legacy-usage blockers
+remain open.
+
+The first-run archive now explains that its receipt and digest strings are
+recorded references. A fresh Desk installation cannot resolve them because
+the isolated run's SQLite records are not bundled. The SEC filing remains a
+direct link, and the archive remains outside local observations, charts,
+metrics, usage, and alerts. A focused component test passed after this wording
+correction. Final browser, repository, and live-data gate results are recorded
+in the goal-resumption trace and ETL evidence artifact.
+
+In the clean offline browser profile, the 24-company catalog loaded with zero
+saved source observations. Clicking Tesla changed the selected company panel;
+the empty chart and gauge stayed hidden. The archived real filing and its
+recorded-reference caveat appeared above it, and the operator next step was
+visible. The first view had been an old browser document; the API returned
+HTTP 200 and a hard reload loaded the current build. The screenshot then
+revealed a duplicated “Next” prefix, which was removed before the final
+rendered screenshot. External source and Jev requests stayed disabled. The
+archive heading now says “run,” not “verification,” and the disclosure text is
+slightly larger and higher contrast. The final production build passes with
+the existing 614.48 kB JavaScript-chunk warning.
+
+## Pre-smoke checkpoint — 2026-10-01T01:02:05Z
 
 The schema-2 ETL receipt passed all five required checks at
 `2026-10-01T00:58:07Z`, and a subsequent `live_data_etl_gate.py check`

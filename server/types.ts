@@ -15,6 +15,28 @@ export type EvidenceChannel = "news" | "filing" | "social" | "market_context";
 export type TimeBasis = "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown";
 export type DeliveryHealthState = "current" | "processing" | "overdue" | "failed" | "partial" | "never" | "disabled";
 
+/** Historical verification evidence shown separately from live Desk observations. */
+export interface ArchivedRun {
+  label: string;
+  company: string;
+  ticker: string;
+  sourceTitle: string;
+  sourceUrl: string;
+  filedAt: number;
+  sourcePublishedAt: number;
+  collectedAt: number;
+  scoredAt: number;
+  receiptId: string;
+  receiptDigest: string;
+  sourceAdapter: string;
+  sentiment: "negative" | "neutral" | "positive";
+  eventType: string;
+  model: string;
+  confidence: number;
+  requestDigest: string;
+  rubricDigest: string;
+}
+
 /**
  * Source tiers rank publishing venues by expected reliability for business
  * reporting. The tier is a deterministic prior; Jev's per-item credibility

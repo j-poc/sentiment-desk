@@ -13,6 +13,7 @@ import {
   type PriceSeriesDTO,
   type SeriesPoint,
   type SeriesResult,
+  type FirstRunEvidenceDTO,
 } from "./lib/api.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
@@ -33,9 +34,11 @@ import { AlertDeliveryStatus, DeskHealthDisclosure, HealthPanel } from "./compon
 import { SourceCoverageDisclosure } from "./components/SourceCoverageDisclosure.js";
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
+import { FirstRunEvidenceBrief, FirstRunNoLocalData } from "./components/FirstRunEvidenceBrief.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
+import { shouldRefreshDeskOnFirstEvidence } from "./lib/firstRunEvidence.js";
 import { hasComparableDeltas, orderWatchlistCompanies } from "./lib/watchlist-order.js";
 import { mentionIsInWindow, mentionPageParams, mentionWindowHours } from "./lib/mention-window.js";
 import type { ExactTitleGroupFilter } from "./lib/exact-headline-groups.js";
@@ -168,9 +171,11 @@ export default function App() {
   const [priceLoadErrorKey, setPriceLoadErrorKey] = useState<string | null>(null);
   const [priceSource, setPriceSource] = useState<PriceSeriesDTO | null>(null);
   const [health, setHealth] = useState<HealthDTO | null>(null);
+  const [firstRunEvidence, setFirstRunEvidence] = useState<{ state: "loading" | "error" } | ({ state: "ready" } & FirstRunEvidenceDTO)>({ state: "loading" });
   const [connected, setConnected] = useState(false);
   const [reconnectLookupFailedIds, setReconnectLookupFailedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [snapshotRevision, setSnapshotRevision] = useState(0);
+  const firstRunEligibleCountRef = useRef<number | null>(null);
   const [outcomeRefreshRevision, setOutcomeRefreshRevision] = useState(0);
   const [windowHours, setWindowHours] = useState(24);
   const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("sentiment");
@@ -366,6 +371,23 @@ export default function App() {
     setHealth(snapshot);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    let requestSequence = 0;
+    const refresh = async () => {
+      const sequence = ++requestSequence;
+      try {
+        const evidence = await getJSON<FirstRunEvidenceDTO>("/api/first-run-evidence");
+        if (active && sequence === requestSequence) setFirstRunEvidence({ state: "ready", ...evidence });
+      } catch {
+        if (active && sequence === requestSequence) setFirstRunEvidence({ state: "error" });
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 15_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+
   const refreshBackendSnapshot = useCallback(async (reset = false, expectedRuntimeId?: string) => {
     const requestSeq = ++snapshotRequestSeq.current;
     const streamSequenceAtStart = mentionStreamSequence.current;
@@ -499,6 +521,16 @@ export default function App() {
     void refreshSeries();
     void refreshPrice();
   }, [refreshPrice, refreshSeries]);
+
+  useEffect(() => {
+    if (firstRunEvidence.state !== "ready") return;
+    const previousCount = firstRunEligibleCountRef.current;
+    firstRunEligibleCountRef.current = firstRunEvidence.eligibleObservationCount;
+    const companyHistoryVisible = companies.some((company) => company.latestSourceCollectedAt != null);
+    if (!shouldRefreshDeskOnFirstEvidence(previousCount, firstRunEvidence.eligibleObservationCount, companyHistoryVisible)) return;
+    setSnapshotRevision((revision) => revision + 1);
+    void refreshBackendSnapshot();
+  }, [companies, firstRunEvidence, refreshBackendSnapshot]);
 
   useEffect(() => {
     if (chartMode === "comparison") void refreshPrice();
@@ -816,6 +848,17 @@ export default function App() {
     ? mentionFeedPage
     : undefined;
   const totalMentions = companies.reduce((acc, c) => acc + c.sourceRecords24h, 0);
+  const localObservationArrived = totalMentions > 0
+    || companies.some((company) => company.latestSourceCollectedAt != null)
+    || tape.some(isApplicationMention)
+    || Boolean(activeMentionFeed?.loaded && activeMentionFeed.items.some(isApplicationMention));
+  const firstRunUndetermined = researchView === "desk"
+    && firstRunEvidence.state !== "ready"
+    && !localObservationArrived;
+  const firstRunActive = researchView === "desk"
+    && firstRunEvidence.state === "ready"
+    && firstRunEvidence.eligibleObservationCount === 0
+    && !localObservationArrived;
   const selectedMentions = (activeMentionFeed?.items ?? []).filter((mention) =>
     mentionIsInWindow(mention, activeMentionFeed?.hours ?? windowHours, clock),
   );
@@ -1051,9 +1094,10 @@ export default function App() {
               </button>
             ))}
           </div>
-          {researchView === "desk" && <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? true} />}
-          {researchView === "desk" && <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />}
-          {researchView === "desk" && <DeskHealthDisclosure health={health} />}
+          {researchView === "desk" && !firstRunActive && <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? true} />}
+          {researchView === "desk" && !firstRunActive && <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />}
+          {researchView === "desk" && !firstRunActive && <DeskHealthDisclosure health={health} />}
+          {researchView === "desk" && <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />}
           {selected ? (
             researchView === "radar" ? (
               <OpportunityRadar
@@ -1062,6 +1106,22 @@ export default function App() {
                 ticker={selected.ticker}
                 hours={windowHours}
                 onHours={setWindowHours}
+              />
+            ) : firstRunActive ? (
+              <FirstRunNoLocalData
+                company={selected.name}
+                ticker={selected.ticker}
+                state="empty"
+                secCollectorEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.secCollectorEnabled}
+                jevSecScoringEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.jevSecScoringEnabled}
+              />
+            ) : firstRunUndetermined ? (
+              <FirstRunNoLocalData
+                company={selected.name}
+                ticker={selected.ticker}
+                state={firstRunEvidence.state === "loading" ? "checking" : "unavailable"}
+                secCollectorEnabled={false}
+                jevSecScoringEnabled={false}
               />
             ) : (
             <>

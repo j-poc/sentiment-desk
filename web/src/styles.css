@@ -65,6 +65,42 @@ body {
   border-bottom: 1px solid var(--color-desk-line);
 }
 
+.first-run-brief {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+  gap: 16px;
+  margin: 0 0 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  border-radius: 10px;
+  background: linear-gradient(120deg, rgba(52, 211, 153, 0.055), rgba(255, 255, 255, 0.012));
+}
+.first-run-brief h2 { margin: 5px 0; font-size: 15px; font-weight: 650; }
+.first-run-summary, .first-run-blockers { color: rgba(232, 235, 242, 0.58); font-size: 11px; line-height: 1.5; }
+.first-run-source { margin: 8px 0 4px; color: rgba(232, 235, 242, 0.72); font-size: 11px; line-height: 1.5; }
+.first-run-source a { color: #7dd3fc; text-decoration: underline; text-underline-offset: 2px; }
+.first-run-result { margin: 8px 0 4px; color: #d9e4df; font-size: 11px; }
+.first-run-blockers p { margin: 4px 0; }
+.first-run-blockers strong { color: rgba(232, 235, 242, 0.82); }
+.first-run-provenance { min-width: 0; border-left: 1px solid var(--color-desk-line); padding-left: 14px; color: rgba(232, 235, 242, 0.68); font-size: 11px; }
+.first-run-provenance summary { cursor: pointer; color: rgba(232, 235, 242, 0.84); outline-offset: 4px; }
+.first-run-requirements { margin-top: 10px; color: rgba(232, 235, 242, 0.57); font-size: 10px; }
+.first-run-requirements summary { cursor: pointer; color: rgba(232, 235, 242, 0.72); outline-offset: 4px; }
+.first-run-provenance dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 10px; margin: 10px 0 0; overflow-wrap: anywhere; }
+.first-run-provenance dt { color: rgba(232, 235, 242, 0.54); }
+.first-run-provenance dd { margin: 0; }
+.first-run-provenance a { color: #7dd3fc; text-decoration: underline; text-underline-offset: 2px; }
+.first-run-status { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--color-desk-line); border-radius: 8px; color: rgba(232, 235, 242, 0.58); font-size: 11px; }
+.first-run-company-empty { margin-top: 10px; padding: 18px; border: 1px solid var(--color-desk-line); border-radius: 10px; background: rgba(255, 255, 255, 0.018); }
+.first-run-company-empty h2 { margin: 5px 0; font-size: 15px; font-weight: 650; }
+.first-run-company-empty > p:not(.micro) { max-width: 58ch; margin: 0; color: rgba(232, 235, 242, 0.58); font-size: 11px; line-height: 1.55; }
+.first-run-company-empty .first-run-next-step { max-width: 72ch; margin: 12px 0 0; color: rgba(232, 235, 242, 0.78); font-size: 11px; line-height: 1.55; }
+.first-run-company-empty .first-run-next-step strong { color: #c1f4dd; }
+@media (max-width: 720px) {
+  .first-run-brief { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 12px; }
+  .first-run-provenance { border-top: 1px solid var(--color-desk-line); border-left: 0; padding: 10px 0 0; }
+}
+
 .chart-panel-head {
   align-items: stretch;
   flex-direction: column;

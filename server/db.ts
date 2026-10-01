@@ -738,6 +738,12 @@ export class Desk {
     return this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined;
   }
 
+  /** All-time eligible research history, using the same exclusion policy as the Desk APIs. */
+  realObservationCount(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM mentions WHERE ${REAL_MENTION_FILTER}`).get() as { count: number };
+    return Number(row.count);
+  }
+
   markScored(id: string, s: MentionScore, exclude: boolean, alert?: AlertIntent, receipt?: JevAttemptReceipt): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {

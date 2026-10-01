@@ -12,6 +12,7 @@ import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
 import { forwardReturn, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
+import type { ArchivedRun } from "./types.js";
 
 /**
  * HTTP surface: read APIs, an explicitly confirmed single-item Jev retry, and
@@ -33,6 +34,28 @@ export interface AppDeps {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+// Verified read-only from the isolated real SEC -> Jev smoke DB. Kept outside
+// the operational observation store and never passed to a Desk calculation.
+const ARCHIVED_SEC_JEV_RUN: ArchivedRun = {
+  label: "Archived real-source SEC-to-Jev run",
+  company: "Tesla, Inc.",
+  ticker: "TSLA",
+  sourceTitle: "8-K 1.01 — Material Definitive Agreement (+2 more)",
+  sourceUrl: "https://www.sec.gov/Archives/edgar/data/1318605/000162828026063820/tsla-20260929.htm",
+  filedAt: 1790640000000,
+  sourcePublishedAt: 1790714330000,
+  collectedAt: 1790847689506,
+  scoredAt: 1790847689800,
+  receiptId: "dca6b627-8b86-4288-bc01-6e88bf3bd072",
+  receiptDigest: "695a0b359e553f25b39d47b4d9e96bf35df72f8ae9d373f7d5e938e5c84466ee",
+  sourceAdapter: "sec-primary-document/1",
+  sentiment: "neutral",
+  eventType: "corporate_action",
+  model: "jev-1.13.0",
+  confidence: 0.54,
+  requestDigest: "4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee",
+  rubricDigest: "0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b",
+};
 const PRICE_SERIES_REFRESH_AGE_MS = 5 * 60 * 1000;
 const retryConfirmationSchema = z.object({
   confirmNewCharge: z.literal(true),
@@ -99,6 +122,17 @@ export function createApp(deps: AppDeps): Hono {
       },
       usage: deps.db.usageSince(startOfDayUtc.getTime()),
       events: deps.db.recentEvents(20),
+    });
+  });
+
+  app.get("/api/first-run-evidence", (c) => {
+    const eligibleObservationCount = deps.db.realObservationCount();
+    const runtimeHealth = deps.health.snapshot();
+    return c.json({
+      eligibleObservationCount,
+      secCollectorEnabled: runtimeHealth.sec.enabled,
+      jevSecScoringEnabled: runtimeHealth.jev.enabled && runtimeHealth.sourceApproval.jevAllowedCollectors.includes("sec_edgar"),
+      archivedRun: eligibleObservationCount === 0 ? ARCHIVED_SEC_JEV_RUN : null,
     });
   });
 

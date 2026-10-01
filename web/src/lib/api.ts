@@ -31,6 +31,34 @@ export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
 export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
 
+export interface ArchivedRun {
+  label: string;
+  company: string;
+  ticker: string;
+  sourceTitle: string;
+  sourceUrl: string;
+  filedAt: number;
+  sourcePublishedAt: number;
+  collectedAt: number;
+  scoredAt: number;
+  receiptId: string;
+  receiptDigest: string;
+  sourceAdapter: string;
+  sentiment: "negative" | "neutral" | "positive";
+  eventType: string;
+  model: string;
+  confidence: number;
+  requestDigest: string;
+  rubricDigest: string;
+}
+
+export interface FirstRunEvidenceDTO {
+  eligibleObservationCount: number;
+  secCollectorEnabled: boolean;
+  jevSecScoringEnabled: boolean;
+  archivedRun: ArchivedRun | null;
+}
+
 export interface MentionScore {
   sentiment: Sentiment;
   pPos: number;
