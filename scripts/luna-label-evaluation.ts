@@ -16,7 +16,9 @@ const eventTypeSchema = z.enum(EVENT_TYPES);
 const takeawaySchema = z.enum(TAKEAWAY_KEYS);
 const sentimentClasses = ["negative", "neutral", "positive"] as const;
 
-const productCompanyIds: string[] = (JSON.parse(readFileSync(new URL("../config/companies.json", import.meta.url), "utf8")) as { companies: Array<{ id: string }> }).companies.map(({ id }) => id).sort();
+const productCompanies = (JSON.parse(readFileSync(new URL("../config/companies.json", import.meta.url), "utf8")) as { companies: Array<{ id: string; name: string; ticker: string; sector: string }> }).companies;
+const productCompanyById = new Map(productCompanies.map((company) => [company.id, company]));
+const productCompanyIds = productCompanies.map(({ id }) => id).sort();
 export const PRODUCT_COMPANY_UNIVERSE_SHA256 = createHash("sha256").update(JSON.stringify(productCompanyIds), "utf8").digest("hex");
 
 const companySchema = z.object({ id: z.string().min(1).max(200), name: z.string().trim().min(1).max(160), ticker: z.string().trim().min(1).max(24), sector: z.string().trim().min(1).max(120) }).strict();
@@ -188,7 +190,11 @@ export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierCont
   if (labels.evaluationProfile !== LUNA_DIAGNOSTIC_PROFILE || labels.profileVersion !== LUNA_PROFILE_VERSION) throw new Error("unsupported categorical Luna evaluation profile");
   if (labels.requestedModel !== classifier.model || labels.requestedServiceTier !== classifier.serviceTier || labels.promptVersion !== classifier.promptVersion || labels.schemaVersionName !== classifier.schemaVersion || labels.promptSha256 !== classifier.promptSha256 || labels.schemaSha256 !== classifier.schemaSha256 || labels.profileSha256 !== classifier.profileSha256) throw new Error("frozen Luna classifier model, service tier, prompt, schema or profile identity differs from the loaded production classifier");
   if (labels.productCompanyUniverseSha256 !== PRODUCT_COMPANY_UNIVERSE_SHA256) throw new Error("Luna diagnostic does not bind the current configured product company universe");
-  if ([...labels.populationFrame, ...labels.items].some((item) => !productCompanyIds.includes(item.company.id))) throw new Error("Luna case falls outside the configured product company universe");
+  for (const item of [...labels.populationFrame, ...labels.items]) {
+    const configured = productCompanyById.get(item.company.id);
+    if (!configured) throw new Error(`Luna case ${item.observationId} falls outside the configured product company universe`);
+    if (item.company.name !== configured.name || item.company.ticker !== configured.ticker || item.company.sector !== configured.sector) throw new Error(`Luna case ${item.observationId} company identity does not match configured company ${configured.id}`);
+  }
   if (labels.items.length < 30 || new Set(labels.items.map(({ company }) => company.id)).size < 8) throw new Error("Luna product24 diagnostic requires at least 30 cases across 8 configured product companies");
   if (Date.parse(labels.samplingWindowStart) >= Date.parse(labels.samplingWindowEnd) || Date.parse(labels.samplingWindowEnd) > Date.parse(labels.sampledAt) || Date.parse(labels.sampledAt) > Date.parse(labels.frozenAt) || labels.agentLabelProtocol.frozenAt !== labels.frozenAt) throw new Error("Luna sample and blind-label chronology is invalid");
   if (labels.stage === "final" && (!labels.evaluationBudget || labels.evaluationBudget.maxRequests < labels.items.length || labels.evaluationBudget.maxEstimatedCostUsd > labels.evaluationBudget.openAIAccountReadback.availableBudgetUsd || Date.parse(labels.evaluationBudget.accountOwnerApproval.approvedAt) > Date.parse(labels.frozenAt))) throw new Error("final Luna labels require a pre-frozen owner-approved spend budget within the independently read OpenAI account limit and covering every selected case");

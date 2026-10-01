@@ -143,6 +143,13 @@ describe("offline categorical Luna evaluation", () => {
     expect(lunaLabelSetV1Schema.safeParse({ ...labels, reviewers: [{ id: "human", qualifiedHumanAttested: true }] }).success).toBe(false);
     expect(lunaLabelSetV1Schema.safeParse({ ...labels, pPos: 0.9 }).success).toBe(false);
     expect(parseLunaLabelSet(labels, makeContract()).items).toHaveLength(30);
+    const mismatchedIdentity = structuredClone(labels) as any;
+    const selected = mismatchedIdentity.items[0];
+    const frameRow = mismatchedIdentity.populationFrame.find((row: any) => row.observationId === selected.observationId);
+    selected.company.ticker = "WRONG"; selected.input.company.ticker = "WRONG"; frameRow.company.ticker = "WRONG";
+    mismatchedIdentity.populationFrameSha256 = sampleManifestSha256(mismatchedIdentity.populationFrame);
+    mismatchedIdentity.sampleManifestSha256 = sampleManifestSha256(mismatchedIdentity.items);
+    expect(() => parseLunaLabelSet(mismatchedIdentity, makeContract())).toThrow("company identity does not match configured company");
   });
 
   it("selects two seeded filings per issuer, then deterministically tops up the case count without label input", () => {
