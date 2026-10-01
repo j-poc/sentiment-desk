@@ -325,3 +325,26 @@ browser proof shows zero eligible saved observations, a separately archived
 real SEC-to-Jev run, no empty chart and a Luna-specific operator next step, with
 all external/model requests and Radar off. It does not establish current live
 arrival/recovery, exact target dimensions or classification quality.
+
+
+## Offline verifier multi-request log repair
+
+The fresh68000f1 scoped verification reports four passing checks and one
+non-pass: offline_source_request_gates exited1. The full failed receipt is
+retained privately. The global verifier keeps output digests, not the original
+individual stdout/stderr, so its exact first error is unavailable. A separately
+captured rerun of the exact offline command passes; this does not replace the
+failed receipt or identify that first exit with certainty.
+
+An independent advisor requested as gpt-6.1-sol/xhigh found a timing-sensitive defect:
+the JSONL guard writer emits real newlines, while its reader splits literal
+backslash-n. A single record parses, but multiple valid startup attempts become
+concatenated JSON. Finnhub legitimately schedules multiple request paths in one
+startup cycle, so the number present at the poll boundary varies. Root splits
+LF/CRLF records without weakening request parsing, all-attempt source matching,
+missing-source zero-attempt assertions, classifier gates or the interception
+before network access. A controlled offline boundary probe demonstrates the old
+multi-record failure and corrected LF/CRLF parsing; this is verifier-only
+fixture evidence, not provider data or a product observation. The exact guarded
+command and complete source-bound ETL are rerun after review; earlier passing
+checks never stand in for a fresh receipt. The failed run remains preserved.

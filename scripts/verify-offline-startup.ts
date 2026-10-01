@@ -215,7 +215,7 @@ async function verifyCollectorGate(
     let attempts: GuardedAttempt[] = [];
     while (Date.now() < requestDeadline) {
       attempts = existsSync(guardLog)
-        ? readFileSync(guardLog, "utf8").split("\\n").filter(Boolean).map((line) => JSON.parse(line) as GuardedAttempt)
+        ? readFileSync(guardLog, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as GuardedAttempt)
         : [];
       if (sourceIsApproved && attempts.some((attempt) => matchesCollectorRequest(collector, attempt))) break;
       await delay(100);
