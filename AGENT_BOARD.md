@@ -14,6 +14,30 @@ Current implementation baseline follows pushed `cc2fd29`; the final full-cohort 
 | `/root/luna_final_contract_advisor` | Read-only GPT-6.1 Sol xhigh final acceptance and reference chronology | Found future unresolved-reference false-pass; root repaired full-cohort eligibility;13 focused evaluator tests/typecheck pass; advisor independently PASS for repair/chronology; original source/ref hashes unchanged; serving model resolution unavailable |
 | `/root` | Web, shared records/contracts, source cohort/labels, integration, runtime/browser proof and Git | Final scoped ETL/Git regeneration after retry repair; OpenAI live activation blocked; no new paid call |
 
+## October 2 recovery and capacity pass
+
+Baseline is pushed c2d9e982. Observable completion for this bounded pass is:
+a stale successful company snapshot remains retryable until saved source history
+appears; feed refresh stays once per first-arrival transition; actual saved-real-data
+UI selection, source drilldown, first arrival and recovery are observed; exact desktop
+and phone dimensions are measured; current bounded local read results identify the
+code and data. Live Luna, negative reference coverage and full operational acceptance
+remain separate non-passes.
+
+Root owns tracked records/contracts, integration, runtime, browser proof and Git.
+The reused investor-ui worktree is on codex/first-evidence-recovery from c2d9e982;
+its prior health commit is already preserved in the main branch. Isolation is a
+checkout boundary, not a filesystem security boundary. No paid calls or main-data
+writes are authorized by this task brief.
+
+| Owner | Current scope | Status |
+|---|---|---|
+| /root/ui_recovery_gap_scan | firstRunEvidence controller, minimal App call-site and recovery tests; isolated investor-ui worktree | Complete; integrated90863a4 plus header3ca4552/64dd4e1;29 integrated focused checks, typecheck/build pass |
+| /root/health_read_performance | Current saved-DB read-only capacity verifier, private output only | Complete; one successful current saved-data run, zero external fetches/source DB unchanged |
+| /root/luna_final_contract_advisor | Read-only Sol/xhigh reference coverage design | Recommends exhaustive unused18 diagnostic extension; no confirmed negative stratum |
+| /root/whole_build_oct02_recovery_review | Independent entire-build and final frozen runtime evidence review | Local recovery and exact390/1440 layouts PASS; full live qualification FAIL;20 artifact hashes match after stop |
+| /root | Integration, actual UI/recovery observation, contracts/trace and reviewed push | Final scoped gate and source checkpoint in progress |
+
 The following board entries are historical and do not replace current ownership.
 
 Coordinator: `/root` owns the acceptance contract, integration, records, checks,
