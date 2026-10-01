@@ -3,6 +3,7 @@ dist/
 data/
 web/dist/
 .playwright-cli/
+.engineering-evidence/
 output/
 .env*
 !.env.example

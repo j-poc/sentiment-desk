@@ -4,6 +4,7 @@
  * credentials; Jev retry is the only explicit write action.
  */
 import { z } from "zod";
+import { withReadDeadline } from "./bounded-read.js";
 
 export interface EarningsSurprise {
   percent: number;
@@ -423,22 +424,41 @@ export interface AlertDeliveryHistoryPage {
   nextCursor: string | null;
 }
 
-export async function getJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+export async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   return (await res.json()) as T;
 }
 
+export async function readBackendSnapshot(): Promise<{
+  companies: CompanySnapshot[] | null;
+  tape: Mention[] | null;
+  quotes: MarketSnapshot | null;
+  health: HealthDTO | null;
+}> {
+  const section = <T>(url: string) => withReadDeadline((signal) => getJSON<T>(url, signal)).catch(() => null);
+  const [companies, tape, quotes, health] = await Promise.all([
+    section<CompanySnapshot[]>("/api/companies"),
+    section<Mention[]>("/api/tape?limit=60"),
+    section<MarketSnapshot>("/api/quotes"),
+    section<HealthDTO>("/api/health"),
+  ]);
+  return { companies, tape, quotes, health };
+}
+
 export async function lookupMentionsByIds(companyId: string, ids: string[]): Promise<Mention[]> {
   if (ids.length === 0) return [];
-  const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}/mentions/lookup`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ids }),
+  return withReadDeadline(async (signal) => {
+    const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}/mentions/lookup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids }),
+      signal,
+    });
+    if (!response.ok) throw new Error(`POST mention lookup -> ${response.status}`);
+    const body = await response.json() as { items: Mention[] };
+    return body.items;
   });
-  if (!response.ok) throw new Error(`POST mention lookup -> ${response.status}`);
-  const body = await response.json() as { items: Mention[] };
-  return body.items;
 }
 
 const retryErrorSchema = z.object({ error: z.string() });

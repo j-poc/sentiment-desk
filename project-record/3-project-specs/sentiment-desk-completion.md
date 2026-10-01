@@ -2,13 +2,15 @@
 
 ## Latest native goal status check — 2026-10-01
 
-The goal service reports the existing Sentiment Desk goal as **blocked**. Its
-objective still matches the acceptance contract, so it was not replaced. The
-user asked to continue, and this turn continued the work. The available goal
-controls provide no resume-to-active action, so automatic continuation after
-this turn is not established. The current evaluation, bounded real-source
-smoke, and remaining inputs are recorded in
-`project-record/4-log/2026-10-01-goal-resumption-audit.md`. The product remains
+After the user's latest continuation, the goal service reports the existing
+Sentiment Desk goal as **active**, superseding the earlier blocked readback.
+Its full objective remains unchanged and unachieved. Current work repairs the
+independent Jev evidence checker and restores access to health disclosures in
+the true-empty Desk. The current evaluation, bounded real-source smoke, and
+remaining inputs are recorded in
+`project-record/4-log/2026-10-01-goal-resumption-audit.md`; the current
+evidence-gate and health/snapshot recovery repairs are recorded in
+`project-record/4-log/2026-10-01-jev-evidence-gate-repair.md`. The product remains
 incomplete pending an independently reviewed real-source evaluation and
 account/source evidence. Opportunity Radar stays disabled.
 
@@ -32,8 +34,8 @@ one chart point. The main `data/desk.db` was unchanged. The smoke proves one
 real integration path, not classifier quality, 30-issuer coverage, or ongoing
 live operation.
 
-The whole-build engineering-bullshit-detector returned **FAIL** for the full
-goal and found no new reproducible local defect. It confirmed unresolved
+An earlier whole-build engineering-bullshit-detector returned **FAIL** for the
+full goal and found no new reproducible local defect in that candidate. It confirmed unresolved
 delivery links for the main database's identified legacy records, the lack of a
 30-issuer real SEC cohort and independent human labels, no final spend artifact,
 and no provider records for historical usage reconciliation. The GPT-6.1 Sol

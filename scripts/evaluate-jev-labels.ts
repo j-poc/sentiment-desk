@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   analyzeFinal,
   analyzePilot,
@@ -36,15 +37,48 @@ function readJson(filePath: string): { bytes: Buffer; value: unknown } {
   return { bytes, value: JSON.parse(bytes.toString("utf8")) as unknown };
 }
 
-function verifyFrozenCode(labels: LabelSet): void {
-  const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+export function verifyFrozenCode(labels: LabelSet, cwd = process.cwd(), extraSources: string[] = []): void {
+  const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
   if (revision !== labels.analysisCodeRevision) throw new Error("current HEAD differs from the code revision frozen with the labels");
-  const trackedChanges = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim();
+  const trackedChanges = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd, encoding: "utf8" }).trim();
   if (trackedChanges) throw new Error("tracked source tree is dirty; the frozen evaluation code must be run from a clean checkout");
-  const untrackedFiles = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { encoding: "utf8" })
+  const untrackedFiles = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" })
     .split("\n")
     .filter((file) => /^(server|scripts|tests|web\/src)\//.test(file) || ["package.json", "tsconfig.json"].includes(file));
   if (untrackedFiles.length) throw new Error("untracked executable or test source exists; the frozen evaluation code must be committed first");
+  const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const sources = ["scripts/evaluate-jev-labels.ts", "scripts/jev-label-evaluation.ts", "server/rubric.ts", ...extraSources];
+  for (const relative of sources) {
+    const sourceFile = path.resolve(sourceRoot, relative);
+    const frozenFile = path.resolve(cwd, relative);
+    if (!frozenFile.startsWith(`${path.resolve(cwd)}${path.sep}`)) throw new Error("frozen evaluator source path escapes its checkout");
+    const sourceStat = lstatSync(sourceFile);
+    const frozenStat = lstatSync(frozenFile);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink() || !frozenStat.isFile() || frozenStat.isSymbolicLink() || !readFileSync(sourceFile).equals(readFileSync(frozenFile))) {
+      throw new Error(`frozen evaluator source differs from the loaded source: ${relative}`);
+    }
+    const treeEntry = execFileSync("git", ["--no-replace-objects", "ls-tree", revision, "--", relative], { cwd, encoding: "utf8" });
+    if (!/^(100644|100755) blob [0-9a-f]+\t/.test(treeEntry)) {
+      throw new Error(`frozen evaluator source is absent from the code revision: ${relative}`);
+    }
+    const committedBytes = execFileSync("git", ["--no-replace-objects", "show", `${revision}:${relative}`], { cwd });
+    if (!committedBytes.equals(readFileSync(frozenFile))) {
+      throw new Error(`frozen evaluator source differs from the committed code revision: ${relative}`);
+    }
+  }
+}
+
+export function writeReportIdempotently(outputPath: string, output: string): "written" | "identical" {
+  try {
+    writeFileSync(outputPath, output, { flag: "wx" });
+    return "written";
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
+    const stat = lstatSync(outputPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("existing report path is not a regular file");
+    if (!readFileSync(outputPath).equals(Buffer.from(output, "utf8"))) throw new Error("existing report differs from recomputed evidence; refusing to overwrite");
+    return "identical";
+  }
 }
 
 function main(): void {
@@ -70,18 +104,29 @@ function main(): void {
     if (outputPath === labelsFile || outputPath === (args.runPath ? path.resolve(args.runPath) : "")) {
       throw new Error("report output must not overwrite a frozen input artifact");
     }
-    writeFileSync(outputPath, output, { flag: "wx" });
-    console.log(JSON.stringify({ result: "REPORT_WRITTEN", mode: report.mode, status: report.status ?? "PILOT_DESCRIPTIVE", outputPath }));
+    const writeResult = writeReportIdempotently(outputPath, output);
+    console.log(JSON.stringify({ result: writeResult === "written" ? "REPORT_WRITTEN" : "REPORT_ALREADY_IDENTICAL", mode: report.mode, status: report.status ?? "PILOT_DESCRIPTIVE", outputPath }));
   } else {
     process.stdout.write(output);
   }
   if (report.status === "FAIL" || report.status === "UNVERIFIED") process.exitCode = 2;
 }
 
-try {
-  main();
-} catch (error) {
-  const message = error instanceof Error ? error.message : "invalid evaluation input";
-  console.error(JSON.stringify({ result: "INVALID_OR_UNVERIFIED_INPUT", message }));
-  process.exitCode = 2;
+export function isDirectScriptInvocation(moduleUrl: string): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectScriptInvocation(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid evaluation input";
+    console.error(JSON.stringify({ result: "INVALID_OR_UNVERIFIED_INPUT", message }));
+    process.exitCode = 2;
+  }
 }

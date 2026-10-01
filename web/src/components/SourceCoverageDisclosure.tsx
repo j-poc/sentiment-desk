@@ -1,8 +1,8 @@
-export function SourceCoverageDisclosure({ externalRequestsEnabled = true }: { externalRequestsEnabled?: boolean }) {
+export function SourceCoverageDisclosure({ externalRequestsEnabled = null }: { externalRequestsEnabled?: boolean | null }) {
   return (
     <div className="mb-1.5 shrink-0 px-1 text-[10.5px] leading-relaxed text-white/55">
       <p role="note">Configured feeds only. This desk does not cover the entire public web or all investor activity.</p>
-      {!externalRequestsEnabled && <p role="status" className="text-amber-200/80">External requests are paused. This view uses only data and price history already saved locally.</p>}
+      {externalRequestsEnabled === false && <p role="status" className="text-amber-200/80">External requests are paused. This view uses only data and price history already saved locally.</p>}
       <details className="mt-0.5 max-w-4xl text-[10px] text-white/40">
         <summary className="w-fit cursor-pointer select-none hover:text-white/65 focus-visible:outline focus-visible:outline-1 focus-visible:outline-cyan-300/70">
           Collection scope and gaps

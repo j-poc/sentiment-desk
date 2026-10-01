@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   getJSON,
+  readBackendSnapshot,
   lookupMentionsByIds,
   openStream,
   type CompanySnapshot,
@@ -39,6 +40,7 @@ import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
 import { shouldRefreshDeskOnFirstEvidence } from "./lib/firstRunEvidence.js";
+import { createHealthRefresher } from "./lib/health-refresh.js";
 import { hasComparableDeltas, orderWatchlistCompanies } from "./lib/watchlist-order.js";
 import { mentionIsInWindow, mentionPageParams, mentionWindowHours } from "./lib/mention-window.js";
 import type { ExactTitleGroupFilter } from "./lib/exact-headline-groups.js";
@@ -171,6 +173,7 @@ export default function App() {
   const [priceLoadErrorKey, setPriceLoadErrorKey] = useState<string | null>(null);
   const [priceSource, setPriceSource] = useState<PriceSeriesDTO | null>(null);
   const [health, setHealth] = useState<HealthDTO | null>(null);
+  const [healthLoadState, setHealthLoadState] = useState<"loading" | "ready" | "failed">("loading");
   const [firstRunEvidence, setFirstRunEvidence] = useState<{ state: "loading" | "error" } | ({ state: "ready" } & FirstRunEvidenceDTO)>({ state: "loading" });
   const [connected, setConnected] = useState(false);
   const [reconnectLookupFailedIds, setReconnectLookupFailedIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -369,6 +372,7 @@ export default function App() {
     runtimeIdRef.current = snapshot.runtimeId;
     healthRef.current = snapshot;
     setHealth(snapshot);
+    setHealthLoadState("ready");
   }, []);
 
   useEffect(() => {
@@ -390,6 +394,7 @@ export default function App() {
 
   const refreshBackendSnapshot = useCallback(async (reset = false, expectedRuntimeId?: string) => {
     const requestSeq = ++snapshotRequestSeq.current;
+    const healthAtStart = healthRef.current;
     const streamSequenceAtStart = mentionStreamSequence.current;
     const idsByCompany = new Map<string, Set<string>>();
     const addLookupRows = (companyId: string, rows: Mention[]) => {
@@ -407,12 +412,7 @@ export default function App() {
       const openMention = drawerMentionRef.current;
       if (openMention) addLookupRows(openMention.companyId, [openMention]);
     }
-    const [cs, tapeSnapshot, quoteSnapshot, healthSnapshot] = await Promise.all([
-      getJSON<CompanySnapshot[]>("/api/companies").catch(() => null),
-      getJSON<Mention[]>("/api/tape?limit=60").catch(() => null),
-      getJSON<MarketSnapshot>("/api/quotes").catch(() => null),
-      getJSON<HealthDTO>("/api/health").catch(() => null),
-    ]);
+    const { companies: cs, tape: tapeSnapshot, quotes: quoteSnapshot, health: healthSnapshot } = await readBackendSnapshot();
     if (requestSeq !== snapshotRequestSeq.current) return;
     if (healthSnapshot) {
       if (expectedRuntimeId && healthSnapshot.runtimeId !== expectedRuntimeId) return;
@@ -420,6 +420,18 @@ export default function App() {
       runtimeIdRef.current = healthSnapshot.runtimeId;
       healthRef.current = healthSnapshot;
       setHealth(healthSnapshot);
+      setHealthLoadState("ready");
+    } else if (healthRef.current === healthAtStart) {
+      setHealthLoadState("failed");
+    }
+    if (cs) {
+      setCompanies(cs);
+      setCompaniesLoadState("ready");
+      setSelectedId((current) => current && cs.some((company) => company.id === current)
+        ? current
+        : cs[0]?.id ?? null);
+    } else {
+      setCompaniesLoadState("failed");
     }
 
     // Read loaded historical IDs after the rolling tape. The ID response is
@@ -450,15 +462,6 @@ export default function App() {
       streamSequenceAtStart,
     ));
 
-    if (cs) {
-      setCompanies(cs);
-      setCompaniesLoadState("ready");
-      setSelectedId((current) => current && cs.some((company) => company.id === current)
-        ? current
-        : cs[0]?.id ?? null);
-    } else {
-      setCompaniesLoadState("failed");
-    }
     if (tapeSnapshot) {
       setOutcomeRefreshRevision((revision) => revision + 1);
       setTape((current) => mergeSnapshotWithLive(
@@ -564,6 +567,7 @@ export default function App() {
           drawerMentionIdRef.current = null;
           setDrawerMention(null);
           setHealth(null);
+          setHealthLoadState("loading");
           healthRef.current = null;
           seriesRequestSeq.current += 1;
           priceRequestSeq.current += 1;
@@ -741,17 +745,15 @@ export default function App() {
 
   // Health poll.
   useEffect(() => {
-    const load = async () => {
-      try {
-        const h = await getJSON<HealthDTO>("/api/health");
-        applyHealth(h);
-      } catch {
-        /* ignore */
-      }
-    };
-    void load();
-    const t = setInterval(load, 20_000);
-    return () => clearInterval(t);
+    const refresher = createHealthRefresher({
+      read: (signal) => getJSON<HealthDTO>("/api/health", signal),
+      current: () => healthRef.current,
+      apply: applyHealth,
+      failed: () => setHealthLoadState("failed"),
+    });
+    void refresher.refresh();
+    const t = setInterval(() => void refresher.refresh(), 20_000);
+    return () => { clearInterval(t); refresher.stop(); };
   }, [applyHealth]);
 
   // Sparklines for every watchlist row.
@@ -1094,9 +1096,9 @@ export default function App() {
               </button>
             ))}
           </div>
-          {researchView === "desk" && !firstRunActive && <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? true} />}
-          {researchView === "desk" && !firstRunActive && <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />}
-          {researchView === "desk" && !firstRunActive && <DeskHealthDisclosure health={health} />}
+          {researchView === "desk" && <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? null} />}
+          {researchView === "desk" && <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />}
+          {researchView === "desk" && <DeskHealthDisclosure health={health} loadState={healthLoadState} />}
           {researchView === "desk" && <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />}
           {selected ? (
             researchView === "radar" ? (

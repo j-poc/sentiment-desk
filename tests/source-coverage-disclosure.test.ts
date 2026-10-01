@@ -23,6 +23,8 @@ describe("Desk source coverage disclosure", () => {
     expect(html).toContain("SOURCE_RIGHTS_APPROVED_COLLECTORS");
     expect(html).toContain("TYPESAFE_ACCOUNT_USE_APPROVED=true");
     expect(html).toContain("operator attestations");
+    expect(html).toContain("Checking source, Jev, and webhook status");
+    expect(html).not.toContain("External requests are paused.");
   });
 
   it("keeps paused external requests and saved-data mode visible", () => {
@@ -30,5 +32,12 @@ describe("Desk source coverage disclosure", () => {
 
     expect(html).toContain("External requests are paused.");
     expect(html).toContain("uses only data and price history already saved locally.");
+  });
+
+  it("does not infer an external request switch from unknown health", () => {
+    const html = renderToStaticMarkup(createElement(SourceCoverageDisclosure, { externalRequestsEnabled: null }));
+
+    expect(html).not.toContain("External requests are paused.");
+    expect(html).toContain("Collection scope and gaps");
   });
 });

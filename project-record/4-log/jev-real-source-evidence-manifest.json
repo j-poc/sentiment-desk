@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "status": "blocked",
+  "run": {
+    "status": "missing",
+    "reason": "No frozen real-source Jev evaluation package is present. The isolated smoke contains one saved classification from one issuer and does not meet the 30-issuer cohort requirement."
+  },
+  "groups": {
+    "provider_authenticity_usage": {
+      "status": "missing",
+      "reason": "Provider usage, billing, rejected-request, and uncertain-submission records are not reconciled to request outcomes or the 4,700 quarantined legacy_unknown rows."
+    },
+    "sec_source_correspondence": {
+      "status": "missing",
+      "reason": "The evaluation package does not contain rights-qualified per-case SEC filing, delivery receipt, source excerpt, exact Jev payload digest, and collector/parser version bindings."
+    },
+    "typesafe_account_and_spend": {
+      "status": "missing",
+      "reason": "User authorization for TypeSafe and public/API sources is recorded, but account-specific permitted-use terms, telemetry and retention, billing/refill behavior, limits, approved prices, numeric spend ceiling, configured SEC contact, source-specific rights evidence, and billing reconciliation are not verified."
+    },
+    "independent_human_labels": {
+      "status": "missing",
+      "reason": "Two independent qualified human label sets, their blind-freeze chronology and rationales, adjudication status, and a separate evidence-review verdict are absent."
+    }
+  },
+  "humanLabels": {
+    "status": "missing",
+    "reason": "No frozen paired human labels are available for a real-source cohort."
+  },
+  "independentReview": {
+    "status": "unresolved",
+    "reason": "No independent evidence package is available to review."
+  }
+}

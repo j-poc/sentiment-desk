@@ -132,8 +132,14 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
   );
 }
 
-export function DeskHealthDisclosure({ health }: { health: HealthDTO | null }) {
-  if (!health) return null;
+export function DeskHealthDisclosure({ health, loadState = "loading" }: { health: HealthDTO | null; loadState?: "loading" | "ready" | "failed" }) {
+  if (!health) return (
+    <p role="status" aria-live="polite" className="mb-2 px-1 text-[10.5px] text-amber-200/80">
+      {loadState === "failed"
+        ? "Operations status unavailable. Source, Jev, and webhook state could not be loaded. Waiting for the next server update."
+        : "Checking source, Jev, and webhook status…"}
+    </p>
+  );
   const degradedDeliveries = health.deliveryHealth.filter((delivery) =>
     ["partial", "overdue", "failed"].includes(delivery.state)
     || delivery.latestIngestionState === "partial"
@@ -147,6 +153,8 @@ export function DeskHealthDisclosure({ health }: { health: HealthDTO | null }) {
   const operationalIssues = degradedDeliveries + sourceErrors + blockedSources + alertsNeedingAttention;
   const mode = health.externalRequestsEnabled ? "external requests enabled" : "saved data only";
   return (
+    <>
+    {loadState === "failed" && <p role="status" aria-live="polite" className="mb-2 px-1 text-[10.5px] text-amber-200/80">Operations refresh failed. Showing the last received source, Jev, and webhook status.</p>}
     <details className="mt-3 border-t border-desk-line pt-2.5 2xl:hidden">
       <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded px-1 text-white/55 hover:bg-white/[0.025] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 [&::-webkit-details-marker]:hidden">
         <span className="micro">Desk health</span>
@@ -157,6 +165,7 @@ export function DeskHealthDisclosure({ health }: { health: HealthDTO | null }) {
       </summary>
       <HealthPanel health={health} />
     </details>
+    </>
   );
 }
 

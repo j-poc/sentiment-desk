@@ -1,10 +1,10 @@
 {
   "version": 2,
   "runtime_data_paths": ["data"],
-  "job": "Continue the real-data-only Sentiment Desk rebuild, prove a truthful first-run experience using a separately archived actual SEC-to-Jev trace, and checkpoint the reviewed work to the existing branch.",
+  "job": "Complete the real-data-only Sentiment Desk operational goal, close false-pass gaps in the independent Jev evidence gate, verify the full acceptance contract, and checkpoint reviewed work to the existing branch.",
   "acceptance": [
     "New observations and research reads use identified real sources; demo and synthetic records never enter product runtime, and legacy_unknown rows stay quarantined from research and Jev paths.",
-    "Jev remains the per-item classifier behind explicit source/account/budget gates, and an authorized real-source cohort passes independent provenance-backed label evaluation.",
+    "Jev remains the per-item classifier behind explicit source/account/budget gates, and an authorized real-source cohort passes independent provenance-backed label evaluation with separately reviewed provider-usage, SEC source-to-input, account/budget, and blinded-human-label evidence.",
     "Feed failures, pending judgments, and retries remain persistent, bounded, recoverable, and reachable to the user, including aggregate alert attention counts, prioritized pageable outcomes, responsive source/operations health details, and a visible not-configured webhook state before the first alert.",
     "Selecting a company updates the chart and evidence workflow on desktop and narrow screens, with accessible controls and truthful units/freshness.",
     "The live-data contract and code-bound evidence are current and passing for the scoped live source/persistence path.",
@@ -29,7 +29,7 @@
     }
   },
   "change_safety": {
-    "checkpoint": "Work is on codex/real-data-rebuild at origin baseline 786b19720ea0a28df6272cc65c530389eb6accfd. Commit the reviewed first-run implementation and updated acceptance records, push the same branch, then verify the local SHA equals origin/codex/real-data-rebuild.",
+    "checkpoint": "Work is on codex/real-data-rebuild at origin baseline f40c8877c8bf4667e632fa5f6d5d97f6a0810541. Commit the reviewed evidence gate and updated acceptance records, push the same branch, then verify local HEAD against git ls-remote origin refs/heads/codex/real-data-rebuild.",
     "rollback": "Revert the new regular commit if required; preserve the local SQLite database and never roll back persisted user data to reverse source code. External requests remain off by default."
   },
   "risks": {
@@ -46,7 +46,7 @@
       "id": "full-suite",
       "covers": ["workflow_success", "workflow_failure", "resource_bounds"],
       "command": ["npm", "test", "--", "--reporter=dot", "--maxWorkers=1", "--testTimeout=20000"],
-      "timeout_seconds": 120
+      "timeout_seconds": 600
     },
     {
       "id": "typecheck",
@@ -93,13 +93,19 @@
     {
       "id": "github-checkpoint",
       "covers": ["change_review"],
-      "command": ["node", "-e", "const {execFileSync}=require('node:child_process'); const local=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(); const remote=execFileSync('git',['rev-parse','origin/codex/real-data-rebuild'],{encoding:'utf8'}).trim(); if(local!==remote) throw new Error('local branch is not pushed'); console.log('local and origin match at '+local);"],
+      "command": ["node", "-e", "const {execFileSync}=require('node:child_process'); const local=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(); const result=execFileSync('git',['ls-remote','--exit-code','origin','refs/heads/codex/real-data-rebuild'],{encoding:'utf8'}).trim().split(/\\s+/); if(result.length!==2 || result[1]!=='refs/heads/codex/real-data-rebuild' || local!==result[0]) throw new Error('local branch does not match GitHub'); console.log('local and GitHub match at '+local);"],
       "timeout_seconds": 30
     },
     {
       "id": "real-source-jev-evaluation",
       "covers": ["authorization", "integration_failure"],
-      "command": ["npm", "run", "evaluate:jev-labels", "--", "--labels", "project-record/4-log/jev-independent-real-source-labels.json", "--run", "project-record/4-log/jev-independent-real-source-run.json"],
+      "command": ["npm", "run", "evaluate:jev-labels", "--", "--labels", ".engineering-evidence/real-source/jev-independent-real-source-labels.json", "--run", ".engineering-evidence/real-source/jev-independent-real-source-run.json", "--out", ".engineering-evidence/real-source/jev-independent-real-source-report.json"],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "jev-real-source-evidence",
+      "covers": ["authorization", "integration_failure"],
+      "command": ["npm", "run", "verify:jev-real-source-evidence"],
       "timeout_seconds": 120
     },
     {
@@ -113,7 +119,7 @@
     "request": "Complete Sentiment Desk as a real-data-only locally operational research desk, keep Jev as the core classifier, independently evaluate real-source judgments, preserve failure/recovery and evidence workflows, make charts/company selection work end to end, record and verify every gate, push checkpoints to the existing branch, and defer Opportunity Radar. The current user specifically asked investor and UI agents to rate the full build and to improve actionable gaps until their reviews improve.",
     "acceptance_checks": [
       {"acceptance_index": 0, "check_ids": ["full-suite", "offline-source-gates", "etl-artifact-check"]},
-      {"acceptance_index": 1, "check_ids": ["full-suite", "offline-source-gates", "real-source-jev-evaluation"]},
+      {"acceptance_index": 1, "check_ids": ["full-suite", "offline-source-gates", "real-source-jev-evaluation", "jev-real-source-evidence"]},
       {"acceptance_index": 2, "check_ids": ["full-suite", "etl-artifact-check"]},
       {"acceptance_index": 3, "check_ids": ["full-suite", "production-build"]},
       {"acceptance_index": 4, "check_ids": ["etl-artifact-check", "offline-source-gates"]},
@@ -121,7 +127,7 @@
       {"acceptance_index": 6, "check_ids": ["github-checkpoint", "committed-diff-check"]},
       {"acceptance_index": 7, "check_ids": ["first-run-evidence", "full-suite", "production-build"]}
     ],
-    "artifacts": [],
+    "artifacts": ["project-record/4-log/jev-real-source-evidence-manifest.json"],
     "review": ".engineering-evidence/alignment-review.json"
   }
 }

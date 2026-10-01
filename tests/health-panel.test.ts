@@ -48,6 +48,26 @@ const blockedHealth: HealthDTO = {
 };
 
 describe("HealthPanel source approval disclosure", () => {
+  it("distinguishes loading operations from an unavailable response", () => {
+    const loading = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health: null, loadState: "loading" }));
+    const failed = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health: null, loadState: "failed" }));
+
+    expect(loading).toContain("Checking source, Jev, and webhook status");
+    expect(loading).not.toContain("Operations status unavailable");
+    expect(failed).toContain("Operations status unavailable");
+    expect(failed).not.toContain("Checking source");
+    expect(failed).toContain('role="status"');
+    expect(failed).not.toContain("2xl:hidden");
+  });
+
+  it("marks a failed refresh while retaining the last received operations evidence", () => {
+    const html = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health: blockedHealth, loadState: "failed" }));
+
+    expect(html).toContain("Operations refresh failed.");
+    expect(html).toContain("Showing the last received");
+    expect(html).toContain("1 requested blocked");
+  });
+
   it("shows an unapproved requested collector and blocks Jev without account-use attestation", () => {
     const html = renderToStaticMarkup(createElement(HealthPanel, { health: blockedHealth }));
 
