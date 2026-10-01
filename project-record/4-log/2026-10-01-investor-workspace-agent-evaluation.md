@@ -261,3 +261,43 @@ are bounded observations on the isolated saved-data copy, not sustained-load
 or scale certification. Final code-bound reference-pilot/report evidence is
 written privately only after the clean cohesive checkpoint. No missing serving
 model resolution, OpenAI invoice or paid result is invented.
+
+
+## Full-cohort evaluation repair and final freeze
+
+A final read-only advisor dispatched as gpt-6.1-sol with xhigh reasoning found
+a future false-pass in the categorical evaluator: unresolved required
+references could be dropped from per-field metric denominators while aggregate
+quality still passed. The existing30-case fixture explicitly demonstrated
+quality PASS at29 resolved sentiment cases. Root keeps subset metrics as
+diagnostics and adds full-cohort eligibility for sentiment, about and investor
+relevance. Every required field reports selected/resolved/unresolved counts
+and coverage; any unresolved required reference prevents qualification, while
+an actual failing metric retains FAIL precedence. Unknown reference classes
+are not invented. The field denominator is now210 for30 cases/seven fields,
+with a separate unresolved count. All13 evaluator checks and typecheck pass,
+including both inclusion fields and failed-metric precedence.
+
+The advisor also matched all48 raw-document/receipt hashes,30 primary inputs
+and3 adjudication inputs to the retained source artifacts. Original A/B/C
+bytes and primary consensus remain unchanged. The original adjudication packet
+inherits the primary bounded-input freeze time; generated chronology names it
+accordingly and leaves packet creation/dispatch time unknown. Nullable actual
+serving-model identity is retained for reference and advisor records; requested
+model settings are not runtime resolution proof. Private dispatch/result
+evidence records the user's requested Sol/xhigh advisory settings. The root
+serving model cannot be changed through the exposed agent tools; the previous
+fixed-role review is preserved. Settings alone do not prove quality.
+
+The interrupted verification was stopped only in its owned process tree;
+no projectsmoke21787 container, network or volume remained. It is not a PASS.
+The final source/docs are frozen here before a fresh scoped ETL verify/check
+and reviewed pushed receipt. This change affects offline evaluation scripts;
+app executable bytes remain those actually rebuilt and observed after
+cc2fd29. Full live classifier quality and the remaining acceptance observations
+remain blocked/unverified rather than inferred from local technical tests.
+
+Independent Sol/xhigh re-read marks the exact eligibility/test/chronology
+repair PASS with no remaining actionable finding in those edits. It executed
+no tests or live calls. This scoped review supports checkpointing, not complete
+product acceptance.

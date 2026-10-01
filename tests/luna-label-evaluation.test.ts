@@ -210,10 +210,40 @@ describe("offline categorical Luna evaluation", () => {
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.selectedCaseDenominator).toBe(30);
     expect(report.resolvedReferenceDenominators.sentiment).toBe(29);
-    expect(report.unresolvedReferenceFieldDenominator).toBe(1);
+    expect(report.unresolvedReferenceFieldCount).toBe(1);
+    expect(report.unresolvedReferenceFieldDenominator).toBe(210);
     expect(report.quality.sentiment.metrics.total).toBe(29);
     expect(report.quality.sentiment.metrics.matrix.negative.missing).toBe(1);
-    expect(report.qualityStatus).toBe("PASS");
+    expect(report.referenceEligibility).toMatchObject({ status: "UNVERIFIED", selectedCaseDenominator: 30, fields: { sentiment: { resolvedCases: 29, unresolvedCases: 1, coverage: 29 / 30 } } });
+    expect(report.qualityStatus).toBe("UNVERIFIED");
+    expect(report.status).toBe("UNVERIFIED");
+  });
+
+  it.each(["about", "investorRelevant"] as const)("cannot qualify by discarding an unresolved %s reference", (field) => {
+    const labels = parseLunaLabelSet(labelsFixture("final", (value) => {
+      for (const review of value.items[0].reviews) review.labels[field] = null;
+    }), makeContract());
+    const labelsSha256 = digest(`unresolved ${field} reference`);
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.quality.inclusionPrecision[field].status).toBe("PASS");
+    expect(report.referenceEligibility.fields[field]).toEqual({ selectedCases: 30, resolvedCases: 29, unresolvedCases: 1, coverage: 29 / 30 });
+    expect(report.qualityStatus).toBe("UNVERIFIED");
+    expect(report.status).toBe("UNVERIFIED");
+  });
+
+  it("preserves a failing sentiment gate when another required reference is unresolved", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final", (value) => {
+      for (const review of value.items[0].reviews) review.labels.about = null;
+    }), makeContract());
+    const labelsSha256 = digest("unresolved inclusion and failed sentiment");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      for (const item of value.items) item.attempts[0].classification.sentiment = "neutral";
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.referenceEligibility.status).toBe("UNVERIFIED");
+    expect(report.qualityStatus).toBe("FAIL");
+    expect(report.status).toBe("FAIL");
   });
 
   it("counts every rate-limit retry, rechecks exact requests, and forbids retry after an unknown outcome", () => {

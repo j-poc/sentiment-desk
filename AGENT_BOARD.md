@@ -1,6 +1,6 @@
 # Sentiment Desk Agent Board
 
-Current implementation baseline follows pushed `c70c792`; the final provider-neutral retry repair is under checkpoint review: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
+Current implementation baseline follows pushed `cc2fd29`; the final full-cohort evaluation repair is under checkpoint review: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
 
 | Current owner | Owned scope | State |
 |---|---|---|
@@ -11,6 +11,7 @@ Current implementation baseline follows pushed `c70c792`; the final provider-neu
 | `/root/luna_blind_reference_a`, `/root/luna_blind_reference_b` | Two fresh-context blinded30case real SEC reference sets | Complete; original3case/11field disagreements preserved |
 | `/root/luna_blind_adjudicator` | Fresh blinded third review of3 disputed real inputs | Complete; unsupported labels remain null, no model outputs seen |
 | `/root/health_read_performance` | Indexed delivery health/summary reads and database regressions in investor-ui worktree | Integrated at023ef8c from8704c15;27 database tests/typecheck pass; independent source review found no correctness regression; actual idle health reads37–81ms on101,033 receipts |
+| `/root/luna_final_contract_advisor` | Read-only GPT-6.1 Sol xhigh final acceptance and reference chronology | Found future unresolved-reference false-pass; root repaired full-cohort eligibility;13 focused evaluator tests/typecheck pass; advisor independently PASS for repair/chronology; original source/ref hashes unchanged; serving model resolution unavailable |
 | `/root` | Web, shared records/contracts, source cohort/labels, integration, runtime/browser proof and Git | Final scoped ETL/Git regeneration after retry repair; OpenAI live activation blocked; no new paid call |
 
 The following board entries are historical and do not replace current ownership.
