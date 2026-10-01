@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS source_deliveries (
   CHECK (result IN ('success', 'empty', 'partial', 'failed', 'rate_limited', 'invalid'))
 );
 CREATE INDEX IF NOT EXISTS deliveries_collector_completed ON source_deliveries(collector, completed_at DESC);
+CREATE INDEX IF NOT EXISTS deliveries_health_group_latest
+  ON source_deliveries(collector, company_id, adapter_version, completed_at DESC, started_at DESC)
+  WHERE collector NOT IN ('demo_simulation', 'legacy_unknown');
+CREATE INDEX IF NOT EXISTS deliveries_health_recent_degraded
+  ON source_deliveries(collector, completed_at DESC, started_at DESC)
+  WHERE result IN ('failed', 'rate_limited', 'invalid', 'partial');
+CREATE INDEX IF NOT EXISTS deliveries_summary_latest
+  ON source_deliveries(completed_at DESC, started_at DESC)
+  WHERE collector NOT IN ('demo_simulation', 'legacy_unknown');
 CREATE TRIGGER IF NOT EXISTS source_deliveries_no_update BEFORE UPDATE ON source_deliveries
 BEGIN SELECT RAISE(ABORT, 'source deliveries are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS source_deliveries_no_delete BEFORE DELETE ON source_deliveries
@@ -1457,11 +1466,25 @@ export class Desk {
     collector: CollectorId; companyId: string | null; result: string; completedAt: number;
     parsedItemCount: number; adapterVersion: string; error: string | null;
   }> {
-    return this.db.prepare(
-      `SELECT collector, company_id AS companyId, result, completed_at AS completedAt,
-        parsed_item_count AS parsedItemCount, adapter_version AS adapterVersion, error
-       FROM source_deliveries WHERE collector NOT IN ('demo_simulation', 'legacy_unknown') ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
-    ).all() as unknown as Array<{
+    const summaryColumns = `collector, company_id AS companyId, result, completed_at AS completedAt,
+      parsed_item_count AS parsedItemCount, adapter_version AS adapterVersion, error`;
+    const summaryFilter = "collector NOT IN ('demo_simulation', 'legacy_unknown')";
+    const boundary = this.db.prepare(
+      `SELECT completed_at AS completedAt, started_at AS startedAt
+       FROM source_deliveries WHERE ${summaryFilter}
+       ORDER BY completed_at DESC, started_at DESC LIMIT 1 OFFSET 59`,
+    ).get() as { completedAt: number; startedAt: number } | undefined;
+    const rows = boundary
+      ? this.db.prepare(
+        `SELECT ${summaryColumns} FROM source_deliveries
+         WHERE ${summaryFilter} AND (completed_at, started_at) >= (?, ?)
+         ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
+      ).all(boundary.completedAt, boundary.startedAt)
+      : this.db.prepare(
+        `SELECT ${summaryColumns} FROM source_deliveries WHERE ${summaryFilter}
+         ORDER BY completed_at DESC, started_at DESC, rowid DESC`,
+      ).all();
+    return rows as unknown as Array<{
       collector: CollectorId; companyId: string | null; result: string; completedAt: number;
       parsedItemCount: number; adapterVersion: string; error: string | null;
     }>;
@@ -1504,24 +1527,26 @@ export class Desk {
       ingestionInsertedCount: number | null;
       ingestionError: string | null;
     };
-    const attempts = this.db.prepare(
-      `WITH ranked AS (
-        SELECT d.collector, d.company_id AS companyId, d.completed_at AS completedAt, d.result,
-          d.parsed_item_count AS parsedItemCount, d.error, d.adapter_version AS adapterVersion,
-          d.processing_required AS processingRequired, i.status AS ingestionState,
-          i.started_at AS ingestionStartedAt, i.expected_count AS ingestionExpectedCount,
-          i.processed_count AS ingestionProcessedCount, i.inserted_count AS ingestionInsertedCount,
-          i.error AS ingestionError,
-          ROW_NUMBER() OVER (PARTITION BY d.collector, COALESCE(d.company_id, ''), d.adapter_version
-            ORDER BY d.completed_at DESC, d.started_at DESC, d.rowid DESC) AS rn
-        FROM source_deliveries d LEFT JOIN source_ingestions i ON i.delivery_id = d.id
-        WHERE d.collector NOT IN ('demo_simulation', 'legacy_unknown')
-      )
-      SELECT collector, companyId, completedAt, result, parsedItemCount, error, adapterVersion,
-        processingRequired, ingestionState, ingestionStartedAt, ingestionExpectedCount,
-        ingestionProcessedCount, ingestionInsertedCount, ingestionError
-      FROM ranked WHERE rn = 1`,
-    ).all() as unknown as DeliveryRow[];
+    const deliveryGroups = this.db.prepare(
+      `SELECT DISTINCT collector, company_id AS companyId, adapter_version AS adapterVersion
+       FROM source_deliveries WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')`,
+    ).all() as unknown as Array<{ collector: CollectorId; companyId: string | null; adapterVersion: string }>;
+    const latestForGroup = this.db.prepare(
+      `SELECT d.collector, d.company_id AS companyId, d.completed_at AS completedAt, d.result,
+        d.parsed_item_count AS parsedItemCount, d.error, d.adapter_version AS adapterVersion,
+        d.processing_required AS processingRequired, i.status AS ingestionState,
+        i.started_at AS ingestionStartedAt, i.expected_count AS ingestionExpectedCount,
+        i.processed_count AS ingestionProcessedCount, i.inserted_count AS ingestionInsertedCount,
+        i.error AS ingestionError
+       FROM source_deliveries d LEFT JOIN source_ingestions i ON i.delivery_id = d.id
+       WHERE d.collector = ? AND d.company_id IS ? AND d.adapter_version = ?
+         AND d.collector NOT IN ('demo_simulation', 'legacy_unknown')
+       ORDER BY d.completed_at DESC, d.started_at DESC, d.rowid DESC LIMIT 1`,
+    );
+    const attempts = deliveryGroups.flatMap((group) => {
+      const latest = latestForGroup.get(group.collector, group.companyId, group.adapterVersion) as DeliveryRow | undefined;
+      return latest ? [latest] : [];
+    });
     const byCollector = new Map<CollectorId, DeliveryRow[]>();
     for (const row of attempts) byCollector.set(row.collector, [...(byCollector.get(row.collector) ?? []), row]);
 

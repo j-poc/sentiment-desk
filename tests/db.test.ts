@@ -593,6 +593,111 @@ describe("Desk observation and judgment storage", () => {
     }
   });
 
+  it("keeps health latest-per-group ordering and quarantined receipts exact", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-health-groups-"));
+    directories.push(directory);
+    const dbPath = join(directory, "desk.db");
+    const db = new Desk(dbPath);
+    const now = 10_000_000;
+    const startedAt = now - 1_000;
+    const add = (input: Parameters<Desk["recordDelivery"]>[0]) => db.recordDelivery(input);
+    try {
+      db.seedCompanies([company, {
+        id: "beta", name: "Beta", ticker: "BETA", sector: "Technology", aliases: ["Beta"], color: "#654321",
+      }]);
+      add({
+        collector: "google_news_rss", companyId: null, requestKey: "null-tie-first", startedAt,
+        completedAt: startedAt + 1, result: "success", parsedItemCount: 1, adapterVersion: "rss/1",
+      });
+      add({
+        collector: "google_news_rss", companyId: null, requestKey: "null-tie-later", startedAt,
+        completedAt: startedAt + 1, result: "partial", parsedItemCount: 2, adapterVersion: "rss/1",
+      });
+      add({
+        collector: "sec_edgar", companyId: company.id, requestKey: "acme-sec", startedAt,
+        completedAt: startedAt + 2, result: "success", parsedItemCount: 1, adapterVersion: "sec-submissions/1",
+      });
+      add({
+        collector: "sec_edgar", companyId: "beta", requestKey: "beta-sec", startedAt,
+        completedAt: startedAt + 3, result: "empty", parsedItemCount: 0, adapterVersion: "sec-submissions/1",
+      });
+      add({
+        collector: "sec_edgar", companyId: null, requestKey: "sec-directory", startedAt,
+        completedAt: startedAt + 4, result: "failed", parsedItemCount: 0, adapterVersion: "sec-company-tickers/1",
+        error: "global bootstrap failure",
+      });
+      add({
+        collector: "finnhub", companyId: company.id, requestKey: "finnhub-news", startedAt,
+        completedAt: startedAt + 2, result: "success", parsedItemCount: 1, adapterVersion: "finnhub-news/1",
+      });
+      add({
+        collector: "finnhub", companyId: company.id, requestKey: "finnhub-earnings", startedAt,
+        completedAt: startedAt + 5, result: "failed", parsedItemCount: 0, adapterVersion: "finnhub-earnings/1",
+        error: "auxiliary failure",
+      });
+
+      const legacy = new DatabaseSync(dbPath);
+      legacy.prepare(
+        `INSERT INTO source_deliveries
+         (id, collector, company_id, request_key_hash, started_at, completed_at, result,
+          parsed_item_count, adapter_version, error)
+         VALUES (?, ?, NULL, 'test', ?, ?, 'success', 99, 'quarantined/1', NULL)`,
+      ).run("quarantined-demo", "demo_simulation", startedAt, now);
+      legacy.prepare(
+        `INSERT INTO source_deliveries
+         (id, collector, company_id, request_key_hash, started_at, completed_at, result,
+          parsed_item_count, adapter_version, error)
+         VALUES (?, ?, NULL, 'test', ?, ?, 'failed', 99, 'quarantined/1', 'legacy error')`,
+      ).run("quarantined-legacy", "legacy_unknown", startedAt, now);
+      legacy.close();
+
+      const health = db.deliveryHealth([
+        { collector: "google_news_rss", enabled: true, intervalSeconds: 60, targetCount: 1 },
+        { collector: "sec_edgar", enabled: true, intervalSeconds: 60, targetCount: 2, healthCompanyOnly: true },
+        {
+          collector: "finnhub", enabled: true, intervalSeconds: 60, targetCount: 1,
+          healthAdapterVersions: ["finnhub-news/1"],
+        },
+      ], now);
+      expect(health).toMatchObject([
+        { collector: "google_news_rss", state: "partial", latestResult: "partial", latestItemCount: 2 },
+        { collector: "sec_edgar", state: "current", latestResult: "empty", latestDeliveryAt: startedAt + 3, coverageCount: 2 },
+        { collector: "finnhub", state: "current", latestResult: "success", latestDeliveryAt: startedAt + 2 },
+      ]);
+      expect(db.deliverySummary().map((row) => row.collector)).not.toContain("demo_simulation");
+      expect(db.deliverySummary().map((row) => row.collector)).not.toContain("legacy_unknown");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps the rowid tie winner when the delivery summary limit cuts through a tied key", () => {
+    const db = new Desk(":memory:");
+    const now = 10_000_000;
+    try {
+      for (let i = 0; i < 58; i += 1) {
+        db.recordDelivery({
+          collector: "gdelt_doc_api", companyId: null, requestKey: `summary-newer-${i}`,
+          startedAt: now - 3_000, completedAt: now - i - 1, result: "success",
+          parsedItemCount: 100 + i, adapterVersion: "gdelt/1",
+        });
+      }
+      for (let i = 1; i <= 4; i += 1) {
+        db.recordDelivery({
+          collector: "gdelt_doc_api", companyId: null, requestKey: `summary-tie-${i}`,
+          startedAt: now - 2_000, completedAt: now - 1_000, result: "success",
+          parsedItemCount: i, adapterVersion: "gdelt/1",
+        });
+      }
+
+      const summary = db.deliverySummary();
+      expect(summary).toHaveLength(60);
+      expect(summary.slice(-2).map(({ parsedItemCount }) => parsedItemCount)).toEqual([4, 3]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps transport success separate from an incomplete observation-ingestion outcome", () => {
     const db = new Desk(":memory:");
     db.seedCompanies([company]);
