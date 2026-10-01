@@ -301,3 +301,27 @@ Independent Sol/xhigh re-read marks the exact eligibility/test/chronology
 repair PASS with no remaining actionable finding in those edits. It executed
 no tests or live calls. This scoped review supports checkpointing, not complete
 product acceptance.
+
+
+## Native contract validation and evidence preservation
+
+The final native alignment-input check rejected two migration-era check
+timeouts above its120second per-check maximum: offline startup900 and bounded
+Luna checks600. Root used the current version2 contract template and aligns
+these declarations to120 without changing global harness limits or check
+commands. The current observed startup/build and focused checks fit this bound;
+future contention/timeouts must remain genuine non-passes. The separate ETL
+contract retains its own validated command limits. This metadata change is
+included in a fresh source-bound ETL verification rather than reusing an old
+fingerprint.
+
+The2ae2b42 private offline pilot was actually frozen at21:58:02.201Z and reports
+UNVERIFIED with30 cases/15 issuers,28 neutral/1 positive/1 unsupported sentiment,
+three unresolved fields and zero paid calls. It is retained unchanged as a
+historical checkpoint artifact. After the final clean contract checkpoint, a
+new private pilot binds the new actual HEAD; the original source packets and
+primary/third labels remain unchanged. The actual final-app fresh-install
+browser proof shows zero eligible saved observations, a separately archived
+real SEC-to-Jev run, no empty chart and a Luna-specific operator next step, with
+all external/model requests and Radar off. It does not establish current live
+arrival/recovery, exact target dimensions or classification quality.

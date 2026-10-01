@@ -89,7 +89,7 @@
         "run",
         "verify:offline-startup"
       ],
-      "timeout_seconds": 900
+      "timeout_seconds": 120
     },
     {
       "id": "etl-artifact-check",
@@ -228,7 +228,7 @@
         "tests/luna-ui.test.ts",
         "tests/health-panel.test.ts"
       ],
-      "timeout_seconds": 600
+      "timeout_seconds": 120
     }
   ],
   "alignment": {
