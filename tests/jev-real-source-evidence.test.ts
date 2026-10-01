@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unli
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { analyzeFinal, parseLabelSet, parseModelRun } from "../scripts/jev-label-evaluation.js";
+import { analyzeFinal, parseLabelSet, parseModelRun, sampleManifestSha256 } from "../scripts/jev-label-evaluation.js";
 import { MANIFEST_PATH, REVIEW_RECORD_PATH, buildApprovalSubject, digestEvidence, validateManifest } from "../scripts/verify-jev-real-source-evidence.js";
 import { wellSupportedFinalStudy } from "./helpers/jev-real-source-fixture.js";
 
@@ -15,6 +15,12 @@ const evidenceTypes: Record<string, string[]> = {
   sec_source_correspondence: ["sec_filing_receipt_version_timestamp", "permitted_source_excerpt", "exact_jev_payload_digest_chain", "collector_parser_versions"],
   typesafe_account_and_spend: ["typesafe_account_terms_and_use", "telemetry_retention", "approved_prices_limits_refill", "numeric_spend_ceiling", "usage_billing_rejected_request_reconciliation", "sec_contact", "source_rights_matrix"],
   independent_human_labels: ["label_set_a", "label_set_b", "reviewer_qualification_independence", "blind_freeze_chronology", "adjudication_or_not_needed"],
+};
+const agentEvidenceTypes = {
+  provider_authenticity_usage: evidenceTypes.provider_authenticity_usage,
+  sec_source_correspondence: evidenceTypes.sec_source_correspondence,
+  typesafe_account_and_spend: evidenceTypes.typesafe_account_and_spend,
+  independent_agent_labels: ["agent_label_set_a", "agent_label_set_b", "agent_identity_and_model_configuration", "reviewer_independence", "blind_freeze_chronology", "agent_adjudication_or_not_needed"],
 };
 function root(): string { const value = mkdtempSync(path.join(os.tmpdir(), "jev-real-evidence-test-")); tempRoots.push(value); return value; }
 function sha(value: Uint8Array | string): string { return createHash("sha256").update(value).digest("hex"); }
@@ -49,7 +55,7 @@ function rebindEvaluation(dir: string, pkg: any) {
 }
 function initializeSyntheticCheckout(dir: string) {
   execFileSync("git", ["init", "-q", dir]);
-  for (const relative of ["scripts/evaluate-jev-labels.ts", "scripts/jev-label-evaluation.ts", "scripts/verify-jev-real-source-evidence.ts", "server/rubric.ts"]) {
+  for (const relative of ["scripts/evaluate-jev-labels.ts", "scripts/jev-label-evaluation.ts", "scripts/verify-jev-real-source-evidence.ts", "server/rubric.ts", "config/companies.json"]) {
     const source = path.join(process.cwd(), relative); const target = path.join(dir, relative);
     mkdirSync(path.dirname(target), { recursive: true }); cpSync(source, target);
   }
@@ -61,55 +67,80 @@ function commitSyntheticCheckout(dir: string, message: string) {
   execFileSync("git", ["-C", dir, "add", "scripts/evaluate-jev-labels.ts"]);
   execFileSync("git", ["-C", dir, "-c", "user.name=Synthetic Evidence Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "-m", message]);
 }
-function createPackage(dir: string) {
+function createPackage(dir: string, agentMode = false) {
   initializeSyntheticCheckout(dir);
   const revision = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const study = wellSupportedFinalStudy(revision);
-  const labelBytes = Buffer.from(`${JSON.stringify(study.labelArtifact, null, 2)}\n`);
-  const runValue = { ...study.run, labelsSha256: sha(labelBytes) };
+  const agentIds = ["agent-a", "agent-b"];
+  const configuredCompanyIds = agentMode ? (JSON.parse(readFileSync(path.join(process.cwd(), "config/companies.json"), "utf8")) as { companies: Array<{ id: string }> }).companies.map(({ id }) => id).sort() : [];
+  const companyIds = configuredCompanyIds.slice(0, 8);
+  const productUniverseSha256 = agentMode ? sha(JSON.stringify(configuredCompanyIds)) : undefined;
+  const labelArtifact = agentMode ? {
+    ...study.labelArtifact,
+    schemaVersion: 3 as const,
+    evaluationProfile: "sec_edgar_product24_diagnostic_v1" as const,
+    productCompanyUniverseSha256: productUniverseSha256,
+    reviewers: agentIds.map((id) => ({ id, kind: "independent_subagent" as const, agentThreadId: `thread-${id}`, configuredModel: "gpt-6-luna", resolvedModel: null, modelResolutionEvidence: null, independenceAttested: true as const, blindedToJevOutputsAttested: true as const })),
+    agentLabelProtocol: { version: "independent-subagents-blinded-v1" as const, frozenAt: study.labelArtifact.frozenAt, jevOutputsOpenedAt: study.run.startedAt },
+    populationFrame: study.labelArtifact.populationFrame.map((item, index) => ({ ...item, companyId: companyIds[index % companyIds.length]! })),
+    items: study.labelArtifact.items.map((item, index) => ({ ...item, companyId: companyIds[index % companyIds.length]!, reviews: item.reviews.map((review, index) => ({ ...review, reviewerId: agentIds[index]! })) })),
+  } : study.labelArtifact;
+  if (agentMode) {
+    (labelArtifact as any).populationFrameSha256 = sampleManifestSha256(labelArtifact.populationFrame);
+    (labelArtifact as any).sampleManifestSha256 = sampleManifestSha256(labelArtifact.items);
+  }
+  const labelBytes = Buffer.from(`${JSON.stringify(labelArtifact, null, 2)}\n`);
+  const runValue = { ...study.run, labelsSha256: sha(labelBytes), sampleManifestSha256: labelArtifact.sampleManifestSha256 };
   const runBytes = Buffer.from(`${JSON.stringify(runValue, null, 2)}\n`);
   const labels = parseLabelSet(JSON.parse(labelBytes.toString("utf8")));
   const run = parseModelRun(JSON.parse(runBytes.toString("utf8")));
   const report = analyzeFinal({ labels, labelsSha256: sha(labelBytes), run });
   const reportBytes = Buffer.from(`${JSON.stringify(report, null, 2)}\n`);
   const [labelsRef, runRef, reportRef] = [
-    saveJson(dir, `${PREFIX}jev-independent-real-source-labels.json`, study.labelArtifact),
+    saveJson(dir, `${PREFIX}jev-independent-real-source-labels.json`, labelArtifact),
     saveJson(dir, `${PREFIX}jev-independent-real-source-run.json`, runValue),
     saveJson(dir, `${PREFIX}jev-independent-real-source-report.json`, report),
   ];
-  const populationFrameArtifact = saveJson(dir, `${PREFIX}population-frame.json`, study.labelArtifact.populationFrame);
-  const sampleProvenanceArtifact = saveJson(dir, `${PREFIX}sample-provenance.json`, study.labelArtifact.items.map(({ reviews: _reviews, ...row }) => row));
+  const populationFrameArtifact = saveJson(dir, `${PREFIX}population-frame.json`, labelArtifact.populationFrame);
+  const sampleProvenanceArtifact = saveJson(dir, `${PREFIX}sample-provenance.json`, labelArtifact.items.map(({ reviews: _reviews, ...row }) => row));
   const reviewerId = "independent-reviewer-c";
   function artifact(type: string, author = "source-author") {
     const ref = saveJson(dir, `${PREFIX}${type}.json`, { synthetic: type });
     return { ...ref, evidenceType: type, authoredBy: author, reviewedBy: reviewerId };
   }
-  const groups = Object.fromEntries(Object.entries(evidenceTypes).map(([group, types]) => [group, { status: "provided", artifacts: types.map((type) => artifact(type, type === "label_set_a" ? "reviewer-a" : type === "label_set_b" ? "reviewer-b" : "source-author")) }])) as Record<string, any>;
+  const selectedEvidenceTypes = agentMode ? agentEvidenceTypes : evidenceTypes;
+  const groups = Object.fromEntries(Object.entries(selectedEvidenceTypes).map(([group, types]) => [group, { status: "provided", artifacts: (types ?? []).map((type) => artifact(type, type === "label_set_a" ? "reviewer-a" : type === "label_set_b" ? "reviewer-b" : type === "agent_label_set_a" ? "agent-a" : type === "agent_label_set_b" ? "agent-b" : "source-author")) }])) as Record<string, any>;
+  if (agentMode) groups.independent_human_labels = { status: "missing", reason: "historical human rows remain quarantined and unreconciled" };
   const runArtifacts = {
     status: "provided", studyId: labels.studyId, runId: run.runId, resolvedJevModel: report.provenance.resolvedModels[0], rubricSha256: labels.rubricSha256,
     codeRevisionSha256: sha(labels.analysisCodeRevision), labelsSha256: labelsRef.sha256, runSha256: runRef.sha256, reportSha256: reportRef.sha256,
     populationSha256: labels.populationFrameSha256, sampleSha256: labels.sampleManifestSha256,
-    frozenLabelsArtifact: { ...labelsRef, evidenceType: "frozen_labels", authoredBy: "reviewer-a", reviewedBy: reviewerId },
+    frozenLabelsArtifact: { ...labelsRef, evidenceType: "frozen_labels", authoredBy: agentMode ? "agent-a" : "reviewer-a", reviewedBy: reviewerId },
     modelRunArtifact: { ...runRef, evidenceType: "model_run", authoredBy: "source-author", reviewedBy: reviewerId },
     evaluationReportArtifact: { ...reportRef, evidenceType: "evaluation_report", authoredBy: "source-author", reviewedBy: reviewerId },
     populationFrameArtifact: { ...populationFrameArtifact, evidenceType: "population_frame", authoredBy: "source-author", reviewedBy: reviewerId },
     sampleProvenanceArtifact: { ...sampleProvenanceArtifact, evidenceType: "sample_provenance", authoredBy: "source-author", reviewedBy: reviewerId },
   };
+  const freezeChronologyArtifact = agentMode ? (() => {
+    const ref = saveJson(dir, `${PREFIX}agent-freeze-chronology.json`, { frozenAt: labelArtifact.frozenAt, jevOutputsOpenedAt: (labelArtifact as any).agentLabelProtocol.jevOutputsOpenedAt });
+    return { ...ref, evidenceType: "blind_freeze_chronology", authoredBy: "source-author", reviewedBy: reviewerId };
+  })() : undefined;
   const manifest: any = {
     schemaVersion: 1, status: "verified", run: runArtifacts, groups,
-    humanLabels: { status: "provided", labelSetA: { reviewerId: "reviewer-a", qualifiedHumanAttested: true }, labelSetB: { reviewerId: "reviewer-b", qualifiedHumanAttested: true }, freezeChronologyArtifact: artifact("freeze-chronology"), adjudication: { status: "not_needed", reason: "Synthetic fixture has no disagreement." } },
+    humanLabels: agentMode ? { status: "missing", reason: "historical human rows remain quarantined and unreconciled" } : { status: "provided", labelSetA: { reviewerId: "reviewer-a", qualifiedHumanAttested: true }, labelSetB: { reviewerId: "reviewer-b", qualifiedHumanAttested: true }, freezeChronologyArtifact: artifact("freeze-chronology"), adjudication: { status: "not_needed", reason: "Synthetic fixture has no disagreement." } },
+    ...(agentMode ? { agentLabels: { status: "provided", reviewers: labelArtifact.reviewers.map(({ id, kind, agentThreadId, configuredModel, resolvedModel, modelResolutionEvidence }: any) => ({ id, kind, agentThreadId, configuredModel, resolvedModel, modelResolutionEvidence })), freezeChronologyArtifact, adjudication: { status: "not_needed", reason: "Synthetic agent labels have no disagreement." } } } : {}),
     independentReview: { status: "resolved", reviewerId, verdict: "approved", artifact: null },
   };
   const allArtifacts = [runArtifacts.frozenLabelsArtifact, runArtifacts.modelRunArtifact, runArtifacts.evaluationReportArtifact, runArtifacts.populationFrameArtifact, runArtifacts.sampleProvenanceArtifact,
-    ...Object.values(groups).flatMap((group: any) => group.artifacts), manifest.humanLabels.freezeChronologyArtifact];
+    ...Object.values(groups).flatMap((group: any) => group.status === "provided" ? group.artifacts : []), agentMode ? freezeChronologyArtifact : manifest.humanLabels.freezeChronologyArtifact];
   manifest.independentReview.artifact = { ...saveJson(dir, REVIEW_RECORD_PATH, {}), evidenceType: "independent_review_record", authoredBy: reviewerId, reviewedBy: reviewerId };
   // Excluding the review record avoids a circular hash.
   const subject = buildApprovalSubject(manifest, labels, run, report, labelsRef.sha256, runRef.sha256, sha(reportBytes), allArtifacts);
-  const checks = Object.fromEntries(Object.entries(evidenceTypes).map(([group, types]) => [group, Object.fromEntries(types.map((type) => [type, true]))]));
+  const checks = Object.fromEntries(Object.entries(selectedEvidenceTypes).map(([group, types]) => [group, Object.fromEntries((types ?? []).map((type) => [type, true]))]));
   const review = {
     schemaVersion: 1, reviewerId, verdict: "approved", approvalSubject: subject,
-    groupDigests: Object.fromEntries(Object.entries(groups).map(([group, value]) => [group, digestEvidence(value)])),
-    groupVerdicts: Object.fromEntries(Object.keys(groups).map((group) => [group, "approved"])), evidenceTypeChecks: checks,
+    groupDigests: Object.fromEntries(Object.entries(groups).filter(([group]) => !agentMode || group !== "independent_human_labels").map(([group, value]) => [group, digestEvidence(value)])),
+    groupVerdicts: Object.fromEntries(Object.keys(groups).filter((group) => !agentMode || group !== "independent_human_labels").map((group) => [group, "approved"])), evidenceTypeChecks: checks,
   };
   const reviewRef = saveJson(dir, REVIEW_RECORD_PATH, review);
   manifest.independentReview.artifact = { ...reviewRef, evidenceType: "independent_review_record", authoredBy: reviewerId, reviewedBy: reviewerId };
@@ -142,7 +173,7 @@ afterAll(() => { if (template) rmSync(template.dir, { recursive: true, force: tr
 describe("real-source evidence package validator", () => {
   it("runs the CLI validation when its checkout path contains spaces", () => {
     const dir = path.join(root(), "checkout with spaces");
-    for (const relative of ["scripts/verify-jev-real-source-evidence.ts", "scripts/evaluate-jev-labels.ts", "scripts/jev-label-evaluation.ts", "server/rubric.ts"]) {
+    for (const relative of ["scripts/verify-jev-real-source-evidence.ts", "scripts/evaluate-jev-labels.ts", "scripts/jev-label-evaluation.ts", "server/rubric.ts", "config/companies.json"]) {
       const target = path.join(dir, relative);
       mkdirSync(path.dirname(target), { recursive: true });
       cpSync(path.resolve(relative), target);
@@ -163,6 +194,14 @@ describe("real-source evidence package validator", () => {
     expect(pkg.manifest.run.populationFrameArtifact.sha256).not.toBe(pkg.manifest.run.populationSha256);
     expect(pkg.manifest.run.sampleProvenanceArtifact.sha256).not.toBe(pkg.manifest.run.sampleSha256);
     const result = validateManifest(dir);
+    expect(result).toMatchObject({ result: "PASS", missingGroups: [], issues: [] });
+  });
+  it("accepts a scoped product24 agent package while leaving historical human reconciliation explicitly missing", () => {
+    const dir = root();
+    const pkg = createPackage(dir, true);
+    const result = validateManifest(dir);
+    expect(pkg.manifest.humanLabels).toMatchObject({ status: "missing", reason: expect.stringContaining("quarantined") });
+    expect(pkg.manifest.agentLabels.status).toBe("provided");
     expect(result).toMatchObject({ result: "PASS", missingGroups: [], issues: [] });
   });
   it("rejects duplicate contract flags", () => {
@@ -190,7 +229,7 @@ describe("real-source evidence package validator", () => {
   it("rejects a reviewer record with an invalid schema", () => {
     const malformedDir = root(); const malformed = makePackage(malformedDir);
     delete malformed.review.groupDigests; saveReview(malformedDir, malformed);
-    expect(validateManifest(malformedDir).issues).toContain("reviewer record is malformed or incomplete");
+    expect(validateManifest(malformedDir).issues.some((issue) => issue.startsWith("reviewer record is malformed or incomplete"))).toBe(true);
   });
   it("rejects a negative independent reviewer verdict", () => {
     const dir = root(); const pkg = makePackage(dir);
@@ -211,7 +250,7 @@ describe("real-source evidence package validator", () => {
   it("requires every evidence type to be explicitly confirmed", () => {
     const typesDir = root(); const types = makePackage(typesDir);
     delete types.review.evidenceTypeChecks.provider_authenticity_usage.unknown_outcomes_reconciliation; saveReview(typesDir, types);
-    expect(validateManifest(typesDir).issues).toContain("reviewer record is malformed or incomplete");
+    expect(validateManifest(typesDir).issues.some((issue) => issue.startsWith("reviewer record is malformed or incomplete"))).toBe(true);
   });
   it("rejects review group digests that do not match the package", () => {
     const digestDir = root(); const digestPkg = makePackage(digestDir);
@@ -310,7 +349,7 @@ describe("real-source evidence package validator", () => {
     failed.review.approvalSubject.artifacts.find((artifact: any) => artifact.path === failed.reportRef.path).sha256 = failedReportRef.sha256;
     saveReview(failedDir, failed);
     expect(report.status).not.toBe("PASS");
-    expect(validateManifest(failedDir).issues).toContain("offline evaluator report status is not PASS");
+    expect(validateManifest(failedDir).issues).toContain("offline evaluator report does not match the frozen label-authority status");
   });
   it("rejects labels frozen against a different Git revision", () => {
     const identityDir = root(); const identityPkg = makePackage(identityDir);

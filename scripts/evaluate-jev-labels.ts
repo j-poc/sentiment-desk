@@ -48,6 +48,7 @@ export function verifyFrozenCode(labels: LabelSet, cwd = process.cwd(), extraSou
   if (untrackedFiles.length) throw new Error("untracked executable or test source exists; the frozen evaluation code must be committed first");
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const sources = ["scripts/evaluate-jev-labels.ts", "scripts/jev-label-evaluation.ts", "server/rubric.ts", ...extraSources];
+  if (labels.schemaVersion === 3 && labels.evaluationProfile === "sec_edgar_product24_diagnostic_v1") sources.push("config/companies.json");
   for (const relative of sources) {
     const sourceFile = path.resolve(sourceRoot, relative);
     const frozenFile = path.resolve(cwd, relative);

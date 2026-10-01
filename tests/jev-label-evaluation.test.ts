@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   analyzeFinal,
@@ -98,8 +99,73 @@ function labelsFor(stage: "pilot" | "final" = "pilot") {
   };
 }
 
+function agentLabelsFor(stage: "pilot" | "final" = "pilot") {
+  const humanArtifact = labelsFor(stage);
+  return {
+    ...humanArtifact,
+    schemaVersion: 3 as const,
+    reviewers: ["agent-a", "agent-b"].map((id, index) => ({
+      id,
+      kind: "independent_subagent" as const,
+      agentThreadId: `thread-${id}`,
+      configuredModel: "gpt-6-luna",
+      resolvedModel: null,
+      modelResolutionEvidence: null,
+      independenceAttested: true as const,
+      blindedToJevOutputsAttested: true as const,
+    })),
+    agentLabelProtocol: {
+      version: "independent-subagents-blinded-v1" as const,
+      frozenAt: humanArtifact.frozenAt,
+      jevOutputsOpenedAt: "2026-09-04T10:00:00.000Z",
+    },
+    items: humanArtifact.items.map((item) => ({
+      ...item,
+      reviews: item.reviews.map((review, index) => ({ ...review, reviewerId: index === 0 ? "agent-a" : "agent-b" })),
+    })),
+  };
+}
+
 function digestJson(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function product24AgentStudy() {
+  const study = wellSupportedFinalStudy();
+  const companyIds = ((JSON.parse(readFileSync(new URL("../config/companies.json", import.meta.url), "utf8")) as { companies: Array<{ id: string }> }).companies.map(({ id }) => id)).sort();
+  const artifact = {
+    ...study.labelArtifact,
+    schemaVersion: 3 as const,
+    evaluationProfile: "sec_edgar_product24_diagnostic_v1" as const,
+    productCompanyUniverseSha256: digestJson(companyIds),
+    reviewers: ["agent-a", "agent-b"].map((id) => ({
+      id,
+      kind: "independent_subagent" as const,
+      agentThreadId: `thread-${id}`,
+      configuredModel: "gpt-6-luna",
+      resolvedModel: null,
+      modelResolutionEvidence: null,
+      independenceAttested: true as const,
+      blindedToJevOutputsAttested: true as const,
+    })),
+    agentLabelProtocol: {
+      version: "independent-subagents-blinded-v1" as const,
+      frozenAt: study.labelArtifact.frozenAt,
+      jevOutputsOpenedAt: study.run.startedAt,
+    },
+    populationFrame: study.labelArtifact.populationFrame.map((item, index) => ({ ...item, companyId: companyIds[index % 8]! })),
+    items: study.labelArtifact.items.map((item, index) => ({
+      ...item,
+      companyId: companyIds[index % 8]!,
+      reviews: item.reviews.map((review, reviewerIndex) => ({ ...review, reviewerId: reviewerIndex === 0 ? "agent-a" : "agent-b" })),
+    })),
+  };
+  artifact.populationFrameSha256 = sampleManifestSha256(artifact.populationFrame);
+  artifact.sampleManifestSha256 = sampleManifestSha256(artifact.items);
+  const labels = parseLabelSet(artifact);
+  const labelsSha256 = digestJson(artifact);
+  const run = parseModelRun({ ...study.run, labelsSha256, sampleManifestSha256: artifact.sampleManifestSha256 });
+  return { artifact, labels, labelsSha256, run };
 }
 
 function wellSupportedFinalStudy() {
@@ -215,6 +281,120 @@ function wellSupportedFinalStudy() {
 }
 
 describe("offline real-source Jev label analysis", () => {
+  it("preserves human schema v2 and reports v3 labels as agent agreement only", () => {
+    const historical = labelsFor();
+    expect(parseLabelSet(historical).schemaVersion).toBe(2);
+
+    const artifact = agentLabelsFor();
+    const labels = parseLabelSet(artifact);
+    const report = analyzePilot({ labels, labelsSha256: digestJson(artifact) });
+
+    expect(report).toMatchObject({
+      mode: "agent-label-agreement-pilot",
+      labelAuthority: "independent_subagents",
+      humanGroundTruth: "NOT_PROVIDED",
+      statisticalCertification: "UNVERIFIED",
+    });
+    expect(report).toHaveProperty("rawAgentAgreement.sentiment");
+    expect(report).not.toHaveProperty("agreement");
+    expect(JSON.stringify(report)).not.toContain("qualifiedHumanAttested");
+  });
+
+  it("rejects duplicate agent identities and chronology that opens Jev outputs before freeze", () => {
+    const artifact = agentLabelsFor();
+    expect(() => parseLabelSet({ ...artifact, reviewers: [artifact.reviewers[0], { ...artifact.reviewers[1], agentThreadId: artifact.reviewers[0]!.agentThreadId }] })).toThrow(/distinct thread identities/i);
+    expect(() => parseLabelSet({ ...artifact, agentLabelProtocol: { ...artifact.agentLabelProtocol, jevOutputsOpenedAt: "2026-09-02T10:00:00.000Z" } })).toThrow(/cannot be opened before/i);
+    expect(() => parseLabelSet({ ...artifact, reviewers: artifact.reviewers.map(({ independenceAttested: _independenceAttested, ...reviewer }) => reviewer) })).toThrow();
+  });
+
+  it("retains unsupported agent-label fields as abstentions with explicit denominators", () => {
+    const artifact = agentLabelsFor();
+    (artifact.items[0]!.reviews[0]!.labels as any).about = null;
+    artifact.items[0]!.reviews[0]!.rationale = "The filing text does not support a reliable about-company classification.";
+    const report = analyzePilot({ labels: parseLabelSet(artifact), labelsSha256: digestJson(artifact) });
+
+    expect(report).toMatchObject({ itemCount: 1, unresolvedLabelFields: [{ observationId: "obs-1", field: "about" }] });
+    expect(report.rawAgentAgreement).toMatchObject({ about: { selectedCases: 1, resolvedPairCount: 0, rate: null } });
+  });
+
+  it("keeps final agent comparisons separate from human classifier quality", () => {
+    const study = wellSupportedFinalStudy();
+    const artifact = {
+      ...study.labelArtifact,
+      schemaVersion: 3 as const,
+      reviewers: ["agent-a", "agent-b"].map((id) => ({
+        id,
+        kind: "independent_subagent" as const,
+        agentThreadId: `thread-${id}`,
+        configuredModel: "gpt-6-luna",
+        resolvedModel: null,
+        modelResolutionEvidence: null,
+        independenceAttested: true as const,
+        blindedToJevOutputsAttested: true as const,
+      })),
+      agentLabelProtocol: {
+        version: "independent-subagents-blinded-v1" as const,
+        frozenAt: study.labelArtifact.frozenAt,
+        jevOutputsOpenedAt: study.run.startedAt,
+      },
+      items: study.labelArtifact.items.map((item) => ({
+        ...item,
+        reviews: item.reviews.map((review, reviewerIndex) => ({ ...review, reviewerId: reviewerIndex === 0 ? "agent-a" : "agent-b" })),
+      })),
+    };
+    const labels = parseLabelSet(artifact);
+    const labelsSha256 = digestJson(artifact);
+    const run = parseModelRun({ ...study.run, labelsSha256 });
+    const report = analyzeFinal({ labels, labelsSha256, run });
+
+    expect(report).toMatchObject({
+      mode: "final-agent-agreement-evaluation",
+      labelAuthority: "independent_subagents",
+      humanGroundTruth: "NOT_PROVIDED",
+      statisticalCertification: "UNVERIFIED",
+    });
+    expect(report.agentAgreement.sentiment.metrics.exactAgreement).toBe(1);
+    expect(report.gates.statisticalCertification.status).toBe("UNVERIFIED");
+    expect(JSON.stringify(report)).not.toContain("qualifiedHumanAttested");
+  });
+
+  it("runs the bounded product24 diagnostic with its own thresholds and statistical status", () => {
+    const study = product24AgentStudy();
+    const report = analyzeFinal({ labels: study.labels, labelsSha256: study.labelsSha256, run: study.run });
+
+    expect(report).toMatchObject({
+      mode: "final-agent-agreement-evaluation",
+      status: "PASS",
+      agentReferenceAgreementStatus: "PASS",
+      provenanceExecutionStatus: "PASS",
+      statisticalCertification: "UNVERIFIED",
+      humanGroundTruth: "NOT_PROVIDED",
+    });
+    expect(report).toMatchObject({ selectedCaseDenominator: study.artifact.items.length, resolvedReferenceCaseDenominator: study.artifact.items.length, configuredCompanySupport: 8 });
+    expect(report.agentAgreement.untestedEventTypes).toEqual([]);
+    expect(report.agentAgreement.rawAgentAgreement.sentiment.rate).toBe(1);
+  });
+
+  it("keeps unresolved dimensions in the product24 sample and reports their metric exclusions", () => {
+    const study = product24AgentStudy();
+    (study.artifact.items[0]!.reviews[0]!.labels as any).about = null;
+    const labels = parseLabelSet(study.artifact);
+    const labelsSha256 = digestJson(study.artifact);
+    const run = parseModelRun({ ...study.run, labelsSha256 });
+    const report = analyzeFinal({ labels, labelsSha256, run });
+
+    expect(report.selectedCaseDenominator).toBe(study.artifact.items.length);
+    expect(report.unresolvedLabelFieldDenominator).toBeGreaterThan(0);
+    expect(report.agentAgreement.unresolvedLabels).toContainEqual({ observationId: study.artifact.items[0]!.observationId, field: "about" });
+    expect(report.agentAgreement.aboutInclusion).toMatchObject({ selectedCases: study.artifact.items.length, resolvedReferenceCases: study.artifact.items.length - 1 });
+  });
+
+  it("requires the product24 diagnostic sample to come from the configured universe and meet minimum support", () => {
+    const study = product24AgentStudy();
+    expect(() => parseLabelSet({ ...study.artifact, productCompanyUniverseSha256: "0".repeat(64) })).toThrow(/does not bind the current configured company universe/i);
+    expect(() => parseLabelSet({ ...study.artifact, items: study.artifact.items.slice(0, 29), sampleManifestSha256: sampleManifestSha256(study.artifact.items.slice(0, 29)), populationFrame: study.artifact.populationFrame.slice(0, 29), populationFrameSha256: sampleManifestSha256(study.artifact.populationFrame.slice(0, 29)), samplePlan: [{ filingType: "8-K", acceptanceQuarter: "2026-Q3", eligibleCount: 29, sampleCount: 29 }] })).toThrow(/at least 30 cases across at least 8/i);
+  });
+
   it("computes a confusion matrix with missing judgments counted as misses", () => {
     const result = classificationMetrics({
       labels: ["positive", "negative", "positive", "neutral"],

@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { EVENT_TYPES, RUBRIC_SHA } from "../server/rubric.js";
 
 const HEX_256 = /^[a-f0-9]{64}$/;
 const COMMIT_SHA = /^[a-f0-9]{40,64}$/;
+const PRODUCT24_PROFILE = "sec_edgar_product24_diagnostic_v1" as const;
+const LEGACY_PROFILE = "sec_edgar_scoped_standard_v1" as const;
+const productCompanyIds: string[] = (JSON.parse(readFileSync(new URL("../config/companies.json", import.meta.url), "utf8")) as { companies: Array<{ id: string }> }).companies.map(({ id }) => id).sort(compareCodeUnits);
+const productCompanyUniverseSha256 = createHash("sha256").update(JSON.stringify(productCompanyIds), "utf8").digest("hex");
 const SENTIMENTS = ["negative", "neutral", "positive"] as const;
 const SENTIMENT_CLASSES = ["negative", "neutral", "positive"] as const;
 const EVENT_CLASSES = EVENT_TYPES;
@@ -64,13 +69,28 @@ const labelItemSchema = provenanceSchema.extend({
   reviews: z.array(reviewerLabelSchema).length(2),
   adjudication: reviewerLabelSchema.optional(),
 }).strict();
+const agentLabelValuesSchema = z.object({
+  about: z.boolean().nullable(),
+  investorRelevant: z.boolean().nullable(),
+  sentiment: z.enum(SENTIMENTS).nullable(),
+  eventType: EVENT_SCHEMA.nullable(),
+}).strict();
+const agentReviewerLabelSchema = z.object({
+  reviewerId: z.string().min(1).max(200),
+  labels: agentLabelValuesSchema,
+  rationale: z.string().trim().min(12).max(2000),
+}).strict();
+const agentLabelItemSchema = provenanceSchema.extend({
+  reviews: z.array(agentReviewerLabelSchema).length(2),
+  adjudication: agentReviewerLabelSchema.optional(),
+}).strict();
 
-const labelSetSchema = z.object({
+const labelSetV2Schema = z.object({
   schemaVersion: z.literal(2),
   stage: z.enum(["pilot", "final"]),
   studyId: z.string().min(1).max(200),
   source: z.literal("sec_edgar"),
-  evaluationProfile: z.literal("sec_edgar_scoped_standard_v1"),
+  evaluationProfile: z.literal(LEGACY_PROFILE),
   sampleSeed: z.number().int().safe(),
   samplingWindowStart: ISO_TIME,
   samplingWindowEnd: ISO_TIME,
@@ -90,6 +110,32 @@ const labelSetSchema = z.object({
   }).strict()).min(2).max(3),
   items: z.array(labelItemSchema).min(1),
 }).strict();
+
+const agentReviewerSchema = z.object({
+  id: z.string().min(1).max(200),
+  kind: z.literal("independent_subagent"),
+  agentThreadId: z.string().min(1).max(200),
+  configuredModel: z.string().min(1).max(200),
+  resolvedModel: z.string().min(1).max(200).nullable(),
+  modelResolutionEvidence: digestSchema.nullable(),
+  independenceAttested: z.literal(true),
+  blindedToJevOutputsAttested: z.literal(true),
+}).strict();
+
+const labelSetV3Schema = labelSetV2Schema.extend({
+  schemaVersion: z.literal(3),
+  evaluationProfile: z.enum([LEGACY_PROFILE, PRODUCT24_PROFILE]),
+  productCompanyUniverseSha256: digestSchema.optional(),
+  reviewers: z.array(agentReviewerSchema).min(2).max(3),
+  items: z.array(agentLabelItemSchema).min(1),
+  agentLabelProtocol: z.object({
+    version: z.literal("independent-subagents-blinded-v1"),
+    frozenAt: ISO_TIME,
+    jevOutputsOpenedAt: ISO_TIME,
+  }).strict(),
+});
+
+const labelSetSchema = z.discriminatedUnion("schemaVersion", [labelSetV2Schema, labelSetV3Schema]);
 
 const probabilitySchema = z.object({
   negative: z.number().min(0).max(1),
@@ -243,6 +289,17 @@ export function parseLabelSet(value: unknown): LabelSet {
     throw new Error("sec_edgar_scoped_standard_v1 does not exercise the strict identity path; use an applicable source profile");
   }
   if (parsed.rubricSha256 !== RUBRIC_SHA) throw new Error("label set rubric SHA does not match the current frozen Jev rubric");
+  if (parsed.schemaVersion === 3 && parsed.evaluationProfile === PRODUCT24_PROFILE) {
+    if (parsed.productCompanyUniverseSha256 !== productCompanyUniverseSha256) throw new Error("product24 diagnostic profile does not bind the current configured company universe");
+    if ([...parsed.populationFrame, ...parsed.items].some((item) => !productCompanyIds.includes(item.companyId))) {
+      throw new Error("product24 diagnostic profile contains a company outside the configured 24-company product universe");
+    }
+    if (parsed.items.length < 30 || new Set(parsed.items.map((item) => item.companyId)).size < 8) {
+      throw new Error("product24 diagnostic profile requires at least 30 cases across at least 8 configured product companies");
+    }
+  } else if (parsed.schemaVersion === 3 && parsed.productCompanyUniverseSha256 !== undefined) {
+    throw new Error("product company universe binding is only valid for the product24 diagnostic profile");
+  }
   if (Date.parse(parsed.samplingWindowStart) >= Date.parse(parsed.samplingWindowEnd)) throw new Error("sampling window must have positive duration");
   if (Date.parse(parsed.samplingWindowEnd) > Date.parse(parsed.sampledAt)) throw new Error("sample snapshot predates the end of its sampling window");
   if (Date.parse(parsed.sampledAt) > Date.parse(parsed.frozenAt)) throw new Error("sample freeze predates sampling");
@@ -257,6 +314,14 @@ export function parseLabelSet(value: unknown): LabelSet {
   const reviewerIds = parsed.reviewers.map((reviewer) => reviewer.id);
   if (new Set(reviewerIds).size !== reviewerIds.length) throw new Error("reviewer IDs must be distinct");
   if (reviewerIds.length !== 2 && reviewerIds.length !== 3) throw new Error("the study permits two reviewers and, when needed, one adjudicator");
+  if (parsed.schemaVersion === 3) {
+    const agentThreads = parsed.reviewers.map((reviewer) => reviewer.agentThreadId);
+    if (new Set(agentThreads).size !== agentThreads.length) throw new Error("independent agents must have distinct thread identities");
+    if (parsed.agentLabelProtocol.frozenAt !== parsed.frozenAt) throw new Error("agent label protocol freeze time must match the frozen sample chronology");
+    if (Date.parse(parsed.agentLabelProtocol.jevOutputsOpenedAt) < Date.parse(parsed.frozenAt)) {
+      throw new Error("Jev outputs cannot be opened before blinded agent labels are frozen");
+    }
+  }
   const primaryReviewerIds = new Set(reviewerIds.slice(0, 2));
   if (parsed.items.length !== new Set(parsed.items.map((item) => item.observationId)).size) {
     throw new Error("sample contains duplicate observation IDs");
@@ -288,15 +353,18 @@ export function parseLabelSet(value: unknown): LabelSet {
     if (new Set(rowReviewerIds).size !== 2 || !rowReviewerIds.every((id) => primaryReviewerIds.has(id))) {
       throw new Error(`observation ${item.observationId} must have both named primary reviewers`);
     }
-    const differs = !sameLabels(item.reviews[0]!.labels, item.reviews[1]!.labels);
+    const differs = parsed.schemaVersion === 3
+      ? !sameAgentLabels(item.reviews[0]!.labels, item.reviews[1]!.labels)
+      : !sameLabels(item.reviews[0]!.labels as ResolvedLabels, item.reviews[1]!.labels as ResolvedLabels);
+    const hasAgentAbstention = parsed.schemaVersion === 3 && (Object.values(item.reviews[0]!.labels).some((value) => value === null) || Object.values(item.reviews[1]!.labels).some((value) => value === null));
     if (item.adjudication) {
       if (item.adjudication.reviewerId === item.reviews[0]!.reviewerId || item.adjudication.reviewerId === item.reviews[1]!.reviewerId) {
         throw new Error(`observation ${item.observationId} adjudication must use a third reviewer`);
       }
       if (!reviewerIds.includes(item.adjudication.reviewerId)) throw new Error(`observation ${item.observationId} adjudicator is not attested in the reviewer roster`);
     }
-    if (!differs && item.adjudication) throw new Error(`observation ${item.observationId} has unnecessary adjudication`);
-    if (parsed.stage === "final" && differs && !item.adjudication) {
+    if (!differs && !hasAgentAbstention && item.adjudication) throw new Error(`observation ${item.observationId} has unnecessary adjudication`);
+    if (parsed.schemaVersion === 2 && parsed.stage === "final" && differs && !item.adjudication) {
       throw new Error(`final sample has unresolved reviewer disagreement for ${item.observationId}`);
     }
   }
@@ -383,6 +451,154 @@ export function parseModelRun(value: unknown): ModelRun {
   return parsed;
 }
 
+function analyzeAgentFinal(input: { labels: Extract<LabelSet, { schemaVersion: 3 }>; labelsSha256: string; run: ModelRun }): Record<string, any> {
+  const { labels, labelsSha256, run } = input;
+  const budget = labels.evaluationBudget;
+  if (!budget) throw new Error("final analysis requires a frozen evaluation budget");
+  if (run.labelsSha256 !== labelsSha256) throw new Error("model run label digest does not match the exact label artifact");
+  if (run.studyId !== labels.studyId) throw new Error("model run study ID differs from the frozen label set");
+  if (run.sampleManifestSha256 !== labels.sampleManifestSha256) throw new Error("model run sample manifest digest differs from labels");
+  if (run.rubricSha256 !== labels.rubricSha256 || run.rubricSha256 !== RUBRIC_SHA) throw new Error("model run rubric digest differs from the frozen label set");
+  if (run.codeRevision !== labels.analysisCodeRevision || run.sourceTreeDirty) throw new Error("model run code identity differs from the clean frozen analysis revision");
+  if (Date.parse(run.startedAt) < Date.parse(labels.frozenAt) || Date.parse(run.startedAt) !== Date.parse(labels.agentLabelProtocol.jevOutputsOpenedAt)) throw new Error("model run start does not match the blinded freeze chronology");
+
+  const expectedIds = new Set(labels.items.map((item) => item.observationId));
+  const byRunId = new Map(run.items.map((item) => [item.observationId, item]));
+  const missingIds = [...expectedIds].filter((id) => !byRunId.has(id));
+  const unexpectedIds = [...byRunId.keys()].filter((id) => !expectedIds.has(id));
+  const inputDigests = new Map(labels.items.map((item) => [item.observationId, item.jevInputSha256]));
+  for (const runItem of run.items) {
+    if (runItem.attempts.some((attempt) => attempt.payloadSha256 !== inputDigests.get(runItem.observationId))) {
+      throw new Error(`Jev request payload digest differs from the frozen input for ${runItem.observationId}`);
+    }
+  }
+  const resolved = labels.items.map((item) => ({ item, labels: resolveAgentLabels(item), run: byRunId.get(item.observationId) ?? null }));
+  const scored = resolved.filter((row) => row.run?.score !== null && row.run !== null);
+  const scoreColumn = <T extends string | boolean>(key: "sentiment" | "eventType" | "about" | "investorRelevant", isText: boolean) => {
+    const rows = resolved.filter((row) => row.labels[key] !== null);
+    if (isText) {
+      const classes = key === "sentiment" ? SENTIMENT_CLASSES : EVENT_CLASSES;
+      const result = scoreClassification({
+        name: key === "sentiment" ? "sentiment" : "eventType",
+        labels: rows.map((row) => String(row.labels[key])),
+        predictions: rows.map((row) => row.run?.score ? String(row.run.score[key as "sentiment" | "eventType"]) : null),
+        clusters: rows.map((row) => row.item.cik),
+        classes,
+        seed: Number.parseInt(sha256Json({ labelsSha256, runId: run.runId, key }).slice(0, 8), 16),
+      });
+      return { rows, metrics: result.metrics, intervals: result.intervals, clusterCount: result.clusterSupport, classes };
+    }
+    const cutoffs = rows.map((row) => key === "about" ? INCLUSION_CUTOFFS.about.standard : INCLUSION_CUTOFFS.investorRelevant.standard);
+    return {
+      rows,
+      metrics: boundaryMetrics(rows.map((row) => row.labels[key] as boolean), rows.map((row) => row.run?.score?.[key as "about" | "investorRelevant"] ?? null), cutoffs),
+      clusterCount: new Set(rows.map((row) => row.item.cik)).size,
+    };
+  };
+  const sentiment = scoreColumn("sentiment", true);
+  const eventType = scoreColumn("eventType", true);
+  const about = scoreColumn("about", false);
+  const investorRelevant = scoreColumn("investorRelevant", false);
+  const classificationCheck = (metric: ClassificationMetrics, classes: readonly string[], requireAll: boolean) => {
+    const missing = classes.filter((label) => metric.perClass[label]!.support === 0);
+    const represented = classes.filter((label) => metric.perClass[label]!.support > 0);
+    const failures = represented.filter((label) => {
+      const row = metric.perClass[label]!;
+      return row.precision === null || row.recall === null || row.precision < 0.7 || row.recall < 0.7;
+    });
+    const macroF1 = represented.length ? represented.reduce((sum, label) => sum + metric.perClass[label]!.f1!, 0) / represented.length : null;
+    const status = failures.length || (requireAll && missing.length) || (macroF1 !== null && macroF1 < 0.8) ? "FAIL" : macroF1 === null ? "UNVERIFIED" : "PASS";
+    return { status, macroF1, thresholds: { macroF1: 0.8, representedClassPrecision: 0.7, representedClassRecall: 0.7 }, representedClasses: represented, missingRequiredClasses: requireAll ? missing : [], untestedClasses: requireAll ? [] : missing, classFailures: failures };
+  };
+  const boundaryCheck = (metric: ReturnType<typeof boundaryMetrics>) => ({
+    status: metric.support === 0 ? "UNVERIFIED" : metric.precision === null ? "UNVERIFIED" : metric.precision < 0.9 ? "FAIL" : "PASS",
+    precision: metric.precision,
+    positiveLabels: metric.support,
+    threshold: 0.9,
+  });
+  const diagnosticChecks = {
+    sentiment: classificationCheck(sentiment.metrics as ClassificationMetrics, SENTIMENT_CLASSES, true),
+    eventType: classificationCheck(eventType.metrics as ClassificationMetrics, EVENT_CLASSES, false),
+    aboutInclusionPrecision: boundaryCheck(about.metrics as ReturnType<typeof boundaryMetrics>),
+    investorRelevantPrecision: boundaryCheck(investorRelevant.metrics as ReturnType<typeof boundaryMetrics>),
+  };
+  const referenceStatuses = Object.values(diagnosticChecks).map((check) => check.status);
+  const unresolved = resolved.flatMap(({ item, labels: values }) => (["about", "investorRelevant", "sentiment", "eventType"] as const)
+    .filter((key) => values[key] === null).map((field) => ({ observationId: item.observationId, field })));
+  const agentReferenceAgreementStatus = referenceStatuses.includes("FAIL") ? "FAIL" : referenceStatuses.includes("UNVERIFIED") ? "UNVERIFIED" : "PASS";
+  const submitted = run.items.flatMap((item) => item.attempts).filter((attempt) => attempt.submitted);
+  const missingUsage = submitted.filter((attempt) => attempt.inputTokens === null || attempt.outputTokens === null).length;
+  const actualRequestCount = submitted.length;
+  const pricesMatch = run.inputPricePerMTokUsd === budget.inputPricePerMTokUsd && run.outputPricePerMTokUsd === budget.outputPricePerMTokUsd;
+  const estimatedCostUsd = pricesMatch && missingUsage === 0
+    ? (submitted.reduce((sum, attempt) => sum + attempt.inputTokens! * budget.inputPricePerMTokUsd + attempt.outputTokens! * budget.outputPricePerMTokUsd, 0) / 1_000_000)
+    : null;
+  const unreconciledOutcomeCount = submitted.filter((attempt) => ["unknown", "transport_error"].includes(attempt.outcome) && !attempt.usageReconciled).length;
+  const failedOutcomes = run.items.filter((item) => ["failed", "corrupt"].includes(item.terminalStatus));
+  const unknownOutcomes = run.items.filter((item) => item.terminalStatus === "unknown");
+  const resolvedModels = [...new Set(run.items.flatMap((item) => item.score ? [item.score.resolvedModel] : []))];
+  const executionChecks = {
+    exactFrozenDenominator: { status: missingIds.length || unexpectedIds.length || run.items.length !== labels.items.length ? "FAIL" : "PASS", missingIds, unexpectedIds, selectedCases: labels.items.length, runCases: run.items.length },
+    terminalExecution: { status: failedOutcomes.length ? "FAIL" : unknownOutcomes.length ? "UNVERIFIED" : "PASS", failedCaseIds: failedOutcomes.map((item) => item.observationId), unknownCaseIds: unknownOutcomes.map((item) => item.observationId), offTargetIsValid: true },
+    requestSafety: { status: unreconciledOutcomeCount ? "UNVERIFIED" : "PASS", unreconciledUnknownOrTransportOutcomes: unreconciledOutcomeCount },
+    accountBudget: { status: actualRequestCount > budget.maxRequests || !pricesMatch ? "FAIL" : estimatedCostUsd === null ? "UNVERIFIED" : estimatedCostUsd > budget.maxEstimatedCostUsd ? "FAIL" : "PASS", actualRequestCount, maxRequests: budget.maxRequests, estimatedCostUsd, maxEstimatedCostUsd: budget.maxEstimatedCostUsd, missingUsage },
+    resolvedModelProvenance: { status: resolvedModels.length === 1 ? "PASS" : "FAIL", resolvedModels, requestedModel: run.requestedModel },
+    productSample: { status: labels.items.length >= 30 && new Set(labels.items.map((item) => item.companyId)).size >= 8 ? "PASS" : "FAIL", selectedCases: labels.items.length, minimumCases: 30, configuredCompanies: new Set(labels.items.map((item) => item.companyId)).size, minimumCompanies: 8 },
+  };
+  const executionStatuses = Object.values(executionChecks).map((check) => check.status);
+  const provenanceExecutionStatus = executionStatuses.includes("FAIL") ? "FAIL" : executionStatuses.includes("UNVERIFIED") ? "UNVERIFIED" : "PASS";
+  const status = agentReferenceAgreementStatus === "FAIL" || provenanceExecutionStatus === "FAIL" ? "FAIL"
+    : agentReferenceAgreementStatus === "UNVERIFIED" || provenanceExecutionStatus === "UNVERIFIED" ? "UNVERIFIED" : "PASS";
+  const rawAgentAgreement = Object.fromEntries((["about", "investorRelevant", "sentiment", "eventType"] as const).map((key) => [key, agentColumnAgreement(
+    labels.items.map((item) => item.reviews[0]!.labels[key]), labels.items.map((item) => item.reviews[1]!.labels[key]),
+  )]));
+  const perCase = labels.items.map((item) => {
+    const runItem = byRunId.get(item.observationId);
+    const reference = resolveAgentLabels(item);
+    return { observationId: item.observationId, companyId: item.companyId, agentReviews: item.reviews, agentAdjudication: item.adjudication ?? null, resolvedReferenceFields: reference, runStatus: runItem?.terminalStatus ?? "missing", excludedFields: Object.keys(reference).filter((field) => reference[field as keyof typeof reference] === null) };
+  });
+  return {
+    mode: "final-agent-agreement-evaluation",
+    status,
+    statusScope: "bounded product24 operational diagnostic; not statistical certification or human-ground-truth accuracy",
+    releaseReadiness: "NOT_CLEARED_BY_THIS_REPORT; source rights, provider account terms, retention, billing, SEC User-Agent, and other release gates remain separate",
+    evaluationProfile: labels.evaluationProfile,
+    labelAuthority: "independent_subagents",
+    humanGroundTruth: "NOT_PROVIDED",
+    agentReferenceAgreementStatus,
+    provenanceExecutionStatus,
+    statisticalCertification: "UNVERIFIED",
+    studyId: labels.studyId,
+    runId: run.runId,
+    source: labels.source,
+    selectedCaseDenominator: labels.items.length,
+    modelScoredCaseDenominator: scored.length,
+    resolvedReferenceCaseDenominator: new Set(resolved.filter(({ labels: values }) => Object.values(values).some((value) => value !== null)).map(({ item }) => item.observationId)).size,
+    unresolvedLabelFieldDenominator: unresolved.length,
+    issuerCikClusterCount: new Set(labels.items.map((item) => item.cik)).size,
+    configuredCompanySupport: new Set(labels.items.map((item) => item.companyId)).size,
+    productCompanyUniverseSha256: productCompanyUniverseSha256,
+    provenance: { labelsSha256, modelRunSha256: sha256Json(run), populationFrameSha256: labels.populationFrameSha256, sampleManifestSha256: labels.sampleManifestSha256, rubricSha256: labels.rubricSha256, codeRevision: run.codeRevision, requestedModel: run.requestedModel, resolvedModels, frozenAt: labels.frozenAt, runStartedAt: run.startedAt, collectorParserVersions: [...new Set(labels.items.flatMap((item) => [item.collectorVersion, item.parserVersion]))].sort() },
+    agentLabelProtocol: { ...labels.agentLabelProtocol, reviewers: labels.reviewers },
+    bootstrap: { method: "percentile cluster bootstrap with issuer CIK resampling", replicates: 2000, clusterKey: "CIK", intervalsAreDescriptive: true },
+    agentAgreement: {
+      rawAgentAgreement,
+      sentiment: { metrics: sentiment.metrics, clusterBootstrap95: sentiment.intervals, selectedCases: labels.items.length, resolvedReferenceCases: sentiment.rows.length, modelScoredReferenceCases: sentiment.rows.filter((row) => row.run?.score !== null && row.run !== null).length },
+      eventType: { metrics: eventType.metrics, clusterBootstrap95: eventType.intervals, selectedCases: labels.items.length, resolvedReferenceCases: eventType.rows.length, modelScoredReferenceCases: eventType.rows.filter((row) => row.run?.score !== null && row.run !== null).length },
+      aboutInclusion: { ...about.metrics, selectedCases: labels.items.length, resolvedReferenceCases: about.rows.length, modelScoredReferenceCases: about.rows.filter((row) => row.run?.score !== null && row.run !== null).length },
+      investorRelevantInclusion: { ...investorRelevant.metrics, selectedCases: labels.items.length, resolvedReferenceCases: investorRelevant.rows.length, modelScoredReferenceCases: investorRelevant.rows.filter((row) => row.run?.score !== null && row.run !== null).length },
+      diagnosticChecks,
+      excludedCases: perCase.filter((item) => item.runStatus === "missing" || ["failed", "corrupt", "unknown"].includes(item.runStatus)).map(({ observationId, runStatus }) => ({ observationId, reason: runStatus })),
+      unresolvedLabels: unresolved,
+      untestedEventTypes: diagnosticChecks.eventType.untestedClasses,
+      perCase,
+    },
+    gates: { agentReferenceAgreement: { status: agentReferenceAgreementStatus, checks: diagnosticChecks }, provenanceExecution: { status: provenanceExecutionStatus, checks: executionChecks }, statisticalCertification: { status: "UNVERIFIED", reason: "the 24-company diagnostic has descriptive intervals but does not satisfy the legacy 30-issuer statistical certification profile" } },
+    operations: { requestCount: actualRequestCount, attemptsMissingUsage: missingUsage, estimatedCostUsd, maxEstimatedCostUsd: budget.maxEstimatedCostUsd, maxRequests: budget.maxRequests, p50LatencyMs: quantile(submitted.map((attempt) => attempt.latencyMs), 0.5), p95LatencyMs: quantile(submitted.map((attempt) => attempt.latencyMs), 0.95) },
+    limitations: ["Agent labels are an independent model reference and are not human ground truth.", "All frozen cases and per-field abstentions remain visible; unresolved fields are excluded only from that field's metric and remain in denominators.", "Issuer bootstrap intervals are descriptive and do not establish statistical certification or population generalization.", "Provider receipts, billing reconciliation, source rights, actual service identity, and SEC source correspondence still require independently bound supporting artifacts."],
+  };
+}
+
 function sameLabels(left: ResolvedLabels, right: ResolvedLabels): boolean {
   return left.about === right.about
     && left.investorRelevant === right.investorRelevant
@@ -390,7 +606,14 @@ function sameLabels(left: ResolvedLabels, right: ResolvedLabels): boolean {
     && left.eventType === right.eventType;
 }
 
-function resolveLabels(item: LabelSet["items"][number]): ResolvedLabels | null {
+function sameAgentLabels(left: z.infer<typeof agentLabelValuesSchema>, right: z.infer<typeof agentLabelValuesSchema>): boolean {
+  return left.about === right.about
+    && left.investorRelevant === right.investorRelevant
+    && left.sentiment === right.sentiment
+    && left.eventType === right.eventType;
+}
+
+function resolveLabels(item: z.infer<typeof labelItemSchema>): ResolvedLabels | null {
   if (sameLabels(item.reviews[0]!.labels, item.reviews[1]!.labels)) return item.reviews[0]!.labels;
   return item.adjudication?.labels ?? null;
 }
@@ -408,8 +631,74 @@ function prevalence<T extends string | boolean>(values: readonly T[], classes: r
   }));
 }
 
+function resolveAgentLabels(item: z.infer<typeof agentLabelItemSchema>): z.infer<typeof agentLabelValuesSchema> {
+  const first = item.reviews[0]!.labels;
+  const second = item.reviews[1]!.labels;
+  const resolved: Record<string, boolean | string | null> = {};
+  for (const key of ["about", "investorRelevant", "sentiment", "eventType"] as const) {
+    resolved[key] = first[key] !== null && first[key] === second[key]
+      ? first[key]
+      : item.adjudication?.labels[key] ?? null;
+  }
+  return resolved as z.infer<typeof agentLabelValuesSchema>;
+}
+
+function agentColumnAgreement<T>(left: readonly (T | null)[], right: readonly (T | null)[]) {
+  const exactCount = left.reduce((count, value, index) => count + Number(value !== null && value === right[index]), 0);
+  const resolvedPairCount = left.reduce((count, value, index) => count + Number(value !== null && right[index] !== null), 0);
+  const unresolvedPairCount = left.length - resolvedPairCount;
+  return { exactCount, selectedCases: left.length, resolvedPairCount, unresolvedPairCount, rate: resolvedPairCount ? exactCount / resolvedPairCount : null };
+}
+
+function analyzeAgentPilot(input: { labels: Extract<LabelSet, { schemaVersion: 3 }>; labelsSha256: string }): Record<string, unknown> {
+  const { labels } = input;
+  const columns = ["about", "investorRelevant", "sentiment", "eventType"] as const;
+  const rawAgentAgreement = Object.fromEntries(columns.map((key) => [key, agentColumnAgreement(
+    labels.items.map((item) => item.reviews[0]!.labels[key]),
+    labels.items.map((item) => item.reviews[1]!.labels[key]),
+  )]));
+  const resolved = labels.items.map(resolveAgentLabels);
+  const categories = {
+    about: [false, true] as const,
+    investorRelevant: [false, true] as const,
+    sentiment: SENTIMENT_CLASSES,
+    eventType: EVENT_CLASSES,
+  };
+  const prevalenceAfterAgentAdjudication = Object.fromEntries(columns.map((key) => [key, prevalence(
+    resolved.map((item) => item[key]).filter((value): value is NonNullable<typeof value> => value !== null),
+    categories[key] as never,
+  )]));
+  const unresolvedLabelFields = labels.items.flatMap((item) => columns.filter((key) => resolveAgentLabels(item)[key] === null).map((field) => ({ observationId: item.observationId, field })));
+  return {
+    mode: "agent-label-agreement-pilot",
+    studyId: labels.studyId,
+    source: labels.source,
+    evaluationProfile: labels.evaluationProfile,
+    labelAuthority: "independent_subagents",
+    humanGroundTruth: "NOT_PROVIDED",
+    statisticalCertification: "UNVERIFIED",
+    itemCount: labels.items.length,
+    issuerClusterCount: new Set(labels.items.map((item) => item.cik)).size,
+    labelsSha256: input.labelsSha256,
+    sampleManifestSha256: labels.sampleManifestSha256,
+    rubricSha256: labels.rubricSha256,
+    agentIds: labels.reviewers.slice(0, 2).map(({ id }) => id),
+    rawAgentAgreement,
+    prevalenceAfterAgentAdjudication,
+    unresolvedLabelFields,
+    resolution: "descriptive agreement between independent subagents only; labels are not human ground truth",
+    blinding: { labelsFrozenAt: labels.agentLabelProtocol.frozenAt, jevOutputsOpenedAt: labels.agentLabelProtocol.jevOutputsOpenedAt },
+    limitations: [
+      "No Jev outputs were read or joined in label-only mode.",
+      "Agent agreement does not establish classifier accuracy, calibration, source rights, account authorization, or investment performance.",
+      "Agent independence, identity, model configuration, and blinding are recorded attestations; this tool cannot independently verify them.",
+    ],
+  };
+}
+
 export function analyzePilot(input: { labels: LabelSet; labelsSha256: string }): Record<string, unknown> {
   const { labels } = input;
+  if (labels.schemaVersion === 3) return analyzeAgentPilot({ labels, labelsSha256: input.labelsSha256 });
   const primaryIds = labels.reviewers.slice(0, 2).map((reviewer) => reviewer.id);
   const first: Record<string, unknown[]> = { about: [], investorRelevant: [], sentiment: [], eventType: [] };
   const second: Record<string, unknown[]> = { about: [], investorRelevant: [], sentiment: [], eventType: [] };
@@ -621,7 +910,7 @@ function gate(status: "PASS" | "FAIL" | "UNVERIFIED" | "NOT_APPLICABLE", reason:
   return { status, reason, ...(metrics === undefined ? {} : { metrics }) };
 }
 
-function resolvedModelLabels(input: { labels: LabelSet; run: ModelRun }) {
+function resolvedModelLabels(input: { labels: z.infer<typeof labelSetV2Schema>; run: ModelRun }) {
   const byObservation = new Map(input.run.items.map((item) => [item.observationId, item]));
   const rows = input.labels.items.map((labelItem) => {
     const resolution = resolveLabels(labelItem);
@@ -768,6 +1057,7 @@ function calibrationReport(rows: Array<{ label: string; cluster: string; score: 
 }
 
 export function analyzeFinal(input: { labels: LabelSet; labelsSha256: string; run: ModelRun }): Record<string, any> {
+  if (input.labels.schemaVersion === 3) return analyzeAgentFinal({ labels: input.labels, labelsSha256: input.labelsSha256, run: input.run });
   const { labels, labelsSha256, run } = input;
   const evaluationBudget = labels.evaluationBudget;
   if (!evaluationBudget) throw new Error("final analysis requires a frozen evaluation budget");
