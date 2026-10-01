@@ -8,7 +8,7 @@ import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { JevError } from "../server/jev.js";
 import { MarketData } from "../server/market.js";
-import { Pipeline } from "../server/pipeline.js";
+import { Pipeline, type PipelineDeps } from "../server/pipeline.js";
 import { EVENT_TYPES, TAKEAWAY_KEYS } from "../server/rubric.js";
 import type { Company, JevState, RawMention } from "../server/types.js";
 
@@ -57,6 +57,9 @@ function setup(
     latencyMs: number;
   }>,
   options: {
+    provider?: PipelineDeps["provider"];
+    classifier?: PipelineDeps["classifier"];
+    allowedCollectors?: PipelineDeps["allowedCollectors"];
     dailyBudget?: {
       utcDay: () => string;
       maxRequests: number;
@@ -79,12 +82,14 @@ function setup(
   const pipeline = new Pipeline({
     db,
     judge: async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }),
+    provider: options.provider,
+    classifier: options.classifier,
     hub,
     health,
     engineLabel: "jev-latest",
     inputPricePerMTok: 0.042,
     concurrency: 1,
-    allowedCollectors: new Set(["google_news_rss"]),
+    allowedCollectors: options.allowedCollectors ?? new Set(["google_news_rss"]),
     dailyBudget,
   });
   const market = new MarketData({ companies: [company], indices: [], hub, health, db });
@@ -126,7 +131,27 @@ function setup(
   return { db, pipeline, app, source, hub, postRetry };
 }
 
-describe("operator Jev retry API", () => {
+describe("operator classification retry API", () => {
+  it.each(["openai_luna", "typesafe"] as const)("reports source authorization and preserves failed work for %s", async (provider) => {
+    const judge = vi.fn(async () => ({ answers: answers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 1 }));
+    const classifier = vi.fn(async () => { throw new Error("A blocked source must never dispatch"); });
+    const { db, pipeline, source, postRetry } = setup(judge, {
+      provider, classifier, allowedCollectors: new Set(["sec_edgar"]),
+    });
+    try {
+      const { observationId } = db.insertObservation(source);
+      db.markFailed(observationId, "An earlier request failed", false);
+      const response = await postRetry(observationId, { confirmNewCharge: true, reviewedProviderUsage: true });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: "classifier_source_not_allowed" });
+      await pipeline.waitForIdle();
+      expect(db.mentionRow(observationId)?.status).toBe("failed");
+      expect(db.jevAttemptHistory(observationId)).toEqual([]);
+      expect(judge).not.toHaveBeenCalled();
+      expect(classifier).not.toHaveBeenCalled();
+    } finally { pipeline.stop(); db.close(); }
+  });
+
   it("requires a charge acknowledgement and usage review before retrying an unknown outcome", async () => {
     let calls = 0;
     const { db, pipeline, source, postRetry } = setup(async () => {

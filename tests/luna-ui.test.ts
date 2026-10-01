@@ -1,10 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { retryMention } from "../web/src/lib/api.js";
 import type { CategoricalClassification, Mention } from "../web/src/lib/api.js";
 import { CategoricalJudgment } from "../web/src/components/CategoricalJudgment.js";
 import { filterMentionFeed, matchesMentionFeedFilter } from "../web/src/lib/mention-filters.js";
 import { retryAvailabilityFor } from "../web/src/lib/retryAvailability.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 // Isolated UI contract fixture; never inserted into a product database or preview.
 const judgment: CategoricalClassification = {
@@ -24,6 +27,12 @@ function categoryMention(disposition: CategoricalClassification["disposition"]):
 }
 
 describe("Luna category presentation", () => {
+  it("explains a source-blocked retry without falsely claiming Jev is unconfigured", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "classifier_source_not_allowed" }), { status: 403 })));
+    await expect(retryMention("blocked-item", { confirmNewCharge: true, reviewedProviderUsage: true }))
+      .rejects.toThrow("The selected classifier is not authorized to process this source. Check the source allowlist before retrying.");
+  });
+
   it("shows category and provenance without invented Jev probabilities or impact", () => {
     const html = renderToStaticMarkup(createElement(CategoricalJudgment, { judgment, detail: true }));
     expect(html).toContain("positive");

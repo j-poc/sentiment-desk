@@ -236,3 +236,28 @@ source-bound ETL run and under-test endpoint observations remain in their
 authoritative generated/private evidence. This record is frozen before that
 verification, preserving the final source fingerprint. No paid inference is
 performed; the reference pilot remains distinct from live qualification.
+
+
+## Final retry review and qualification limits
+
+The final whole-build reviewer marked full contract acceptance FAIL: actual
+Luna output/usage, finite OpenAI account budget, all-three-class reference
+coverage, exact1440x900/390px UI and final first-install observation remain
+blocked or unverified. Its small actionable defect was a source-blocked Luna
+retry reporting that Jev was not configured. Root changed this to a distinct
+provider-neutral403 authorization result, displayed source-allowlist guidance,
+and made the retry audit event name the active provider. Before any requeue or
+dispatch, source permission is checked. Both-provider API regressions retain
+failed work, record no attempt and make zero calls; the actual client error
+mapper is exercised. All14 focused checks pass and independent re-review
+found no source-admission regression.
+
+The earlier scoped ETL verify/check passed all five checks at
+2026-10-01T21:37:29Z, but this source edit invalidates its fingerprint. The
+receipt is preserved locally and regenerated after this public record freeze.
+The prior actual complete health reads during the owned fixture run returned
+200 in0.173767,0.107893 and0.056065seconds, complementing idle37–81ms. These
+are bounded observations on the isolated saved-data copy, not sustained-load
+or scale certification. Final code-bound reference-pilot/report evidence is
+written privately only after the clean cohesive checkpoint. No missing serving
+model resolution, OpenAI invoice or paid result is invented.

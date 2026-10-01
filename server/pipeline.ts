@@ -78,6 +78,7 @@ export type OperatorRetryResult =
   | "not_retryable"
   | "jev_unavailable"
   | "classifier_not_configured"
+  | "classifier_source_not_allowed"
   | "classifier_daily_budget_exhausted"
   | "budget_exhausted";
 
@@ -143,7 +144,7 @@ export class Pipeline {
     const current = this.deps.db.mentionRow(id);
     if (!current) return "not_retryable";
     if (![...this.deps.allowedCollectors].some((collector) => collector === current.collector)) {
-      return "jev_unavailable";
+      return "classifier_source_not_allowed";
     }
     if (!this.hasDailyBudgetCapacity()) return this.activeProvider === "openai_luna" ? "classifier_daily_budget_exhausted" : "budget_exhausted";
     const result = this.deps.db.requeueFailed(id, reviewedProviderUsage);
@@ -152,8 +153,8 @@ export class Pipeline {
     if (requeued) this.deps.hub.broadcast("mention", rowToDTO(requeued));
     this.deps.db.logEvent(
       "info",
-      "jev",
-      `operator authorized a new Jev input for failed judgment ${id}; provider usage review=${reviewedProviderUsage}`,
+      this.activeProvider,
+      `operator authorized a new ${this.activeProvider === "openai_luna" ? "OpenAI Luna" : "Jev"} input for failed judgment ${id}; provider usage review=${reviewedProviderUsage}`,
     );
     this.enqueue(id);
     return "queued";

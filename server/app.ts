@@ -233,6 +233,8 @@ export function createApp(deps: AppDeps): Hono {
         return c.json({ error: "jev_not_configured" }, 503);
       case "classifier_not_configured":
         return c.json({ error: "classifier_not_configured" }, 503);
+      case "classifier_source_not_allowed":
+        return c.json({ error: "classifier_source_not_allowed" }, 403);
       case "classifier_daily_budget_exhausted":
         return c.json({ error: "classifier_daily_budget_exhausted" }, 429);
       case "budget_exhausted":

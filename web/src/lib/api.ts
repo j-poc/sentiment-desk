@@ -541,6 +541,7 @@ const retryErrorCopy: Record<string, string> = {
   provider_usage_review_required: "Check provider usage before authorizing another attempt.",
   mention_not_retryable: "This item changed state. Refresh its details before retrying.",
   classifier_not_configured: "The selected classifier is blocked. Check its credentials, authorization and budgets.",
+  classifier_source_not_allowed: "The selected classifier is not authorized to process this source. Check the source allowlist before retrying.",
   classifier_daily_budget_exhausted: "The classifier daily budget is exhausted. The item remains pending until the next UTC day.",
   jev_not_configured: "Jev is not configured in the running desk.",
   jev_daily_budget_exhausted: "The daily Jev input budget is exhausted. The item remains pending until the next UTC day.",
