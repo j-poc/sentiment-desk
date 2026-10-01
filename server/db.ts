@@ -24,6 +24,16 @@ import { researchPublisherDomain } from "./publisher-domain.js";
 // or current operational usage totals.
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
 
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: string }).code === "EPERM";
+  }
+}
+
 /**
  * Source observations, Jev judgments, and delivery attempts have separate
  * persistence. The mentions view is a read-only compatibility projection for
@@ -176,6 +186,53 @@ CREATE TABLE IF NOT EXISTS events (
   source TEXT NOT NULL,
   message TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS jev_request_attempts (
+ id TEXT PRIMARY KEY, observation_id TEXT NOT NULL REFERENCES source_observations(id), runtime_id TEXT NOT NULL, attempt_number INTEGER NOT NULL CHECK (attempt_number > 0),
+ request_sha256 TEXT NOT NULL CHECK (length(request_sha256) = 64), request_bytes INTEGER NOT NULL CHECK (request_bytes > 0),
+ requested_model TEXT NOT NULL, rubric_sha TEXT NOT NULL CHECK (length(rubric_sha) = 64), reserved_at INTEGER NOT NULL,
+ UNIQUE(observation_id, attempt_number)
+);
+CREATE INDEX IF NOT EXISTS jev_attempts_observation ON jev_request_attempts(observation_id, attempt_number DESC);
+CREATE TABLE IF NOT EXISTS desk_runtime_sessions (
+ id TEXT PRIMARY KEY, pid INTEGER NOT NULL, started_at INTEGER NOT NULL, closed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS jev_attempt_events (
+ id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES jev_request_attempts(id), event_type TEXT NOT NULL
+ CHECK (event_type IN ('dispatch_intent', 'response', 'rejected', 'unknown', 'not_sent')),
+ occurred_at INTEGER NOT NULL, http_status INTEGER CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+ input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0), output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
+ resolved_model TEXT, latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0), error_category TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS jev_attempt_dispatch_once ON jev_attempt_events(attempt_id) WHERE event_type = 'dispatch_intent';
+CREATE UNIQUE INDEX IF NOT EXISTS jev_attempt_terminal_once ON jev_attempt_events(attempt_id) WHERE event_type IN ('response', 'rejected', 'unknown', 'not_sent');
+CREATE TRIGGER IF NOT EXISTS jev_request_attempts_no_update BEFORE UPDATE ON jev_request_attempts BEGIN SELECT RAISE(ABORT, 'Jev request attempts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS jev_request_attempts_no_delete BEFORE DELETE ON jev_request_attempts BEGIN SELECT RAISE(ABORT, 'Jev request attempts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS jev_attempt_events_no_update BEFORE UPDATE ON jev_attempt_events BEGIN SELECT RAISE(ABORT, 'Jev request attempt events are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS jev_attempt_events_no_delete BEFORE DELETE ON jev_attempt_events BEGIN SELECT RAISE(ABORT, 'Jev request attempt events are immutable'); END;
+CREATE TABLE IF NOT EXISTS alert_outbox (
+ id TEXT PRIMARY KEY, observation_id TEXT NOT NULL, rule_version TEXT NOT NULL, payload TEXT NOT NULL,
+ policy TEXT NOT NULL, destination_fingerprint TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+ state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
+ owner_token TEXT, lease_until INTEGER, last_error_category TEXT,
+ UNIQUE(observation_id, rule_version)
+);
+CREATE INDEX IF NOT EXISTS alert_outbox_priority_created ON alert_outbox(
+  (CASE state WHEN 'failed' THEN 0 WHEN 'pending' THEN 1 WHEN 'sending' THEN 1 WHEN 'retrying' THEN 1 WHEN 'paused' THEN 1 ELSE 2 END),
+  created_at DESC, id DESC
+);
+CREATE INDEX IF NOT EXISTS alert_outbox_state ON alert_outbox(state);
+CREATE TABLE IF NOT EXISTS alert_attempts (
+ id TEXT PRIMARY KEY, alert_id TEXT NOT NULL, claimed_at INTEGER NOT NULL, lease_until INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS alert_receipts (
+ id TEXT PRIMARY KEY, alert_id TEXT NOT NULL, attempt_id TEXT NOT NULL, completed_at INTEGER NOT NULL,
+ outcome TEXT NOT NULL, http_status INTEGER
+);
+CREATE TRIGGER IF NOT EXISTS alert_attempts_no_update BEFORE UPDATE ON alert_attempts BEGIN SELECT RAISE(ABORT, 'alert attempts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS alert_attempts_no_delete BEFORE DELETE ON alert_attempts BEGIN SELECT RAISE(ABORT, 'alert attempts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS alert_receipts_no_update BEFORE UPDATE ON alert_receipts BEGIN SELECT RAISE(ABORT, 'alert receipts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS alert_receipts_no_delete BEFORE DELETE ON alert_receipts BEGIN SELECT RAISE(ABORT, 'alert receipts are immutable'); END;
+CREATE UNIQUE INDEX IF NOT EXISTS alert_receipts_attempt_once ON alert_receipts(attempt_id);
 `;
 
 const retryRowSchema = z.object({
@@ -251,9 +308,75 @@ export interface MentionRow {
 }
 
 export type BudgetedScoreClaim =
-  | { kind: "claimed"; row: MentionRow }
+  | { kind: "claimed"; row: MentionRow; attemptId: string }
   | { kind: "budget_exhausted" }
   | { kind: "not_claimed" };
+
+export type JevAttemptOutcome = "response" | "rejected" | "unknown" | "not_sent";
+export interface JevAttemptReceipt {
+  attemptId: string;
+  outcome: JevAttemptOutcome;
+  occurredAt: number;
+  httpStatus: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  resolvedModel: string | null;
+  latencyMs: number | null;
+  errorCategory: string | null;
+}
+export interface JevAttemptSummary {
+  attemptId: string;
+  attemptNumber: number;
+  requestSha256: string;
+  requestBytes: number;
+  requestedModel: string;
+  rubricSha256: string;
+  reservedAt: number;
+  dispatchAt: number | null;
+  outcome: "prepared" | "dispatch_intent" | JevAttemptOutcome;
+  completedAt: number | null;
+  httpStatus: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  resolvedModel: string | null;
+  latencyMs: number | null;
+  errorCategory: string | null;
+}
+
+export interface AlertIntent { observationId: string; ruleVersion: string; payload: string; policy: string; destinationFingerprint: string; createdAt: number; expiresAt: number; }
+export interface AlertClaim { id: string; alertId: string; payload: string; attempt: number; expiresAt: number; token: string; }
+export interface AlertDeliverySummary {
+  alertId: string;
+  observationId: string;
+  companyId: string;
+  ticker: string;
+  title: string;
+  state: "pending" | "sending" | "retrying" | "delivered" | "failed" | "expired" | "paused";
+  attemptCount: number;
+  createdAt: number;
+  expiresAt: number;
+  nextAttemptAt: number;
+  lastOutcome: "delivered" | "retry" | "failed" | "ambiguous" | "expired" | null;
+  lastHttpStatus: number | null;
+  lastAttemptAt: number | null;
+  lastErrorCategory: string | null;
+}
+export interface AlertDeliveryCursor {
+  priority: 0 | 1 | 2;
+  createdAt: number;
+  alertId: string;
+}
+export interface AlertDeliveryPage {
+  items: AlertDeliverySummary[];
+  nextCursor: AlertDeliveryCursor | null;
+}
+export interface AlertDeliveryCounts {
+  pending: number;
+  sending: number;
+  retrying: number;
+  failed: number;
+  paused: number;
+}
 
 export interface SourceDeliveryInput {
   collector: CollectorId;
@@ -291,14 +414,21 @@ export interface DeliverySourceSchedule {
 
 export class Desk {
   private readonly db: DatabaseSync;
+  private readonly runtimeId: string;
+  private closed = false;
 
   constructor(dbPath: string) {
+    this.runtimeId = randomUUID();
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(SCHEMA);
     this.migrate();
+    this.db.prepare("INSERT INTO desk_runtime_sessions(id, pid, started_at) VALUES (?, ?, ?)")
+      .run(this.runtimeId, process.pid, Date.now());
+    this.recoverUnfinishedJevAttempts();
+    this.db.exec("PRAGMA user_version = 9");
   }
 
   /** Migrate the v1 combined table atomically, retaining it for audit/rollback. */
@@ -315,6 +445,13 @@ export class Desk {
     );
     if (!deliveryCols.has("processing_required")) {
       this.db.exec("ALTER TABLE source_deliveries ADD COLUMN processing_required INTEGER NOT NULL DEFAULT 0 CHECK (processing_required IN (0, 1))");
+    }
+    const jevAttemptCols = new Set(
+      (this.db.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!jevAttemptCols.has("runtime_id")) {
+      this.db.exec("ALTER TABLE jev_request_attempts ADD COLUMN runtime_id TEXT NOT NULL DEFAULT 'legacy-runtime'");
+      this.db.prepare("INSERT OR IGNORE INTO desk_runtime_sessions(id, pid, started_at, closed_at) VALUES ('legacy-runtime', 0, 0, 0)").run();
     }
 
     const priceCols = new Set(
@@ -409,11 +546,8 @@ export class Desk {
           ].map(sqlValue);
           insertJudgment.run(...judgmentValues);
         }
-        this.db.exec(`UPDATE jev_judgments SET status = 'failed',
-          score_error = 'Scoring was interrupted; provider outcome is unknown. Check provider usage before retrying.',
-          score_usage_check_required = 1 WHERE status = 'scoring'`);
         this.createMentionsView();
-        this.db.exec("PRAGMA user_version = 7");
+        this.db.exec("PRAGMA user_version = 9");
         this.db.exec("COMMIT");
       } catch (err) {
         this.db.exec("ROLLBACK");
@@ -436,11 +570,8 @@ export class Desk {
         this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_usage_check_required INTEGER NOT NULL DEFAULT 0");
       }
       if (object?.type === "view") this.db.exec("DROP VIEW mentions");
-      this.db.exec(`UPDATE jev_judgments SET status = 'failed', score_error =
-        'Scoring was interrupted; provider outcome is unknown. Check provider usage before retrying.', score_usage_check_required = 1
-        WHERE status = 'scoring'`);
       this.createMentionsView();
-      this.db.exec("PRAGMA user_version = 7");
+      this.db.exec("PRAGMA user_version = 9");
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
@@ -460,6 +591,57 @@ export class Desk {
         j.output_tokens, j.cost_usd, j.latency_ms, j.rubric_sha, j.score_error, j.scored_at,
         j.score_attempts, j.score_retry_at, j.score_usage_check_required
       FROM source_observations o JOIN jev_judgments j ON j.observation_id = o.id`);
+  }
+
+  private recoverUnfinishedJevAttempts(): void {
+    const unfinished = this.db.prepare(`SELECT a.id, a.observation_id, a.attempt_number, s.pid, s.closed_at,
+        EXISTS(SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') AS dispatch_started
+      FROM jev_request_attempts a LEFT JOIN desk_runtime_sessions s ON s.id = a.runtime_id
+      WHERE NOT EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response', 'rejected', 'unknown', 'not_sent'))
+      ORDER BY a.reserved_at`).all() as Array<{ id: string; observation_id: string; attempt_number: number; pid: number | null; closed_at: number | null; dispatch_started: number }>;
+    const abandoned = unfinished.filter((attempt) => attempt.closed_at != null || !processIsAlive(attempt.pid ?? 0));
+    const scoring = this.db.prepare(`SELECT j.observation_id, j.score_attempts, a.id AS attempt_id, a.runtime_id, s.pid, s.closed_at,
+        (SELECT e.event_type FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type IN ('response','rejected','unknown','not_sent') LIMIT 1) AS terminal_outcome,
+        (SELECT e.event_type FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type='dispatch_intent' LIMIT 1) AS dispatch_event
+      FROM jev_judgments j
+      LEFT JOIN jev_request_attempts a ON a.observation_id=j.observation_id AND a.attempt_number=j.score_attempts
+      LEFT JOIN desk_runtime_sessions s ON s.id=a.runtime_id
+      WHERE j.status='scoring'`).all() as Array<{
+        observation_id: string; score_attempts: number; attempt_id: string | null; runtime_id: string | null;
+        pid: number | null; closed_at: number | null; terminal_outcome: JevAttemptOutcome | null; dispatch_event: string | null;
+      }>;
+    const recoverableScoring = scoring.filter((row) => !row.attempt_id || row.closed_at != null || !processIsAlive(row.pid ?? 0));
+    if (abandoned.length === 0 && recoverableScoring.length === 0) return;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const insert = this.db.prepare(`INSERT OR IGNORE INTO jev_attempt_events
+        (id, attempt_id, event_type, occurred_at, error_category) VALUES (?, ?, ?, ?, ?)`);
+      const now = Date.now();
+      for (const attempt of abandoned) {
+        const wasDispatched = attempt.dispatch_started === 1;
+        insert.run(randomUUID(), attempt.id, wasDispatched ? "unknown" : "not_sent", now,
+          wasDispatched ? "interrupted_after_dispatch" : "interrupted_before_dispatch");
+      }
+      const fail = this.db.prepare(`UPDATE jev_judgments SET status='failed', score_retry_at=NULL,
+        score_usage_check_required=?, score_error=? WHERE observation_id=? AND status='scoring' AND score_attempts=?`);
+      for (const row of recoverableScoring) {
+        const attempt = unfinished.find((candidate) => candidate.id === row.attempt_id);
+        const outcome = row.terminal_outcome ?? (attempt ? attempt.dispatch_started === 1 ? "unknown" : "not_sent" : "unknown");
+        const needsUsageReview = outcome === "response" || outcome === "unknown" ? 1 : 0;
+        const errorMessage = outcome === "not_sent"
+          ? "Scoring was interrupted before provider dispatch; no request was sent."
+          : outcome === "rejected"
+            ? "Provider rejected the request before returning a judgment."
+            : outcome === "response"
+              ? "Provider returned a judgment response, but local scoring did not finish. Review provider usage before retrying."
+              : "Scoring was interrupted after dispatch; provider outcome is unknown. Review provider usage before retrying.";
+        fail.run(needsUsageReview, errorMessage, row.observation_id, row.score_attempts);
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   seedCompanies(companies: Company[]): void {
@@ -556,7 +738,9 @@ export class Desk {
     return this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined;
   }
 
-  markScored(id: string, s: MentionScore, exclude: boolean): void {
+  markScored(id: string, s: MentionScore, exclude: boolean, alert?: AlertIntent, receipt?: JevAttemptReceipt): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
     this.db
       .prepare(
         `UPDATE jev_judgments SET
@@ -597,11 +781,132 @@ export class Desk {
         s.scoredAt,
         id,
       );
+    if (receipt) this.appendJevAttemptReceipt(receipt);
+    if (alert && !exclude) this.db.prepare(`INSERT OR IGNORE INTO alert_outbox
+      (id, observation_id, rule_version, payload, policy, destination_fingerprint, created_at, expires_at, state, next_attempt_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+      .run(randomUUID(), alert.observationId, alert.ruleVersion, alert.payload, alert.policy, alert.destinationFingerprint,
+        alert.createdAt, alert.expiresAt, alert.createdAt);
+    this.db.exec("COMMIT");
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+  }
+
+  claimAlert(now: number, destinationFingerprint: string, leaseMs: number, maxAttempts: number): AlertClaim | null {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE alert_outbox SET state='paused', owner_token=NULL, lease_until=NULL WHERE destination_fingerprint<>? AND state IN ('pending','retrying')").run(destinationFingerprint);
+      this.db.prepare("UPDATE alert_outbox SET state='pending', next_attempt_at=?, owner_token=NULL, lease_until=NULL WHERE destination_fingerprint=? AND state='paused'").run(now, destinationFingerprint);
+      const abandoned = this.db.prepare(`SELECT a.id AS attempt_id, a.alert_id, o.expires_at
+        FROM alert_attempts a JOIN alert_outbox o ON o.id=a.alert_id
+        LEFT JOIN alert_receipts r ON r.attempt_id=a.id
+        WHERE o.state='sending' AND a.lease_until<=? AND r.id IS NULL`).all(now) as Array<{
+          attempt_id: string; alert_id: string; expires_at: number;
+        }>;
+      const recordAbandoned = this.db.prepare(`INSERT OR IGNORE INTO alert_receipts
+        (id, alert_id, attempt_id, completed_at, outcome, http_status) VALUES (?, ?, ?, ?, ?, NULL)`);
+      for (const attempt of abandoned) {
+        recordAbandoned.run(randomUUID(), attempt.alert_id, attempt.attempt_id, now,
+          now >= attempt.expires_at ? "expired" : "ambiguous");
+      }
+      this.db.prepare("UPDATE alert_outbox SET state='expired', owner_token=NULL, lease_until=NULL WHERE expires_at <= ? AND state IN ('pending','sending','retrying')").run(now);
+      this.db.prepare(`UPDATE alert_outbox SET
+        state=CASE WHEN attempts>=? THEN 'failed' ELSE 'retrying' END,
+        owner_token=NULL, lease_until=NULL,
+        next_attempt_at=CASE WHEN attempts>=? THEN next_attempt_at ELSE ? END
+        WHERE state='sending' AND lease_until<=? AND expires_at>?`).run(maxAttempts, maxAttempts, now, now, now);
+      const row = this.db.prepare(`SELECT * FROM alert_outbox WHERE destination_fingerprint=? AND state IN ('pending','retrying')
+        AND next_attempt_at<=? AND expires_at>? AND attempts<? ORDER BY created_at LIMIT 1`).get(destinationFingerprint, now, now, maxAttempts) as any;
+      if (!row) { this.db.exec("COMMIT"); return null; }
+      const token = randomUUID(), attemptId = randomUUID(), leaseUntil = Math.min(now + leaseMs, row.expires_at);
+      const upd = this.db.prepare(`UPDATE alert_outbox SET state='sending', attempts=attempts+1, owner_token=?, lease_until=? WHERE id=? AND state IN ('pending','retrying')`).run(token, leaseUntil, row.id);
+      if (!Number(upd.changes)) { this.db.exec("COMMIT"); return null; }
+      this.db.prepare("INSERT INTO alert_attempts(id, alert_id, claimed_at, lease_until) VALUES (?, ?, ?, ?)").run(attemptId, row.id, now, leaseUntil);
+      this.db.exec("COMMIT"); return { id: attemptId, alertId: row.id, payload: row.payload, attempt: row.attempts + 1, expiresAt: row.expires_at, token };
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+  }
+
+  nextAlertDispatchAt(now: number, destinationFingerprint: string, maxAttempts: number): number | null {
+    const row = this.db.prepare(`SELECT MIN(
+        CASE WHEN state='sending'
+          THEN MIN(COALESCE(lease_until, next_attempt_at), expires_at)
+          ELSE MIN(next_attempt_at, expires_at)
+        END
+      ) AS due_at
+      FROM alert_outbox
+      WHERE destination_fingerprint=? AND expires_at>?
+        AND (state='sending' OR (state IN ('pending','retrying') AND attempts<?))`)
+      .get(destinationFingerprint, now, maxAttempts) as { due_at: number | null };
+    return row.due_at == null ? null : Number(row.due_at);
+  }
+  alertClaimValid(claim: AlertClaim, now: number): boolean {
+    const row = this.db.prepare("SELECT state, owner_token, expires_at, lease_until FROM alert_outbox WHERE id=?").get(claim.alertId) as any;
+    return !!row && row.state === 'sending' && row.owner_token === claim.token && row.expires_at > now && row.lease_until > now;
+  }
+
+  completeAlert(claim: AlertClaim, outcome: 'delivered'|'retry'|'failed'|'ambiguous'|'expired', now: number, httpStatus: number|null, errorCategory: string|null, retryAt: number): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare("SELECT state, owner_token, expires_at, attempts FROM alert_outbox WHERE id=?").get(claim.alertId) as any;
+      if (!row || row.state !== 'sending' || row.owner_token !== claim.token) { this.db.exec("COMMIT"); return false; }
+      const final = now >= row.expires_at ? 'expired' : outcome === 'delivered' ? 'delivered' : (outcome === 'retry' || outcome === 'ambiguous') && row.attempts < 5 ? 'retrying' : 'failed';
+      this.db.prepare("INSERT INTO alert_receipts(id, alert_id, attempt_id, completed_at, outcome, http_status) VALUES (?, ?, ?, ?, ?, ?)").run(randomUUID(), claim.alertId, claim.id, now, now >= row.expires_at ? 'expired' : outcome, httpStatus);
+      this.db.prepare("UPDATE alert_outbox SET state=?, owner_token=NULL, lease_until=NULL, next_attempt_at=?, last_error_category=? WHERE id=? AND owner_token=?")
+        .run(final, retryAt, errorCategory, claim.alertId, claim.token);
+      this.db.exec("COMMIT"); return true;
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+  }
+
+  alertDeliverySummary(limit = 10): AlertDeliverySummary[] {
+    return this.alertDeliveryPage(limit).items;
+  }
+
+  alertDeliveryPage(limit = 10, cursor?: AlertDeliveryCursor | null): AlertDeliveryPage {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error("alert delivery history limit must be between 1 and 20");
+    const priority = "CASE o.state WHEN 'failed' THEN 0 WHEN 'pending' THEN 1 WHEN 'sending' THEN 1 WHEN 'retrying' THEN 1 WHEN 'paused' THEN 1 ELSE 2 END";
+    const cursorClause = cursor ? `WHERE (${priority}) > ? OR ((${priority}) = ? AND
+      (o.created_at < ? OR (o.created_at = ? AND o.id < ?)))` : "";
+    const cursorValues = cursor ? [cursor.priority, cursor.priority, cursor.createdAt, cursor.createdAt, cursor.alertId] : [];
+    const rows = this.db.prepare(`SELECT o.id AS alert_id, (${priority}) AS priority, o.created_at AS cursor_created_at,
+        o.observation_id, m.company_id, c.ticker, m.title, o.state, o.attempts,
+        o.created_at, o.expires_at, o.next_attempt_at, o.last_error_category,
+        (SELECT r.outcome FROM alert_receipts r WHERE r.alert_id=o.id ORDER BY r.completed_at DESC, r.id DESC LIMIT 1) AS last_outcome,
+        (SELECT r.http_status FROM alert_receipts r WHERE r.alert_id=o.id ORDER BY r.completed_at DESC, r.id DESC LIMIT 1) AS last_http_status,
+        (SELECT r.completed_at FROM alert_receipts r WHERE r.alert_id=o.id ORDER BY r.completed_at DESC, r.id DESC LIMIT 1) AS last_attempt_at
+      FROM alert_outbox o JOIN mentions m ON m.id=o.observation_id JOIN companies c ON c.id=m.company_id
+      ${cursorClause}
+      ORDER BY (${priority}), o.created_at DESC, o.id DESC LIMIT ?`).all(...cursorValues, limit + 1) as Array<Record<string, unknown>>;
+    const hasMore = rows.length > limit;
+    const visibleRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = visibleRows.map((row) => ({
+      alertId: String(row.alert_id),
+      observationId: String(row.observation_id), companyId: String(row.company_id), ticker: String(row.ticker), title: String(row.title),
+      state: String(row.state) as AlertDeliverySummary["state"], attemptCount: Number(row.attempts), createdAt: Number(row.created_at),
+      expiresAt: Number(row.expires_at), nextAttemptAt: Number(row.next_attempt_at),
+      lastOutcome: row.last_outcome == null ? null : String(row.last_outcome) as NonNullable<AlertDeliverySummary["lastOutcome"]>,
+      lastHttpStatus: row.last_http_status == null ? null : Number(row.last_http_status),
+      lastAttemptAt: row.last_attempt_at == null ? null : Number(row.last_attempt_at),
+      lastErrorCategory: row.last_error_category == null ? null : String(row.last_error_category),
+    }));
+    const last = visibleRows.at(-1);
+    const nextCursor = hasMore && last ? {
+      priority: Number(last.priority) as AlertDeliveryCursor["priority"],
+      createdAt: Number(last.cursor_created_at),
+      alertId: String(last.alert_id),
+    } : null;
+    return { items, nextCursor };
+  }
+
+  alertDeliveryCounts(): AlertDeliveryCounts {
+    const rows = this.db.prepare(`SELECT state, COUNT(*) AS count FROM alert_outbox
+      WHERE state IN ('pending','sending','retrying','failed','paused') GROUP BY state`).all() as Array<{ state: string; count: number }>;
+    const counts: AlertDeliveryCounts = { pending: 0, sending: 0, retrying: 0, failed: 0, paused: 0 };
+    for (const row of rows) if (Object.hasOwn(counts, row.state)) counts[row.state as keyof AlertDeliveryCounts] = Number(row.count);
+    return counts;
   }
 
   markFailed(id: string, error: string, usageCheckRequired: boolean): void {
     this.db
-      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ?, score_retry_at = NULL, score_usage_check_required = ? WHERE observation_id = ?")
+      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ?, score_retry_at = NULL, score_usage_check_required = ? WHERE observation_id = ? AND status IN ('pending', 'scoring')")
       .run(error.slice(0, 500), usageCheckRequired ? 1 : 0, id);
   }
 
@@ -668,10 +973,16 @@ export class Desk {
     allowedCollectors: readonly CollectorId[];
     utcDay: string;
     requestBytes: number;
+    requestSha256: string;
+    requestedModel: string;
+    rubricSha256: string;
     maxRequests: number;
     maxRequestBytes: number;
   }): BudgetedScoreClaim {
     if (input.allowedCollectors.length === 0) return { kind: "not_claimed" };
+    if (!/^[a-f0-9]{64}$/.test(input.requestSha256) || !/^[a-f0-9]{64}$/.test(input.rubricSha256) || !input.requestedModel.trim()) {
+      throw new Error("valid Jev request digest, rubric digest, and requested model are required for a scoring claim");
+    }
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(input.utcDay) ||
       !Number.isSafeInteger(input.requestBytes) || input.requestBytes <= 0 ||
@@ -747,12 +1058,95 @@ export class Desk {
         this.db.exec("ROLLBACK");
         return { kind: "not_claimed" };
       }
+      const attemptId = randomUUID();
+      this.db.prepare(`INSERT INTO jev_request_attempts
+        (id, observation_id, runtime_id, attempt_number, request_sha256, request_bytes, requested_model, rubric_sha, reserved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(attemptId, input.id, this.runtimeId, row.score_attempts, input.requestSha256, input.requestBytes, input.requestedModel.trim(), input.rubricSha256, input.now);
       this.db.exec("COMMIT");
-      return { kind: "claimed", row };
+      return { kind: "claimed", row, attemptId };
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
     }
+  }
+
+  recordJevDispatchIntent(attemptId: string, occurredAt: number): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const attempt = this.db.prepare(`SELECT a.observation_id, a.attempt_number, j.status, j.score_attempts
+        FROM jev_request_attempts a JOIN jev_judgments j ON j.observation_id = a.observation_id WHERE a.id = ?`).get(attemptId) as
+        | { observation_id: string; attempt_number: number; status: string; score_attempts: number }
+        | undefined;
+      if (!attempt || attempt.status !== "scoring" || attempt.attempt_number !== attempt.score_attempts) {
+        this.db.exec("COMMIT");
+        return false;
+      }
+      const alreadyStarted = this.db.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(attemptId);
+      const alreadyFinished = this.db.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type IN ('response','rejected','unknown','not_sent')").get(attemptId);
+      if (alreadyStarted || alreadyFinished) {
+        this.db.exec("COMMIT");
+        return false;
+      }
+      this.db.prepare("INSERT INTO jev_attempt_events(id, attempt_id, event_type, occurred_at) VALUES (?, ?, 'dispatch_intent', ?)")
+        .run(randomUUID(), attemptId, occurredAt);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  recordJevAttemptReceipt(receipt: JevAttemptReceipt): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.appendJevAttemptReceipt(receipt);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  private appendJevAttemptReceipt(receipt: JevAttemptReceipt): void {
+    const exists = this.db.prepare("SELECT 1 FROM jev_request_attempts WHERE id = ?").get(receipt.attemptId);
+    if (!exists) throw new Error("Jev attempt receipt has no matching request attempt");
+    const dispatched = this.db.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(receipt.attemptId);
+    if (receipt.outcome === "not_sent" ? Boolean(dispatched) : !dispatched) {
+      throw new Error("Jev attempt receipt does not match its dispatch-intent state");
+    }
+    this.db.prepare(`INSERT INTO jev_attempt_events
+      (id, attempt_id, event_type, occurred_at, http_status, input_tokens, output_tokens, resolved_model, latency_ms, error_category)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(randomUUID(), receipt.attemptId, receipt.outcome, receipt.occurredAt, receipt.httpStatus,
+        receipt.inputTokens, receipt.outputTokens, receipt.resolvedModel, receipt.latencyMs, receipt.errorCategory);
+  }
+
+  jevAttemptHistory(observationId: string, limit = 10): JevAttemptSummary[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error("Jev attempt history limit must be between 1 and 20");
+    const rows = this.db.prepare(`SELECT a.id AS attempt_id, a.attempt_number, a.request_sha256, a.request_bytes,
+        a.requested_model, a.rubric_sha, a.reserved_at,
+        (SELECT occurred_at FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') AS dispatch_at,
+        COALESCE((SELECT event_type FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')),
+          CASE WHEN EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') THEN 'dispatch_intent' ELSE 'prepared' END) AS outcome,
+        (SELECT occurred_at FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS completed_at,
+        (SELECT http_status FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS http_status,
+        (SELECT input_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS input_tokens,
+        (SELECT output_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS output_tokens,
+        (SELECT resolved_model FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS resolved_model,
+        (SELECT latency_ms FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS latency_ms,
+        (SELECT error_category FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS error_category
+      FROM jev_request_attempts a WHERE a.observation_id = ? ORDER BY a.attempt_number DESC LIMIT ?`).all(observationId, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      attemptId: String(row.attempt_id), attemptNumber: Number(row.attempt_number), requestSha256: String(row.request_sha256),
+      requestBytes: Number(row.request_bytes), requestedModel: String(row.requested_model), rubricSha256: String(row.rubric_sha),
+      reservedAt: Number(row.reserved_at), dispatchAt: row.dispatch_at == null ? null : Number(row.dispatch_at),
+      outcome: String(row.outcome) as JevAttemptSummary["outcome"], completedAt: row.completed_at == null ? null : Number(row.completed_at),
+      httpStatus: row.http_status == null ? null : Number(row.http_status), inputTokens: row.input_tokens == null ? null : Number(row.input_tokens),
+      outputTokens: row.output_tokens == null ? null : Number(row.output_tokens), resolvedModel: row.resolved_model == null ? null : String(row.resolved_model),
+      latencyMs: row.latency_ms == null ? null : Number(row.latency_ms), errorCategory: row.error_category == null ? null : String(row.error_category),
+    }));
   }
 
   recordDelivery(delivery: SourceDeliveryInput): string {
@@ -1480,7 +1874,10 @@ export class Desk {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.db.prepare("UPDATE desk_runtime_sessions SET closed_at=? WHERE id=? AND closed_at IS NULL").run(Date.now(), this.runtimeId);
     this.db.close();
+    this.closed = true;
   }
 }
 

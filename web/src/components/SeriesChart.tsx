@@ -14,6 +14,7 @@ import {
 } from "lightweight-charts";
 import type { PricePoint, SeriesPoint } from "../lib/api.js";
 import { formatChartTimestamp } from "../lib/chart-time.js";
+import { timeAgo } from "../lib/format.js";
 import { sentimentSeriesState } from "../lib/series-chart-state.js";
 import { SavedPriceHistoryControl } from "./SavedPriceHistoryControl.js";
 
@@ -109,6 +110,7 @@ export function SeriesChart({
   const hasModeledTail = lastScoredAt != null
     && drawableSentiment.some((point) => point.t > lastScoredAt && point.v != null && point.n === 0);
   const scorePointCount = drawableSentiment.filter((point) => point.v != null && point.n > 0).length;
+  const hasVisibleModeledIndex = drawableSentiment.some((point) => point.v != null && point.n === 0 && Math.abs(point.v) >= 0.5);
   const scoredBuckets = drawableSentiment.filter((point) => point.v != null && point.n > 0);
   const lastPoint = drawableSentiment.at(-1) ?? null;
   const latestModeledPoint = lastPoint?.v != null && lastPoint.n === 0 ? lastPoint : null;
@@ -328,9 +330,15 @@ export function SeriesChart({
         : "No saved Yahoo prices or Jev scores in this window.";
   const noScoreMessage = seriesError
     ? "Sentiment history could not be loaded. Check the source status above."
-    : hasModeledHistory
-      ? "No new Jev scores in this window · dashed line shows modeled decay from earlier scores"
-      : "No Jev-scored items in this window";
+    : lastScoredAt != null && lastScoredAt < Date.now() - hours * 60 * 60_000 && !hasVisibleModeledIndex
+      ? `No saved scores or visible index in this window · latest saved score ${timeAgo(lastScoredAt)}`
+      : hasVisibleModeledIndex
+        ? `No new Jev scores in this window · modeled decay from the latest saved score ${lastScoredAt == null ? "at an unknown time" : timeAgo(lastScoredAt)}`
+        : "No Jev-scored items in this window";
+  const canShowLatestSavedHistory = lastScoredAt != null
+    && lastScoredAt >= Date.now() - 168 * 60 * 60_000
+    && hours < 168
+    && onViewHistory != null;
   const priceStatus = priceError
     ? drawablePrice.length > 0 ? "Refresh failed · showing saved prices" : "Price history unavailable"
     : priceLoading
@@ -389,13 +397,33 @@ export function SeriesChart({
         </div>
       )}
       {!loading && !waitingForPrice && comparison && !hasSentiment && hasModeledHistory && (
-        <div role="status" className="pointer-events-none absolute left-[86px] top-9 z-10 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/55">
+        <div role="status" className="absolute left-[86px] top-9 z-10 flex max-w-[calc(100%-110px)] flex-wrap items-center gap-2 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/65">
           {noScoreMessage}
+          {canShowLatestSavedHistory && (
+            <button
+              type="button"
+              onClick={onViewHistory}
+              aria-label="Show the last 7 days of saved Jev history"
+              className="pointer-events-auto rounded border border-white/15 px-1.5 py-0.5 text-emerald-200/80 hover:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300"
+            >
+              Show 7D history
+            </button>
+          )}
         </div>
       )}
       {!loading && !waitingForPrice && !comparison && !hasSentiment && hasModeledHistory && (
-        <div role="status" className="pointer-events-none absolute left-[86px] top-2 z-10 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/55">
-          No new Jev scores in this window · dashed line shows modeled decay from earlier scores
+        <div role="status" className="absolute left-[86px] top-2 z-10 flex max-w-[calc(100%-110px)] flex-wrap items-center gap-2 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/65">
+          {noScoreMessage}
+          {canShowLatestSavedHistory && (
+            <button
+              type="button"
+              onClick={onViewHistory}
+              aria-label="Show the last 7 days of saved Jev history"
+              className="pointer-events-auto rounded border border-white/15 px-1.5 py-0.5 text-emerald-200/80 hover:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300"
+            >
+              Show 7D history
+            </button>
+          )}
         </div>
       )}
       {!loading && !waitingForPrice && !hasChartData && (

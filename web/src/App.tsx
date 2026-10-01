@@ -29,7 +29,7 @@ import { DeskConnectionState } from "./components/DeskConnectionState.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
 import { MentionDrawer } from "./components/MentionDrawer.js";
 import { Tape } from "./components/Tape.js";
-import { HealthPanel } from "./components/HealthPanel.js";
+import { AlertDeliveryStatus, DeskHealthDisclosure, HealthPanel } from "./components/HealthPanel.js";
 import { SourceCoverageDisclosure } from "./components/SourceCoverageDisclosure.js";
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
@@ -192,6 +192,16 @@ export default function App() {
     setDrawerMention(mention);
   }, []);
   const closeDrawer = useCallback(() => openDrawerMention(null), [openDrawerMention]);
+  const openAlertEvidence = useCallback(async (companyId: string, observationId: string) => {
+    try {
+      const mention = (await lookupMentionsByIds(companyId, [observationId]))[0];
+      if (!mention) return false;
+      openDrawerMention(mention);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [openDrawerMention]);
 
   useLayoutEffect(() => {
     drawerMentionRef.current = drawerMention;
@@ -1042,6 +1052,8 @@ export default function App() {
             ))}
           </div>
           {researchView === "desk" && <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? true} />}
+          {researchView === "desk" && <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />}
+          {researchView === "desk" && <DeskHealthDisclosure health={health} />}
           {selected ? (
             researchView === "radar" ? (
               <OpportunityRadar

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Desk } from "../server/db.js";
+import { Desk, type AlertIntent } from "../server/db.js";
 import type { Company, MentionScore, RawMention } from "../server/types.js";
 
 const directories: string[] = [];
@@ -36,6 +36,150 @@ function mention(overrides: Partial<RawMention> = {}): RawMention {
 }
 
 describe("Desk observation and judgment storage", () => {
+  it("binds a Jev receipt to the immutable request and rejects a terminal receipt before dispatch", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const id = db.insertObservation(mention({ sourceItemId: "jev-request-trace" })).observationId;
+      const claim = db.claimForScoringWithBudget({
+        id, now: 1_000, allowedCollectors: ["google_news_rss"], utcDay: "2026-09-28",
+        requestBytes: 128, requestSha256: "a".repeat(64), requestedModel: "jev-latest", rubricSha256: "b".repeat(64),
+        maxRequests: 10, maxRequestBytes: 10_000,
+      });
+      expect(claim.kind).toBe("claimed");
+      if (claim.kind !== "claimed") throw new Error("expected scoring claim");
+      expect(() => db.recordJevAttemptReceipt({
+        attemptId: claim.attemptId, outcome: "response", occurredAt: 1_001, httpStatus: 200,
+        inputTokens: 10, outputTokens: 5, resolvedModel: "jev-1.13.0", latencyMs: 20, errorCategory: null,
+      })).toThrow(/dispatch-intent/);
+      expect(db.recordJevDispatchIntent(claim.attemptId, 1_001)).toBe(true);
+      db.recordJevAttemptReceipt({
+        attemptId: claim.attemptId, outcome: "response", occurredAt: 1_010, httpStatus: 200,
+        inputTokens: 10, outputTokens: 5, resolvedModel: "jev-1.13.0", latencyMs: 20, errorCategory: null,
+      });
+      expect(db.jevAttemptHistory(id)).toMatchObject([{
+        requestSha256: "a".repeat(64), requestBytes: 128, requestedModel: "jev-latest", rubricSha256: "b".repeat(64),
+        dispatchAt: 1_001, outcome: "response", httpStatus: 200, inputTokens: 10, outputTokens: 5,
+        resolvedModel: "jev-1.13.0", latencyMs: 20,
+      }]);
+      expect(() => db.recordJevAttemptReceipt({
+        attemptId: claim.attemptId, outcome: "unknown", occurredAt: 1_020, httpStatus: null,
+        inputTokens: null, outputTokens: null, resolvedModel: null, latencyMs: null, errorCategory: "transport_outcome_unknown",
+      })).toThrow();
+    } finally { db.close(); }
+  });
+
+  it("recovers interrupted Jev attempts as unknown after dispatch and not-sent before it", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-jev-recovery-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    db.seedCompanies([company]);
+    const dispatchedId = db.insertObservation(mention({ sourceItemId: "jev-dispatched-interrupt" })).observationId;
+    const reservedId = db.insertObservation(mention({ sourceItemId: "jev-reserved-interrupt" })).observationId;
+    const claim = (id: string) => db.claimForScoringWithBudget({
+      id, now: 1_000, allowedCollectors: ["google_news_rss"], utcDay: "2026-09-28",
+      requestBytes: 128, requestSha256: "c".repeat(64), requestedModel: "jev-latest", rubricSha256: "d".repeat(64),
+      maxRequests: 10, maxRequestBytes: 10_000,
+    });
+    const dispatched = claim(dispatchedId);
+    const reserved = claim(reservedId);
+    if (dispatched.kind !== "claimed" || reserved.kind !== "claimed") throw new Error("expected scoring claims");
+    expect(db.recordJevDispatchIntent(dispatched.attemptId, 1_001)).toBe(true);
+    const observer = new Desk(path);
+    expect(observer.mentionRow(dispatchedId)?.status).toBe("scoring");
+    expect(observer.jevAttemptHistory(dispatchedId)).toMatchObject([{ outcome: "dispatch_intent" }]);
+    observer.close();
+    db.close();
+    db = new Desk(path);
+    try {
+      expect(db.jevAttemptHistory(dispatchedId)).toMatchObject([{ outcome: "unknown", errorCategory: "interrupted_after_dispatch" }]);
+      expect(db.jevAttemptHistory(reservedId)).toMatchObject([{ outcome: "not_sent", errorCategory: "interrupted_before_dispatch" }]);
+    } finally { db.close(); }
+  });
+
+  it("commits a qualified alert intent with the score and preserves immutable claims and receipts", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const id = db.insertObservation(mention({ sourceItemId: "alert-outbox" })).observationId;
+      const intent: AlertIntent = { observationId: id, ruleVersion: "rule-1", payload: '{"text":"x"}', policy: '{"threshold":65}', destinationFingerprint: "a".repeat(64), createdAt: 1000, expiresAt: 100_000 };
+      db.markScored(id, score("results"), false, intent);
+      const claim = db.claimAlert(1001, intent.destinationFingerprint, 10_000, 5)!;
+      expect(claim).toMatchObject({ payload: intent.payload, attempt: 1 });
+      expect(db.claimAlert(1002, intent.destinationFingerprint, 10_000, 5)).toBeNull();
+      expect(db.completeAlert(claim, "delivered", 1003, 204, null, 0)).toBe(true);
+      expect(db.alertDeliverySummary()).toMatchObject([{
+        observationId: id,
+        ticker: "ACME",
+        title: "Acme expands manufacturing capacity",
+        state: "delivered",
+        attemptCount: 1,
+        lastOutcome: "delivered",
+        lastHttpStatus: 204,
+        lastErrorCategory: null,
+      }]);
+      expect(() => db.completeAlert(claim, "failed", 1004, 500, "http_server_error", 2000)).not.toThrow();
+      expect(db.claimAlert(1005, intent.destinationFingerprint, 10_000, 5)).toBeNull();
+    } finally { db.close(); }
+  });
+
+  it("surfaces unresolved alert failures ahead of newer deliveries and reports aggregate counts", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const destination = "f".repeat(64);
+      const makeAlert = (sourceItemId: string, createdAt: number) => {
+        const id = db.insertObservation(mention({ sourceItemId })).observationId;
+        const intent: AlertIntent = {
+          observationId: id, ruleVersion: "rule-1", payload: "{}", policy: "{}",
+          destinationFingerprint: destination, createdAt, expiresAt: 1_000_000,
+        };
+        db.markScored(id, score("results"), false, intent);
+        return id;
+      };
+
+      const failureId = makeAlert("old-terminal-failure", 1_000);
+      const failedClaim = db.claimAlert(1_001, destination, 10_000, 5);
+      if (!failedClaim) throw new Error("expected failure alert to be claimed");
+      expect(db.completeAlert(failedClaim, "failed", 1_002, 400, "http_client_error", 1_003)).toBe(true);
+      for (let index = 0; index < 11; index += 1) {
+        makeAlert(`newer-success-${index}`, 2_000 + index);
+        const claim = db.claimAlert(2_100 + index, destination, 10_000, 5);
+        if (!claim) throw new Error("expected recent alert to be claimed");
+        expect(db.completeAlert(claim, "delivered", 2_101 + index, 204, null, 0)).toBe(true);
+      }
+
+      expect(db.alertDeliverySummary(10)[0]).toMatchObject({ observationId: failureId, state: "failed" });
+      expect(db.alertDeliveryCounts()).toEqual({ pending: 0, sending: 0, retrying: 0, failed: 1, paused: 0 });
+    } finally { db.close(); }
+  });
+
+  it("excludes off-target rows, pauses destination mismatches, expires intents, and recovers expired leases", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const makeIntent = (observationId: string, destinationFingerprint: string, expiresAt = 100_000): AlertIntent => ({ observationId, ruleVersion: "r", payload: "{}", policy: "{}", destinationFingerprint, createdAt: 1000, expiresAt });
+      const off = db.insertObservation(mention({ sourceItemId: "alert-off" })).observationId;
+      db.markScored(off, score("results"), true, makeIntent(off, "a".repeat(64)));
+      expect(db.claimAlert(1001, "a".repeat(64), 10, 5)).toBeNull();
+      const id = db.insertObservation(mention({ sourceItemId: "alert-recovery" })).observationId;
+      db.markScored(id, score("results"), false, makeIntent(id, "b".repeat(64)));
+      expect(db.claimAlert(1001, "c".repeat(64), 10, 5)).toBeNull();
+      expect(db.claimAlert(1002, "b".repeat(64), 10, 5)?.attempt).toBe(1);
+      const recoveryId = db.insertObservation(mention({ sourceItemId: "alert-lease" })).observationId;
+      db.markScored(recoveryId, score("results"), false, makeIntent(recoveryId, "e".repeat(64)));
+      db.claimAlert(1010, "e".repeat(64), 10, 5);
+      const recovered = db.claimAlert(1020, "e".repeat(64), 10, 5);
+      expect(recovered?.attempt).toBe(2);
+      expect(db.alertDeliverySummary().find((record) => record.observationId === recoveryId)).toMatchObject({
+        state: "sending", attemptCount: 2, lastOutcome: "ambiguous",
+      });
+      const expiring = db.insertObservation(mention({ sourceItemId: "alert-expiry" })).observationId;
+      db.markScored(expiring, score("results"), false, makeIntent(expiring, "d".repeat(64), 2000));
+      expect(db.claimAlert(2000, "d".repeat(64), 10, 5)).toBeNull();
+    } finally { db.close(); }
+  });
   it("keeps the latest saved collection time visible when the 24-hour count is zero", () => {
     const db = new Desk(":memory:");
     try {

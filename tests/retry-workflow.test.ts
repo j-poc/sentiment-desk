@@ -49,7 +49,7 @@ function answers(): Record<string, unknown> {
 }
 
 function setup(
-  judge: (state: JevState) => Promise<{
+  judge: (state: JevState, prepared?: unknown) => Promise<{
     answers: Record<string, unknown>;
     model: string;
     inputTokens: number;
@@ -78,7 +78,7 @@ function setup(
   };
   const pipeline = new Pipeline({
     db,
-    judge,
+    judge: async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }),
     hub,
     health,
     engineLabel: "jev-latest",

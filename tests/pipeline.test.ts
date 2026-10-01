@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { Desk } from "../server/db.js";
 import { intersectJevSourceAllowlist } from "../server/collector-policy.js";
 import { HealthTracker } from "../server/health.js";
@@ -9,14 +10,17 @@ import { Hub } from "../server/hub.js";
 import { JevError } from "../server/jev.js";
 import { Pipeline } from "../server/pipeline.js";
 import { EVENT_TYPES, TAKEAWAY_KEYS } from "../server/rubric.js";
+import { RUBRIC_SHA } from "../server/rubric.js";
 import type { CollectorId, Company, JevState, RawMention } from "../server/types.js";
 
 const directories: string[] = [];
+const pipelines: Pipeline[] = [];
 const company: Company = {
   id: "acme", name: "Acme Incorporated", ticker: "ACME", sector: "Technology", aliases: ["Acme"], color: "#123456",
 };
 
 afterEach(() => {
+  for (const pipeline of pipelines.splice(0)) pipeline.stop();
   vi.useRealTimers();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
@@ -43,10 +47,12 @@ function fixtureAnswers(): Record<string, unknown> {
 }
 
 function setup(
-  judge: ((state: JevState) => Promise<{ answers: Record<string, unknown>; model: string; inputTokens: number; outputTokens: number; latencyMs: number }>) | null,
+  judge: ((state: JevState, prepared?: unknown) => Promise<{ answers: Record<string, unknown>; model: string; inputTokens: number; outputTokens: number; latencyMs: number }>) | null,
   options: {
     allowedCollectors?: ReadonlySet<CollectorId>;
+    externalRequestsEnabled?: boolean;
     dailyBudget?: { utcDay: () => string; maxRequests: number; maxRequestBytes: number };
+    concurrency?: number;
     alert?: { webhookUrl: string; eventScore: number; impact: number; freshMinutes: number };
   } = {},
 ) {
@@ -56,14 +62,16 @@ function setup(
   db.seedCompanies([company]);
   const health = new HealthTracker(true, judge !== null, "jev-latest");
   const pipeline = new Pipeline({
-    db, judge, hub: new Hub(), health,
-    engineLabel: "jev-latest", inputPricePerMTok: 0.042, concurrency: 1,
+    db, judge: judge ? async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }) : null, hub: new Hub(), health,
+    engineLabel: "jev-latest", inputPricePerMTok: 0.042, concurrency: options.concurrency ?? 1,
     allowedCollectors: options.allowedCollectors ?? new Set(["google_news_rss"]),
+    externalRequestsEnabled: options.externalRequestsEnabled,
     dailyBudget: options.dailyBudget ?? {
       utcDay: () => "2026-09-28", maxRequests: 100, maxRequestBytes: 1_000_000,
     },
     alert: options.alert,
   });
+  pipelines.push(pipeline);
   const source: RawMention = {
     companyId: company.id, kind: "rss", sourceName: "Reuters", sourceUrl: "https://reuters.com/acme",
     tier: "wire", title: "Acme announces a product launch", snippet: "A new product is available.",
@@ -76,10 +84,231 @@ function setup(
     startedAt: source.retrievedAt - 1_000, completedAt: source.retrievedAt + 1_000,
     result: "success", parsedItemCount: 1, responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
   });
-  return { db, pipeline, source, health };
+  return { db, pipeline, source, health, dbPath: join(directory, "desk.db") };
 }
 
 describe("Jev pipeline recovery", () => {
+  it("keeps both Jev and webhook requests paused when external requests are disabled", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const judge = vi.fn(async () => ({ answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 }));
+    const { db, pipeline, source } = setup(judge, {
+      externalRequestsEnabled: false,
+      alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 },
+    });
+    try {
+      expect(pipeline.alertDeliveryConfigured).toBe(true);
+      expect(pipeline.alertDeliveryEnabled).toBe(false);
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      await pipeline.dispatchAlerts();
+      expect(judge).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("pending");
+    } finally { db.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("does not call Jev if the durable dispatch-intent write fails", async () => {
+    const judge = vi.fn(async () => ({ answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 }));
+    const { db, pipeline, source } = setup(judge);
+    vi.spyOn(db, "recordJevDispatchIntent").mockImplementation(() => { throw new Error("simulated sqlite write failure"); });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      const mention = db.mentionsForCompany(company.id, 0, 10)[0];
+      expect(judge).not.toHaveBeenCalled();
+      expect(mention?.status).toBe("failed");
+      expect(db.jevAttemptHistory(mention!.id)).toMatchObject([{ outcome: "not_sent", errorCategory: "dispatch_intent_not_recorded" }]);
+    } finally { db.close(); }
+  });
+
+  it("dispatches a persisted qualifying alert with a stable idempotency key", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({
+      answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }), { alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 } });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0]?.[1]?.headers?.["Idempotency-Key"]).toMatch(/[0-9a-f-]{36}/);
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("scored");
+    } finally { db.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("resumes a persisted alert retry after restart at its saved due time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source, health, dbPath } = setup(async () => ({
+      answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }), { alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 } });
+    pipeline.ingest(source);
+    await pipeline.waitForIdle();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(db.alertDeliverySummary()[0]).toMatchObject({ state: "retrying", attemptCount: 1 });
+    pipeline.stop();
+    db.close();
+
+    const restartedDb = new Desk(dbPath);
+    const restartedPipeline = new Pipeline({
+      db: restartedDb, judge: null, hub: new Hub(), health, engineLabel: "jev-latest", inputPricePerMTok: 0.042,
+      concurrency: 1, allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-09-28", maxRequests: 100, maxRequestBytes: 1_000_000 },
+      alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 },
+    });
+    pipelines.push(restartedPipeline);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(restartedDb.alertDeliverySummary()[0]).toMatchObject({ state: "delivered", attemptCount: 2, lastOutcome: "delivered" });
+    } finally { restartedPipeline.stop(); restartedDb.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("continues draining other ready alerts after a permanent webhook rejection", async () => {
+    let releaseRejectedResponse!: () => void;
+    let announceFirstSend!: () => void;
+    const firstSendStarted = new Promise<void>((resolve) => { announceFirstSend = resolve; });
+    const blockedResponse = new Promise<void>((resolve) => { releaseRejectedResponse = resolve; });
+    const fetch = vi.fn()
+      .mockImplementationOnce(async () => { announceFirstSend(); await blockedResponse; return new Response(null, { status: 400 }); })
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({
+      answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }), { concurrency: 2, alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 } });
+    try {
+      pipeline.ingest(source);
+      pipeline.ingest({ ...source, sourceItemId: "second-independent-alert", title: "Acme announces a second product launch" });
+      await firstSendStarted;
+      await vi.waitFor(() => expect(db.mentionsForCompany(company.id, 0, 10).filter((row) => row.status === "scored")).toHaveLength(2));
+      releaseRejectedResponse();
+      await pipeline.waitForIdle();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(db.alertDeliverySummary()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ state: "failed", lastHttpStatus: 400 }),
+        expect.objectContaining({ state: "delivered", lastHttpStatus: 204 }),
+      ]));
+    } finally { pipeline.stop(); db.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("keeps a successful Jev judgment scored when the alert outbox fails", async () => {
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({
+      answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }), { alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 } });
+    vi.spyOn(pipeline, "dispatchAlerts").mockRejectedValue(new Error("simulated alert storage failure"));
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      const saved = db.mentionsForCompany(company.id, 0, 10)[0];
+      expect(saved?.status).toBe("scored");
+      expect(db.jevAttemptHistory(saved!.id)).toMatchObject([{ outcome: "response" }]);
+    } finally { pipeline.stop(); db.close(); }
+  });
+
+  it("persists the exact model request once before reserving budget and sending it", async () => {
+    const answers = fixtureAnswers();
+    let prepared: unknown;
+    const { db, pipeline, source } = setup(async (_state, request) => {
+      prepared = request;
+      return { answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 };
+    });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      expect(prepared).toMatchObject({
+        requestedModel: "jev-latest",
+        rubricSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        body: expect.any(String),
+        payloadSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        requestBytes: expect.any(Number),
+      });
+      const request = prepared as { body: string; requestBytes: number; payloadSha256: string };
+      expect(request.requestBytes).toBe(Buffer.byteLength(request.body, "utf8"));
+      expect(request.payloadSha256).toBe(createHash("sha256").update(request.body, "utf8").digest("hex"));
+      const mention = db.mentionsForCompany(company.id, 0, 10).find((item) => item.status === "scored");
+      expect(mention).toBeDefined();
+      expect(db.jevAttemptHistory(mention!.id)).toMatchObject([{
+        requestSha256: request.payloadSha256,
+        requestBytes: request.requestBytes,
+        rubricSha256: RUBRIC_SHA,
+        requestedModel: "jev-latest",
+        outcome: "response",
+        httpStatus: 200,
+        resolvedModel: "jev-1.13.0",
+      }]);
+    } finally { db.close(); }
+  });
+
+  it("does not dispatch a queued intent after its publisher freshness expires", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({ answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 }), {
+      alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 },
+    });
+    const markScored = db.markScored.bind(db);
+    vi.useFakeTimers();
+    vi.spyOn(db, "markScored").mockImplementation((id, score, excluded, alert, receipt) => {
+      markScored(id, score, excluded, alert, receipt);
+      vi.setSystemTime(source.publishedAt! + 15 * 60_000 + 1);
+    });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("scored");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { db.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each([
+    ["HTTP rejection", () => Promise.resolve(new Response("private response body", { status: 503 }))],
+    ["transport failure", () => Promise.reject(new Error("private transport detail"))],
+  ])("records %s and leaves bounded retry work durable", async (_label, send) => {
+    const fetch = vi.fn().mockImplementation(send);
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({ answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10 }), {
+      alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 },
+    });
+    try {
+      pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await pipeline.dispatchAlerts();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("scored");
+    } finally { db.close(); vi.unstubAllGlobals(); }
+  });
+
   it("does not send a webhook for a judgment excluded from investor research", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
@@ -379,7 +608,8 @@ describe("Jev pipeline recovery", () => {
       expect(calls).toBe(3);
       expect(failed.status).toBe("failed");
       expect(failed.scoreRetryAt).toBeNull();
-      expect(failed.error).toContain("rate limited");
+      expect(failed.error).toBe("TypeSafe request failed (HTTP 429)");
+      expect(failed.error).not.toContain("rate limited");
     } finally {
       db.close();
     }
@@ -395,7 +625,8 @@ describe("Jev pipeline recovery", () => {
       const result = ambiguous.db.mentionsForCompany(company.id, 0, 10)[0]!;
       expect(ambiguousCalls).toBe(1);
       expect(result.status).toBe("failed");
-      expect(result.error).toContain("outcome is unknown");
+      expect(result.error).toContain("TypeSafe request outcome is unknown");
+      expect(result.error).not.toContain("socket timeout");
       expect(ambiguous.pipeline.drainPending(10)).toBe(0);
     } finally {
       ambiguous.db.close();

@@ -172,4 +172,61 @@ describe("chart keyboard data inspection", () => {
     assert.doesNotMatch(failedMarkup, /No saved Jev score buckets are available/);
     assert.match(failedMarkup, /Saved Yahoo share-price observations/);
   });
+
+  it("offers saved history when the selected window has no visible index or recent scores", () => {
+    const now = Date.now();
+    const latestScoreAt = now - 48 * 60 * 60_000;
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[{
+          t: now - 30 * 60_000,
+          v: 0.1,
+          n: 0,
+          itemImpactMin: null,
+          itemImpactMax: null,
+          lastScoredAt: latestScoreAt,
+        }]}
+        hours={24}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={latestScoreAt}
+        onViewHistory={() => undefined}
+      />,
+    );
+
+    assert.match(html, /No saved scores or visible index in this window/);
+    assert.match(html, /latest saved score 2d ago/);
+    assert.match(html, /Show 7D history/);
+    assert.match(html, /Show the last 7 days of saved Jev history/);
+    assert.doesNotMatch(html, /modeled decay from the latest saved score/);
+  });
+
+  it("describes visible modeled movement as decay and links to older saved scores", () => {
+    const now = Date.now();
+    const latestScoreAt = now - 48 * 60 * 60_000;
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[{
+          t: now - 30 * 60_000,
+          v: 12,
+          n: 0,
+          itemImpactMin: null,
+          itemImpactMax: null,
+          lastScoredAt: latestScoreAt,
+        }]}
+        hours={24}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={latestScoreAt}
+        onViewHistory={() => undefined}
+      />,
+    );
+
+    assert.match(html, /No new Jev scores in this window · modeled decay from the latest saved score 2d ago/);
+    assert.match(html, /Show 7D history/);
+  });
 });

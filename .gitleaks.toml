@@ -1,0 +1,9 @@
+title = "Sentiment Desk secret scan"
+minVersion = "v8.25.0"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local mutable runtime databases are not source and are never checkpointed."
+paths = ['''(^|/)data/''']

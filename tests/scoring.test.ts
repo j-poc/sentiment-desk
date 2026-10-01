@@ -444,4 +444,9 @@ describe("shouldAlert (alert gate)", () => {
     expect(shouldAlert({ ...base, eventScore: 50, impact: -70, publishedAt: now - 60_000 })).toBe(false); // weak
     expect(shouldAlert({ ...base, eventScore: 80, impact: -20, publishedAt: now - 60_000 })).toBe(false); // small move
   });
+  it("rejects future, non-finite, and invalid threshold values", () => {
+    expect(shouldAlert({ ...base, eventScore: 80, impact: 70, publishedAt: now + 1 })).toBe(false);
+    expect(shouldAlert({ ...base, eventScore: Number.NaN, impact: 70, publishedAt: now - 1 })).toBe(false);
+    expect(shouldAlert({ ...base, eventScore: 80, impact: 70, publishedAt: now - 1, thresholdScore: Number.POSITIVE_INFINITY })).toBe(false);
+  });
 });

@@ -66,10 +66,11 @@ const labelItemSchema = provenanceSchema.extend({
 }).strict();
 
 const labelSetSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   stage: z.enum(["pilot", "final"]),
   studyId: z.string().min(1).max(200),
   source: z.literal("sec_edgar"),
+  evaluationProfile: z.literal("sec_edgar_scoped_standard_v1"),
   sampleSeed: z.number().int().safe(),
   samplingWindowStart: ISO_TIME,
   samplingWindowEnd: ISO_TIME,
@@ -238,6 +239,9 @@ function validateSecProvenance(item: Provenance): void {
 
 export function parseLabelSet(value: unknown): LabelSet {
   const parsed = labelSetSchema.parse(value);
+  if (parsed.populationFrame.some((item) => item.strictAbout) || parsed.items.some((item) => item.strictAbout)) {
+    throw new Error("sec_edgar_scoped_standard_v1 does not exercise the strict identity path; use an applicable source profile");
+  }
   if (parsed.rubricSha256 !== RUBRIC_SHA) throw new Error("label set rubric SHA does not match the current frozen Jev rubric");
   if (Date.parse(parsed.samplingWindowStart) >= Date.parse(parsed.samplingWindowEnd)) throw new Error("sampling window must have positive duration");
   if (Date.parse(parsed.samplingWindowEnd) > Date.parse(parsed.sampledAt)) throw new Error("sample snapshot predates the end of its sampling window");
@@ -437,6 +441,8 @@ export function analyzePilot(input: { labels: LabelSet; labelsSha256: string }):
     mode: "label-only-pilot",
     studyId: labels.studyId,
     source: "sec_edgar",
+    evaluationProfile: labels.evaluationProfile,
+    pathApplicability: { standard: "IN_SCOPE", strictIdentity: "OUT_OF_SCOPE" },
     itemCount: labels.items.length,
     issuerClusterCount,
     labelsSha256: input.labelsSha256,
@@ -611,7 +617,7 @@ function clusteredIntervals(input: {
   };
 }
 
-function gate(status: "PASS" | "FAIL" | "UNVERIFIED", reason: string, metrics?: unknown): Record<string, unknown> {
+function gate(status: "PASS" | "FAIL" | "UNVERIFIED" | "NOT_APPLICABLE", reason: string, metrics?: unknown): Record<string, unknown> {
   return { status, reason, ...(metrics === undefined ? {} : { metrics }) };
 }
 
@@ -832,14 +838,12 @@ export function analyzeFinal(input: { labels: LabelSet; labelsSha256: string; ru
       positiveLabelIssuerClusterCount: new Set(subset.flatMap((row) => row.labels[key] ? [row.labelItem.cik] : [])).size,
     };
   };
-  const aboutByIdentityPath = {
-    standard: identityBoundary("about", false),
-    strictIdentity: identityBoundary("about", true),
-  };
-  const investorRelevantByIdentityPath = {
-    standard: identityBoundary("investorRelevant", false),
-    strictIdentity: identityBoundary("investorRelevant", true),
-  };
+  const strictIdentityNotApplicable = gate(
+    "NOT_APPLICABLE",
+    "issuer-scoped SEC observations always have strong company identity; this profile does not evaluate ambiguous-identity publisher inputs",
+  );
+  const aboutByIdentityPath = { standard: identityBoundary("about", false) };
+  const investorRelevantByIdentityPath = { standard: identityBoundary("investorRelevant", false) };
   const attempts = run.items.flatMap((item) => item.attempts);
   const submittedAttempts = attempts.filter((attempt) => attempt.submitted);
   const unknownUnreconciled = run.items.flatMap((item) => item.attempts
@@ -912,9 +916,9 @@ export function analyzeFinal(input: { labels: LabelSet; labelsSha256: string; ru
     : gate("PASS", "model run contains exactly the frozen item denominator");
   const boundaryGates = {
     aboutStandardPrecision: boundaryGate("about standard identity path", aboutByIdentityPath.standard),
-    aboutStrictIdentityPrecision: boundaryGate("about strict-identity path", aboutByIdentityPath.strictIdentity),
+    aboutStrictIdentityPrecision: strictIdentityNotApplicable,
     investorRelevantStandardPrecision: boundaryGate("investor_relevant standard identity path", investorRelevantByIdentityPath.standard),
-    investorRelevantStrictIdentityPrecision: boundaryGate("investor_relevant strict-identity path", investorRelevantByIdentityPath.strictIdentity),
+    investorRelevantStrictIdentityPrecision: strictIdentityNotApplicable,
   };
   const unsampledStrata = labels.samplePlan.filter((stratum) => stratum.eligibleCount > 0 && stratum.sampleCount === 0);
   const samplingGate = unsampledStrata.length
@@ -932,14 +936,18 @@ export function analyzeFinal(input: { labels: LabelSet; labelsSha256: string; ru
     samplingFrameCoverage: samplingGate,
     ...boundaryGates,
   };
-  const gateStatuses = Object.values(gates).map((value) => value.status as "PASS" | "FAIL" | "UNVERIFIED");
+  const gateStatuses = Object.values(gates)
+    .map((value) => value.status as "PASS" | "FAIL" | "UNVERIFIED" | "NOT_APPLICABLE")
+    .filter((status) => status !== "NOT_APPLICABLE");
   const status = gateStatuses.includes("FAIL") ? "FAIL" : gateStatuses.includes("UNVERIFIED") ? "UNVERIFIED" : "PASS";
   return {
     mode: "final-classifier-evaluation",
     status,
-    statusScope: "classifier evaluation gates only; not Sentiment Desk release approval",
+    statusScope: "applicable SEC issuer-scoped classifier gates only; not cross-source quality or Sentiment Desk release approval",
     releaseReadiness: "NOT_CLEARED_BY_THIS_REPORT; source rights, TypeSafe account terms, retention, billing, SEC User-Agent, and other release gates remain separate",
-    scope: "authorized public SEC EDGAR filing cohort only; no other publisher or social source is evaluated",
+    scope: "authorized public SEC EDGAR issuer-scoped filing cohort; only the standard inclusion path is evaluated; no ambiguous-identity publisher or social source is evaluated",
+    evaluationProfile: labels.evaluationProfile,
+    pathApplicability: { standard: "IN_SCOPE", strictIdentity: "OUT_OF_SCOPE" },
     studyId: labels.studyId,
     runId: run.runId,
     source: labels.source,
@@ -991,8 +999,8 @@ export function analyzeFinal(input: { labels: LabelSet; labelsSha256: string; ru
     sentiment: { metrics: sentiment.metrics, clusterBootstrap95: sentiment.intervals },
     eventType: { metrics: eventType.metrics, clusterBootstrap95: eventType.intervals },
     inclusionBoundaries: {
-      about: { overall: about, standard: aboutByIdentityPath.standard, strictIdentity: aboutByIdentityPath.strictIdentity },
-      investorRelevant: { overall: investorRelevant, standard: investorRelevantByIdentityPath.standard, strictIdentity: investorRelevantByIdentityPath.strictIdentity },
+      about: { overall: about, standard: aboutByIdentityPath.standard, strictIdentity: strictIdentityNotApplicable },
+      investorRelevant: { overall: investorRelevant, standard: investorRelevantByIdentityPath.standard, strictIdentity: strictIdentityNotApplicable },
     },
     calibration: calibrationReport(usable.map((row) => ({ label: row.labels.sentiment, cluster: row.labelItem.cik, score: row.model.score }))),
     operations: {
@@ -1026,7 +1034,7 @@ export function analyzeFinal(input: { labels: LabelSet; labelsSha256: string; ru
       "SEC URLs and content/request digests are provenance attestations; the offline tool does not fetch EDGAR or prove a digest-to-source-text correspondence.",
       "Results apply only to this frozen SEC EDGAR sample, this exact rubric, and the recorded Jev model; they do not establish performance on other feeds, market impact, alpha, or investment returns.",
       "Cluster bootstrap resamples issuers, not arbitrary rows. At least 30 issuer clusters overall and 10 per class are required before the corresponding inference is considered verified.",
-      "Standard and strict-identity inclusion precision are separately gated; each path requires at least 10 positive human labels across 10 issuer clusters.",
+      "The SEC issuer-scoped profile evaluates standard inclusion precision only. Strict-identity precision remains not applicable here and unverified for any other source profile.",
       "Calibration metrics are descriptive only because a calibration pass threshold was not frozen; sparse support remains unverified.",
       "Account-owner budget approval is recorded as a local attestation and digest; this tool cannot independently verify the underlying approval record or provider invoice.",
       "This offline report does not clear SEC User-Agent, provider-account terms, telemetry, retention, source-rights, or historical billing approval gates.",

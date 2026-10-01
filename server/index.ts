@@ -6,7 +6,6 @@ import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
 import { JevClient } from "./jev.js";
 import { Pipeline, type JudgeFn } from "./pipeline.js";
-import { RUBRIC } from "./rubric.js";
 import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import {
@@ -81,7 +80,7 @@ async function main(): Promise<void> {
   let judge: JudgeFn | null;
   let engineLabel: string;
   if (jevClient.configured && jevDispatchEnabled) {
-    judge = (state) => jevClient.judge(state, RUBRIC);
+    judge = (_state, prepared) => jevClient.judgePrepared(prepared);
     engineLabel = config.jev.model;
   } else {
     judge = null;
@@ -100,6 +99,7 @@ async function main(): Promise<void> {
     inputPricePerMTok: config.jev.inputPricePerMTok,
     concurrency: config.scoreConcurrency,
     allowedCollectors: jevAllowedCollectors,
+    externalRequestsEnabled: config.externalRequestsEnabled,
     dailyBudget: {
       utcDay: () => new Date().toISOString().slice(0, 10),
       maxRequests: config.jev.maxRequestsPerDay,
@@ -269,6 +269,8 @@ async function main(): Promise<void> {
       await Promise.all(schedulers.map((scheduler) => scheduler.stop()));
       await market.waitForIdle();
       await pipeline.waitForIdle();
+      await pipeline.waitForAlertIdle();
+      pipeline.stop();
       // SSE responses otherwise keep server.close() pending indefinitely.
       hub.closeAll();
       // Tear down any remaining keep-alive or stalled HTTP sockets after the SSE routes close.

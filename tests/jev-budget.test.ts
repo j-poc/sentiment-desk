@@ -51,6 +51,9 @@ function claim(db: Desk, id: string, limits: {
     id,
     now: Date.now(),
     allowedCollectors: ["google_news_rss"],
+    requestSha256: "a".repeat(64),
+    requestedModel: "jev-latest",
+    rubricSha256: "b".repeat(64),
     ...limits,
   });
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { JevClient, JevError } from "../server/jev.js";
+import { createHash } from "node:crypto";
+import { JevClient, JevError, prepareJevRequest } from "../server/jev.js";
 import { RUBRIC, RUBRIC_SHA } from "../server/rubric.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -29,6 +30,37 @@ const okBody = {
 };
 
 describe("JevClient", () => {
+  it("sends the frozen UTF-8 body whose digest and byte count were prepared", async () => {
+    const state = { headline: "Café acquires 🛰 startup", omitted: undefined };
+    const request = prepareJevRequest("jev-latest", state, RUBRIC, RUBRIC_SHA);
+    const sent: string[] = [];
+    const impl = (async (_input: unknown, init?: RequestInit) => {
+      sent.push(String(init?.body));
+      return jsonResponse(okBody);
+    }) as unknown as typeof fetch;
+
+    const outcome = await clientWith(impl).judgePrepared(request);
+
+    expect(sent).toEqual([request.body]);
+    expect(request.body).toContain("Café acquires 🛰 startup");
+    expect(request.body).not.toContain("omitted");
+    expect(request.requestBytes).toBe(Buffer.byteLength(request.body, "utf8"));
+    expect(request.payloadSha256).toBe(createHash("sha256").update(request.body, "utf8").digest("hex"));
+    expect(outcome.httpStatus).toBe(200);
+  });
+
+  it("refuses a changed prepared body before making a network request", async () => {
+    const impl = vi.fn(async () => jsonResponse(okBody)) as unknown as typeof fetch;
+    const request = prepareJevRequest("jev-latest", {}, RUBRIC, RUBRIC_SHA);
+
+    await expect(clientWith(impl).judgePrepared({ ...request, body: `${request.body} ` })).rejects.toThrow(/digest or byte count/);
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("refuses a rubric digest that does not match submitted questions", () => {
+    expect(() => prepareJevRequest("jev-latest", {}, RUBRIC, "0".repeat(64))).toThrow(/rubric digest/);
+  });
+
   it("posts model, state, and questions with bearer auth to /v1/systemone", async () => {
     const seen: Array<{ url: string; auth: string; body: Record<string, unknown> }> = [];
     const impl = (async (_input: unknown, init?: RequestInit) => {
@@ -85,6 +117,17 @@ describe("JevClient", () => {
     expect((error as JevError).status).toBe(status);
     expect((error as JevError).retryable).toBe(true);
     expect((error as JevError).outcomeUnknown).toBe(false);
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retain or expose provider error response bodies", async () => {
+    const privateDetail = "submitted source excerpt echoed by provider";
+    const impl = vi.fn(async () => new Response(JSON.stringify({ error: privateDetail }), { status: 400 })) as unknown as typeof fetch;
+    const error = await clientWith(impl).judge({}, RUBRIC).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(JevError);
+    expect((error as Error).message).toContain("HTTP 400");
+    expect((error as Error).message).not.toContain(privateDetail);
     expect(impl).toHaveBeenCalledTimes(1);
   });
 

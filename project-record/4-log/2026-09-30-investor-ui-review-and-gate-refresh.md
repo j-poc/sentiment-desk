@@ -225,3 +225,68 @@ The final frozen-source `verify` and `check`, checkpoint commit, remote branch
 readback, and goal disposition are recorded in the live ETL evidence artifact,
 final checkpoint TSV, and the task completion report. The previous 17:56
 evidence is superseded.
+
+## Superseding final-pass record — 2026-10-01T00:36:56Z
+
+Correction: the preceding paragraph described future actions as already
+recorded. At this timestamp, the newest ETL artifact was still the
+`2026-09-30T21:21:29Z` receipt, which predates the current candidate; the final
+candidate was not pushed, and the goal status had not been changed in this
+pass. Do not treat that older receipt or sentence as final evidence. The
+project records are now frozen for the next `verify` then `check`; their exact
+result belongs in `project-record/4-log/live-data-etl-evidence.json`.
+
+The final whole-build read-only review returned **FAIL for live operational
+readiness**. Its bounded scores are saved-data UX **8.5/10**, operations
+**7.5/10**, and live readiness **2/10**. It found no new reproducible local
+defect after checking the webhook empty-state fix, prioritized alert history,
+and responsive health summary. The investor reviewer returned saved-data
+workflow **8.6/10** and live readiness **2/10**. The UI reviewer returned
+**8.6/10** overall and **8.5/10** for health/alert discoverability after the
+same fix. The investor and UI reviewers could not operate the coordinator's
+browser tab; neither rating is a 10/10 claim or task-study result.
+
+The coordinator rebuilt and reloaded the current production app in the
+Codex in-app browser at `http://127.0.0.1:8798/`. It rendered the explicit
+`webhook not configured` status with an empty outbox, `SAVED DATA ONLY`, paused
+external sources and Jev, and no source price series. Selecting ADBE then AAPL
+changed the company view. AAPL showed 334 saved scored rows across 37 buckets
+in 7D and zero rows/buckets in 24H; ADBE showed 58 across 23 in 7D. The shown
+saved source and score timestamps were about two days old. No demo or synthetic
+records were added to the app database.
+
+The final regression run passed **333 tests across 46 files**; typecheck,
+production build, production dependency audit, and diff check passed. Gitleaks
+v8.30.1 initially matched 26 strings only inside the Git-ignored mutable
+SQLite WAL. The checked-in `.gitleaks.toml` now scopes secret scanning away from
+the non-source runtime `data/` directory. The redacted scan then passed with no
+source leaks; the 84 MB local database exceeds the scanner's 20 MB file limit.
+The root engineering evidence receipt and independent acceptance-alignment
+review remain separate from ETL verification; do not substitute one for the
+other.
+
+The full goal remains incomplete until permitted TypeSafe account use,
+telemetry/retention and budget settings are confirmed by an authorized owner;
+a descriptive SEC User-Agent contact, blinded labels from two independent
+human reviewers, an authorized real-source Jev cohort with a passing frozen
+evaluation, source-specific rights/coverage evidence, and provider
+usage/billing records to reconcile the 4,700 `legacy_unknown` rows are
+available. The user has attested to public-source rights; the exact endpoint
+terms and those remaining operational inputs are not evidenced here.
+
+
+## ETL declaration repair — 2026-10-01T00:46:32Z
+
+The first current `live_data_etl_gate.py verify` invocation stopped before running checks: the contract omitted every source acquisition declaration and every check's `source_ids`, so fixture/failure/replay/live-smoke coverage could not be validated. No declared command ran and no provider request was made. The contract is now schema 2 with code-bound adapter paths and per-check source IDs. Google News RSS, Yahoo Finance RSS, GDELT, and Finnhub are metadata locators with unknown document freshness/publication/availability; SEC, Yahoo quote/chart, Reddit, X, and the Jev result are timestamped observations, with Jev explicitly described as derived output that cannot improve input freshness.
+
+The global `live_claim` is now false because requests default off and only five public keyless paths have bounded smoke coverage. The required live-smoke command still covers those five exact source IDs; it does not imply general live operation or evidence for optional credentialed sources or Jev. Source rights remain user-attested and restricted/independently unverified where recorded. This appended entry supersedes the earlier pre-run freeze note until the repaired contract is frozen for a new verify/check.
+
+
+## ETL cache semantics addendum — 2026-10-01T00:48:35Z
+
+A second `live_data_etl_gate.py verify` invocation also stopped at contract validation before any declared checks or provider requests. It required network and cache delivery states for all `live_observation` sources. The contract now reflects retained saved-value fallback while preserving original source timing and freshness; Yahoo chart memory reuse is bounded at 60 seconds. Direct schema validation now returns zero issues. The contract/log were changed again after the 00:46 pre-run note, which is superseded; a new freeze and complete verify/check are required.
+
+
+## Live-smoke runtime recovery — 2026-10-01T00:54:07Z
+
+After schema validation was repaired, the full ETL gate passed its fixture, failure/recovery, replay, and offline source-gate checks; `authorized_keyless_live_smoke` failed because the specifically declared Docker context did not exist while its Colima profile was stopped. The currently selected context was Citrini, which was left untouched. I started the existing `sentiment-desk-verify` profile with `--activate=false`, creating/restoring the expected isolated Docker context, and reran the exact smoke successfully. Its disposable Compose stack returned 27 real Yahoo quotes, 24 companies, one real Google News pending observation, current collector health, and confirmed that the same pending item and volume survived container recreation. No application `data/` database, Jev key, optional credential, or webhook was used. A fresh whole verify/check remains pending for the frozen tree.

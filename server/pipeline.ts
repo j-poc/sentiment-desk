@@ -1,8 +1,9 @@
-import type { Desk, RawMentionInput } from "./db.js";
+import type { Desk, JevAttemptReceipt, RawMentionInput } from "./db.js";
 import { rowToDTO } from "./db.js";
+import { createHash } from "node:crypto";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
-import { JevError } from "./jev.js";
+import { JevError, prepareJevRequest, type PreparedJevRequest } from "./jev.js";
 import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
 import {
@@ -38,12 +39,13 @@ import type {
  */
 
 export interface JudgeFn {
-  (state: JevState): Promise<{
+  (state: JevState, prepared: PreparedJevRequest): Promise<{
     answers: Record<string, unknown>;
     model: string;
     inputTokens: number;
     outputTokens: number;
     latencyMs: number;
+    httpStatus: number;
   }>;
 }
 
@@ -56,6 +58,7 @@ export interface PipelineDeps {
   inputPricePerMTok: number;
   concurrency: number;
   allowedCollectors: ReadonlySet<CollectorId>;
+  externalRequestsEnabled?: boolean;
   dailyBudget: {
     utcDay: () => string;
     maxRequests: number;
@@ -76,26 +79,43 @@ const CURRENT_WINDOW_MS = 3 * 60 * 60 * 1000;
 const MAX_JEV_ATTEMPTS = 3;
 const RETRY_BASE_MS = 30_000;
 
+function safeJevFailureMessage(error: unknown): string {
+  if (!(error instanceof JevError)) return "Jev scoring failed due to an internal processing error";
+  if (error.status != null && (error.status < 200 || error.status >= 300)) return `TypeSafe request failed (HTTP ${error.status})`;
+  if (error.status != null) return `TypeSafe response failed validation (HTTP ${error.status})`;
+  if (error.outcomeUnknown) return "TypeSafe request outcome is unknown";
+  return "TypeSafe request failed before a valid response was received";
+}
+
 export class Pipeline {
   private readonly queue: string[] = [];
   private readonly queued = new Set<string>();
   private inFlight = 0;
   private readonly idleWaiters = new Set<() => void>();
   private memoryCache: Map<string, { at: number; block: JevState["deskMemory"] }> = new Map();
+  private alertDispatchPromise: Promise<void> | null = null;
+  private alertDispatchTimer: ReturnType<typeof setTimeout> | null = null;
+  private alertDispatchDueAt: number | null = null;
+  private alertDispatchStopped = false;
 
   private companyCache: Map<
     string,
     { name: string; ticker: string; sector: string; color: string; aliases: string[]; ambiguous?: boolean }
   > | null = null;
 
-  constructor(private readonly deps: PipelineDeps) {}
+  constructor(private readonly deps: PipelineDeps) {
+    if (this.alertDeliveryEnabled) queueMicrotask(() => { void this.dispatchAlerts().catch(() => undefined); });
+  }
+
+  get alertDeliveryConfigured(): boolean { return Boolean(this.deps.alert?.webhookUrl); }
+  get alertDeliveryEnabled(): boolean { return this.alertDeliveryConfigured && this.deps.externalRequestsEnabled !== false; }
 
   /** Insert a normalized source observation; exact replays do not reach Jev. */
   ingest(m: RawMentionInput): boolean {
     if (!m.deliveryId) throw new Error("A persisted source delivery receipt is required before an observation can be ingested");
     const stored = this.deps.db.insertObservation(m);
     const collector = m.collector ?? "legacy_unknown";
-    if (stored.inserted && this.deps.judge && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
+    if (stored.inserted && this.deps.externalRequestsEnabled !== false && this.deps.judge && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
       this.enqueue(stored.observationId);
     }
     return stored.inserted;
@@ -103,7 +123,7 @@ export class Pipeline {
 
   /** Re-queue existing pending mentions (used after rubric migrations). */
   drainPending(limit = 1_000): number {
-    if (!this.deps.judge || this.deps.allowedCollectors.size === 0) return 0;
+    if (this.deps.externalRequestsEnabled === false || !this.deps.judge || this.deps.allowedCollectors.size === 0) return 0;
     const remaining = this.remainingDailyRequests();
     if (remaining <= 0) return 0;
     const ids = this.deps.db.pendingIds(Math.min(limit, remaining), [...this.deps.allowedCollectors]);
@@ -112,7 +132,7 @@ export class Pipeline {
   }
 
   retryFailed(id: string, reviewedProviderUsage: boolean): OperatorRetryResult {
-    if (!this.deps.judge) return "jev_unavailable";
+    if (this.deps.externalRequestsEnabled === false || !this.deps.judge) return "jev_unavailable";
     const current = this.deps.db.mentionRow(id);
     if (!current) return "not_retryable";
     if (![...this.deps.allowedCollectors].some((collector) => collector === current.collector)) {
@@ -170,6 +190,17 @@ export class Pipeline {
     return new Promise((resolve) => this.idleWaiters.add(resolve));
   }
 
+  async waitForAlertIdle(): Promise<void> {
+    while (this.alertDispatchPromise) await this.alertDispatchPromise;
+  }
+
+  stop(): void {
+    this.alertDispatchStopped = true;
+    if (this.alertDispatchTimer != null) clearTimeout(this.alertDispatchTimer);
+    this.alertDispatchTimer = null;
+    this.alertDispatchDueAt = null;
+  }
+
   private resolveIdleWaiters(): void {
     if (this.inFlight !== 0 || this.queue.length !== 0) return;
     for (const resolve of this.idleWaiters) resolve();
@@ -179,7 +210,7 @@ export class Pipeline {
   private async scoreOne(id: string): Promise<void> {
     const db = this.deps.db;
     const queuedRow = db.mentionRow(id);
-    if (!queuedRow || (queuedRow.status !== "pending" && queuedRow.status !== "retrying")) return;
+    if (this.deps.externalRequestsEnabled === false || !queuedRow || (queuedRow.status !== "pending" && queuedRow.status !== "retrying")) return;
     if (![...this.deps.allowedCollectors].some((collector) => collector === queuedRow.collector)) return;
 
     if (!this.deps.judge) {
@@ -224,17 +255,16 @@ export class Pipeline {
       deskMemory,
     };
 
-    const requestBytes = Buffer.byteLength(JSON.stringify({
-      model: this.deps.engineLabel,
-      state,
-      questions: RUBRIC,
-    }), "utf8");
+    const prepared = prepareJevRequest(this.deps.engineLabel, state, RUBRIC, RUBRIC_SHA);
     const claim = db.claimForScoringWithBudget({
       id,
       now: Date.now(),
       allowedCollectors: [...this.deps.allowedCollectors],
       utcDay: this.deps.dailyBudget.utcDay(),
-      requestBytes,
+      requestBytes: prepared.requestBytes,
+      requestSha256: prepared.payloadSha256,
+      requestedModel: prepared.requestedModel,
+      rubricSha256: prepared.rubricSha256,
       maxRequests: this.deps.dailyBudget.maxRequests,
       maxRequestBytes: this.deps.dailyBudget.maxRequestBytes,
     });
@@ -242,10 +272,17 @@ export class Pipeline {
     const row = claim.row;
     this.deps.hub.broadcast("mention", rowToDTO(row));
 
-    let judgeResponseReceived = false;
+    let judgeResponse: Awaited<ReturnType<JudgeFn>> | null = null;
+    let attemptReceiptPersisted = false;
+    let dispatchIntentRecorded = false;
+    let scoreCommitted = false;
     try {
-      const out = await this.deps.judge(state);
-      judgeResponseReceived = true;
+      if (!db.recordJevDispatchIntent(claim.attemptId, Date.now())) {
+        throw new Error("Jev dispatch intent could not be durably recorded; request was not sent");
+      }
+      dispatchIntentRecorded = true;
+      const out = await this.deps.judge(state, prepared);
+      judgeResponse = out;
       if (
         !Number.isSafeInteger(out.inputTokens) || out.inputTokens < 0 ||
         !Number.isSafeInteger(out.outputTokens) || out.outputTokens < 0
@@ -282,17 +319,67 @@ export class Pipeline {
         rubricSha: RUBRIC_SHA,
         scoredAt: Date.now(),
       };
-      db.markScored(id, score, final.exclude);
+      const alert = this.alertIntent(row, score, final.exclude);
+      db.markScored(id, score, final.exclude, alert, {
+        attemptId: claim.attemptId,
+        outcome: "response",
+        occurredAt: Date.now(),
+        httpStatus: out.httpStatus,
+        inputTokens: out.inputTokens,
+        outputTokens: out.outputTokens,
+        resolvedModel: out.model,
+        latencyMs: out.latencyMs,
+        errorCategory: null,
+      });
+      scoreCommitted = true;
+      attemptReceiptPersisted = true;
       this.deps.health.recordJev(true);
 
       const updated = db.mentionRow(id);
       if (updated) {
         this.deps.hub.broadcast("mention", rowToDTO(updated));
         this.deps.hub.broadcast("company", this.snapshot(row.company_id));
-        this.maybeAlert(updated);
+        await this.dispatchAlerts();
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      if (scoreCommitted) {
+        try { db.logEvent("warn", "pipeline", `score saved for ${id}; a follow-up notification failed`); } catch { /* keep the committed judgment authoritative */ }
+        return;
+      }
+      const message = safeJevFailureMessage(err);
+      if (!attemptReceiptPersisted) {
+        const status = err instanceof JevError ? err.status ?? null : judgeResponse?.httpStatus ?? null;
+        const outcome: JevAttemptReceipt["outcome"] = judgeResponse
+          ? "response"
+          : err instanceof JevError && err.status != null && (err.status < 500 || err.status === 529)
+            ? "rejected"
+            : dispatchIntentRecorded
+              ? "unknown"
+              : "not_sent";
+        const category = judgeResponse
+          ? "response_validation_failed"
+          : outcome === "rejected"
+            ? status === 429 || status === 529 ? "provider_overloaded" : "http_rejected"
+            : outcome === "unknown"
+              ? err instanceof JevError && err.status != null ? "provider_outcome_unknown" : "transport_outcome_unknown"
+              : "dispatch_intent_not_recorded";
+        try {
+          db.recordJevAttemptReceipt({
+            attemptId: claim.attemptId,
+            outcome,
+            occurredAt: Date.now(),
+            httpStatus: status,
+            inputTokens: judgeResponse?.inputTokens ?? null,
+            outputTokens: judgeResponse?.outputTokens ?? null,
+            resolvedModel: judgeResponse?.model ?? null,
+            latencyMs: judgeResponse?.latencyMs ?? null,
+            errorCategory: category,
+          });
+          attemptReceiptPersisted = true;
+        } catch {
+          // Startup recovery will close an unfinished attempt conservatively from its durable dispatch intent.
+        }
+      }
       if (err instanceof JevError && err.retryable && row.score_attempts < MAX_JEV_ATTEMPTS) {
         const backoffMs = RETRY_BASE_MS * 2 ** (row.score_attempts - 1);
         const retryAt = Date.now() + Math.max(backoffMs, err.retryAfterMs ?? 0);
@@ -301,7 +388,7 @@ export class Pipeline {
         const outcomeNote = err instanceof JevError && err.outcomeUnknown
           ? "; provider outcome is unknown, so automatic retry is withheld to avoid a duplicate charge"
           : "";
-        const usageCheckRequired = judgeResponseReceived || (
+        const usageCheckRequired = judgeResponse !== null || (
           err instanceof JevError && (err.outcomeUnknown || err.status != null)
         );
         db.markFailed(id, `${message}${outcomeNote}`, usageCheckRequired);
@@ -313,43 +400,99 @@ export class Pipeline {
     }
   }
 
-  /** Fire-and-forget webhook on fresh, high-strength events; never blocks scoring. */
-  private maybeAlert(row: {
-    company_id: string;
-    title: string;
-    published_at: number | null;
-    impact: number | null;
-    event_score: number | null;
-  }): void {
+  private alertIntent(row: { id: string; company_id: string; title: string; published_at: number | null }, score: MentionScore, excluded: boolean) {
     const alert = this.deps.alert;
-    if (!alert?.webhookUrl) return;
-    if (row.impact == null || row.event_score == null || row.published_at == null) return;
+    if (!this.alertDeliveryEnabled || !alert?.webhookUrl || excluded || row.published_at == null) return undefined;
+    const now = Date.now();
     const meta = this.companyMeta(row.company_id);
     if (
       !shouldAlert({
-        eventScore: row.event_score,
-        impact: row.impact,
+        eventScore: score.eventScore,
+        impact: score.impact,
         publishedAt: row.published_at,
-        now: Date.now(),
+        now,
         thresholdScore: alert.eventScore,
         thresholdImpact: alert.impact,
         freshMs: alert.freshMinutes * 60_000,
       })
     ) {
-      return;
+      return undefined;
     }
-    const impact = row.impact;
-    const eventScore = row.event_score;
+    const impact = score.impact;
+    const eventScore = score.eventScore;
     const arrow = impact > 0 ? "↑" : impact < 0 ? "↓" : "·";
     const text = `${arrow} ${meta.ticker} ${impact > 0 ? "+" : ""}${impact.toFixed(0)} (event ${Math.round(eventScore)}) — ${row.title.slice(0, 140)}`;
-    void fetch(alert.webhookUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, content: text }),
-      signal: AbortSignal.timeout(5_000),
-    }).catch(() => {
-      /* alerts are best-effort */
+    const destinationFingerprint = createHash("sha256").update(alert.webhookUrl).digest("hex");
+    const policy = JSON.stringify({ eventScore: alert.eventScore, impact: alert.impact, freshMinutes: alert.freshMinutes, maxAttempts: 5, ttlMs: 24 * 60 * 60_000 });
+    return {
+      observationId: row.id,
+      ruleVersion: createHash("sha256").update(policy).digest("hex"),
+      payload: JSON.stringify({ text, content: text }),
+      policy,
+      destinationFingerprint,
+      createdAt: now,
+      expiresAt: Math.min(now + 24 * 60 * 60_000, row.published_at + alert.freshMinutes * 60_000),
+    };
+  }
+
+  async dispatchAlerts(): Promise<void> {
+    const alert = this.deps.alert;
+    if (this.alertDispatchStopped || !this.alertDeliveryEnabled || !alert?.webhookUrl) return;
+    if (this.alertDispatchPromise) return this.alertDispatchPromise;
+    if (this.alertDispatchTimer != null) clearTimeout(this.alertDispatchTimer);
+    this.alertDispatchTimer = null;
+    this.alertDispatchDueAt = null;
+    const run = this.drainAlertOutbox(alert.webhookUrl);
+    const wrapped = run.finally(() => {
+      if (this.alertDispatchPromise === wrapped) this.alertDispatchPromise = null;
     });
+    this.alertDispatchPromise = wrapped;
+    return wrapped;
+  }
+
+  private async drainAlertOutbox(webhookUrl: string): Promise<void> {
+    const fingerprint = createHash("sha256").update(webhookUrl).digest("hex");
+    try {
+      while (!this.alertDispatchStopped) {
+        const now = Date.now();
+        const claim = this.deps.db.claimAlert(now, fingerprint, 10_000, 5);
+        if (!claim) {
+          const dueAt = this.deps.db.nextAlertDispatchAt(now, fingerprint, 5);
+          if (dueAt != null) this.scheduleAlertWake(dueAt);
+          return;
+        }
+        if (!this.deps.db.alertClaimValid(claim, Date.now())) continue;
+        let outcome: "delivered" | "retry" | "failed" | "ambiguous" = "failed";
+        let status: number | null = null;
+        let category: string | null = null;
+        try {
+          const response = await fetch(webhookUrl, { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": claim.alertId }, body: claim.payload, signal: AbortSignal.timeout(5_000) });
+          status = response.status;
+          outcome = response.ok ? "delivered" : response.status >= 500 || response.status === 429 ? "retry" : "failed";
+          if (!response.ok) category = response.status === 429 ? "http_rate_limited" : response.status >= 500 ? "http_server_error" : "http_rejected";
+        } catch { outcome = "ambiguous"; category = "transport_ambiguous"; }
+        const backoff = Date.now() + Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, claim.attempt - 1));
+        this.deps.db.completeAlert(claim, outcome, Date.now(), status, category, backoff);
+        // Keep draining independent alerts after retryable and permanent failures.
+        // The saved next-attempt time below schedules only work that is not due yet.
+      }
+    } catch {
+      try { this.deps.db.logEvent("warn", "alerts", "alert dispatch worker failed; saved delivery intent remains pending"); } catch { /* preserve primary delivery state */ }
+      this.scheduleAlertWake(Date.now() + 5_000);
+    }
+  }
+
+  private scheduleAlertWake(dueAt: number): void {
+    if (this.alertDispatchStopped || !this.alertDeliveryEnabled) return;
+    if (this.alertDispatchTimer != null && this.alertDispatchDueAt != null && this.alertDispatchDueAt <= dueAt) return;
+    if (this.alertDispatchTimer != null) clearTimeout(this.alertDispatchTimer);
+    this.alertDispatchDueAt = dueAt;
+    this.alertDispatchTimer = setTimeout(() => {
+      this.alertDispatchTimer = null;
+      this.alertDispatchDueAt = null;
+      void this.dispatchAlerts();
+    }, Math.max(1, Math.min(2_147_483_647, dueAt - Date.now())));
+    this.alertDispatchTimer.unref?.();
   }
 
   /**

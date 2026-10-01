@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 /**
  * Wire contract with TypeSafe AI's System One, matching the Go adapter in
@@ -87,6 +88,35 @@ export interface JudgeOutcome {
   inputTokens: number;
   outputTokens: number;
   latencyMs: number;
+  httpStatus: number;
+}
+
+export interface PreparedJevRequest {
+  readonly body: string;
+  readonly payloadSha256: string;
+  readonly requestBytes: number;
+  readonly requestedModel: string;
+  readonly rubricSha256: string;
+}
+
+/** Serialize once so the budget, durable attempt, and HTTP request bind the same UTF-8 bytes. */
+export function prepareJevRequest(
+  model: string,
+  state: unknown,
+  questions: unknown,
+  rubricSha256 = createHash("sha256").update(JSON.stringify(questions)).digest("hex"),
+): PreparedJevRequest {
+  const actualRubricSha256 = createHash("sha256").update(JSON.stringify(questions)).digest("hex");
+  if (rubricSha256 !== actualRubricSha256) throw new Error("Prepared Jev rubric digest does not match the submitted questions");
+  const body = JSON.stringify({ model, state, questions });
+  const bytes = Buffer.from(body, "utf8");
+  return Object.freeze({
+    body,
+    payloadSha256: createHash("sha256").update(bytes).digest("hex"),
+    requestBytes: bytes.byteLength,
+    requestedModel: model,
+    rubricSha256,
+  });
 }
 
 export function validateChoiceAnswer(raw: unknown) {
@@ -129,9 +159,16 @@ export class JevClient {
   }
 
   async judge(state: unknown, questions: unknown): Promise<JudgeOutcome> {
-    if (!this.configured) throw new JevError("TypeSafe API key is not configured", undefined, false);
+    return this.judgePrepared(prepareJevRequest(this.opts.model, state, questions));
+  }
 
-    const body = JSON.stringify({ model: this.opts.model, state, questions });
+  async judgePrepared(request: PreparedJevRequest): Promise<JudgeOutcome> {
+    if (!this.configured) throw new JevError("TypeSafe API key is not configured", undefined, false);
+    const bodyBytes = Buffer.from(request.body, "utf8");
+    if (request.requestedModel !== this.opts.model) throw new Error("Prepared Jev request model differs from the configured model");
+    if (request.requestBytes !== bodyBytes.byteLength || request.payloadSha256 !== createHash("sha256").update(bodyBytes).digest("hex")) {
+      throw new Error("Prepared Jev request digest or byte count does not match its exact body");
+    }
     const started = Date.now();
     let res: Response;
     try {
@@ -141,12 +178,12 @@ export class JevClient {
           authorization: `Bearer ${this.opts.apiKey}`,
           "content-type": "application/json",
         },
-        body,
+        body: request.body,
         signal: AbortSignal.timeout(this.opts.timeoutMs),
       });
     } catch (err) {
       throw new JevError(
-        `TypeSafe request failed before a response was received: ${err instanceof Error ? err.message : String(err)}`,
+        "TypeSafe request failed before a response was received",
         undefined,
         false,
         true,
@@ -166,12 +203,8 @@ export class JevClient {
       throw new JevError(`TypeSafe responded HTTP ${res.status}; request outcome is unknown`, res.status, false, true);
     }
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new JevError(
-        `TypeSafe responded HTTP ${res.status}${text ? `: ${text.slice(0, 300)}` : ""}`,
-        res.status,
-        false,
-      );
+      await res.body?.cancel().catch(() => undefined);
+      throw new JevError(`TypeSafe responded HTTP ${res.status}`, res.status, false);
     }
 
     let raw: unknown;
@@ -183,7 +216,7 @@ export class JevClient {
     const parsed = jevResponseSchema.safeParse(raw);
     if (!parsed.success) {
       throw new JevError(
-        `TypeSafe response failed contract validation; request outcome is unknown: ${parsed.error.message}`,
+        "TypeSafe response failed contract validation; request outcome is unknown",
         res.status,
         false,
         true,
@@ -203,6 +236,7 @@ export class JevClient {
       inputTokens: parsed.data.usage.input_tokens,
       outputTokens: parsed.data.usage.output_tokens,
       latencyMs: Date.now() - started,
+      httpStatus: res.status,
     };
   }
 }

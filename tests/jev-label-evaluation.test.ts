@@ -62,10 +62,11 @@ function labelsFor(stage: "pilot" | "final" = "pilot") {
     },
   ];
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     stage,
     studyId: "sec-jev-pilot-2026-09",
     source: "sec_edgar" as const,
+    evaluationProfile: "sec_edgar_scoped_standard_v1" as const,
     sampleSeed: 481516,
     samplingWindowStart: "2026-08-01T00:00:00.000Z",
     samplingWindowEnd: "2026-09-02T00:00:00.000Z",
@@ -106,7 +107,9 @@ function wellSupportedFinalStudy() {
   const items = Array.from({ length: 30 }, (_issuer, issuerIndex) => {
     const cik = String(issuerIndex + 100000).padStart(10, "0");
     return eventClasses.map((eventType, eventIndex) => {
-      const strictAbout = issuerIndex < 10 && eventIndex < 2;
+      // This fixture models the actual issuer-scoped SEC profile, which never
+      // enters the ambiguous-identity strictAbout branch.
+      const strictAbout = false;
       const accession = `${cik}-26-${String(eventIndex + 1).padStart(6, "0")}`;
       const labels = {
         about: strictAbout ? eventIndex === 0 : (issuerIndex + eventIndex) % 2 === 0,
@@ -138,10 +141,11 @@ function wellSupportedFinalStudy() {
   }).flat();
   const populationFrame = items.map(({ reviews: _reviews, ...row }) => row);
   const labelArtifact = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     stage: "final" as const,
     studyId: "frozen-test-study",
     source: "sec_edgar" as const,
+    evaluationProfile: "sec_edgar_scoped_standard_v1" as const,
     sampleSeed: 481516,
     samplingWindowStart: "2026-08-01T00:00:00.000Z",
     samplingWindowEnd: "2026-09-02T00:00:00.000Z",
@@ -343,34 +347,25 @@ describe("offline real-source Jev label analysis", () => {
     expect(report.operations.estimatedCostUsd).toBeCloseTo(0.001488, 10);
     expect(report.calibration.status).toBe("DESCRIPTIVE_ONLY");
     expect(report.gates.eventTypeCoverage.status).toBe("PASS");
-    expect(report.inclusionBoundaries.about.overall.cutoffCounts).toEqual({ "0.5": 220, "0.8": 20 });
+    expect(report.inclusionBoundaries.about.overall.cutoffCounts).toEqual({ "0.5": 240 });
     expect(report.inclusionBoundaries.about.standard.falseInclusionRate).toBe(0);
-    expect(report.inclusionBoundaries.about.strictIdentity.falseExclusionRate).toBe(0);
+    expect(report.pathApplicability).toEqual({ standard: "IN_SCOPE", strictIdentity: "OUT_OF_SCOPE" });
+    expect(report.inclusionBoundaries.about.strictIdentity.status).toBe("NOT_APPLICABLE");
     expect(report.gates.aboutStandardPrecision.status).toBe("PASS");
-    expect(report.gates.aboutStrictIdentityPrecision.status).toBe("PASS");
+    expect(report.gates.aboutStrictIdentityPrecision.status).toBe("NOT_APPLICABLE");
     expect(report.gates.investorRelevantStandardPrecision.status).toBe("PASS");
-    expect(report.gates.investorRelevantStrictIdentityPrecision.status).toBe("PASS");
+    expect(report.gates.investorRelevantStrictIdentityPrecision.status).toBe("NOT_APPLICABLE");
     expect(report.gates.evaluationBudget.status).toBe("PASS");
     expect(report.provenance.modelRunSha256).toBe(digestJson(study.run));
   });
 
-  it("does not let strong standard-path performance hide strict-identity false inclusions", () => {
-    const study = wellSupportedFinalStudy();
-    const labelsById = new Map(study.labels.items.map((item) => [item.observationId, item]));
-    const run = parseModelRun({
-      ...study.run,
-      items: study.run.items.map((item) => {
-        const label = labelsById.get(item.observationId)!;
-        if (!label.strictAbout || label.reviews[0]!.labels.about) return item;
-        return { ...item, score: { ...item.score!, about: 0.91 } };
-      }),
-    });
-    const report = analyzeFinal({ ...study, run });
+  it("rejects strict identity labels from the SEC issuer-scoped evaluation profile", () => {
+    const raw = labelsFor("final");
+    const strictPopulation = { ...raw, populationFrame: raw.populationFrame.map((item, index) => index === 0 ? { ...item, strictAbout: true } : item) };
+    const strictSample = { ...raw, items: raw.items.map((item) => ({ ...item, strictAbout: true })) };
 
-    expect(report.inclusionBoundaries.about.overall.precision).toBeGreaterThan(0.9);
-    expect(report.inclusionBoundaries.about.strictIdentity.precision).toBe(0.5);
-    expect(report.gates.aboutStrictIdentityPrecision.status).toBe("FAIL");
-    expect(report.status).toBe("FAIL");
+    expect(() => parseLabelSet(strictPopulation)).toThrow(/does not exercise the strict identity path/i);
+    expect(() => parseLabelSet(strictSample)).toThrow(/does not exercise the strict identity path/i);
   });
 
   it("fails when estimated provider cost exceeds the pre-frozen approved ceiling", () => {

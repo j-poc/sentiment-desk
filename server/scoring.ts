@@ -410,7 +410,9 @@ export interface AlertCheck {
 }
 
 export function shouldAlert(p: AlertCheck): boolean {
-  if (p.publishedAt < p.now - p.freshMs) return false;
+  if (![p.eventScore, p.impact, p.publishedAt, p.now, p.thresholdScore, p.thresholdImpact, p.freshMs].every(Number.isFinite)) return false;
+  if (p.publishedAt > p.now || p.freshMs <= 0 || p.thresholdScore < 0 || p.thresholdImpact < 0) return false;
+  if (p.publishedAt <= p.now - p.freshMs) return false;
   return p.eventScore >= p.thresholdScore && Math.abs(p.impact) >= p.thresholdImpact;
 }
 

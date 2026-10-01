@@ -1,30 +1,208 @@
 {
+  "adapter_fingerprints": [
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "finnhub"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "finnhub"
+    },
+    {
+      "path": "server/sources/finnhub.ts",
+      "sha256": "45d05d558a260a16c3ebb4ebff9ae03498f294e6c6e55c02bd49c5b6e83f42a5",
+      "source_id": "finnhub"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "gdelt_doc_api"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "gdelt_doc_api"
+    },
+    {
+      "path": "server/sources/gdelt.ts",
+      "sha256": "6f578da4e5aadc1bc623ed700e7db1a5d27decfdfef2da5842149406e768b443",
+      "source_id": "gdelt_doc_api"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "google_news_rss"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "google_news_rss"
+    },
+    {
+      "path": "server/sources/rss.ts",
+      "sha256": "612806274c135ad19d7a13e5ef55a397f760465f883d6ba522aa0af1bc527e69",
+      "source_id": "google_news_rss"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "reddit"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "reddit"
+    },
+    {
+      "path": "server/sources/reddit.ts",
+      "sha256": "0bde5566b3100d846e35d25a9058d691bf9d1fb48862f8473f618501e3ba274a",
+      "source_id": "reddit"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "sec_edgar"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "sec_edgar"
+    },
+    {
+      "path": "server/sources/sec.ts",
+      "sha256": "d185ca76e08b669f04994f7bbd0f31727d544670a33b407fa187e7a84f6aa6c8",
+      "source_id": "sec_edgar"
+    },
+    {
+      "path": "server/jev.ts",
+      "sha256": "ee1e684e1b543bd4a82932c4bdaf71e2bcd13033f0c741790bd18658f48f9888",
+      "source_id": "typesafe_jev"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "typesafe_jev"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "x"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "x"
+    },
+    {
+      "path": "server/sources/x.ts",
+      "sha256": "7cdb016127468aafe2ab14298e959e303c98ca047936ca3353f6526d58c1632a",
+      "source_id": "x"
+    },
+    {
+      "path": "server/app.ts",
+      "sha256": "7f4c1d60a4081889bc971f104cd5731284ee5400def86833dcbc6f37d46c3d58",
+      "source_id": "yahoo_chart"
+    },
+    {
+      "path": "server/sources/quotes.ts",
+      "sha256": "b16feaf9d8e66b78e47950881e812dc401db66da12072d53f6cc415d108076cb",
+      "source_id": "yahoo_chart"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "source_id": "yahoo_finance_rss"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "yahoo_finance_rss"
+    },
+    {
+      "path": "server/sources/rss.ts",
+      "sha256": "612806274c135ad19d7a13e5ef55a397f760465f883d6ba522aa0af1bc527e69",
+      "source_id": "yahoo_finance_rss"
+    },
+    {
+      "path": "server/app.ts",
+      "sha256": "7f4c1d60a4081889bc971f104cd5731284ee5400def86833dcbc6f37d46c3d58",
+      "source_id": "yahoo_quote"
+    },
+    {
+      "path": "server/schedule.ts",
+      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "source_id": "yahoo_quote"
+    },
+    {
+      "path": "server/sources/quotes.ts",
+      "sha256": "b16feaf9d8e66b78e47950881e812dc401db66da12072d53f6cc415d108076cb",
+      "source_id": "yahoo_quote"
+    }
+  ],
   "checks": [
     {
       "exit_code": 0,
       "id": "fixture_suite",
       "kind": "fixture",
-      "output_bytes": 940,
-      "output_digest": "ededd34d8e638797e5128915801f21a9c014a7cfba68d5dbca22b4fb6a589b41",
-      "started_at": "2026-09-30T21:18:42Z",
+      "output_bytes": 1002,
+      "output_digest": "28b8e23ec597b9dd97285b89d0b9d671d6507de17351a3dcee5611a10ec9b698",
+      "source_ids": [
+        "google_news_rss",
+        "yahoo_finance_rss",
+        "gdelt_doc_api",
+        "sec_edgar",
+        "yahoo_quote",
+        "yahoo_chart",
+        "finnhub",
+        "reddit",
+        "x",
+        "typesafe_jev"
+      ],
+      "started_at": "2026-10-01T00:54:34Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "failure_recovery_regressions",
       "kind": "failure",
-      "output_bytes": 585,
-      "output_digest": "dc5e772d350ef75d34a3486d996d6d9c06684f314b4fcd59e4dd1ed82cafbb4f",
-      "started_at": "2026-09-30T21:19:30Z",
+      "output_bytes": 1107,
+      "output_digest": "24a807b767e53a7f07bfb64f20ab9284916572483db2674139010f32bc149591",
+      "source_ids": [
+        "google_news_rss",
+        "yahoo_finance_rss",
+        "gdelt_doc_api",
+        "sec_edgar",
+        "yahoo_quote",
+        "yahoo_chart",
+        "finnhub",
+        "reddit",
+        "x",
+        "typesafe_jev"
+      ],
+      "started_at": "2026-10-01T00:55:28Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "pipeline_replay_regressions",
       "kind": "replay",
-      "output_bytes": 439,
-      "output_digest": "40770753c0a2dc037cbee5a2ff9f8aa664aa0b969ead988f6411945e3d284213",
-      "started_at": "2026-09-30T21:20:02Z",
+      "output_bytes": 638,
+      "output_digest": "ba8fd709fd5d8924af0ac76ba1890ed0ed54e5e6342bede2aed60fa6fadac2bb",
+      "source_ids": [
+        "google_news_rss",
+        "yahoo_finance_rss",
+        "gdelt_doc_api",
+        "sec_edgar",
+        "yahoo_quote",
+        "yahoo_chart",
+        "finnhub",
+        "reddit",
+        "x",
+        "typesafe_jev"
+      ],
+      "started_at": "2026-10-01T00:56:13Z",
       "status": "PASS"
     },
     {
@@ -32,24 +210,43 @@
       "id": "offline_source_request_gates",
       "kind": "failure",
       "output_bytes": 8333,
-      "output_digest": "c21d17792ec2a0a42346c6ad91ec72e29f79e90dee55bf961d775b168fcc7534",
-      "started_at": "2026-09-30T21:20:03Z",
+      "output_digest": "e97af5988dbb01836d3470ecce9213b2031fee98d57284f7f69475f38735b249",
+      "source_ids": [
+        "google_news_rss",
+        "yahoo_finance_rss",
+        "gdelt_doc_api",
+        "sec_edgar",
+        "yahoo_quote",
+        "yahoo_chart",
+        "finnhub",
+        "reddit",
+        "x",
+        "typesafe_jev"
+      ],
+      "started_at": "2026-10-01T00:56:44Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
-      "output_bytes": 12864,
-      "output_digest": "c760ec5c6a7524321b116fa944a91fcc473216df297838820bff335208cbbbcd",
-      "started_at": "2026-09-30T21:20:22Z",
+      "output_bytes": 12858,
+      "output_digest": "8f23a7f1808d27ec29ef26e472451b1ddbb10020747e426705634d26b7e96f51",
+      "source_ids": [
+        "google_news_rss",
+        "yahoo_finance_rss",
+        "gdelt_doc_api",
+        "yahoo_quote",
+        "yahoo_chart"
+      ],
+      "started_at": "2026-10-01T00:57:02Z",
       "status": "PASS"
     }
   ],
-  "code_fingerprint": "1e67a1f77946ca50cf135a667f053302149ef84c3625aafa3c9cdc404628393c",
-  "contract_digest": "9e9a1278ba7bde586518d7b1b8725bc519f2a1a390152a9981ae09975075f3e8",
+  "code_fingerprint": "f04db35d1f31065cfb368fdfd9268fc04fe363a6c845046e26e98fd336d03a38",
+  "contract_digest": "6627428ee1241fdf040fcbcd310ad5b74cd29fc343a19362f2f301a854c501a0",
   "schema_version": 1,
-  "standard_digest": "134109b13a8217e5b33cff58999a602361c79c051080f622fc6a44b5f87c4898",
+  "standard_digest": "02b3a9ea75ea9e82981cac988f021a78b440bbc0407f3759a62405ffff5bf1a8",
   "status": "PASS",
-  "verified_at": "2026-09-30T21:21:29Z"
+  "verified_at": "2026-10-01T00:58:07Z"
 }

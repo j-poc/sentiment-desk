@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
-import type { Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor, ScoreBucketCursor } from "./db.js";
+import type { AlertDeliveryCursor, Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor, ScoreBucketCursor } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
@@ -47,6 +47,11 @@ const scoreBucketCursorSchema = z.object({
   scoredAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   id: z.string().min(1).max(200),
 });
+const alertDeliveryCursorSchema = z.object({
+  priority: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+  createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  alertId: z.string().uuid(),
+}).strict();
 const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed"]);
 const mentionLookupSchema = z.object({
   ids: z.array(z.string().min(1).max(200)).min(1).max(900)
@@ -72,6 +77,7 @@ export function createApp(deps: AppDeps): Hono {
       /* db file not yet created */
     }
     const healthSnapshot = deps.health.snapshot();
+    const alertPage = deps.db.alertDeliveryPage(10);
     return c.json({
       ok: true,
       externalRequestsEnabled: healthSnapshot.externalRequestsEnabled,
@@ -84,12 +90,47 @@ export function createApp(deps: AppDeps): Hono {
       health: healthSnapshot,
       deliveries: deps.db.deliverySummary(),
       deliveryHealth: deps.db.deliveryHealth(deps.deliverySources),
+      alertDelivery: {
+        configured: deps.pipeline.alertDeliveryConfigured,
+        enabled: deps.pipeline.alertDeliveryEnabled,
+        counts: deps.db.alertDeliveryCounts(),
+        recent: alertPage.items,
+        nextCursor: alertPage.nextCursor == null ? null : JSON.stringify(alertPage.nextCursor),
+      },
       usage: deps.db.usageSince(startOfDayUtc.getTime()),
       events: deps.db.recentEvents(20),
     });
   });
 
+  app.get("/api/alerts", (c) => {
+    const rawCursor = c.req.query("cursor");
+    let cursor: AlertDeliveryCursor | null = null;
+    if (rawCursor != null) {
+      if (rawCursor.length > 500) return c.json({ error: "invalid_cursor" }, 400);
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(rawCursor);
+      } catch {
+        return c.json({ error: "invalid_cursor" }, 400);
+      }
+      const parsed = alertDeliveryCursorSchema.safeParse(decoded);
+      if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
+      cursor = parsed.data;
+    }
+    const page = deps.db.alertDeliveryPage(clampNumber(c.req.query("limit"), 1, 20, 10), cursor);
+    return c.json({
+      items: page.items,
+      nextCursor: page.nextCursor == null ? null : JSON.stringify(page.nextCursor),
+    });
+  });
+
   app.get("/api/quotes", (c) => c.json(deps.market.current()));
+
+  app.get("/api/mentions/:id/jev-attempts", (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.mentionRow(id)) return c.json({ error: "unknown mention" }, 404);
+    return c.json(deps.db.jevAttemptHistory(id));
+  });
 
   app.get("/api/companies", (c) => c.json(deps.pipeline.snapshots()));
 

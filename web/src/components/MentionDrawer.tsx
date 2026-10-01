@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { Mention } from "../lib/api.js";
-import { retryMention } from "../lib/api.js";
+import type { JevAttemptSummary, Mention } from "../lib/api.js";
+import { getJSON, retryMention } from "../lib/api.js";
 import type { RetryAvailability } from "../lib/retryAvailability.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { NEU, dayTime, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
@@ -74,6 +74,8 @@ export function MentionDrawer({
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [retryState, setRetryState] = useState<RetryState>({ type: "idle" });
+  const [jevAttempts, setJevAttempts] = useState<JevAttemptSummary[] | null>(null);
+  const [jevAttemptsFailed, setJevAttemptsFailed] = useState(false);
 
   useEffect(() => {
     if (!mention) return;
@@ -117,6 +119,18 @@ export function MentionDrawer({
   useEffect(() => {
     setRetryState({ type: "idle" });
   }, [mention?.id, mention?.status, retryAvailability.kind]);
+
+  useEffect(() => {
+    if (!mention) return;
+    let active = true;
+    setJevAttempts(null);
+    setJevAttemptsFailed(false);
+    void getJSON<JevAttemptSummary[]>(`/api/mentions/${encodeURIComponent(mention.id)}/jev-attempts`).then(
+      (attempts) => { if (active) setJevAttempts(attempts); },
+      () => { if (active) setJevAttemptsFailed(true); },
+    );
+    return () => { active = false; };
+  }, [mention?.id]);
 
   if (!mention) return null;
   const s = mention.score;
@@ -297,6 +311,44 @@ export function MentionDrawer({
                     : "Awaiting judgment…"}
             </div>
           )}
+
+          <section className="mt-4 border-t border-white/[0.06] pt-2.5" aria-label="Jev request history">
+            <div className="micro">Jev request history</div>
+            <p className="mt-1 text-[9.5px] text-white/30">Exact request fingerprints and outcomes are saved; raw request bodies are not retained.</p>
+            {jevAttemptsFailed && <div role="status" className="mt-2 text-[10.5px] text-amber-200/75">Request history could not be loaded. Refresh the desk and try again.</div>}
+            {!jevAttemptsFailed && jevAttempts == null && <div role="status" className="mt-2 text-[10.5px] text-white/35">Loading request history…</div>}
+            {jevAttempts?.length === 0 && (
+              <div className="mt-2 text-[10.5px] text-white/40">
+                {mention.status === "pending" ? "No Jev request has been sent for this item." : "No request trace is stored for this item."}
+              </div>
+            )}
+            {jevAttempts?.map((attempt) => {
+              const outcome = attempt.outcome === "response" ? "response received"
+                : attempt.outcome === "rejected" ? "request rejected"
+                  : attempt.outcome === "unknown" ? "outcome unknown"
+                    : attempt.outcome === "not_sent" ? "not sent"
+                      : attempt.outcome === "dispatch_intent" ? "dispatch started"
+                        : "prepared";
+              return (
+                <div key={attempt.attemptId} className="mt-2 rounded-md border border-white/[0.06] bg-white/[0.015] px-2.5 py-2 text-[10px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-white/50">attempt {attempt.attemptNumber}</span>
+                    <span className={attempt.outcome === "response" ? "text-emerald-300/75" : attempt.outcome === "unknown" ? "text-amber-200/80" : "text-white/55"}>{outcome}</span>
+                  </div>
+                  <div className="mt-1 grid grid-cols-[6rem_1fr] gap-x-2 gap-y-0.5 text-white/35">
+                    <span>requested model</span><span className="truncate text-right text-white/60">{attempt.requestedModel}</span>
+                    <span>resolved model</span><span className="truncate text-right text-white/60">{attempt.resolvedModel ?? "unknown"}</span>
+                    <span>request size</span><span className="tabnum text-right text-white/60">{attempt.requestBytes.toLocaleString()} bytes</span>
+                    <span>HTTP result</span><span className="tabnum text-right text-white/60">{attempt.httpStatus == null ? "unknown" : attempt.httpStatus}</span>
+                    <span>tokens</span><span className="tabnum text-right text-white/60">{attempt.inputTokens == null ? "unknown" : `${attempt.inputTokens} in / ${attempt.outputTokens ?? "?"} out`}</span>
+                    <span>rubric SHA</span><code className="truncate text-right text-white/55" title={attempt.rubricSha256}>{attempt.rubricSha256}</code>
+                    <span>request SHA</span><code className="truncate text-right text-white/55" title={attempt.requestSha256}>{attempt.requestSha256}</code>
+                    {attempt.errorCategory && <><span>outcome detail</span><span className="truncate text-right text-amber-200/65">{attempt.errorCategory}</span></>}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
 
           {mention.status === "failed" && (
             <section className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/[0.05] p-3" aria-label="Retry Jev judgment">

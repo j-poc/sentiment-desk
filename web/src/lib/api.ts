@@ -84,6 +84,25 @@ export interface MentionPage {
   nextCursor: { orderAt: number; ingestedAt: number; id: string } | null;
 }
 
+export interface JevAttemptSummary {
+  attemptId: string;
+  attemptNumber: number;
+  requestSha256: string;
+  requestBytes: number;
+  requestedModel: string;
+  rubricSha256: string;
+  reservedAt: number;
+  dispatchAt: number | null;
+  outcome: "prepared" | "dispatch_intent" | "response" | "rejected" | "unknown" | "not_sent";
+  completedAt: number | null;
+  httpStatus: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  resolvedModel: string | null;
+  latencyMs: number | null;
+  errorCategory: string | null;
+}
+
 export interface ScoreBucketEvidencePage {
   bucketFromMs: number;
   bucketThroughMs: number;
@@ -283,6 +302,19 @@ export interface HealthDTO {
   uptimeSec: number;
   sseClients: number;
   dbSizeBytes: number | null;
+  alertDelivery: {
+    configured: boolean;
+    enabled: boolean;
+    counts: {
+      pending: number;
+      sending: number;
+      retrying: number;
+      failed: number;
+      paused: number;
+    };
+    recent: AlertDeliveryRecord[];
+    nextCursor: string | null;
+  };
   health: {
     externalRequestsEnabled: boolean;
     sourceApproval: {
@@ -339,6 +371,28 @@ export interface HealthDTO {
     estimatedInputCostUsd: number;
   };
   events: Array<{ at: number; level: string; source: string; message: string }>;
+}
+
+export interface AlertDeliveryRecord {
+  alertId: string;
+  observationId: string;
+  companyId: string;
+  ticker: string;
+  title: string;
+  state: "pending" | "sending" | "retrying" | "delivered" | "failed" | "expired" | "paused";
+  attemptCount: number;
+  createdAt: number;
+  expiresAt: number;
+  nextAttemptAt: number;
+  lastOutcome: "delivered" | "retry" | "failed" | "ambiguous" | "expired" | null;
+  lastHttpStatus: number | null;
+  lastAttemptAt: number | null;
+  lastErrorCategory: string | null;
+}
+
+export interface AlertDeliveryHistoryPage {
+  items: AlertDeliveryRecord[];
+  nextCursor: string | null;
 }
 
 export async function getJSON<T>(url: string): Promise<T> {

@@ -1,5 +1,94 @@
 # Sentiment Desk completion plan
 
+## Final local continuation — 2026-10-01T00:34:59Z
+
+This continuation fixed the actionable alert and health gaps from the fresh
+whole-build, investor, and UI reviews. The alert API now gives failures
+priority, counts all outstanding outcomes, validates its older-page cursor,
+and loads older rows without exposing webhook payloads. The collapsed health
+summary surfaces source, Jev, ingestion, and alert degradation beside the Desk
+controls at common widths. The webhook status now explicitly says
+“webhook not configured” before any alert exists; its regression failed before
+the fix and passes after it.
+
+The refreshed Codex in-app preview at `http://127.0.0.1:8798/` is connected to
+the real saved SQLite database. It shows `SAVED DATA ONLY`, paused external
+requests, paused Jev, and no configured webhook. Direct 1280×720 interaction
+confirmed that selecting Adobe changes the company view, and that selecting
+Apple shows 334 saved scored records across 37 score-time buckets in 7D versus
+zero scored records and buckets in 24H. The latest Apple evidence is about two
+days old. The empty 24H view offers the saved 7D history. No eligible saved
+Yahoo price points exist, so the interface does not draw a stock-price series.
+No demo or synthetic records were added to the app database; fictional parser
+and logic fixtures remain isolated to tests.
+
+Fresh bounded reviewer results remain below 10/10. The investor reviewer scored
+the saved-data workflow 8.6/10 and live readiness 2/10. The UI reviewer scored
+the interface 8.6/10 and health/alert discoverability 8.5/10 after fixes. The
+whole-build engineering reviewer scored saved-data UX 8.5/10, operations
+7.5/10, and live readiness 2/10, and found no new reproducible local defect in
+the final code-level re-review. The two independent reviewers could not operate
+the coordinator's browser session; the coordinator separately verified the
+rendered build and interactions. No task study establishes investor value or
+10/10 readiness. The GPT-6.1 Sol xhigh advisor found no justified reason to
+smooth the order-sensitive index without investor and real-label evidence.
+
+The final local suite passed 333 tests across 46 files, typecheck passed,
+production build passed, and `npm audit --omit=dev --audit-level=high` found
+zero vulnerabilities. Gitleaks initially reported 26 token-pattern matches
+only in the ignored mutable SQLite WAL. The repository now declares that
+runtime `data/` is outside source scanning and is never checkpointed; the
+redacted source scan then passed, scanning 9.88 MB with no leaks. Its 84 MB
+database files exceed the scanner's 20 MB file limit and remain local mutable
+data. Gitleaks v8.30.1 uses the checked-in path allowlist, based on the
+[official Gitleaks configuration example](https://github.com/gitleaks/gitleaks/blob/master/.gitleaks.toml).
+
+The previously recorded ETL `PASS` at `2026-09-30T21:21:29Z` predates this
+candidate and is stale. The early current `verify` attempts stopped at
+contract validation before any declared command or provider request: the first
+identified missing acquisition paths and source-bound check coverage; the
+second identified required network-plus-cache delivery states for timestamped
+observations. The schema-2 repair records adapter paths, per-check source IDs,
+and separates metadata locators from timestamped observations. Saved-value
+fallbacks retain original source times, and the Yahoo chart memory cache has a
+60-second delivery TTL. It sets `live_claim=false`: external requests are
+default-off and the bounded smoke only exercises Google News RSS, Yahoo
+Finance RSS, GDELT, Yahoo quote, and Yahoo chart. A successful smoke will not
+claim that other providers, Jev, or the app generally are live.
+The latest matching verify/check receipt in
+`project-record/4-log/live-data-etl-evidence.json` is authoritative; its code
+fingerprint must match the final candidate. The disposable Compose smoke sends
+no Jev or webhook request and does not prove provider terms, complete source
+coverage, or currentness of saved app data.
+
+The full product objective remains unmet. The user's public-source rights
+statement is recorded as an operator attestation; endpoint-specific use,
+retention, display, processing, deletion, and coverage evidence is incomplete.
+No authorized TypeSafe account-owner confirmation of permitted use,
+telemetry/retention, billing/refill behavior, limits, and spend ceiling is
+available. A contact-bearing SEC User-Agent, two independent blinded human
+label sets, an authorized real-source Jev run and passing frozen evaluation,
+and provider usage/billing records to reconcile 4,700 `legacy_unknown` rows
+are still missing. The root engineering alignment receipt is separate from
+the live-data ETL receipt. Opportunity Radar remains disabled until the
+Sentiment Desk's research and operation gates pass. Checkpoint SHA and remote
+readback are reported in the final handoff.
+
+## Live-smoke runtime recovery — 2026-10-01T00:54:07Z
+
+The schema-correct ETL run passed fixture, source failure/recovery, replay, and
+offline-startup checks, but its keyless live smoke could not reach Docker: the
+contract named the dedicated `colima-sentiment-desk-verify` context and that
+preconfigured profile was stopped. The active context was Citrini, so it was
+not reused. Starting only the existing Sentiment Desk profile without global
+activation restored the named context. The exact declared smoke then passed:
+27 real Yahoo quotes, 24 companies, a current collector sweep, and a real
+Google News pending observation appeared in the disposable database; after
+container recreation the same observation and database survived. No Jev,
+optional credential, webhook, or user database was involved. A fresh complete
+ETL `verify` followed by `check` is still required to bind these outcomes to the
+current frozen tree.
+
 ## Current goal state as of 2026-10-01
 
 The native goal remains **active** while the user asks Codex to continue. A

@@ -5,7 +5,7 @@
   "acceptance": [
     "New observations and research reads use identified real sources; synthetic/demo observations are rejected and quarantined legacy_unknown rows stay out of research and Jev paths.",
     "Jev remains the per-item classifier behind explicit source/account/budget gates, and an authorized real-source cohort passes independent provenance-backed label evaluation.",
-    "Feed failures, pending judgments, and retries remain persistent, bounded, recoverable, and reachable to the user.",
+    "Feed failures, pending judgments, and retries remain persistent, bounded, recoverable, and reachable to the user, including aggregate alert attention counts, prioritized pageable outcomes, responsive source/operations health details, and a visible not-configured webhook state before the first alert.",
     "Selecting a company updates the chart and evidence workflow on desktop and narrow screens, with accessible controls and truthful units/freshness.",
     "The live-data contract and code-bound evidence are current and passing for the scoped live source/persistence path.",
     "Opportunity Radar remains disabled until Sentiment Desk operational acceptance passes.",
@@ -19,7 +19,7 @@
     "simplicity": "Use the existing React controls, formatters, tests, and verifiers; no new runtime dependency or synthetic product fixture is introduced."
   },
   "change_safety": {
-    "checkpoint": "Work is on codex/real-data-rebuild at origin checkpoint 9fe171a before this continuation. Commit only the reviewed accumulated Sentiment Desk changes, then verify the local SHA equals origin/codex/real-data-rebuild.",
+    "checkpoint": "Work is on codex/real-data-rebuild at origin baseline 976d0234aceee749a62f3dcb53f5f73cea4c2eb2; local already contains the alert-dispatch regression reproduction commit 7a97df690902ced72b226ad942598b8e5c90969b. Commit the reviewed fix and records, push the same branch, then verify the local SHA equals origin/codex/real-data-rebuild.",
     "rollback": "Revert the new regular commit if required; preserve the local SQLite database and never roll back persisted user data to reverse source code. External requests remain off by default."
   },
   "risks": {
