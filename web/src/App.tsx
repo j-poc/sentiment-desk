@@ -18,10 +18,8 @@ import {
 } from "./lib/api.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
-import { TickerTape } from "./components/TickerTape.js";
 import { MobileCompanyPicker } from "./components/MobileCompanyPicker.js";
 import { Watchlist, DeltaChip } from "./components/Watchlist.js";
-import { Gauge } from "./components/Gauge.js";
 import { SeriesChart } from "./components/SeriesChart.js";
 import { MentionFeed } from "./components/MentionFeed.js";
 import { EvidenceBreadth } from "./components/EvidenceBreadth.js";
@@ -31,7 +29,7 @@ import { DeskConnectionState } from "./components/DeskConnectionState.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
 import { MentionDrawer } from "./components/MentionDrawer.js";
 import { Tape } from "./components/Tape.js";
-import { AlertDeliveryStatus, DeskHealthDisclosure, HealthPanel } from "./components/HealthPanel.js";
+import { AlertDeliveryStatus, HealthPanel } from "./components/HealthPanel.js";
 import { SourceCoverageDisclosure } from "./components/SourceCoverageDisclosure.js";
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
@@ -180,7 +178,7 @@ export default function App() {
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const firstEvidenceRecoveryRef = useRef(new FirstEvidenceRecovery());
   const [outcomeRefreshRevision, setOutcomeRefreshRevision] = useState(0);
-  const [windowHours, setWindowHours] = useState(24);
+  const [windowHours, setWindowHours] = useState(168);
   const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("sentiment");
   const [feedFilter, setFeedFilter] = useState<FilterKey>("all");
   const [feedGroupFilter, setFeedGroupFilter] = useState<ExactTitleGroupFilter>(null);
@@ -1044,15 +1042,8 @@ export default function App() {
     <div className="flex h-full flex-col overflow-hidden" inert={drawerMention !== null}>
       <Header connected={connected} health={health} totalMentions={totalMentions} clock={clock} />
       <MobileCompanyPicker companies={companies} selectedId={selectedId} onSelect={setSelectedId} />
-      <TickerTape
-        market={market}
-        companies={companies}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        indices={["SPY", "QQQ", "^VIX"]}
-      />
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[312px_minmax(0,1fr)] 2xl:grid-cols-[312px_minmax(0,1fr)_330px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[232px_minmax(0,1fr)]">
         <aside className="hidden min-h-0 overflow-y-auto border-r border-desk-line lg:block">
           <div className="panel-head sticky top-0 z-10 bg-[#0a0c11]/95 backdrop-blur">
             <div className="flex items-center gap-2">
@@ -1082,7 +1073,7 @@ export default function App() {
           />
         </aside>
 
-        <main className="flex min-h-0 flex-col overflow-y-auto px-3 py-2 sm:px-4 sm:py-3">
+        <main className="research-scroll flex min-h-0 flex-col overflow-y-auto px-3 py-2 sm:px-5 sm:py-3">
           <div className="mb-2 flex shrink-0 items-center gap-1" role="group" aria-label="Research view">
             {([
               ["desk", "Desk"],
@@ -1099,10 +1090,37 @@ export default function App() {
               </button>
             ))}
           </div>
-          {researchView === "desk" && <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? null} />}
-          {researchView === "desk" && <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />}
-          {researchView === "desk" && <DeskHealthDisclosure health={health} loadState={healthLoadState} />}
-          {researchView === "desk" && <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />}
+          {researchView === "desk" && (
+            <details className="desk-operations">
+              <summary>
+                <span>Sources &amp; operations</span>
+                <span className={health?.externalRequestsEnabled ? "text-emerald-200/70" : "text-amber-200/80"}>
+                  {health == null ? healthLoadState === "failed" ? "status unavailable" : "checking status" : health.externalRequestsEnabled ? "external requests enabled" : "saved data only"}
+                </span>
+                <span className="desk-operations-detail">details</span>
+              </summary>
+              <div className="desk-operations-content">
+                <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? null} />
+                <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />
+                {healthLoadState === "failed" && <p role="status" className="px-1 py-2 text-[11px] text-amber-200/80">Operations status unavailable. Waiting for the next server update.</p>}
+                {healthLoadState === "loading" && !health && <p role="status" className="px-1 py-2 text-[11px] text-white/55">Checking source, Jev, and webhook status…</p>}
+                <HealthPanel health={health} />
+                <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />
+                <details className="desk-market-activity">
+                  <summary>Market activity</summary>
+                  <div className="panel-head">
+                    <span className="micro">Jev weighted-mean movers</span>
+                    <span className="text-[9px] text-white/55">3h − 24h Δ · impact pts</span>
+                  </div>
+                  <TopMovers companies={companies} selectedId={selectedId} onSelect={setSelectedId} />
+                  <div className="panel-head mt-2 border-t border-desk-line">
+                    <span className="micro">{health?.externalRequestsEnabled && health.deliveryHealth.some((source) => source.enabled) ? "Live tape" : "Recent tape"}</span>
+                  </div>
+                  <Tape mentions={tape} tickerOf={tickerOf} onOpen={openDrawerMention} />
+                </details>
+              </div>
+            </details>
+          )}
           {selected ? (
             researchView === "radar" ? (
               <OpportunityRadar
@@ -1130,17 +1148,7 @@ export default function App() {
               />
             ) : (
             <>
-              <div className="panel grid shrink-0 grid-cols-[88px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 px-3 py-2 sm:flex sm:gap-4 sm:px-4">
-                <Gauge
-                  value={selected.index}
-                  detail={selected.indexWindow
-                    ? `${selected.indexWindow}${selected.indexWindow === "24h" ? " fallback" : ""} weighted item mean · ${selected.indexRecordCount} records`
-                    : "No scored records"}
-                  description={selected.indexWindow
-                    ? `Weighted mean of ${selected.indexRecordCount} Jev-scored source records available in the last ${selected.indexWindow}, including repeated or syndicated coverage. This item mean is separate from the time-decayed sequence in the chart, so the two values can differ. Individual impact is 100 times Jev probability of positive minus probability of negative, in impact points; this is not a share-price return, and the sentiment class is the most likely category. The 24-hour window is used only when the 3-hour window has no scored records.`
-                    : "No Jev-scored source records are available in the last 24 hours."}
-                  size={88}
-                />
+              <div className="selected-company panel shrink-0 px-3 py-2.5 sm:px-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-[18px] font-semibold">{selected.name}</h1>
@@ -1203,17 +1211,17 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <div className="mt-2 flex items-center gap-2 text-[11.5px]">
+                  <div className="mt-1.5 flex items-center gap-2 text-[11.5px]">
                     <DeltaChip
                       delta={selected.delta}
                       label={`${selected.name}: current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean`}
                     />
                     <span className="text-white/55" title="Current three-hour Jev-scored item mean minus the trailing 24-hour item mean, in impact points. The baseline includes the latest three hours; this is neither share-price return nor investor opinion.">
-                      3h vs 24h Jev mean Δ · impact points
+                      Secondary · 3h vs 24h Jev mean difference in impact points
                     </span>
                   </div>
                 </div>
-                <div className="col-span-2 flex w-full flex-row justify-between gap-1 sm:ml-auto sm:w-auto sm:shrink-0 sm:justify-start">
+                <div className="flex w-full flex-row justify-between gap-1 pt-2 sm:ml-auto sm:w-auto sm:shrink-0 sm:justify-start sm:pt-0">
                   {WINDOWS.map((w, i) => (
                     <button
                       key={w.h}
@@ -1332,21 +1340,22 @@ export default function App() {
                       seriesReady={selectedSeriesReady}
                     />
                   </div>
-                  <EvidenceBreadth
-                    mentions={evidenceBreadthMentions}
-                    hours={windowHours}
-                    loaded={activeEvidenceBreadthPage?.loaded === true}
-                    error={activeEvidenceBreadthPage?.error === true}
-                    hasMore={activeEvidenceBreadthPage?.hasMore === true}
-                    now={clock}
-                    refreshWarning={evidenceBreadthRefreshWarning}
-                    onRetry={() => setSnapshotRevision((revision) => revision + 1)}
-                    onRetryRefresh={() => void refreshBackendSnapshot()}
-                    onShowRecords={showMentionFeed}
-                    onOpenMention={openDrawerMention}
-                  />
                 </div>
               </div>
+
+              <EvidenceBreadth
+                mentions={evidenceBreadthMentions}
+                hours={windowHours}
+                loaded={activeEvidenceBreadthPage?.loaded === true}
+                error={activeEvidenceBreadthPage?.error === true}
+                hasMore={activeEvidenceBreadthPage?.hasMore === true}
+                now={clock}
+                refreshWarning={evidenceBreadthRefreshWarning}
+                onRetry={() => setSnapshotRevision((revision) => revision + 1)}
+                onRetryRefresh={() => void refreshBackendSnapshot()}
+                onShowRecords={showMentionFeed}
+                onOpenMention={openDrawerMention}
+              />
 
               {breaking.length > 0 && (
                 <div className="no-scrollbar panel mt-2 flex shrink-0 items-center gap-1.5 overflow-x-auto px-2 py-1.5">
@@ -1371,8 +1380,8 @@ export default function App() {
                 </div>
               )}
 
-              <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_330px] lg:overflow-hidden">
-                <div className="panel flex min-h-[45vh] max-h-[55vh] flex-col lg:min-h-0 lg:max-h-none" id="mention-feed-panel">
+              <div className="mt-2 grid grid-cols-1 gap-3">
+                <div className="panel flex min-w-0 flex-col" id="mention-feed-panel">
                   <div className="panel-head mentions-panel-head shrink-0">
                     <h2 id="mention-feed-heading" ref={mentionFeedHeadingRef} tabIndex={-1} className="micro m-0 p-0">
                       Mentions · {health?.health.jev.model ?? "jev"} · {feedFilter === "failed" ? "all saved history" : windowLabel(windowHours)}
@@ -1470,7 +1479,7 @@ export default function App() {
                     )}
                   </div>
                 </div>
-                <div className="flex min-h-0 flex-col gap-3 overflow-visible pb-2 pr-1 lg:overflow-y-auto lg:pb-0">
+                <div className="grid grid-cols-1 gap-3 pb-2 xl:grid-cols-2">
                   <OutcomeCheck
                     companyId={selected.id}
                     ticker={selected.ticker}
@@ -1495,27 +1504,6 @@ export default function App() {
           )}
         </main>
 
-        <aside className="hidden min-h-0 flex-col overflow-y-auto border-l border-desk-line 2xl:flex">
-          <div className="panel-head sticky top-0 z-10 bg-[#0a0c11]/95 backdrop-blur">
-            <span className="micro">Jev weighted-mean movers</span>
-            <span className="text-[9px] text-white/55">3h − 24h Δ · impact pts</span>
-          </div>
-          <TopMovers companies={companies} selectedId={selectedId} onSelect={setSelectedId} />
-
-          <div className="panel-head sticky top-0 z-0 mt-3 border-t border-desk-line bg-[#0a0c11]/95 backdrop-blur">
-            <span className="micro">
-              {health?.externalRequestsEnabled && health.deliveryHealth.some((source) => source.enabled) ? "Live tape" : "Recent tape"}
-            </span>
-          </div>
-          <Tape mentions={tape} tickerOf={tickerOf} onOpen={openDrawerMention} />
-
-          <div className="mt-3 border-t border-desk-line">
-            <div className="panel-head">
-              <span className="micro">Desk health</span>
-            </div>
-            <HealthPanel health={health} />
-          </div>
-        </aside>
       </div>
 
       <StatusBar health={health} session={session} connected={connected} tape={tape} />

@@ -54,20 +54,15 @@ export function EvidenceBreadth({
   return (
     <section className="evidence-breadth" aria-label={`${period} source evidence breadth`}>
       <div className="evidence-breadth-heading">
-        <span className="micro">Source evidence · {period} · first-page sample</span>
+        <span className="micro">Saved evidence · {period}</span>
         <span className="evidence-breadth-sample">
-          {loaded ? `${mentions.length} / up to 100 source rows${hasMore ? " · sample only · older rows available" : " · complete at load"}` : error ? "Unavailable" : "Loading…"}
+          {loaded ? `${mentions.length} of up to 100 loaded source rows${hasMore ? " · older rows available" : " · sample complete"}` : error ? "Unavailable" : "Loading…"}
         </span>
       </div>
       {refreshWarning && (
         <p className="evidence-breadth-status score-bucket-error" role="alert">
           Some saved records in this sample could not be refreshed after reconnect and may be out of date. {" "}
           <button type="button" onClick={onRetryRefresh}>Retry refresh</button>
-        </p>
-      )}
-      {loaded && !error && hasMore && (
-        <p className="evidence-breadth-caveat" role="note">
-          Counts below cover only these loaded rows, not the full {period} window. Older saved records are available in the mention feed.
         </p>
       )}
       {error ? (
@@ -77,10 +72,41 @@ export function EvidenceBreadth({
         </p>
       ) : !loaded ? (
         <p className="evidence-breadth-status" role="status">Loading saved source records for the selected window…</p>
-      ) : summary.scoredRecordCount === 0 ? (
-        <p className="evidence-breadth-status" role="status">No scored source records in this first-page sample ({summary.sourceRecordCount} saved records).</p>
       ) : (
         <>
+          <div className="evidence-record-list" aria-label={`Latest saved source records in the ${period} window`}>
+            {mentions.slice(0, 3).map((mention) => {
+              const recordAt = mention.publishedAt ?? mention.providerObservedAt ?? mention.retrievedAt;
+              const publisher = mention.publisherName || mention.source.name;
+              const timeBasis = mention.publishedAt != null ? "publisher time"
+                : mention.providerObservedAt != null ? "provider observed" : "retrieved";
+              const sentiment = mention.score ? `${mention.score.sentiment} · ${mention.score.impact > 0 ? "+" : ""}${mention.score.impact.toFixed(0)} impact` : mention.status.replaceAll("_", " ");
+              return (
+                <button
+                  className="evidence-record"
+                  key={mention.id}
+                  type="button"
+                  onClick={() => onOpenMention(mention)}
+                  aria-label={`Open saved evidence from ${publisher}: ${mention.title}. ${sentiment}. ${timeAgo(recordAt, now)} ${timeBasis}.`}
+                >
+                  <span className="evidence-record-title">{mention.title}</span>
+                  <span className="evidence-record-meta">{publisher} · {timeAgo(recordAt, now)} · {timeBasis} · {sentiment}</span>
+                </button>
+              );
+            })}
+          </div>
+          {loaded && mentions.length === 0 && <p className="evidence-breadth-status" role="status">No saved source records in this {period} window.</p>}
+          {loaded && mentions.length > 0 && summary.scoredRecordCount === 0 && <p className="evidence-breadth-status" role="status">No scored records in these {summary.sourceRecordCount} saved rows.</p>}
+          <button type="button" className="evidence-breadth-link" aria-controls="mention-feed-panel" onClick={() => onShowRecords()}>
+            Open full mention feed <span aria-hidden="true">↓</span>
+          </button>
+          <details className="evidence-coverage">
+            <summary>Coverage and title analysis <span>{summary.scoredRecordCount} scored · {summary.exactHeadlineCount} exact-title groups</span></summary>
+            {hasMore && (
+              <p className="evidence-breadth-caveat" role="note">
+                Counts below cover only these loaded rows, not the full {period} window. Older saved records are available in the mention feed.
+              </p>
+            )}
           <p className="evidence-breadth-metrics">
             <strong>{summary.scoredRecordCount} scored in this sample</strong>
             <span>{summary.exactHeadlineCount} distinct exact-title {summary.exactHeadlineCount === 1 ? "group" : "groups"}</span>
@@ -119,25 +145,17 @@ export function EvidenceBreadth({
           <p className="evidence-breadth-caveat">
             Window uses publisher, provider-observed, then retrieval time. Mixed labels means exact-title rows have different Jev most-likely classes. Exact-title matches are only a duplicate cue; publisher labels do not verify independent reporting.
           </p>
+          <RelatedHeadlineCandidates
+            candidates={relatedHeadlineCandidates}
+            loaded={loaded && !error}
+            now={now}
+            onOpenMention={onOpenMention}
+          />
+          <p className="evidence-breadth-caveat">
+            Latest source time {latestSourceTime} · latest completed Jev score {latestJevScoreTime}
+          </p>
+          </details>
         </>
-      )}
-      {loaded && !error && (
-        <RelatedHeadlineCandidates
-          candidates={relatedHeadlineCandidates}
-          loaded={loaded && !error}
-          now={now}
-          onOpenMention={onOpenMention}
-        />
-      )}
-      {loaded && !error && (
-        <p className="evidence-breadth-caveat">
-          Latest source time {latestSourceTime} · latest completed Jev score {latestJevScoreTime}
-        </p>
-      )}
-      {loaded && !error && summary.sourceRecordCount > 0 && (
-        <button type="button" className="evidence-breadth-link" aria-controls="mention-feed-panel" onClick={() => onShowRecords()}>
-          Open All mention feed <span aria-hidden="true">↓</span>
-        </button>
       )}
     </section>
   );

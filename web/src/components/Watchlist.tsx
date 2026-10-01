@@ -86,12 +86,12 @@ export function Watchlist({
             onClick={() => onSelect(c.id)}
             aria-pressed={selected}
             aria-label={`${c.name} (${c.ticker}). ${indexDescription}. ${deltaDescription}. ${priceDescription}. ${sourceFreshness}. Activate to show ${c.name} research.`}
-            className={`flex w-full items-center gap-2.5 border-b border-white/[0.04] px-3 py-2 text-left transition-colors ${
+            className={`flex w-full items-center gap-1.5 border-b border-white/[0.04] px-2 py-2 text-left transition-colors ${
               selected ? "bg-white/[0.05]" : "hover:bg-white/[0.03]"
             }`}
             style={{ borderLeft: `2px solid ${selected ? c.color : "transparent"}` }}
           >
-            <span className="w-[72px] shrink-0">
+            <span className="w-[56px] shrink-0">
               <span className="flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.color }} />
                 <span className="text-[12px] font-semibold tracking-wide">{c.ticker}</span>
@@ -99,9 +99,9 @@ export function Watchlist({
               <span className="clamp-1 mt-0.5 block text-[10.5px] text-white/60">{c.name}</span>
             </span>
 
-            <Sparkline points={sparks[c.id]} />
+            <Sparkline points={sparks[c.id]} width={32} height={20} />
 
-            <span className="w-[58px] shrink-0 text-right">
+            <span className="w-[50px] shrink-0 text-right">
               <span className={`tabnum block text-[11.5px] ${q?.delivery === "cache" ? "text-amber-300/80" : "text-white/85"}`} title={q ? priceDescription : undefined}>
                 {q ? `${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}` : "--"}
               </span>
@@ -110,7 +110,7 @@ export function Watchlist({
               </span>
             </span>
 
-            <span className="w-[52px] shrink-0 text-right">
+            <span className="w-[42px] shrink-0 text-right">
               <span
                 className="tabnum block text-[12.5px] font-semibold"
                 style={{ color }}
