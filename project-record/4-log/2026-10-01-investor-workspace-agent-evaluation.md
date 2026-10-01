@@ -204,3 +204,35 @@ outcomes/timestamps/log digests. Source-only checkpoints remain eligible for
 reviewed push while full live classification, three-class quality, billing
 reconciliation, broader scale and exact responsive viewport proof are blocked
 or unverified. No PR, merge, deployment, access, billing or license change occurs.
+
+## Health-read repair — 2026-10-02 local time
+
+The actual browser exposed a health refresh failure while the final fixture
+suite was running. The complete endpoint took9.849862seconds, exceeding the
+UI's8second deadline; after the test process stopped, an idle read took
+2.108136seconds and the browser recovered automatically without reload.
+Independent read-only diagnosis found full-history receipt ranking and global
+summary sorting on101,033 actual deliveries and12,509 observations. Root
+interrupted its own verification processes, retained that non-pass observation,
+and assigned the two health reads/indexes to a separate worktree writer.
+
+Worker8704c15 was integrated at023ef8c. Covering group enumeration and indexed
+latest seeks replace the full receipt window sort. A dedicated summary index
+finds the60th timestamp key before rowid-exact candidate ordering; a partial
+index supports recent degraded receipts. Existing databases create these
+indexes during normal Desk construction. Tests preserve null-company groups,
+adapter/company filters, quarantine, partial/ingestion states and rowid ties
+across the60-row summary boundary. All27 database regressions and typecheck
+pass. Independent review found no correctness regression in these paths.
+Grouping still scans index entries and an exceptionally large timestamp tie
+cohort may require sorting; this is not broader scale certification.
+
+Root rebuilt the complete app and restarted only its owned saved-data preview.
+Three actual complete health reads returned200 with18,876bytes in0.080907,
+0.074474 and0.036882seconds on that database. Each confirmed Luna selected,
+classifier/global external requests disabled, zero paid dispatches and Radar
+off. These idle measurements do not establish load guarantees. The final
+source-bound ETL run and under-test endpoint observations remain in their
+authoritative generated/private evidence. This record is frozen before that
+verification, preserving the final source fingerprint. No paid inference is
+performed; the reference pilot remains distinct from live qualification.

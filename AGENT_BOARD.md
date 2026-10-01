@@ -1,6 +1,6 @@
 # Sentiment Desk Agent Board
 
-Current checkpoint baseline `3838940`: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
+Current implementation baseline `023ef8c`, following pushed Luna checkpoint `857e9e4`: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
 
 | Current owner | Owned scope | State |
 |---|---|---|
@@ -10,6 +10,7 @@ Current checkpoint baseline `3838940`: the latest user requested OpenAI GPT-6 Lu
 | `/root/whole_build_luna_review` | Independent entire-build review and two scoped rechecks | Found duplicate feed filter and omitted operations attention; root repaired both, re-read confirmed with19 focused passes; full live/quality proof remains absent |
 | `/root/luna_blind_reference_a`, `/root/luna_blind_reference_b` | Two fresh-context blinded30case real SEC reference sets | Complete; original3case/11field disagreements preserved |
 | `/root/luna_blind_adjudicator` | Fresh blinded third review of3 disputed real inputs | Complete; unsupported labels remain null, no model outputs seen |
+| `/root/health_read_performance` | Indexed delivery health/summary reads and database regressions in investor-ui worktree | Integrated at023ef8c from8704c15;27 database tests/typecheck pass; independent source review found no correctness regression; actual idle health reads37–81ms on101,033 receipts |
 | `/root` | Web, shared records/contracts, source cohort/labels, integration, runtime/browser proof and Git | Final scoped ETL/Git verification; OpenAI live activation blocked |
 
 The following board entries are historical and do not replace current ownership.
