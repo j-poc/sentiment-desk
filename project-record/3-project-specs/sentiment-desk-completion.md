@@ -27,6 +27,25 @@ and expose pending/failure/freshness/model-quality limitations. No synthetic
 application records, new Radar expansion, license or release action is allowed.
 The trace is `2026-10-01-investor-workspace-agent-evaluation.md`.
 
+## OpenAI Luna replacement — current scope
+
+The user explicitly requested research and replacement with OpenAI's Luna.
+Official documentation confirms GPT-6 Luna supports Responses and strict
+Structured Outputs. It is a categorical alternative to Jev; probability service
+compatibility is not established. New records use a distinct categorical
+profile; genuine historical Jev probabilities, numeric indices and archive
+remain unchanged. No invented confidence or one-hot probability is permitted.
+
+Missing OpenAI API credentials currently block a live request. Codex/ChatGPT
+model access does not establish direct API access or billing. Paid dispatch
+requires finite request, byte and USD caps with durable pre-dispatch reservation.
+There is no automatic TypeSafe fallback. The new frozen SEC cohort and blinded
+agent references will qualify the exact Luna profile; fixture passes do not
+establish real classification quality. Current native goal wording cannot be
+edited/resumed through the available status-only tool and remains blocked.
+
+The entries below are historical and do not supersede this current scope.
+
 ## Latest native goal status check — 2026-10-01
 
 After the user's latest continuation, the goal service reports the existing

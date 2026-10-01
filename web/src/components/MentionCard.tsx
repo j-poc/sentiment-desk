@@ -1,5 +1,6 @@
 import type { Mention } from "../lib/api.js";
 import { NEU, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
+import { CategoricalJudgment } from "./CategoricalJudgment.js";
 
 const TIER_DOT: Record<string, string> = {
   wire: "#e2e8f0",
@@ -79,7 +80,7 @@ export function MentionCard({
   const s = m.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
   const impactColor = s ? (s.impact > 0 ? "#34d399" : s.impact < 0 ? "#f87171" : NEU) : NEU;
-  const offTarget = m.status === "off_target";
+  const offTarget = m.status === "off_target" || m.status === "excluded";
 
   const body = (
     <>
@@ -130,7 +131,8 @@ export function MentionCard({
       </div>
 
       {m.status === "pending" && <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>}
-      {m.status === "scoring" && <div className="mt-2 text-[11px] text-sky-200/70">Jev is judging this item…</div>}
+      {m.classification && <CategoricalJudgment judgment={m.classification} />}
+      {m.status === "scoring" && <div className="mt-2 text-[11px] text-sky-200/70">Classifying this item…</div>}
       {m.status === "retrying" && (
         <div className="mt-2 text-[11px] text-amber-200/80" title={m.error ?? ""}>
           retry scheduled{m.scoreRetryAt == null ? "" : ` · ${new Date(m.scoreRetryAt).toLocaleTimeString()}`}

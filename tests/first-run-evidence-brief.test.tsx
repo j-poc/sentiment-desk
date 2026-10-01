@@ -68,4 +68,13 @@ describe("FirstRunEvidenceBrief", () => {
     expect(markup).toContain("SEC collection is enabled");
     expect(markup).toContain("SEC source allowlist");
   });
+
+  it("directs new Luna installations to the selected provider while preserving the Jev archive", () => {
+    const markup = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="empty" secCollectorEnabled={true} jevSecScoringEnabled={true} classifierProvider="openai_luna" classifierSecClassificationEnabled={false} classifierBlockedReason="OpenAI API key missing" />);
+    expect(markup).toContain("enable Luna for SEC filings");
+    expect(markup).toContain("dollar cap");
+    expect(markup).toContain("OpenAI API key missing");
+    expect(markup).not.toContain("enable Jev for SEC");
+    expect(markup).toContain("separate from the archived Jev probabilities");
+  });
 });

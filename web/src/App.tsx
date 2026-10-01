@@ -36,6 +36,7 @@ import { StatusBar } from "./components/StatusBar.js";
 import { FirstRunEvidenceBrief, FirstRunNoLocalData } from "./components/FirstRunEvidenceBrief.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
+import { matchesMentionFeedFilter } from "./lib/mention-filters.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
@@ -107,21 +108,6 @@ type ScoreBucketEvidenceState = {
   error: boolean;
   loadMoreError: boolean;
 };
-
-function isUnscoredMention(mention: Mention): boolean {
-  return ["failed", "pending", "retrying", "scoring", "corrupt"].includes(mention.status);
-}
-
-function matchesMentionFeedFilter(mention: Mention, filter: FilterKey): boolean {
-  switch (filter) {
-    case "all": return true;
-    case "bull": return mention.status === "scored" && mention.score?.sentiment === "positive";
-    case "bear": return mention.status === "scored" && mention.score?.sentiment === "negative";
-    case "material": return mention.status === "scored" && (mention.score?.material ?? 0) >= 0.6;
-    case "offtarget": return mention.status === "off_target";
-    case "failed": return isUnscoredMention(mention);
-  }
-}
 
 function mergeScoreBucketMentions(...pages: Mention[][]): Mention[] {
   const byId = new Map<string, Mention>();
@@ -864,7 +850,7 @@ export default function App() {
     && !localObservationArrived;
   const healthSources = health
     ? [health.health.rss, health.health.gdelt, health.health.x, health.health.quotes, health.health.sec,
-      health.health.finnhub, health.health.reddit, health.health.jev]
+      health.health.finnhub, health.health.reddit, health.health.classifier ?? health.health.jev]
     : [];
   const healthSourceErrors = healthSources.filter((source) =>
     source.lastErrorAt != null && (source.lastOkAt == null || source.lastErrorAt > source.lastOkAt),
@@ -1124,7 +1110,7 @@ export default function App() {
                   </span>
                   {healthAttentionCount > 0 && healthLoadState !== "failed" && <span className="text-amber-200/80">{healthAttentionCount} health or alert signals</span>}
                   {webhookNotConfigured && <span className="text-amber-200/85">webhook not configured</span>}
-                  <span className="text-white/50">Jev output independently unvalidated</span>
+                  <span className="text-white/50">Model output independently unvalidated</span>
                 </span>
                 <span className="desk-operations-detail">details</span>
               </summary>
@@ -1132,7 +1118,7 @@ export default function App() {
                 <SourceCoverageDisclosure externalRequestsEnabled={health?.externalRequestsEnabled ?? null} />
                 <AlertDeliveryStatus delivery={health?.alertDelivery ?? null} onOpenEvidence={openAlertEvidence} />
                 {healthLoadState === "failed" && <p role="status" className="px-1 py-2 text-[11px] text-amber-200/80">Operations status unavailable. Waiting for the next server update.</p>}
-                {healthLoadState === "loading" && !health && <p role="status" className="px-1 py-2 text-[11px] text-white/55">Checking source, Jev, and webhook status…</p>}
+                {healthLoadState === "loading" && !health && <p role="status" className="px-1 py-2 text-[11px] text-white/55">Checking source, classifier, and webhook status…</p>}
                 <HealthPanel health={health} />
                 {!firstRunActive && <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />}
                 <details className="desk-market-activity">
@@ -1166,6 +1152,9 @@ export default function App() {
                 state="empty"
                 secCollectorEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.secCollectorEnabled}
                 jevSecScoringEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.jevSecScoringEnabled}
+                classifierProvider={firstRunEvidence.state === "ready" ? firstRunEvidence.classifierProvider : health?.health.classifier?.provider}
+                classifierSecClassificationEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.classifierSecClassificationEnabled === true}
+                classifierBlockedReason={firstRunEvidence.state === "ready" ? firstRunEvidence.classifierBlockedReason : health?.health.classifier?.blockedReason}
               />
             ) : firstRunUndetermined ? (
               <FirstRunNoLocalData
@@ -1275,11 +1264,22 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="panel mt-2 shrink-0">
+              {health?.health.classifier?.provider === "openai_luna" && (
+                <p className="mt-2 px-1 text-[11px] leading-relaxed text-white/55" role="note">
+                  New judgments use Luna categories. The index below contains historical Jev scores only; Luna does not create probability or impact points.
+                  {!health.health.classifier.enabled && health.health.classifier.blockedReason && <span className="ml-1 text-amber-200/85">{health.health.classifier.blockedReason}.</span>}
+                </p>
+              )}
+              {selectedSeriesReady && !selectedSeriesHasSentiment && health?.health.classifier?.provider === "openai_luna" && chartMode === "sentiment" ? (
+                <section className="panel mt-2 px-3 py-3 text-[12px] text-white/55" role="status">
+                  No historical Jev index in this window. Inspect saved source records and categorical judgments below.
+                  <button type="button" className="ml-2 rounded border border-white/10 px-2 py-1 text-white/75" onClick={() => setChartMode("comparison")}>Inspect saved price history</button>
+                </section>
+              ) : <div className="panel mt-2 shrink-0">
                 <div className="panel-head chart-panel-head">
                   <div className="chart-panel-topline">
                     <span className="micro">
-                      {chartMode === "comparison" ? "Score-time Jev Impact Index + Price" : "Score-time Jev Impact Index"}
+                      {chartMode === "comparison" ? "Historical Jev Impact Index + Price" : "Historical Jev Impact Index"}
                     </span>
                     <button
                       onClick={() => setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"))}
@@ -1376,7 +1376,7 @@ export default function App() {
                     />
                   </div>
                 </div>
-              </div>
+              </div>}
 
               <EvidenceBreadth
                 mentions={evidenceBreadthMentions}
@@ -1419,7 +1419,7 @@ export default function App() {
                 <div className="panel flex min-w-0 flex-col" id="mention-feed-panel">
                   <div className="panel-head mentions-panel-head shrink-0">
                     <h2 id="mention-feed-heading" ref={mentionFeedHeadingRef} tabIndex={-1} className="micro m-0 p-0">
-                      Mentions · {health?.health.jev.model ?? "jev"} · {feedFilter === "failed" ? "all saved history" : windowLabel(windowHours)}
+                      Source records · {feedFilter === "failed" ? "all saved history" : windowLabel(windowHours)}
                       {mentionsFailed && <span className="ml-2 normal-case tracking-normal text-amber-300/80">refresh failed</span>}
                     </h2>
                     <div className="mentions-filters">
@@ -1484,10 +1484,10 @@ export default function App() {
                                 ? "No saved mentions in this window yet."
                                 : !health.externalRequestsEnabled || !health.deliveryHealth.some((source) => source.enabled)
                                   ? "No saved mentions in this window yet. Live collection is paused."
-                                  : !health.health.jev.enabled
-                                    ? "No saved mentions in this window yet. Jev scoring is paused; collected real-source items remain pending."
-                                    : "No saved mentions in this window yet. Waiting for a real-source delivery and Jev judgment."
-                              : feedFilter === "all" && selectedMentions.length > 0 && selectedMentions.every((mention) => mention.status === "off_target")
+                                  : !(health.health.classifier ?? health.health.jev).enabled
+                                    ? "No saved mentions in this window yet. Classification is paused; collected real-source items remain pending."
+                                    : "No saved mentions in this window yet. Waiting for a real-source delivery and classification."
+                              : feedFilter === "all" && selectedMentions.length > 0 && selectedMentions.every((mention) => mention.status === "off_target" || mention.status === "excluded")
                                 ? activeMentionFeed?.nextCursor != null
                                   ? `The newest ${selectedMentions.length} saved items are off-target. Load older items or choose Off-target to inspect them.`
                                   : `No in-scope saved mentions. ${selectedMentions.length} off-target ${selectedMentions.length === 1 ? "item is" : "items are"} hidden; choose Off-target to review them.`

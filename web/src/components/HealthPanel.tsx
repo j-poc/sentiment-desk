@@ -15,6 +15,8 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
   if (!health) return null;
   const { jev, rss, gdelt, x } = health.health;
   const { sourceApproval } = health.health;
+  const classifier = health.health.classifier ?? jev;
+  const lunaSelected = health.health.classifier?.provider === "openai_luna";
 
   return (
     <div className="px-4 py-3.5 text-[11px]">
@@ -26,16 +28,25 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
           : `${sourceApproval.approvedCollectors.length} approved source flag(s) · ${sourceApproval.approvedCollectors.join(", ") || "none"}`}
         wrap
       />
-      <Row label="Jev account-use flag" value={sourceApproval.typesafeAccountUseApproved ? "set · operator attestation" : "missing · dispatch blocked"} wrap />
-      <Row label="engine" value={`${jev.model} · ${health.externalRequestsEnabled ? jev.enabled ? "live" : "off" : "paused"}`} />
+      <Row label={lunaSelected ? "OpenAI account-use flag" : "Jev account-use flag"} value={(lunaSelected ? sourceApproval.openaiAccountUseApproved : sourceApproval.typesafeAccountUseApproved) ? "set · operator attestation" : "missing · dispatch blocked"} wrap />
+      <Row label="engine" value={`${classifier.model} · ${health.externalRequestsEnabled ? classifier.enabled ? "enabled" : "blocked" : "paused"}`} />
+      {health.health.classifier?.blockedReason && <Row label="classifier gate" value={health.health.classifier.blockedReason} wrap />}
       <div role="note" className="mt-1 text-[9.5px] text-amber-200/55">
         Approval flags are operator attestations; they do not independently verify source rights or account terms.
       </div>
-      <Row label="source-identified judged today" value={String(health.usage.judgedItems)} />
-      <Row label="est. input cost · identified sources" value={fmtCost(health.usage.estimatedInputCostUsd)} />
-      {jev.lastError && (
-        <div className="mt-1 clamp-2 text-red-400/80" title={jev.lastError}>
-          {jev.lastError}
+      <Row label="historical Jev judgments today" value={String(health.usage.judgedItems)} />
+      <Row label="Jev input estimate · identified sources" value={fmtCost(health.usage.estimatedInputCostUsd)} />
+      {health.classifierUsage && (
+        <>
+          <Row label="Luna dispatched / reserved today" value={`${health.classifierUsage.requests} / ${health.classifierUsage.reservedRequests}`} />
+          <Row label="Luna cost estimate / reserved" value={`${fmtCost(health.classifierUsage.estimatedCostUsd)} / ${fmtCost(health.classifierUsage.reservedCostUsd)}`} />
+          <Row label="Luna unknown outcomes" value={String(health.classifierUsage.unknownOutcomes)} />
+          <p className="mt-1 text-[9.5px] text-white/40">Input plus output estimates are not invoices or account balances. Unknown outcomes retain their full cost reservation.</p>
+        </>
+      )}
+      {classifier.lastError && (
+        <div className="mt-1 clamp-2 text-red-400/80" title={classifier.lastError}>
+          {classifier.lastError}
         </div>
       )}
 
@@ -136,8 +147,8 @@ export function DeskHealthDisclosure({ health, loadState = "loading" }: { health
   if (!health) return (
     <p role="status" aria-live="polite" className="mb-2 px-1 text-[10.5px] text-amber-200/80">
       {loadState === "failed"
-        ? "Operations status unavailable. Source, Jev, and webhook state could not be loaded. Waiting for the next server update."
-        : "Checking source, Jev, and webhook status…"}
+        ? "Operations status unavailable. Source, classifier, and webhook state could not be loaded. Waiting for the next server update."
+        : "Checking source, classifier, and webhook status…"}
     </p>
   );
   const degradedDeliveries = health.deliveryHealth.filter((delivery) =>
@@ -147,14 +158,14 @@ export function DeskHealthDisclosure({ health, loadState = "loading" }: { health
   ).length;
   const blockedSources = health.health.sourceApproval.blockedRequestedCollectors.length;
   const sourceErrors = [health.health.rss, health.health.gdelt, health.health.x, health.health.quotes,
-    health.health.sec, health.health.finnhub, health.health.reddit, health.health.jev]
+    health.health.sec, health.health.finnhub, health.health.reddit, health.health.classifier ?? health.health.jev]
     .filter((source) => source.lastErrorAt != null && (source.lastOkAt == null || source.lastErrorAt > source.lastOkAt)).length;
   const alertsNeedingAttention = Object.values(health.alertDelivery.counts).reduce((sum, count) => sum + count, 0);
   const operationalIssues = degradedDeliveries + sourceErrors + blockedSources + alertsNeedingAttention;
   const mode = health.externalRequestsEnabled ? "external requests enabled" : "saved data only";
   return (
     <>
-    {loadState === "failed" && <p role="status" aria-live="polite" className="mb-2 px-1 text-[10.5px] text-amber-200/80">Operations refresh failed. Showing the last received source, Jev, and webhook status.</p>}
+    {loadState === "failed" && <p role="status" aria-live="polite" className="mb-2 px-1 text-[10.5px] text-amber-200/80">Operations refresh failed. Showing the last received source, classifier, and webhook status.</p>}
     <details className="mt-3 border-t border-desk-line pt-2.5 2xl:hidden">
       <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded px-1 text-white/55 hover:bg-white/[0.025] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 [&::-webkit-details-marker]:hidden">
         <span className="micro">Desk health</span>

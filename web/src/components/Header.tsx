@@ -1,11 +1,6 @@
 import type { HealthDTO } from "../lib/api.js";
 import { clockTime, fmtCost } from "../lib/format.js";
 
-/**
- * Engine chip states, so the desk never pretends:
- *  - JEV ENABLED: configured scoring requests may be sent for approved records
- *  - JEV PAUSED: the request path is unavailable; check its explicit gates
- */
 function engineChip(health: HealthDTO | null) {
   if (!health) return null;
   if (!health.health.externalRequestsEnabled) {
@@ -15,20 +10,22 @@ function engineChip(health: HealthDTO | null) {
       </span>
     );
   }
-  if (health.health.jev.enabled) {
+  const classifier = health.health.classifier ?? health.health.jev;
+  const engine = health.health.classifier?.provider === "openai_luna" ? "LUNA" : "JEV";
+  if (classifier.enabled) {
     return (
       <span className="flex items-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-emerald-300">
         <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />
-        JEV ENABLED
+        {engine} ENABLED
       </span>
     );
   }
   return (
     <span
       className="rounded-md border border-amber-300/25 bg-amber-300/[0.07] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.12em] text-amber-200/90"
-      title="Jev dispatch is unavailable. Check credentials, account-use approval, approved source overlap, and configured daily request/byte limits."
+      title={health.health.classifier?.blockedReason ?? "Classifier dispatch is unavailable. Check credentials, account approval, approved sources and daily budgets."}
     >
-      JEV PAUSED
+      {engine} PAUSED
     </span>
   );
 }
@@ -59,12 +56,16 @@ export function Header({
       {engineChip(health)}
 
       <div className="ml-auto flex items-center gap-5 text-[11px] text-white/45">
-        {usage && (
+        {health?.health.classifier?.provider === "openai_luna" && health.classifierUsage ? (
+          <span className="tabnum hidden md:inline" title="Estimated input plus output cost of responses with recorded usage; reserved cost also covers unknown outcomes. These are local controls, not provider invoice or balance evidence.">
+            Luna est. {fmtCost(health.classifierUsage.estimatedCostUsd)} · {health.classifierUsage.requests} requests today
+          </span>
+        ) : usage && (
           <span
             className="tabnum hidden md:inline"
             title="Input-cost estimate for judgments with identified source provenance; excludes unknown-source history and failed or retried requests. Not an invoice."
           >
-            est. input {fmtCost(usage.estimatedInputCostUsd)} · {usage.judgedItems} source-identified judgments today
+            Jev historical input est. {fmtCost(usage.estimatedInputCostUsd)} · {usage.judgedItems} source-identified judgments today
           </span>
         )}
         <span className="tabnum hidden sm:inline">

@@ -1,9 +1,9 @@
-import type { ArchivedRun } from "../lib/api.js";
+import type { FirstRunEvidenceDTO } from "../lib/api.js";
 
 type Props = (
   | { state: "loading" }
   | { state: "error" }
-  | { state: "ready"; eligibleObservationCount: number; secCollectorEnabled: boolean; jevSecScoringEnabled: boolean; archivedRun: ArchivedRun | null }
+  | ({ state: "ready" } & FirstRunEvidenceDTO)
 ) & { localObservationArrived?: boolean };
 
 function timestamp(value: number): string {
@@ -64,25 +64,34 @@ export function FirstRunNoLocalData({
   state,
   secCollectorEnabled,
   jevSecScoringEnabled,
+  classifierProvider,
+  classifierSecClassificationEnabled,
+  classifierBlockedReason,
 }: {
   company: string;
   ticker: string;
   state: "empty" | "checking" | "unavailable";
   secCollectorEnabled: boolean;
   jevSecScoringEnabled: boolean;
+  classifierProvider?: "openai_luna" | "typesafe";
+  classifierSecClassificationEnabled?: boolean;
+  classifierBlockedReason?: string | null;
 }) {
   const description = state === "empty"
     ? "No eligible source-attributed observations are available for this installation, so there is no company trend to chart. The archived Tesla filing above belongs to a separate historical run and does not supply this company’s data."
     : state === "checking"
       ? "The Desk is checking local history before deciding whether a company chart is available."
       : "The Desk cannot verify whether this company has saved chart data right now. It will retry automatically; an empty chart is hidden until history can be checked.";
-  const nextStep = secCollectorEnabled && jevSecScoringEnabled
+  const lunaSelected = classifierProvider === "openai_luna";
+  const engine = lunaSelected ? "Luna" : "Jev";
+  const classifierEnabled = lunaSelected ? classifierSecClassificationEnabled === true : jevSecScoringEnabled;
+  const nextStep = secCollectorEnabled && classifierEnabled
     ? "Check the latest SEC delivery and ingestion state; enabled collectors do not guarantee that a filing has been saved."
-    : !secCollectorEnabled && !jevSecScoringEnabled
-      ? "An operator needs to enable external requests, approve SEC collection, and configure its contact, then enable Jev for SEC with account approval and finite request limits. This page does not change settings or start provider requests."
+    : !secCollectorEnabled && !classifierEnabled
+      ? `An operator needs to enable external requests, approve SEC collection and configure its contact, then enable ${engine} for SEC with account approval, a key and finite budgets. This page does not change settings or start provider requests.`
       : !secCollectorEnabled
-        ? "An operator needs to configure and approve the SEC source. Jev is enabled for SEC filings, but cannot score until an eligible filing is saved."
-        : "An operator needs to enable Jev for SEC filings with account approval, a key, and finite request limits. New SEC filings remain unscored until then.";
+        ? `An operator needs to configure and approve the SEC source. ${engine} is enabled for SEC filings, but cannot classify until an eligible filing is saved.`
+        : `An operator needs to enable ${engine} for SEC filings with account approval, a key and finite request limits${lunaSelected ? ", byte limits and a dollar cap" : ""}. New SEC filings remain unscored until then.`;
 
   return (
     <section className="first-run-company-empty" role="status" aria-labelledby="first-run-company-title">
@@ -98,9 +107,11 @@ export function FirstRunNoLocalData({
           <p><strong>SEC source:</strong> {secCollectorEnabled
             ? "SEC collection is enabled; check the latest SEC delivery and ingestion state if filings do not appear."
             : "Enable external requests, approve the SEC collector, and configure its contact in the SEC User-Agent to collect filings."}</p>
-          <p><strong>SEC scoring:</strong> {jevSecScoringEnabled
-            ? "Jev scoring is enabled for SEC filings; new eligible evidence can be scored as it arrives."
-            : "Configure Jev credentials, account-use approval, a finite request budget, and an SEC source allowlist to score evidence."}</p>
+          <p><strong>SEC classification:</strong> {classifierEnabled
+            ? `${engine} classification is enabled for SEC filings; new eligible evidence can be classified as it arrives.`
+            : `Configure ${engine} credentials, account-use approval, finite budgets and an SEC source allowlist to classify evidence.`}</p>
+          {classifierBlockedReason && <p><strong>Current classifier gate:</strong> {classifierBlockedReason}</p>}
+          {lunaSelected && <p>Luna categories stay separate from the archived Jev probabilities and do not create a numeric sentiment index.</p>}
             </div>
           </details>
         </>

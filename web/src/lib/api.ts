@@ -1,7 +1,7 @@
 /**
  * API client: typed mirrors of the server DTOs, fetch helpers, and one
  * EventSource wrapper with liveness callbacks. The browser never sees source
- * credentials; Jev retry is the only explicit write action.
+ * credentials; classifier retry is the only explicit write action.
  */
 import { z } from "zod";
 import { withReadDeadline } from "./bounded-read.js";
@@ -28,7 +28,38 @@ export interface CompanySnapshot {
 }
 
 export type Sentiment = "negative" | "neutral" | "positive";
-export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off_target" | "failed" | "corrupt";
+export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off_target" | "failed" | "corrupt" | "classified" | "excluded" | "review_required";
+
+/** Luna categories remain separate from historical Jev probabilities and index values. */
+export interface CategoricalClassification {
+  provider: "openai_luna";
+  modelRequested: string;
+  modelReturned: string | null;
+  promptVersion: string;
+  promptSha256: string;
+  schemaVersion: string;
+  schemaSha256: string;
+  sentiment: Sentiment | null;
+  eventType: string | null;
+  takeaway: string | null;
+  about: boolean | null;
+  investorRelevant: boolean | null;
+  material: boolean | null;
+  evidenceSufficient: boolean;
+  summary: string | null;
+  supportingExcerpt: string | null;
+  disposition: "classified" | "excluded" | "review_required";
+  responseId: string | null;
+  responseSha256: string;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+  estimatedCostUsd: number | null;
+  latencyMs: number;
+  classifiedAt: number;
+}
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
 export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
 
@@ -58,6 +89,9 @@ export interface FirstRunEvidenceDTO {
   secCollectorEnabled: boolean;
   jevSecScoringEnabled: boolean;
   archivedRun: ArchivedRun | null;
+  classifierProvider?: "openai_luna" | "typesafe";
+  classifierSecClassificationEnabled?: boolean;
+  classifierBlockedReason?: string | null;
 }
 
 export interface MentionScore {
@@ -105,6 +139,7 @@ export interface Mention {
   scoreRetryAt: number | null;
   usageCheckRequired: boolean;
   score: MentionScore | null;
+  classification?: CategoricalClassification | null;
   error: string | null;
 }
 
@@ -114,6 +149,7 @@ export interface MentionPage {
 }
 
 export interface JevAttemptSummary {
+  provider?: "typesafe" | "openai_luna";
   attemptId: string;
   attemptNumber: number;
   requestSha256: string;
@@ -130,6 +166,14 @@ export interface JevAttemptSummary {
   resolvedModel: string | null;
   latencyMs: number | null;
   errorCategory: string | null;
+  cachedInputTokens?: number | null;
+  reasoningTokens?: number | null;
+  totalTokens?: number | null;
+  estimatedCostUsd?: number | null;
+  reservedCostUsd?: number | null;
+  responseId?: string | null;
+  responseSha256?: string | null;
+  schemaSha256?: string | null;
 }
 
 export interface ScoreBucketEvidencePage {
@@ -331,6 +375,17 @@ export interface HealthDTO {
   uptimeSec: number;
   sseClients: number;
   dbSizeBytes: number | null;
+  classifierUsage?: {
+    requests: number;
+    reservedRequests: number;
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    estimatedCostUsd: number;
+    reservedCostUsd: number;
+    unknownOutcomes: number;
+  };
   alertDelivery: {
     configured: boolean;
     enabled: boolean;
@@ -352,6 +407,9 @@ export interface HealthDTO {
       blockedRequestedCollectors: CollectorId[];
       typesafeAccountUseApproved: boolean;
       jevAllowedCollectors: CollectorId[];
+      openaiAccountUseApproved?: boolean;
+      openaiAllowedCollectors?: CollectorId[];
+      openaiBlockedCollectors?: CollectorId[];
     };
     rss: SourceHealth;
     gdelt: SourceHealth;
@@ -361,6 +419,12 @@ export interface HealthDTO {
     finnhub: SourceHealth;
     reddit: SourceHealth;
     jev: SourceHealth & { model: string };
+    classifier?: SourceHealth & {
+      provider: "openai_luna" | "typesafe";
+      model: string;
+      configured: boolean;
+      blockedReason: string | null;
+    };
   };
   deliveries: Array<{
     collector: CollectorId;
@@ -463,8 +527,10 @@ export async function lookupMentionsByIds(companyId: string, ids: string[]): Pro
 
 const retryErrorSchema = z.object({ error: z.string() });
 const retryErrorCopy: Record<string, string> = {
-  provider_usage_review_required: "Check TypeSafe usage before authorizing another attempt.",
+  provider_usage_review_required: "Check provider usage before authorizing another attempt.",
   mention_not_retryable: "This item changed state. Refresh its details before retrying.",
+  classifier_not_configured: "The selected classifier is blocked. Check its credentials, authorization and budgets.",
+  classifier_daily_budget_exhausted: "The classifier daily budget is exhausted. The item remains pending until the next UTC day.",
   jev_not_configured: "Jev is not configured in the running desk.",
   jev_daily_budget_exhausted: "The daily Jev input budget is exhausted. The item remains pending until the next UTC day.",
   retry_confirmation_required: "Confirm the new request and provider-usage review before retrying.",
@@ -484,8 +550,8 @@ export async function retryMention(
   const body: unknown = await response.json().catch(() => null);
   const parsed = retryErrorSchema.safeParse(body);
   const message = parsed.success
-    ? retryErrorCopy[parsed.data.error] ?? "Jev retry failed."
-    : "Jev retry failed. Refresh the desk and try again.";
+    ? retryErrorCopy[parsed.data.error] ?? "Classification retry failed."
+    : "Classification retry failed. Refresh the desk and try again.";
   throw new Error(message);
 }
 

@@ -52,7 +52,7 @@ describe("HealthPanel source approval disclosure", () => {
     const loading = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health: null, loadState: "loading" }));
     const failed = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health: null, loadState: "failed" }));
 
-    expect(loading).toContain("Checking source, Jev, and webhook status");
+    expect(loading).toContain("Checking source, classifier, and webhook status");
     expect(loading).not.toContain("Operations status unavailable");
     expect(failed).toContain("Operations status unavailable");
     expect(failed).not.toContain("Checking source");

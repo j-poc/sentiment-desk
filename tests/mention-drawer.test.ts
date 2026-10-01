@@ -58,7 +58,7 @@ describe("MentionDrawer retry availability", () => {
       expect(html).toContain(availability.reason);
       expect(html).toContain("source request receipt");
       expect(html).toContain("unlinked · historical record");
-      expect(html).toContain("Jev request history");
+      expect(html).toContain("Classifier request history");
       expect(html).toContain("Loading request history");
       expect(html).not.toContain(">Retry Jev</button>");
       expect(html).not.toContain("Send new Jev request");

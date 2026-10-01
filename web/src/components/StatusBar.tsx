@@ -23,7 +23,7 @@ function ingestP50(tape: Mention[]): string {
 
 function p50Latency(tape: Mention[]): string {
   const vals = tape
-    .map((m) => m.score?.latencyMs)
+    .map((m) => m.classification?.latencyMs ?? m.score?.latencyMs)
     .filter((v): v is number => v != null)
     .sort((a, b) => a - b);
   if (vals.length === 0) return "--";
@@ -48,9 +48,9 @@ export function StatusBar({
   const engine = health
     ? !health.externalRequestsEnabled
       ? "paused offline"
-      : health.health.jev.enabled
-      ? health.health.jev.model
-      : "awaiting key"
+      : (health.health.classifier ?? health.health.jev).enabled
+      ? (health.health.classifier ?? health.health.jev).model
+      : "classification blocked"
     : "…";
 
   return (
@@ -67,7 +67,7 @@ export function StatusBar({
         engine <span className="text-white/60">{engine}</span>
       </span>
       <span className="hidden md:inline">
-        score p50 <span className="tabnum text-white/60">{p50Latency(tape)}</span>
+        judgment p50 <span className="tabnum text-white/60">{p50Latency(tape)}</span>
       </span>
       <span className="hidden md:inline">
         ingest p50 <span className="tabnum text-white/60">{ingestP50(tape)}</span>

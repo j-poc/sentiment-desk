@@ -146,7 +146,7 @@ body {
 }
 
 .chart-canvas-sentiment {
-  height: 220px;
+  height: clamp(160px, 23vh, 220px);
 }
 
 .mentions-filters {

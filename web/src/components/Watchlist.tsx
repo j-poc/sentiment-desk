@@ -69,8 +69,8 @@ export function Watchlist({
               : "No saved history";
         const indexDescription = c.index == null
           ? historyStatus
-          : `Jev impact mean ${fmtIndex(c.index)} points from ${c.indexRecordCount} scored records`;
-        const accessibleData = [q ? priceDescription : null, indexDescription, c.delta == null ? null : `3-hour versus 24-hour mean difference ${fmtDelta(c.delta)} impact points`]
+          : `Jev weighted item mean ${fmtIndex(c.index)} impact points from ${c.indexRecordCount} scored source records over ${c.indexWindow === "24h" ? "the trailing 24 hours (fallback)" : "the latest 3 hours"}`;
+        const accessibleData = [indexDescription, c.delta == null ? null : `Current 3-hour weighted Jev mean minus trailing 24-hour weighted Jev mean: ${fmtDelta(c.delta)} impact points`, priceDescription, `latest saved source record collected ${timeAgo(c.latestSourceCollectedAt)}`]
           .filter(Boolean).join(". ");
         return (
           <button
@@ -92,7 +92,7 @@ export function Watchlist({
               <span className="clamp-1 mt-0.5 block text-[10.5px] text-white/60">{c.name}</span>
             </span>
 
-            <Sparkline points={sparks[c.id]} width={32} height={20} />
+            {(sparks[c.id] ?? []).some((point) => point.n > 0) && <Sparkline points={sparks[c.id]} width={32} height={20} />}
 
             <span className="min-w-0 flex-1 text-right">
               {q && (
@@ -120,7 +120,7 @@ export function Watchlist({
         );
       })}
       <div className="px-3 py-2 text-[10.5px] text-white/55">
-        {companies.length} companies · {latestSourceCollectedAt == null ? "no saved history yet" : `latest source collected ${timeAgo(latestSourceCollectedAt)}`}
+        {companies.length} companies · {latestSourceCollectedAt == null ? "no saved history yet" : `latest source record collected ${timeAgo(latestSourceCollectedAt)}`}
       </div>
     </div>
   );

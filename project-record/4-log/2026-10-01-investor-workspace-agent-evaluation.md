@@ -79,3 +79,40 @@ this replay; actual raw-byte and derived-excerpt hashes are checked separately.
 The SEC parser suite passes 9 tests, the earlier parser/collector pair passes 30,
 and typecheck passes. The historical archive correctly retains adapter/1.
 The preliminary cohort is not a paid classification run or quality result.
+
+## OpenAI replacement and library selection
+
+The latest explicit user request supersedes Jev for new classification work.
+Official GPT-6 Luna model and Structured Outputs docs were verified on2026-10-01:
+https://developers.openai.com/api/docs/models/gpt-6-luna
+https://developers.openai.com/api/docs/guides/structured-outputs
+https://developers.openai.com/api/docs/pricing
+The selected adapter is raw fetch to Responses, strict schema, store:false,
+reasoning:none, bounded output and no hosted tools. Each request preserves its
+exact body, prompt/schema/profile hashes as digests, provider response identity,
+returned model, token usage and cost estimate. Historical Jev distributions
+remain separate; categories never populate Jev scalar fields or charts. Refusal,
+incomplete, invalid and unknown outcomes remain explicit. Known usage and
+unknown-cost reservation are distinct from provider billing reconciliation.
+
+The direct OpenAI API credential is not locally configured; no paid Luna call
+has been performed. Its own API budget/access must be verified independently of
+Codex or TypeSafe. The native goal's status-only interface cannot edit/resume its
+old objective; current work is directly user authorized with live qualification
+blocked, not falsely marked complete.
+
+The newly applicable financial-library standard and matching catalog were read.
+The current task uses an existing maintained Node/TypeScript SEC adapter and
+bounded categorical confusion counts. EdgarTools/Arelle would add a Python
+runtime and target richer filing/XBRL behavior not needed for this bounded8-K
+excerpt change; adoption is deferred to the next safe source/parser comparison,
+preserving the retained48 raw sources. statsmodels/arch and exchange_calendars
+are deferred: this migration changes neither return inference nor market-session
+semantics and makes no new statistical/portfolio performance claim. No catalog
+candidate has a demonstrated adoption advantage here; no dependency added.
+
+UI integration repairs exact-title preview repetition and restores watchlist
+accessible score/time/price context. The current category/card/drawer/filter and
+provider retry/health changes pass20 focused tests and typecheck; web build
+passes with an existing bundle-size advisory. These checks use isolated technical
+fixtures only and do not insert fixture data into the runtime preview.

@@ -1,7 +1,7 @@
 import { summarizeEvidenceBreadth } from "../lib/evidence-breadth.js";
 import type { Mention } from "../lib/api.js";
 import { timeAgo } from "../lib/format.js";
-import type { ExactTitleGroupFilter } from "../lib/exact-headline-groups.js";
+import { normalizeExactHeadline, type ExactTitleGroupFilter } from "../lib/exact-headline-groups.js";
 import { findRelatedHeadlineCandidates } from "../lib/related-headline-candidates.js";
 import { RelatedHeadlineCandidates } from "./RelatedHeadlineCandidates.js";
 
@@ -31,7 +31,19 @@ export function EvidenceBreadth({
   onOpenMention: (mention: Mention) => void;
 }) {
   const summary = summarizeEvidenceBreadth(mentions);
+  const categorical = mentions.filter((mention) => mention.classification != null);
+  const classified = categorical.filter((mention) => mention.status === "classified");
+  const reviewRequired = categorical.filter((mention) => mention.status === "review_required").length;
+  const excluded = categorical.filter((mention) => mention.status === "excluded").length;
   const relatedHeadlineCandidates = findRelatedHeadlineCandidates(mentions);
+  const headlineRows = new Map<string, Mention[]>();
+  for (const mention of mentions) {
+    const key = normalizeExactHeadline(mention.title);
+    const group = headlineRows.get(key) ?? [];
+    group.push(mention);
+    headlineRows.set(key, group);
+  }
+  const visibleHeadlines = [...headlineRows.values()].slice(0, 3);
   const period = hours === 6 ? "6H" : hours === 24 ? "24H" : hours === 72 ? "3D" : "7D";
   const absoluteTime = (value: number) => new Date(value).toLocaleString(undefined, {
     month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
@@ -75,12 +87,13 @@ export function EvidenceBreadth({
       ) : (
         <>
           <div className="evidence-record-list" aria-label={`Latest saved source records in the ${period} window`}>
-            {mentions.slice(0, 3).map((mention) => {
+            {visibleHeadlines.map((rows) => {
+              const mention = rows[0]!;
               const recordAt = mention.publishedAt ?? mention.providerObservedAt ?? mention.retrievedAt;
               const publisher = mention.publisherName || mention.source.name;
               const timeBasis = mention.publishedAt != null ? "publisher time"
                 : mention.providerObservedAt != null ? "provider observed" : "retrieved";
-              const sentiment = mention.score ? `${mention.score.sentiment} · ${mention.score.impact > 0 ? "+" : ""}${mention.score.impact.toFixed(0)} impact` : mention.status.replaceAll("_", " ");
+              const sentiment = mention.score ? `${mention.score.sentiment} · ${mention.score.impact > 0 ? "+" : ""}${mention.score.impact.toFixed(0)} impact` : mention.classification ? `Luna · ${mention.classification.disposition === "classified" ? mention.classification.sentiment ?? "direction uncertain" : mention.classification.disposition.replaceAll("_", " ")}` : mention.status.replaceAll("_", " ");
               return (
                 <button
                   className="evidence-record"
@@ -90,7 +103,7 @@ export function EvidenceBreadth({
                   aria-label={`Open saved evidence from ${publisher}: ${mention.title}. ${sentiment}. ${timeAgo(recordAt, now)} ${timeBasis}.`}
                 >
                   <span className="evidence-record-title">{mention.title}</span>
-                  <span className="evidence-record-meta">{publisher} · {timeAgo(recordAt, now)} · {timeBasis} · {sentiment}</span>
+                  <span className="evidence-record-meta">{publisher} · {timeAgo(recordAt, now)} · {timeBasis} · {sentiment}{rows.length > 1 ? ` · ${rows.length} same-title rows loaded` : ""}</span>
                 </button>
               );
             })}
@@ -101,7 +114,11 @@ export function EvidenceBreadth({
             Open full mention feed <span aria-hidden="true">↓</span>
           </button>
           <details className="evidence-coverage">
-            <summary>Coverage and title analysis <span>{summary.scoredRecordCount} scored · {summary.exactHeadlineCount} exact-title groups</span></summary>
+            <summary>Coverage and title analysis <span>{summary.scoredRecordCount} Jev scored{categorical.length > 0 ? ` · ${classified.length} Luna classified` : ""} · {summary.exactHeadlineCount} exact-title groups</span></summary>
+            {categorical.length > 0 && <p className="evidence-breadth-metrics">
+              <strong>Luna in this loaded sample: {classified.length} classified · {reviewRequired} need evidence review · {excluded} excluded</strong>
+              <span>Positive {classified.filter((mention) => mention.classification?.sentiment === "positive").length} · Neutral {classified.filter((mention) => mention.classification?.sentiment === "neutral").length} · Negative {classified.filter((mention) => mention.classification?.sentiment === "negative").length}</span>
+            </p>}
             {hasMore && (
               <p className="evidence-breadth-caveat" role="note">
                 Counts below cover only these loaded rows, not the full {period} window. Older saved records are available in the mention feed.

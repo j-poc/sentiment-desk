@@ -3,6 +3,7 @@ import type { JevAttemptSummary, Mention } from "../lib/api.js";
 import { getJSON, retryMention } from "../lib/api.js";
 import type { RetryAvailability } from "../lib/retryAvailability.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
+import { CategoricalJudgment } from "./CategoricalJudgment.js";
 import { NEU, dayTime, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
 
 function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
@@ -70,6 +71,8 @@ export function MentionDrawer({
   refreshWarning?: boolean;
   onRetryRefresh?: () => void;
 }) {
+  const providerLabel = retryAvailability.kind === "available" ? retryAvailability.providerLabel ?? "Jev" : "classifier";
+  const providerName = retryAvailability.kind === "available" ? retryAvailability.providerName ?? "TypeSafe" : "provider";
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -300,6 +303,8 @@ export function MentionDrawer({
                 )}
               </div>
             </>
+          ) : mention.classification ? (
+            <CategoricalJudgment judgment={mention.classification} detail />
           ) : (
             <div className="mt-4 text-[11.5px] text-white/40">
               {mention.status === "failed" || mention.status === "corrupt"
@@ -307,19 +312,19 @@ export function MentionDrawer({
                 : mention.status === "retrying"
                   ? `Rate-limited; retry scheduled${mention.scoreRetryAt == null ? "" : ` for ${dayTime(mention.scoreRetryAt)}`}.`
                   : mention.status === "scoring"
-                    ? "Jev is judging this item…"
+                    ? "Classifying this item…"
                     : "Awaiting judgment…"}
             </div>
           )}
 
-          <section className="mt-4 border-t border-white/[0.06] pt-2.5" aria-label="Jev request history">
-            <div className="micro">Jev request history</div>
+          <section className="mt-4 border-t border-white/[0.06] pt-2.5" aria-label="Classifier request history">
+            <div className="micro">Classifier request history</div>
             <p className="mt-1 text-[9.5px] text-white/30">Exact request fingerprints and outcomes are saved; raw request bodies are not retained.</p>
             {jevAttemptsFailed && <div role="status" className="mt-2 text-[10.5px] text-amber-200/75">Request history could not be loaded. Refresh the desk and try again.</div>}
             {!jevAttemptsFailed && jevAttempts == null && <div role="status" className="mt-2 text-[10.5px] text-white/35">Loading request history…</div>}
             {jevAttempts?.length === 0 && (
               <div className="mt-2 text-[10.5px] text-white/40">
-                {mention.status === "pending" ? "No Jev request has been sent for this item." : "No request trace is stored for this item."}
+                {mention.status === "pending" ? "No classification request has been sent for this item." : "No request trace is stored for this item."}
               </div>
             )}
             {jevAttempts?.map((attempt) => {
@@ -341,6 +346,14 @@ export function MentionDrawer({
                     <span>request size</span><span className="tabnum text-right text-white/60">{attempt.requestBytes.toLocaleString()} bytes</span>
                     <span>HTTP result</span><span className="tabnum text-right text-white/60">{attempt.httpStatus == null ? "unknown" : attempt.httpStatus}</span>
                     <span>tokens</span><span className="tabnum text-right text-white/60">{attempt.inputTokens == null ? "unknown" : `${attempt.inputTokens} in / ${attempt.outputTokens ?? "?"} out`}</span>
+                    {attempt.provider === "openai_luna" && <>
+                      <span>cached / reasoning</span><span className="tabnum text-right text-white/60">{attempt.cachedInputTokens ?? "?"} / {attempt.reasoningTokens ?? "?"}</span>
+                      <span>cost estimate</span><span className="tabnum text-right text-white/60">{attempt.estimatedCostUsd == null ? "unknown" : `$${attempt.estimatedCostUsd.toFixed(6)}`}</span>
+                      <span>reserved cost</span><span className="tabnum text-right text-white/60">{attempt.reservedCostUsd == null ? "unknown" : `$${attempt.reservedCostUsd.toFixed(6)}`}</span>
+                      <span>response ID</span><span className="truncate text-right text-white/60" title={attempt.responseId ?? undefined}>{attempt.responseId ?? "not recorded"}</span>
+                      <span>schema SHA</span><code className="truncate text-right text-white/55" title={attempt.schemaSha256 ?? undefined}>{attempt.schemaSha256 ?? "not recorded"}</code>
+                      <span>response SHA</span><code className="truncate text-right text-white/55" title={attempt.responseSha256 ?? undefined}>{attempt.responseSha256 ?? "not recorded"}</code>
+                    </>}
                     <span>rubric SHA</span><code className="truncate text-right text-white/55" title={attempt.rubricSha256}>{attempt.rubricSha256}</code>
                     <span>request SHA</span><code className="truncate text-right text-white/55" title={attempt.requestSha256}>{attempt.requestSha256}</code>
                     {attempt.errorCategory && <><span>outcome detail</span><span className="truncate text-right text-amber-200/65">{attempt.errorCategory}</span></>}
@@ -351,7 +364,7 @@ export function MentionDrawer({
           </section>
 
           {mention.status === "failed" && (
-            <section className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/[0.05] p-3" aria-label="Retry Jev judgment">
+            <section className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/[0.05] p-3" aria-label={`Retry ${providerLabel} judgment`}>
               {retryAvailability.kind === "unavailable" && <p className="text-[11px] leading-relaxed text-amber-100/80">{retryAvailability.reason}</p>}
               {retryAvailability.kind === "available" && retryState.type === "idle" && (
                 <button
@@ -359,18 +372,18 @@ export function MentionDrawer({
                   onClick={() => setRetryState({ type: "confirming", chargeConfirmed: false, usageReviewed: false })}
                   className="w-full rounded-md border border-amber-200/25 bg-amber-200/[0.08] px-3 py-2 text-[11px] font-medium text-amber-100 hover:bg-amber-200/[0.13] focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
                 >
-                  Retry Jev
+                  Retry {providerLabel}
                 </button>
               )}
 
               {retryAvailability.kind === "available" && retryState.type === "confirming" && (
                 <div>
                   <p className="text-[11px] leading-relaxed text-amber-100/90">
-                    This sends a new Jev input. TypeSafe charges for submitted inputs, so another attempt may consume more credits.
+                    This sends a new {providerLabel} request. {providerName} charges for model use, so another attempt may consume more credits.
                   </p>
                   {mention.usageCheckRequired && (
                     <p className="mt-2 text-[11px] leading-relaxed text-amber-200/80">
-                      The earlier provider request did not produce a saved judgment. Check TypeSafe usage before authorizing another attempt.
+                      The earlier provider request did not produce a saved judgment. Check the account used for the earlier request before authorizing another attempt. The request history identifies its provider and model.
                     </p>
                   )}
                   <label className="mt-3 flex cursor-pointer items-start gap-2 text-[10.5px] leading-relaxed text-white/65">
@@ -413,20 +426,20 @@ export function MentionDrawer({
                           () => setRetryState({ type: "accepted" }),
                           (error: unknown) => setRetryState({
                             type: "failed",
-                            message: error instanceof Error ? error.message : "Jev retry failed. Refresh the desk and check provider usage before trying again.",
+                            message: error instanceof Error ? error.message : "Classification retry failed. Refresh the desk and check provider usage before trying again.",
                           }),
                         );
                       }}
                       className="flex-1 rounded-md bg-amber-200/15 px-2 py-1.5 text-[10.5px] font-medium text-amber-100 enabled:hover:bg-amber-200/25 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      Send new Jev request
+                      Send new {providerLabel} request
                     </button>
                   </div>
                 </div>
               )}
 
               {retryAvailability.kind === "available" && retryState.type === "submitting" && <p role="status" className="text-[11px] text-amber-100/80">Sending the authorized request…</p>}
-              {retryAvailability.kind === "available" && retryState.type === "accepted" && <p role="status" className="text-[11px] text-amber-100/80">Retry requested. Waiting for Jev to update this item.</p>}
+              {retryAvailability.kind === "available" && retryState.type === "accepted" && <p role="status" className="text-[11px] text-amber-100/80">Retry requested. Waiting for {providerLabel} to update this item.</p>}
               {retryAvailability.kind === "available" && retryState.type === "failed" && (
                 <div role="alert" className="text-[11px] leading-relaxed text-amber-100/90">
                   <p>{retryState.message}</p>

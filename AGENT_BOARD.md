@@ -1,13 +1,13 @@
 # Sentiment Desk Agent Board
 
-Current UI and agent-label rebuild at `280a20d`: root owns shared contracts, integration, account/cohort evidence, runtime/browser checks and Git. User replaced required human labels with blinded independent subagents; agent agreement remains distinct from human ground truth. Existing Jev account balance is the authorized spending boundary. Runtime provider/model dispatch remains paused until the actual bound is established.
+Current checkpoint baseline `0f1623e`: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
 
 | Current owner | Owned scope | State |
 |---|---|---|
-| `/root/investor_ui_rebuild` | Frontend in investor-ui worktree | Implementing company research workspace |
-| `/root/agent_evaluation_migration` | Evaluator schemas/reports and tests in agent-evaluation worktree | Implementing explicit agent-label mode, historical human mode preserved |
-| `/root/first_run_observability_advisor` | Read-only GPT-6.1 Sol xhigh product/evaluation decisions | Advisor |
-| `/root` | Shared records/contracts, integration, runtime and account evidence | Working |
+| `/root/investor_ui_rebuild` | OpenAI client, backend categorical persistence/queue/config/health/API, matching tests and env example in investor-ui worktree | Implementing; UI commits already integrated |
+| `/root/agent_evaluation_migration` | Separate categorical Luna evaluation/CLI/tests in agent-evaluation worktree | Implementing; historical agent Jev evaluation already integrated |
+| `/root/first_run_observability_advisor` | Read-only GPT-6.1 Sol xhigh model/account/evaluation decisions | Scoped migration advice complete |
+| `/root` | Web, shared records/contracts, source cohort/labels, integration, runtime/browser proof and Git | Working |
 
 The following board entries are historical and do not replace current ownership.
 
