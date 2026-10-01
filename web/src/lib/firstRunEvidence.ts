@@ -28,8 +28,8 @@ export class FirstEvidenceRecovery {
     return { refreshFeeds, refreshSnapshot };
   }
 
-  snapshotApplied(): void {
-    this.pendingSnapshot = false;
+  snapshotApplied(companyHistoryVisible: boolean): void {
+    this.pendingSnapshot = !companyHistoryVisible && (this.previousEligibleCount ?? 0) > 0;
   }
 
   snapshotFailed(): void {
