@@ -22,6 +22,9 @@ export interface HealthSnapshot {
     blockedRequestedCollectors: CollectorId[];
     typesafeAccountUseApproved: boolean;
     jevAllowedCollectors: CollectorId[];
+    openaiAccountUseApproved?: boolean;
+    openaiAllowedCollectors?: CollectorId[];
+    openaiBlockedCollectors?: CollectorId[];
   };
   rss: SourceCounters;
   gdelt: SourceCounters;
@@ -31,6 +34,15 @@ export interface HealthSnapshot {
   finnhub: SourceCounters;
   reddit: SourceCounters;
   jev: SourceCounters & { model: string };
+  classifier: SourceCounters & { provider: "openai_luna" | "typesafe"; model: string; configured: boolean; blockedReason: string | null };
+}
+
+export interface ClassifierHealthConfig {
+  provider: "openai_luna" | "typesafe";
+  model: string;
+  configured: boolean;
+  enabled: boolean;
+  blockedReason: string | null;
 }
 
 export class HealthTracker {
@@ -38,6 +50,7 @@ export class HealthTracker {
   private readonly gdelt: SourceCounters;
   private readonly x: SourceCounters;
   private readonly jev: SourceCounters & { model: string };
+  private readonly classifier: SourceCounters & ClassifierHealthConfig;
 
   private readonly quotes: SourceCounters;
   private readonly sec: SourceCounters;
@@ -62,6 +75,7 @@ export class HealthTracker {
       typesafeAccountUseApproved: false,
       jevAllowedCollectors: [],
     },
+    classifierConfig: ClassifierHealthConfig = { provider: "typesafe", model: jevModel, configured: jevEnabled, enabled: jevEnabled, blockedReason: jevEnabled ? null : "provider is disabled" },
   ) {
     const collectorEnabled = (collector: CollectorId) =>
       externalRequestsEnabled && (externalCollectors == null || externalCollectors.has(collector));
@@ -72,6 +86,9 @@ export class HealthTracker {
       blockedRequestedCollectors: [...sourceApproval.blockedRequestedCollectors],
       typesafeAccountUseApproved: sourceApproval.typesafeAccountUseApproved,
       jevAllowedCollectors: [...sourceApproval.jevAllowedCollectors],
+      openaiAccountUseApproved: sourceApproval.openaiAccountUseApproved ?? false,
+      openaiAllowedCollectors: [...(sourceApproval.openaiAllowedCollectors ?? [])],
+      openaiBlockedCollectors: [...(sourceApproval.openaiBlockedCollectors ?? [])],
     };
     this.rss = fresh(collectorEnabled("google_news_rss") || collectorEnabled("yahoo_finance_rss"));
     this.gdelt = fresh(collectorEnabled("gdelt_doc_api"));
@@ -81,6 +98,7 @@ export class HealthTracker {
     this.finnhub = fresh(collectorEnabled("finnhub") && finnhubEnabled);
     this.reddit = fresh(collectorEnabled("reddit") && redditEnabled);
     this.jev = { ...fresh(externalRequestsEnabled && jevEnabled), model: jevModel };
+    this.classifier = { ...fresh(externalRequestsEnabled && classifierConfig.enabled), ...classifierConfig };
   }
 
   recordQuotes(ok: boolean, error?: string): void {
@@ -115,6 +133,8 @@ export class HealthTracker {
     this.record(this.jev, ok, error);
   }
 
+  recordClassifier(ok: boolean, error?: string): void { this.record(this.classifier, ok, error); }
+
   snapshot(): HealthSnapshot {
     return {
       externalRequestsEnabled: this.externalRequestsEnabled,
@@ -124,6 +144,9 @@ export class HealthTracker {
         blockedRequestedCollectors: [...this.sourceApproval.blockedRequestedCollectors],
         typesafeAccountUseApproved: this.sourceApproval.typesafeAccountUseApproved,
         jevAllowedCollectors: [...this.sourceApproval.jevAllowedCollectors],
+        openaiAccountUseApproved: this.sourceApproval.openaiAccountUseApproved ?? false,
+        openaiAllowedCollectors: [...(this.sourceApproval.openaiAllowedCollectors ?? [])],
+        openaiBlockedCollectors: [...(this.sourceApproval.openaiBlockedCollectors ?? [])],
       },
       rss: { ...this.rss },
       gdelt: { ...this.gdelt },
@@ -133,6 +156,7 @@ export class HealthTracker {
       finnhub: { ...this.finnhub },
       reddit: { ...this.reddit },
       jev: { ...this.jev },
+      classifier: { ...this.classifier },
     };
   }
 

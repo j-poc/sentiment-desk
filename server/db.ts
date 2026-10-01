@@ -5,6 +5,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { z } from "zod";
 import type {
   CollectorId,
+  CategoricalClassification,
   Company,
   EvidenceChannel,
   MentionDTO,
@@ -190,6 +191,8 @@ CREATE TABLE IF NOT EXISTS jev_request_attempts (
  id TEXT PRIMARY KEY, observation_id TEXT NOT NULL REFERENCES source_observations(id), runtime_id TEXT NOT NULL, attempt_number INTEGER NOT NULL CHECK (attempt_number > 0),
  request_sha256 TEXT NOT NULL CHECK (length(request_sha256) = 64), request_bytes INTEGER NOT NULL CHECK (request_bytes > 0),
  requested_model TEXT NOT NULL, rubric_sha TEXT NOT NULL CHECK (length(rubric_sha) = 64), reserved_at INTEGER NOT NULL,
+ provider TEXT NOT NULL DEFAULT 'typesafe', reserved_cost_micros INTEGER NOT NULL DEFAULT 0,
+ requested_service_tier TEXT, max_daily_cost_micros INTEGER NOT NULL DEFAULT 0, max_output_tokens INTEGER NOT NULL DEFAULT 0, budget_day TEXT, schema_sha256 TEXT,
  UNIQUE(observation_id, attempt_number)
 );
 CREATE INDEX IF NOT EXISTS jev_attempts_observation ON jev_request_attempts(observation_id, attempt_number DESC);
@@ -201,7 +204,11 @@ CREATE TABLE IF NOT EXISTS jev_attempt_events (
  CHECK (event_type IN ('dispatch_intent', 'response', 'rejected', 'unknown', 'not_sent')),
  occurred_at INTEGER NOT NULL, http_status INTEGER CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
  input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0), output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
- resolved_model TEXT, latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0), error_category TEXT
+ resolved_model TEXT, latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0), error_category TEXT,
+ cached_input_tokens INTEGER CHECK (cached_input_tokens IS NULL OR cached_input_tokens >= 0), cache_write_tokens INTEGER CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+ reasoning_tokens INTEGER CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+ total_tokens INTEGER CHECK (total_tokens IS NULL OR total_tokens >= 0), response_id TEXT, response_sha256 TEXT,
+ estimated_cost_usd REAL, response_service_tier TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jev_attempt_dispatch_once ON jev_attempt_events(attempt_id) WHERE event_type = 'dispatch_intent';
 CREATE UNIQUE INDEX IF NOT EXISTS jev_attempt_terminal_once ON jev_attempt_events(attempt_id) WHERE event_type IN ('response', 'rejected', 'unknown', 'not_sent');
@@ -209,6 +216,21 @@ CREATE TRIGGER IF NOT EXISTS jev_request_attempts_no_update BEFORE UPDATE ON jev
 CREATE TRIGGER IF NOT EXISTS jev_request_attempts_no_delete BEFORE DELETE ON jev_request_attempts BEGIN SELECT RAISE(ABORT, 'Jev request attempts are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS jev_attempt_events_no_update BEFORE UPDATE ON jev_attempt_events BEGIN SELECT RAISE(ABORT, 'Jev request attempt events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS jev_attempt_events_no_delete BEFORE DELETE ON jev_attempt_events BEGIN SELECT RAISE(ABORT, 'Jev request attempt events are immutable'); END;
+CREATE TABLE IF NOT EXISTS categorical_classifications (
+ observation_id TEXT PRIMARY KEY REFERENCES source_observations(id), provider TEXT NOT NULL CHECK(provider='openai_luna'),
+ model_requested TEXT NOT NULL, model_returned TEXT NOT NULL, requested_service_tier TEXT NOT NULL, service_tier TEXT,
+ prompt_version TEXT NOT NULL, prompt_sha256 TEXT NOT NULL CHECK(length(prompt_sha256)=64),
+ schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL CHECK(length(schema_sha256)=64), sentiment TEXT,
+ event_type TEXT, takeaway TEXT, about INTEGER, material INTEGER, investor_relevant INTEGER,
+ evidence_sufficient INTEGER NOT NULL CHECK(evidence_sufficient IN (0,1)), summary TEXT, supporting_excerpt TEXT,
+ disposition TEXT NOT NULL CHECK(disposition IN ('classified','excluded','review_required')),
+ response_id TEXT NOT NULL, response_sha256 TEXT NOT NULL CHECK(length(response_sha256)=64),
+ input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER, cache_write_tokens INTEGER, output_tokens INTEGER NOT NULL,
+ reasoning_tokens INTEGER, total_tokens INTEGER NOT NULL, estimated_cost_usd REAL,
+ latency_ms INTEGER NOT NULL, classified_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS categorical_classifications_no_update BEFORE UPDATE ON categorical_classifications BEGIN SELECT RAISE(ABORT, 'Categorical classifications are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS categorical_classifications_no_delete BEFORE DELETE ON categorical_classifications BEGIN SELECT RAISE(ABORT, 'Categorical classifications are immutable'); END;
 CREATE TABLE IF NOT EXISTS alert_outbox (
  id TEXT PRIMARY KEY, observation_id TEXT NOT NULL, rule_version TEXT NOT NULL, payload TEXT NOT NULL,
  policy TEXT NOT NULL, destination_fingerprint TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
@@ -305,6 +327,36 @@ export interface MentionRow {
   score_attempts: number;
   score_retry_at: number | null;
   score_usage_check_required: number;
+  classification_provider?: string | null;
+  classification_model_requested?: string | null;
+  classification_model_returned?: string | null;
+  classification_service_tier_requested?: string | null;
+  classification_service_tier?: string | null;
+  classification_prompt_version?: string | null;
+  classification_prompt_sha256?: string | null;
+  classification_schema_version?: string | null;
+  classification_schema_sha256?: string | null;
+  classification_sentiment?: string | null;
+  classification_event_type?: string | null;
+  classification_takeaway?: string | null;
+  classification_about?: number | null;
+  classification_material?: number | null;
+  classification_investor_relevant?: number | null;
+  classification_evidence_sufficient?: number | null;
+  classification_summary?: string | null;
+  classification_supporting_excerpt?: string | null;
+  classification_disposition?: CategoricalClassification["disposition"] | null;
+  classification_response_id?: string | null;
+  classification_response_sha256?: string | null;
+  classification_input_tokens?: number | null;
+  classification_cached_input_tokens?: number | null;
+  classification_cache_write_tokens?: number | null;
+  classification_output_tokens?: number | null;
+  classification_reasoning_tokens?: number | null;
+  classification_total_tokens?: number | null;
+  classification_estimated_cost_usd?: number | null;
+  classification_latency_ms?: number | null;
+  classification_classified_at?: number | null;
 }
 
 export type BudgetedScoreClaim =
@@ -313,6 +365,7 @@ export type BudgetedScoreClaim =
   | { kind: "not_claimed" };
 
 export type JevAttemptOutcome = "response" | "rejected" | "unknown" | "not_sent";
+export type ModelProvider = "typesafe" | "openai_luna";
 export interface JevAttemptReceipt {
   attemptId: string;
   outcome: JevAttemptOutcome;
@@ -323,6 +376,14 @@ export interface JevAttemptReceipt {
   resolvedModel: string | null;
   latencyMs: number | null;
   errorCategory: string | null;
+  cachedInputTokens?: number | null;
+  cacheWriteInputTokens?: number | null;
+  reasoningTokens?: number | null;
+  totalTokens?: number | null;
+  responseId?: string | null;
+  responseSha256?: string | null;
+  estimatedCostUsd?: number | null;
+  responseServiceTier?: string | null;
 }
 export interface JevAttemptSummary {
   attemptId: string;
@@ -341,6 +402,19 @@ export interface JevAttemptSummary {
   resolvedModel: string | null;
   latencyMs: number | null;
   errorCategory: string | null;
+  provider: ModelProvider;
+  cachedInputTokens: number | null;
+  cacheWriteInputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+  responseId: string | null;
+  responseSha256: string | null;
+  estimatedCostUsd: number | null;
+  reservedCostMicros: number;
+  reservedCostUsd: number;
+  schemaSha256: string | null;
+  requestedServiceTier: string | null;
+  responseServiceTier: string | null;
 }
 
 export interface AlertIntent { observationId: string; ruleVersion: string; payload: string; policy: string; destinationFingerprint: string; createdAt: number; expiresAt: number; }
@@ -452,6 +526,28 @@ export class Desk {
     if (!jevAttemptCols.has("runtime_id")) {
       this.db.exec("ALTER TABLE jev_request_attempts ADD COLUMN runtime_id TEXT NOT NULL DEFAULT 'legacy-runtime'");
       this.db.prepare("INSERT OR IGNORE INTO desk_runtime_sessions(id, pid, started_at, closed_at) VALUES ('legacy-runtime', 0, 0, 0)").run();
+    }
+
+    const attemptAdditions: Array<[string, string]> = [
+      ["provider", "TEXT NOT NULL DEFAULT 'typesafe'"],
+      ["reserved_cost_micros", "INTEGER NOT NULL DEFAULT 0"],
+      ["requested_service_tier", "TEXT"], ["max_daily_cost_micros", "INTEGER NOT NULL DEFAULT 0"],
+      ["max_output_tokens", "INTEGER NOT NULL DEFAULT 0"], ["budget_day", "TEXT"], ["schema_sha256", "TEXT"],
+    ];
+    for (const [name, ddl] of attemptAdditions) {
+      if (!jevAttemptCols.has(name)) this.db.exec(`ALTER TABLE jev_request_attempts ADD COLUMN ${name} ${ddl}`);
+    }
+    const eventCols = new Set((this.db.prepare("PRAGMA table_info(jev_attempt_events)").all() as Array<{ name: string }>).map((r) => r.name));
+    for (const [name, ddl] of [
+      ["cached_input_tokens", "INTEGER"], ["cache_write_tokens", "INTEGER"], ["reasoning_tokens", "INTEGER"], ["total_tokens", "INTEGER"],
+      ["response_id", "TEXT"], ["response_sha256", "TEXT"], ["estimated_cost_usd", "REAL"],
+      ["response_service_tier", "TEXT"],
+    ] as Array<[string, string]>) {
+      if (!eventCols.has(name)) this.db.exec(`ALTER TABLE jev_attempt_events ADD COLUMN ${name} ${ddl}`);
+    }
+    const categoricalCols = new Set((this.db.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((r) => r.name));
+    for (const [name, ddl] of [["requested_service_tier", "TEXT NOT NULL DEFAULT 'default'"], ["service_tier", "TEXT"]] as Array<[string, string]>) {
+      if (!categoricalCols.has(name)) this.db.exec(`ALTER TABLE categorical_classifications ADD COLUMN ${name} ${ddl}`);
     }
 
     const priceCols = new Set(
@@ -585,20 +681,39 @@ export class Desk {
         o.title, o.snippet, o.publisher_published_at AS published_at, o.publisher_published_at,
         o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector, o.delivery_id,
         o.publisher_name, o.publisher_domain, o.filed_at, o.scoped,
-        j.status, j.sentiment, j.confidence, j.p_pos, j.p_neu, j.p_neg, j.about, j.material,
+        COALESCE(c.disposition, j.status) AS status, j.sentiment, j.confidence, j.p_pos, j.p_neu, j.p_neg, j.about, j.material,
         j.novel, j.credible, j.investor_relevant, j.event_type, j.takeaway, j.magnitude,
         j.surprise, j.event_score, j.impact, j.weight, j.exclude, j.engine, j.input_tokens,
         j.output_tokens, j.cost_usd, j.latency_ms, j.rubric_sha, j.score_error, j.scored_at,
-        j.score_attempts, j.score_retry_at, j.score_usage_check_required
-      FROM source_observations o JOIN jev_judgments j ON j.observation_id = o.id`);
+        j.score_attempts, j.score_retry_at, j.score_usage_check_required,
+        c.provider AS classification_provider, c.model_requested AS classification_model_requested,
+        c.model_returned AS classification_model_returned, c.requested_service_tier AS classification_service_tier_requested,
+        c.service_tier AS classification_service_tier, c.prompt_version AS classification_prompt_version,
+        c.prompt_sha256 AS classification_prompt_sha256, c.schema_version AS classification_schema_version,
+        c.schema_sha256 AS classification_schema_sha256, c.sentiment AS classification_sentiment,
+        c.event_type AS classification_event_type, c.takeaway AS classification_takeaway,
+        c.about AS classification_about, c.material AS classification_material,
+        c.investor_relevant AS classification_investor_relevant, c.evidence_sufficient AS classification_evidence_sufficient,
+        c.summary AS classification_summary, c.supporting_excerpt AS classification_supporting_excerpt,
+        c.disposition AS classification_disposition, c.response_id AS classification_response_id,
+        c.response_sha256 AS classification_response_sha256, c.input_tokens AS classification_input_tokens,
+        c.cached_input_tokens AS classification_cached_input_tokens, c.output_tokens AS classification_output_tokens,
+        c.cache_write_tokens AS classification_cache_write_tokens,
+        c.reasoning_tokens AS classification_reasoning_tokens, c.total_tokens AS classification_total_tokens,
+        c.estimated_cost_usd AS classification_estimated_cost_usd, c.latency_ms AS classification_latency_ms,
+        c.classified_at AS classification_classified_at
+      FROM source_observations o JOIN jev_judgments j ON j.observation_id = o.id
+      LEFT JOIN categorical_classifications c ON c.observation_id = o.id`);
   }
 
   private recoverUnfinishedJevAttempts(): void {
-    const unfinished = this.db.prepare(`SELECT a.id, a.observation_id, a.attempt_number, s.pid, s.closed_at,
+    const unfinished = this.db.prepare(`SELECT a.id, a.observation_id, a.attempt_number, a.provider, a.budget_day, s.pid, s.closed_at,
+        a.reserved_cost_micros, a.max_daily_cost_micros,
         EXISTS(SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') AS dispatch_started
       FROM jev_request_attempts a LEFT JOIN desk_runtime_sessions s ON s.id = a.runtime_id
       WHERE NOT EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response', 'rejected', 'unknown', 'not_sent'))
-      ORDER BY a.reserved_at`).all() as Array<{ id: string; observation_id: string; attempt_number: number; pid: number | null; closed_at: number | null; dispatch_started: number }>;
+      ORDER BY a.reserved_at`).all() as Array<{ id: string; observation_id: string; attempt_number: number; provider: ModelProvider;
+        budget_day: string | null; reserved_cost_micros: number; max_daily_cost_micros: number; pid: number | null; closed_at: number | null; dispatch_started: number }>;
     const abandoned = unfinished.filter((attempt) => attempt.closed_at != null || !processIsAlive(attempt.pid ?? 0));
     const scoring = this.db.prepare(`SELECT j.observation_id, j.score_attempts, a.id AS attempt_id, a.runtime_id, s.pid, s.closed_at,
         (SELECT e.event_type FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type IN ('response','rejected','unknown','not_sent') LIMIT 1) AS terminal_outcome,
@@ -621,12 +736,20 @@ export class Desk {
         const wasDispatched = attempt.dispatch_started === 1;
         insert.run(randomUUID(), attempt.id, wasDispatched ? "unknown" : "not_sent", now,
           wasDispatched ? "interrupted_after_dispatch" : "interrupted_before_dispatch");
+        if (wasDispatched && attempt.provider === "openai_luna" && attempt.budget_day) {
+          this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
+            .run(`openai:budget:${attempt.budget_day}:closed`);
+        }
       }
       const fail = this.db.prepare(`UPDATE jev_judgments SET status='failed', score_retry_at=NULL,
         score_usage_check_required=?, score_error=? WHERE observation_id=? AND status='scoring' AND score_attempts=?`);
       for (const row of recoverableScoring) {
         const attempt = unfinished.find((candidate) => candidate.id === row.attempt_id);
         const outcome = row.terminal_outcome ?? (attempt ? attempt.dispatch_started === 1 ? "unknown" : "not_sent" : "unknown");
+        if (outcome === "unknown" && attempt?.provider === "openai_luna" && attempt.budget_day) {
+          this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
+            .run(`openai:budget:${attempt.budget_day}:closed`);
+        }
         const needsUsageReview = outcome === "response" || outcome === "unknown" ? 1 : 0;
         const errorMessage = outcome === "not_sent"
           ? "Scoring was interrupted before provider dispatch; no request was sent."
@@ -984,7 +1107,14 @@ export class Desk {
     rubricSha256: string;
     maxRequests: number;
     maxRequestBytes: number;
+    provider?: ModelProvider;
+    maxDailyCostMicros?: number;
+    reservedCostMicros?: number;
+    requestedServiceTier?: "default";
+    maxOutputTokens?: number;
+    schemaSha256?: string;
   }): BudgetedScoreClaim {
+    const provider = input.provider ?? "typesafe";
     if (input.allowedCollectors.length === 0) return { kind: "not_claimed" };
     if (!/^[a-f0-9]{64}$/.test(input.requestSha256) || !/^[a-f0-9]{64}$/.test(input.rubricSha256) || !input.requestedModel.trim()) {
       throw new Error("valid Jev request digest, rubric digest, and requested model are required for a scoring claim");
@@ -993,13 +1123,19 @@ export class Desk {
       !/^\d{4}-\d{2}-\d{2}$/.test(input.utcDay) ||
       !Number.isSafeInteger(input.requestBytes) || input.requestBytes <= 0 ||
       !Number.isSafeInteger(input.maxRequests) || input.maxRequests <= 0 ||
-      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0
+      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0 ||
+      (provider === "openai_luna" && (!Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros! <= 0 ||
+        !Number.isSafeInteger(input.reservedCostMicros) || input.reservedCostMicros! <= 0 ||
+        input.requestedServiceTier !== "default" || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens! <= 0 ||
+        !/^[a-f0-9]{64}$/.test(input.schemaSha256 ?? "")))
     ) return { kind: "budget_exhausted" };
 
     const collectorSlots = input.allowedCollectors.map(() => "?").join(", ");
-    const requestKey = `jev:budget:${input.utcDay}:requests`;
-    const bytesKey = `jev:budget:${input.utcDay}:request-bytes`;
-    const closedKey = `jev:budget:${input.utcDay}:closed`;
+    const budgetPrefix = provider === "openai_luna" ? "openai:budget" : "jev:budget";
+    const requestKey = `${budgetPrefix}:${input.utcDay}:requests`;
+    const bytesKey = `${budgetPrefix}:${input.utcDay}:request-bytes`;
+    const costKey = `${budgetPrefix}:${input.utcDay}:cost-micros`;
+    const closedKey = `${budgetPrefix}:${input.utcDay}:closed`;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const candidate = this.db.prepare(`SELECT id FROM mentions
@@ -1040,10 +1176,19 @@ export class Desk {
         this.db.exec("COMMIT");
         return { kind: "budget_exhausted" };
       }
-
       const writeCounter = this.db.prepare(
         "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       );
+      let costMicros = 0;
+      if (provider === "openai_luna") {
+        const usedCost = readCounter(costKey);
+        costMicros = input.reservedCostMicros!;
+        if (usedCost == null || usedCost + costMicros > input.maxDailyCostMicros!) {
+          this.db.exec("COMMIT");
+          return { kind: "budget_exhausted" };
+        }
+        writeCounter.run(costKey, String(usedCost + costMicros));
+      }
       writeCounter.run(requestKey, String(requests + 1));
       writeCounter.run(bytesKey, String(requestBytes + input.requestBytes));
       const result = this.db.prepare(`UPDATE jev_judgments SET status = 'scoring',
@@ -1066,9 +1211,11 @@ export class Desk {
       }
       const attemptId = randomUUID();
       this.db.prepare(`INSERT INTO jev_request_attempts
-        (id, observation_id, runtime_id, attempt_number, request_sha256, request_bytes, requested_model, rubric_sha, reserved_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(attemptId, input.id, this.runtimeId, row.score_attempts, input.requestSha256, input.requestBytes, input.requestedModel.trim(), input.rubricSha256, input.now);
+        (id, observation_id, runtime_id, attempt_number, request_sha256, request_bytes, requested_model, rubric_sha, reserved_at, provider, reserved_cost_micros,
+         requested_service_tier, max_daily_cost_micros, max_output_tokens, budget_day, schema_sha256)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(attemptId, input.id, this.runtimeId, row.score_attempts, input.requestSha256, input.requestBytes, input.requestedModel.trim(), input.rubricSha256, input.now, provider, costMicros,
+          input.requestedServiceTier ?? null, input.maxDailyCostMicros ?? 0, input.maxOutputTokens ?? 0, input.utcDay, input.schemaSha256 ?? null);
       this.db.exec("COMMIT");
       return { kind: "claimed", row, attemptId };
     } catch (err) {
@@ -1116,17 +1263,81 @@ export class Desk {
   }
 
   private appendJevAttemptReceipt(receipt: JevAttemptReceipt): void {
-    const exists = this.db.prepare("SELECT 1 FROM jev_request_attempts WHERE id = ?").get(receipt.attemptId);
-    if (!exists) throw new Error("Jev attempt receipt has no matching request attempt");
+    const attempt = this.db.prepare(`SELECT provider, reserved_cost_micros, budget_day, max_daily_cost_micros,
+      max_output_tokens, request_bytes, requested_service_tier FROM jev_request_attempts WHERE id=?`).get(receipt.attemptId) as
+      | { provider: ModelProvider; reserved_cost_micros: number; budget_day: string | null; max_daily_cost_micros: number;
+          max_output_tokens: number; request_bytes: number; requested_service_tier: string | null }
+      | undefined;
+    if (!attempt) throw new Error("Jev attempt receipt has no matching request attempt");
     const dispatched = this.db.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(receipt.attemptId);
     if (receipt.outcome === "not_sent" ? Boolean(dispatched) : !dispatched) {
       throw new Error("Jev attempt receipt does not match its dispatch-intent state");
     }
     this.db.prepare(`INSERT INTO jev_attempt_events
-      (id, attempt_id, event_type, occurred_at, http_status, input_tokens, output_tokens, resolved_model, latency_ms, error_category)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, attempt_id, event_type, occurred_at, http_status, input_tokens, output_tokens, resolved_model, latency_ms, error_category,
+       cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, response_id, response_sha256, estimated_cost_usd, response_service_tier)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(randomUUID(), receipt.attemptId, receipt.outcome, receipt.occurredAt, receipt.httpStatus,
-        receipt.inputTokens, receipt.outputTokens, receipt.resolvedModel, receipt.latencyMs, receipt.errorCategory);
+        receipt.inputTokens, receipt.outputTokens, receipt.resolvedModel, receipt.latencyMs, receipt.errorCategory,
+        receipt.cachedInputTokens ?? null, receipt.cacheWriteInputTokens ?? null, receipt.reasoningTokens ?? null, receipt.totalTokens ?? null,
+        receipt.responseId ?? null, receipt.responseSha256 ?? null, receipt.estimatedCostUsd ?? null, receipt.responseServiceTier ?? null);
+    if (attempt.provider === "openai_luna" && attempt.budget_day) {
+      const prefix = `openai:budget:${attempt.budget_day}`;
+      const costKey = `${prefix}:cost-micros`;
+      const reserved = Number(attempt.reserved_cost_micros);
+      const current = Number(this.getKv(costKey) ?? "0");
+      const knownCostMicros = receipt.estimatedCostUsd == null ? null : Math.ceil(receipt.estimatedCostUsd * 1_000_000);
+      if (!Number.isSafeInteger(current) || current < reserved || !Number.isSafeInteger(reserved) || reserved < 0) {
+        this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
+      } else if (knownCostMicros != null) {
+        const adjusted = receipt.outcome === "unknown"
+          ? current + Math.max(0, knownCostMicros - reserved)
+          : current - reserved + knownCostMicros;
+        this.db.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(costKey, String(adjusted));
+        const outsideReservation = knownCostMicros > reserved || receipt.outcome === "response" &&
+          ((receipt.inputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.request_bytes ||
+           (receipt.outputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.max_output_tokens ||
+           receipt.resolvedModel !== "gpt-6-luna" || receipt.responseServiceTier !== attempt.requested_service_tier);
+        if (adjusted > attempt.max_daily_cost_micros || outsideReservation) {
+          this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
+        }
+      } else if (receipt.outcome === "unknown" ||
+        (receipt.outcome === "response" && ((receipt.inputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.request_bytes ||
+          (receipt.outputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.max_output_tokens ||
+          receipt.resolvedModel !== "gpt-6-luna" || receipt.responseServiceTier !== attempt.requested_service_tier))) {
+        this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
+      }
+    }
+  }
+
+  recordCategoricalClassification(observationId: string, classification: CategoricalClassification, receipt: JevAttemptReceipt): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.appendJevAttemptReceipt(receipt);
+      this.db.prepare(`INSERT INTO categorical_classifications
+        (observation_id, provider, model_requested, model_returned, requested_service_tier, service_tier, prompt_version, prompt_sha256,
+         schema_version, schema_sha256, sentiment, event_type, takeaway, about, material, investor_relevant,
+         evidence_sufficient, summary, supporting_excerpt, disposition, response_id, response_sha256,
+         input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, reasoning_tokens, total_tokens, estimated_cost_usd, latency_ms, classified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(observationId, classification.provider, classification.modelRequested, classification.modelReturned,
+          classification.serviceTierRequested, classification.serviceTier, classification.promptVersion, classification.promptSha256, classification.schemaVersion, classification.schemaSha256,
+          classification.sentiment, classification.eventType, classification.takeaway,
+          classification.about == null ? null : classification.about ? 1 : 0,
+          classification.material == null ? null : classification.material ? 1 : 0,
+          classification.investorRelevant == null ? null : classification.investorRelevant ? 1 : 0,
+          classification.evidenceSufficient ? 1 : 0, classification.summary, classification.supportingExcerpt,
+          classification.disposition, classification.responseId, classification.responseSha256, classification.inputTokens,
+          classification.cachedInputTokens, classification.cacheWriteInputTokens, classification.outputTokens, classification.reasoningTokens,
+          classification.totalTokens, classification.estimatedCostUsd, classification.latencyMs, classification.classifiedAt);
+      const update = this.db.prepare("UPDATE jev_judgments SET status = ?, score_error = NULL, score_retry_at = NULL, score_usage_check_required = 0 WHERE observation_id = ? AND status = 'scoring'")
+        .run(classification.disposition, observationId);
+      if (Number(update.changes) !== 1) throw new Error("Categorical classification did not own the active judgment claim");
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   jevAttemptHistory(observationId: string, limit = 10): JevAttemptSummary[] {
@@ -1142,7 +1353,18 @@ export class Desk {
         (SELECT output_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS output_tokens,
         (SELECT resolved_model FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS resolved_model,
         (SELECT latency_ms FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS latency_ms,
-        (SELECT error_category FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS error_category
+        (SELECT error_category FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS error_category,
+        a.provider, a.reserved_cost_micros,
+        a.schema_sha256 AS schema_sha256,
+        (SELECT cached_input_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS cached_input_tokens,
+        (SELECT cache_write_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS cache_write_tokens,
+        (SELECT reasoning_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS reasoning_tokens,
+        (SELECT total_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS total_tokens,
+        (SELECT response_id FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS response_id,
+        (SELECT response_sha256 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS response_sha256,
+        (SELECT estimated_cost_usd FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS estimated_cost_usd
+        , a.requested_service_tier AS requested_service_tier,
+        (SELECT response_service_tier FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS response_service_tier
       FROM jev_request_attempts a WHERE a.observation_id = ? ORDER BY a.attempt_number DESC LIMIT ?`).all(observationId, limit) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       attemptId: String(row.attempt_id), attemptNumber: Number(row.attempt_number), requestSha256: String(row.request_sha256),
@@ -1152,6 +1374,19 @@ export class Desk {
       httpStatus: row.http_status == null ? null : Number(row.http_status), inputTokens: row.input_tokens == null ? null : Number(row.input_tokens),
       outputTokens: row.output_tokens == null ? null : Number(row.output_tokens), resolvedModel: row.resolved_model == null ? null : String(row.resolved_model),
       latencyMs: row.latency_ms == null ? null : Number(row.latency_ms), errorCategory: row.error_category == null ? null : String(row.error_category),
+      provider: row.provider === "openai_luna" ? "openai_luna" : "typesafe",
+      reservedCostMicros: Number(row.reserved_cost_micros ?? 0),
+      reservedCostUsd: Number(row.reserved_cost_micros ?? 0) / 1_000_000,
+      schemaSha256: row.schema_sha256 == null ? null : String(row.schema_sha256),
+      cachedInputTokens: row.cached_input_tokens == null ? null : Number(row.cached_input_tokens),
+      cacheWriteInputTokens: row.cache_write_tokens == null ? null : Number(row.cache_write_tokens),
+      reasoningTokens: row.reasoning_tokens == null ? null : Number(row.reasoning_tokens),
+      totalTokens: row.total_tokens == null ? null : Number(row.total_tokens),
+      responseId: row.response_id == null ? null : String(row.response_id),
+      responseSha256: row.response_sha256 == null ? null : String(row.response_sha256),
+      estimatedCostUsd: row.estimated_cost_usd == null ? null : Number(row.estimated_cost_usd),
+      requestedServiceTier: row.requested_service_tier == null ? null : String(row.requested_service_tier),
+      responseServiceTier: row.response_service_tier == null ? null : String(row.response_service_tier),
     }));
   }
 
@@ -1434,12 +1669,12 @@ export class Desk {
     filter: MentionFeedFilter;
   }): { items: MentionDTO[]; nextCursor: MentionPageCursor | null } {
     const filterSql: Record<MentionFeedFilter, string> = {
-      all: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'failed', 'corrupt')",
-      bull: "status = 'scored' AND sentiment = 'positive'",
-      bear: "status = 'scored' AND sentiment = 'negative'",
-      material: "status = 'scored' AND COALESCE(material, 0) >= 0.6",
-      offtarget: "status = 'off_target'",
-      failed: "status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt')",
+      all: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
+      bull: "(status = 'scored' AND sentiment = 'positive') OR (status = 'classified' AND classification_sentiment = 'positive')",
+      bear: "(status = 'scored' AND sentiment = 'negative') OR (status = 'classified' AND classification_sentiment = 'negative')",
+      material: "(status = 'scored' AND COALESCE(material, 0) >= 0.6) OR (status = 'classified' AND classification_material = 1)",
+      offtarget: "status IN ('off_target', 'excluded')",
+      failed: "status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt', 'review_required')",
     };
     const cursorFilter = cursor
       ? `AND (
@@ -1577,7 +1812,7 @@ export class Desk {
   recentVisible(limit: number): MentionDTO[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM mentions WHERE ${REAL_MENTION_FILTER} AND status IN ('scored', 'pending', 'retrying', 'scoring', 'failed', 'corrupt')
+        `SELECT * FROM mentions WHERE ${REAL_MENTION_FILTER} AND status IN ('scored', 'off_target', 'classified', 'excluded', 'review_required', 'pending', 'retrying', 'scoring', 'failed', 'corrupt')
          ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as MentionRow[];
@@ -1813,21 +2048,26 @@ export class Desk {
     }
   }
 
-  remainingJevRequests(input: { utcDay: string; maxRequests: number; maxRequestBytes: number }): number {
+  remainingJevRequests(input: { utcDay: string; maxRequests: number; maxRequestBytes: number; provider?: ModelProvider; maxDailyCostMicros?: number }): number {
+    const provider = input.provider ?? "typesafe";
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(input.utcDay) ||
       !Number.isSafeInteger(input.maxRequests) || input.maxRequests <= 0 ||
-      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0
+      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0 ||
+      (provider === "openai_luna" && (!Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros! <= 0))
     ) return 0;
-    const closed = this.getKv(`jev:budget:${input.utcDay}:closed`);
+    const prefix = provider === "openai_luna" ? "openai:budget" : "jev:budget";
+    const closed = this.getKv(`${prefix}:${input.utcDay}:closed`);
     if (closed !== undefined && closed !== "0") return 0;
-    const requests = this.getKv(`jev:budget:${input.utcDay}:requests`);
-    const requestBytes = this.getKv(`jev:budget:${input.utcDay}:request-bytes`);
+    const requests = this.getKv(`${prefix}:${input.utcDay}:requests`);
+    const requestBytes = this.getKv(`${prefix}:${input.utcDay}:request-bytes`);
+    const cost = this.getKv(`${prefix}:${input.utcDay}:cost-micros`);
     const usedRequests = requests === undefined ? 0 : Number(requests);
     const usedBytes = requestBytes === undefined ? 0 : Number(requestBytes);
     if (
       !Number.isSafeInteger(usedRequests) || usedRequests < 0 ||
       !Number.isSafeInteger(usedBytes) || usedBytes < 0 ||
+      (provider === "openai_luna" && (!Number.isSafeInteger(Number(cost ?? "0")) || Number(cost ?? "0") + 1 > input.maxDailyCostMicros!)) ||
       usedBytes >= input.maxRequestBytes
     ) return 0;
     return Math.max(0, input.maxRequests - usedRequests);
@@ -1879,6 +2119,45 @@ export class Desk {
     };
   }
 
+  classifierUsageSince(sinceMs: number): {
+    requests: number; reservedRequests: number; inputTokens: number | null; cachedInputTokens: number | null; cacheWriteInputTokens: number | null; outputTokens: number | null;
+    reasoningTokens: number | null; totalTokens: number | null; estimatedCostUsd: number | null; knownCostSubtotalUsd: number;
+    reservedCostUsd: number; unknownOutcomes: number; unpricedAttempts: number; usageIncompleteAttempts: number;
+  } {
+    const row = this.db.prepare(`SELECT COUNT(*) AS reserved_requests,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type='dispatch_intent') THEN 1 ELSE 0 END) AS requests,
+      SUM(e.input_tokens) AS input_tokens, SUM(e.cached_input_tokens) AS cached_input_tokens,
+      SUM(e.cache_write_tokens) AS cache_write_input_tokens, SUM(e.output_tokens) AS output_tokens,
+      SUM(e.reasoning_tokens) AS reasoning_tokens, SUM(e.total_tokens) AS total_tokens,
+      SUM(e.estimated_cost_usd) AS known_cost_subtotal_usd,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND (e.event_type IS NULL OR e.event_type IN ('response','unknown') AND e.estimated_cost_usd IS NULL) THEN 1 ELSE 0 END) AS unpriced_attempts,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND (e.event_type IS NULL OR e.input_tokens IS NULL OR e.output_tokens IS NULL OR e.total_tokens IS NULL) THEN 1 ELSE 0 END) AS usage_incomplete_attempts,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent') AND e.cached_input_tokens IS NULL THEN 1 ELSE 0 END) AS cached_incomplete,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent') AND e.cache_write_tokens IS NULL THEN 1 ELSE 0 END) AS cache_write_incomplete,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent') AND e.reasoning_tokens IS NULL THEN 1 ELSE 0 END) AS reasoning_incomplete,
+      COALESCE(SUM(a.reserved_cost_micros),0) AS reserved_cost_micros,
+      SUM(CASE WHEN e.event_type='unknown' THEN 1 ELSE 0 END) AS unknown_outcomes
+      FROM jev_request_attempts a LEFT JOIN jev_attempt_events e ON e.attempt_id=a.id AND e.event_type IN ('response','rejected','unknown')
+      WHERE a.provider='openai_luna' AND a.reserved_at>=?`).get(sinceMs) as Record<string, number | null>;
+    const unpricedAttempts = row.unpriced_attempts ?? 0;
+    const requests = row.requests ?? 0;
+    const usageIncompleteAttempts = row.usage_incomplete_attempts ?? 0;
+    return {
+      requests, reservedRequests: row.reserved_requests ?? 0, inputTokens: usageIncompleteAttempts > 0 ? null : row.input_tokens ?? 0,
+      cachedInputTokens: requests === 0 ? 0 : (row.cached_incomplete ?? 0) > 0 ? null : row.cached_input_tokens ?? 0,
+      cacheWriteInputTokens: requests === 0 ? 0 : (row.cache_write_incomplete ?? 0) > 0 ? null : row.cache_write_input_tokens ?? 0,
+      outputTokens: usageIncompleteAttempts > 0 ? null : row.output_tokens ?? 0,
+      reasoningTokens: requests === 0 ? 0 : (row.reasoning_incomplete ?? 0) > 0 ? null : row.reasoning_tokens ?? 0,
+      totalTokens: usageIncompleteAttempts > 0 ? null : row.total_tokens ?? 0,
+      estimatedCostUsd: unpricedAttempts > 0 ? null : row.known_cost_subtotal_usd ?? 0,
+      knownCostSubtotalUsd: row.known_cost_subtotal_usd ?? 0, reservedCostUsd: (row.reserved_cost_micros ?? 0) / 1_000_000,
+      unknownOutcomes: row.unknown_outcomes ?? 0, unpricedAttempts,
+      usageIncompleteAttempts,
+    };
+  }
+
   close(): void {
     if (this.closed) return;
     this.db.prepare("UPDATE desk_runtime_sessions SET closed_at=? WHERE id=? AND closed_at IS NULL").run(Date.now(), this.runtimeId);
@@ -1889,6 +2168,7 @@ export class Desk {
 
 export function rowToDTO(r: MentionRow): MentionDTO {
   const wantsScore = r.status === "scored" || r.status === "off_target";
+  const wantsClassification = r.status === "classified" || r.status === "excluded" || r.status === "review_required";
   const values = [r.p_pos, r.p_neu, r.p_neg, r.confidence, r.about, r.material, r.novel,
     r.credible, r.investor_relevant, r.magnitude, r.surprise, r.event_score, r.impact,
     r.weight, r.input_tokens, r.output_tokens, r.cost_usd, r.latency_ms, r.scored_at];
@@ -1896,7 +2176,20 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     && (r.sentiment === "positive" || r.sentiment === "neutral" || r.sentiment === "negative")
     && typeof r.event_type === "string" && typeof r.takeaway === "string"
     && typeof r.engine === "string" && typeof r.rubric_sha === "string";
-  const status: MentionStatus = r.status === "corrupt" || (wantsScore && !complete)
+  const classificationNumbers = [r.classification_input_tokens, r.classification_output_tokens,
+    r.classification_total_tokens,
+    r.classification_latency_ms, r.classification_classified_at];
+  const classificationComplete = wantsClassification && r.classification_provider === "openai_luna" &&
+    typeof r.classification_model_requested === "string" && typeof r.classification_model_returned === "string" &&
+    typeof r.classification_prompt_version === "string" && typeof r.classification_prompt_sha256 === "string" &&
+    typeof r.classification_schema_version === "string" && typeof r.classification_schema_sha256 === "string" &&
+    (r.classification_sentiment == null || typeof r.classification_sentiment === "string") &&
+    (r.classification_event_type == null || typeof r.classification_event_type === "string") &&
+    (r.classification_takeaway == null || typeof r.classification_takeaway === "string") &&
+    typeof r.classification_evidence_sufficient === "number" &&
+    typeof r.classification_disposition === "string" && typeof r.classification_response_id === "string" &&
+    typeof r.classification_response_sha256 === "string" && classificationNumbers.every((value) => typeof value === "number" && Number.isFinite(value));
+  const status: MentionStatus = r.status === "corrupt" || (wantsScore && !complete) || (wantsClassification && !classificationComplete)
     ? "corrupt"
     : (r.status as MentionStatus);
   const score: MentionScore | null = complete ? {
@@ -1910,6 +2203,24 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     outputTokens: r.output_tokens!,
     estimatedInputCostUsd: r.cost_usd!,
     latencyMs: r.latency_ms!, rubricSha: r.rubric_sha!, scoredAt: r.scored_at!,
+  } : null;
+  const classification: CategoricalClassification | null = classificationComplete ? {
+    provider: "openai_luna",
+        modelRequested: r.classification_model_requested!, modelReturned: r.classification_model_returned!,
+        serviceTierRequested: "default", serviceTier: r.classification_service_tier ?? null,
+    promptVersion: r.classification_prompt_version!, promptSha256: r.classification_prompt_sha256!,
+    schemaVersion: r.classification_schema_version!, schemaSha256: r.classification_schema_sha256!,
+    sentiment: r.classification_sentiment as CategoricalClassification["sentiment"],
+    eventType: r.classification_event_type ?? null, takeaway: r.classification_takeaway ?? null,
+    about: nullableBoolean(r.classification_about), material: nullableBoolean(r.classification_material),
+    investorRelevant: nullableBoolean(r.classification_investor_relevant), evidenceSufficient: r.classification_evidence_sufficient === 1,
+    summary: r.classification_summary ?? null, supportingExcerpt: r.classification_supporting_excerpt ?? null,
+    disposition: r.classification_disposition!, responseId: r.classification_response_id!, responseSha256: r.classification_response_sha256!,
+    inputTokens: r.classification_input_tokens!, cachedInputTokens: r.classification_cached_input_tokens ?? null,
+    cacheWriteInputTokens: r.classification_cache_write_tokens ?? null,
+    outputTokens: r.classification_output_tokens!, reasoningTokens: r.classification_reasoning_tokens ?? null,
+    totalTokens: r.classification_total_tokens!, estimatedCostUsd: r.classification_estimated_cost_usd ?? null,
+    latencyMs: r.classification_latency_ms!, classifiedAt: r.classification_classified_at!,
   } : null;
   return {
     id: r.id,
@@ -1942,8 +2253,13 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     // explicit usage review even when that legacy flag is false.
     usageCheckRequired: r.score_usage_check_required === 1 || (r.status === "failed" && r.score_attempts > 0),
     score,
-    error: status === "corrupt" ? (r.score_error ?? "Stored Jev judgment is incomplete and was withheld.") : r.score_error,
+    classification,
+    error: status === "corrupt" ? (r.score_error ?? "Stored judgment is incomplete and was withheld.") : r.score_error,
   };
+}
+
+function nullableBoolean(value: number | null | undefined): boolean | null {
+  return value == null ? null : value === 1;
 }
 
 export type RawMentionInput = RawMention;

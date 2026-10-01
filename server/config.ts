@@ -21,6 +21,17 @@ export function boundedNonNegativeInt(v: string | undefined, maximum: number): n
   return Number.isSafeInteger(n) && n >= 0 && n <= maximum ? n : 0;
 }
 
+export function boundedUsdMicros(v: string | undefined, maximumUsd: number): number {
+  if (v === undefined || !/^\d+(?:\.\d{1,6})?$/.test(v.trim())) return 0;
+  const micros = Number(v) * 1_000_000;
+  return Number.isSafeInteger(micros) && micros >= 0 && micros <= maximumUsd * 1_000_000 ? micros : 0;
+}
+
+export function parseClassificationProvider(value: string | undefined): "openai_luna" | "typesafe" {
+  if (value === undefined || value.trim() === "") return "openai_luna";
+  return z.enum(["openai_luna", "typesafe"]).parse(value.trim());
+}
+
 const scoreableCollectorSchema = z.enum([
   "google_news_rss",
   "yahoo_finance_rss",
@@ -107,6 +118,7 @@ export const apiKeySource = envKey !== undefined ? (apiKey ? "env" : "disabled b
 export const VERSION = "0.2.0";
 
 export const config = {
+  classificationProvider: parseClassificationProvider(process.env.CLASSIFICATION_PROVIDER),
   /** Provider and model requests require an explicit opt-in; false serves saved data only. */
   externalRequestsEnabled: parseExternalRequestsEnabled(process.env.EXTERNAL_REQUESTS_ENABLED),
   /** Empty by default: external request opt-in still needs a per-source allowlist. */
@@ -132,6 +144,16 @@ export const config = {
     /** Both positive limits are required before the app can dispatch Jev inputs. */
     maxRequestsPerDay: boundedNonNegativeInt(process.env.TYPESAFE_MAX_REQUESTS_PER_DAY, 100),
     maxRequestBytesPerDay: boundedNonNegativeInt(process.env.TYPESAFE_MAX_REQUEST_BYTES_PER_DAY, 400_000),
+  },
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY?.trim() || "",
+    model: "gpt-6-luna",
+    timeoutMs: 30_000,
+    accountUseApproved: parseExplicitBoolean(process.env.OPENAI_ACCOUNT_USE_APPROVED),
+    allowedCollectors: new Set<CollectorId>(parseExternalSourceCollectors(process.env.OPENAI_ALLOWED_COLLECTORS)),
+    maxRequestsPerDay: boundedNonNegativeInt(process.env.OPENAI_MAX_REQUESTS_PER_DAY, 100),
+    maxRequestBytesPerDay: boundedNonNegativeInt(process.env.OPENAI_MAX_REQUEST_BYTES_PER_DAY, 400_000),
+    maxDailyCostMicros: boundedUsdMicros(process.env.OPENAI_MAX_DAILY_COST_USD, 100),
   },
   xBearer: process.env.X_BEARER_TOKEN?.trim() || "",
   /** Finnhub free tier: per-symbol news + EPS surprises + earnings calendar. */

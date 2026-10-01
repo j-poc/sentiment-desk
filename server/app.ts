@@ -121,6 +121,7 @@ export function createApp(deps: AppDeps): Hono {
         nextCursor: alertPage.nextCursor == null ? null : JSON.stringify(alertPage.nextCursor),
       },
       usage: deps.db.usageSince(startOfDayUtc.getTime()),
+      classifierUsage: deps.db.classifierUsageSince(startOfDayUtc.getTime()),
       events: deps.db.recentEvents(20),
     });
   });
@@ -128,10 +129,16 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/first-run-evidence", (c) => {
     const eligibleObservationCount = deps.db.realObservationCount();
     const runtimeHealth = deps.health.snapshot();
+    const classifierSecAllowed = runtimeHealth.classifier.provider === "openai_luna"
+      ? runtimeHealth.sourceApproval.openaiAllowedCollectors?.includes("sec_edgar") === true
+      : runtimeHealth.sourceApproval.jevAllowedCollectors.includes("sec_edgar");
     return c.json({
       eligibleObservationCount,
       secCollectorEnabled: runtimeHealth.sec.enabled,
       jevSecScoringEnabled: runtimeHealth.jev.enabled && runtimeHealth.sourceApproval.jevAllowedCollectors.includes("sec_edgar"),
+      classifierProvider: runtimeHealth.classifier.provider,
+      classifierSecClassificationEnabled: runtimeHealth.classifier.enabled && classifierSecAllowed,
+      classifierBlockedReason: runtimeHealth.classifier.blockedReason,
       archivedRun: eligibleObservationCount === 0 ? ARCHIVED_SEC_JEV_RUN : null,
     });
   });
@@ -224,6 +231,10 @@ export function createApp(deps: AppDeps): Hono {
         return c.json({ error: "mention_not_retryable" }, 409);
       case "jev_unavailable":
         return c.json({ error: "jev_not_configured" }, 503);
+      case "classifier_not_configured":
+        return c.json({ error: "classifier_not_configured" }, 503);
+      case "classifier_daily_budget_exhausted":
+        return c.json({ error: "classifier_daily_budget_exhausted" }, 429);
       case "budget_exhausted":
         return c.json({ error: "jev_daily_budget_exhausted" }, 429);
       default: {

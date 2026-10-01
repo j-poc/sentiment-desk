@@ -116,7 +116,40 @@ export interface JevState {
   };
 }
 
-export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off_target" | "failed" | "corrupt";
+export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off_target" | "classified" | "excluded" | "review_required" | "failed" | "corrupt";
+
+export interface CategoricalClassification {
+  provider: "openai_luna";
+  modelRequested: string;
+  modelReturned: string | null;
+  serviceTierRequested: "default";
+  serviceTier: string | null;
+  promptVersion: string;
+  promptSha256: string;
+  schemaVersion: string;
+  schemaSha256: string;
+  sentiment: "negative" | "neutral" | "positive" | null;
+  eventType: string | null;
+  takeaway: string | null;
+  about: boolean | null;
+  material: boolean | null;
+  investorRelevant: boolean | null;
+  evidenceSufficient: boolean;
+  summary: string | null;
+  supportingExcerpt: string | null;
+  disposition: "classified" | "excluded" | "review_required";
+  responseId: string;
+  responseSha256: string;
+  inputTokens: number;
+  cachedInputTokens: number | null;
+  cacheWriteInputTokens: number | null;
+  outputTokens: number;
+  reasoningTokens: number | null;
+  totalTokens: number;
+  estimatedCostUsd: number | null;
+  latencyMs: number;
+  classifiedAt: number;
+}
 
 export interface MentionScore {
   sentiment: "negative" | "neutral" | "positive";
@@ -174,6 +207,7 @@ export interface MentionDTO {
   scoreRetryAt: number | null;
   usageCheckRequired: boolean;
   score: MentionScore | null;
+  classification?: CategoricalClassification | null;
   error: string | null;
 }
 

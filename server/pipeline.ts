@@ -1,9 +1,10 @@
-import type { Desk, JevAttemptReceipt, RawMentionInput } from "./db.js";
+import type { Desk, JevAttemptReceipt, ModelProvider, RawMentionInput } from "./db.js";
 import { rowToDTO } from "./db.js";
 import { createHash } from "node:crypto";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { JevError, prepareJevRequest, type PreparedJevRequest } from "./jev.js";
+import { OpenAIClassifierError, OPENAI_PROMPT_VERSION, OPENAI_SCHEMA_VERSION, prepareOpenAIRequest, type OpenAIClassifierResult, type PreparedOpenAIRequest } from "./openai-classifier.js";
 import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
 import {
@@ -20,6 +21,7 @@ import {
 import { TIER_WEIGHT } from "./sources/tiers.js";
 import type {
   Company,
+  CategoricalClassification,
   CompanySnapshot,
   CollectorId,
   EarningsSurprise,
@@ -52,6 +54,8 @@ export interface JudgeFn {
 export interface PipelineDeps {
   db: Desk;
   judge: JudgeFn | null;
+  classifier?: ((prepared: PreparedOpenAIRequest) => Promise<OpenAIClassifierResult>) | null;
+  provider?: ModelProvider;
   hub: Hub;
   health: HealthTracker;
   engineLabel: string;
@@ -63,6 +67,7 @@ export interface PipelineDeps {
     utcDay: () => string;
     maxRequests: number;
     maxRequestBytes: number;
+    maxDailyCostMicros?: number;
   };
   alert?: { webhookUrl: string; eventScore: number; impact: number; freshMinutes: number };
 }
@@ -72,6 +77,8 @@ export type OperatorRetryResult =
   | "usage_review_required"
   | "not_retryable"
   | "jev_unavailable"
+  | "classifier_not_configured"
+  | "classifier_daily_budget_exhausted"
   | "budget_exhausted";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -115,7 +122,7 @@ export class Pipeline {
     if (!m.deliveryId) throw new Error("A persisted source delivery receipt is required before an observation can be ingested");
     const stored = this.deps.db.insertObservation(m);
     const collector = m.collector ?? "legacy_unknown";
-    if (stored.inserted && this.deps.externalRequestsEnabled !== false && this.deps.judge && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
+    if (stored.inserted && this.deps.externalRequestsEnabled !== false && this.activeProviderReady && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
       this.enqueue(stored.observationId);
     }
     return stored.inserted;
@@ -123,7 +130,7 @@ export class Pipeline {
 
   /** Re-queue existing pending mentions (used after rubric migrations). */
   drainPending(limit = 1_000): number {
-    if (this.deps.externalRequestsEnabled === false || !this.deps.judge || this.deps.allowedCollectors.size === 0) return 0;
+    if (this.deps.externalRequestsEnabled === false || !this.activeProviderReady || this.deps.allowedCollectors.size === 0) return 0;
     const remaining = this.remainingDailyRequests();
     if (remaining <= 0) return 0;
     const ids = this.deps.db.pendingIds(Math.min(limit, remaining), [...this.deps.allowedCollectors]);
@@ -132,13 +139,13 @@ export class Pipeline {
   }
 
   retryFailed(id: string, reviewedProviderUsage: boolean): OperatorRetryResult {
-    if (this.deps.externalRequestsEnabled === false || !this.deps.judge) return "jev_unavailable";
+    if (this.deps.externalRequestsEnabled === false || !this.activeProviderReady) return this.activeProvider === "openai_luna" ? "classifier_not_configured" : "jev_unavailable";
     const current = this.deps.db.mentionRow(id);
     if (!current) return "not_retryable";
     if (![...this.deps.allowedCollectors].some((collector) => collector === current.collector)) {
       return "jev_unavailable";
     }
-    if (!this.hasDailyBudgetCapacity()) return "budget_exhausted";
+    if (!this.hasDailyBudgetCapacity()) return this.activeProvider === "openai_luna" ? "classifier_daily_budget_exhausted" : "budget_exhausted";
     const result = this.deps.db.requeueFailed(id, reviewedProviderUsage);
     if (result !== "queued") return result;
     const requeued = this.deps.db.mentionRow(id);
@@ -164,7 +171,14 @@ export class Pipeline {
       utcDay: this.deps.dailyBudget.utcDay(),
       maxRequests: this.deps.dailyBudget.maxRequests,
       maxRequestBytes: this.deps.dailyBudget.maxRequestBytes,
+      provider: this.activeProvider,
+      maxDailyCostMicros: this.deps.dailyBudget.maxDailyCostMicros,
     });
+  }
+
+  private get activeProvider(): ModelProvider { return this.deps.provider ?? "typesafe"; }
+  private get activeProviderReady(): boolean {
+    return this.activeProvider === "openai_luna" ? Boolean(this.deps.classifier) : Boolean(this.deps.judge);
   }
 
   private hasDailyBudgetCapacity(): boolean {
@@ -212,6 +226,11 @@ export class Pipeline {
     const queuedRow = db.mentionRow(id);
     if (this.deps.externalRequestsEnabled === false || !queuedRow || (queuedRow.status !== "pending" && queuedRow.status !== "retrying")) return;
     if (![...this.deps.allowedCollectors].some((collector) => collector === queuedRow.collector)) return;
+
+    if (this.activeProvider === "openai_luna") {
+      await this.classifyOne(id);
+      return;
+    }
 
     if (!this.deps.judge) {
       // No engine configured: leave the real observation pending. An
@@ -395,6 +414,114 @@ export class Pipeline {
       }
       this.deps.health.recordJev(false, message);
       db.logEvent("warn", "jev", `score failed for ${id}: ${message}`);
+      const updated = db.mentionRow(id);
+      if (updated) this.deps.hub.broadcast("mention", rowToDTO(updated));
+    }
+  }
+
+  private async classifyOne(id: string): Promise<void> {
+    const db = this.deps.db;
+    const row = db.mentionRow(id);
+    const classifier = this.deps.classifier;
+    if (!row || (row.status !== "pending" && row.status !== "retrying") || !classifier || !this.hasDailyBudgetCapacity()) return;
+    const collector = row.collector as CollectorId;
+    if (!this.deps.allowedCollectors.has(collector)) return;
+    const meta = this.companyMeta(row.company_id);
+    const strongIdentity = hasStrongIdentity({
+      company: { name: meta.name, ticker: meta.ticker, aliases: meta.aliases, ambiguous: meta.ambiguous },
+      title: row.title, snippet: row.snippet, scoped: row.scoped === 1,
+    });
+    const prepared = prepareOpenAIRequest({
+      company: { name: meta.name, ticker: meta.ticker, sector: meta.sector },
+      source: { collector, publisher: row.publisher_name, title: row.title, excerpt: row.snippet },
+    });
+    const maxOutputCostMicros = prepared.maxOutputTokens * 0.5;
+    const reservedCostMicros = Math.ceil(prepared.requestBytes * 0.125 + maxOutputCostMicros);
+    const claim = db.claimForScoringWithBudget({
+      id, now: Date.now(), allowedCollectors: [...this.deps.allowedCollectors],
+      utcDay: this.deps.dailyBudget.utcDay(), requestBytes: prepared.requestBytes,
+      requestSha256: prepared.payloadSha256, requestedModel: prepared.requestedModel,
+      rubricSha256: prepared.profileSha256, maxRequests: this.deps.dailyBudget.maxRequests,
+      maxRequestBytes: this.deps.dailyBudget.maxRequestBytes, provider: "openai_luna",
+      maxDailyCostMicros: this.deps.dailyBudget.maxDailyCostMicros ?? 0, reservedCostMicros,
+      requestedServiceTier: prepared.requestedServiceTier, maxOutputTokens: prepared.maxOutputTokens,
+      schemaSha256: prepared.schemaSha256,
+    });
+    if (claim.kind !== "claimed") return;
+    const claimed = claim.row;
+    this.deps.hub.broadcast("mention", rowToDTO(claimed));
+    let result: OpenAIClassifierResult | null = null;
+    let intentRecorded = false;
+    let receiptRecorded = false;
+    try {
+      if (!db.recordJevDispatchIntent(claim.attemptId, Date.now())) throw new Error("OpenAI dispatch intent could not be durably recorded; request was not sent");
+      intentRecorded = true;
+      result = await classifier(prepared);
+      const { classification: raw, usage } = result;
+      const disposition: CategoricalClassification["disposition"] = raw.about === false || raw.investorRelevant === false
+        ? "excluded"
+        : !strongIdentity || !raw.evidenceSufficient || raw.about == null || raw.material == null || raw.investorRelevant == null ||
+          raw.sentiment == null || raw.eventType == null || raw.takeaway == null
+          ? "review_required"
+          : "classified";
+      const classification: CategoricalClassification = {
+        provider: "openai_luna", modelRequested: prepared.requestedModel, modelReturned: result.modelReturned,
+        serviceTierRequested: prepared.requestedServiceTier, serviceTier: result.serviceTier,
+        promptVersion: OPENAI_PROMPT_VERSION, promptSha256: prepared.promptSha256,
+        schemaVersion: OPENAI_SCHEMA_VERSION, schemaSha256: prepared.schemaSha256,
+        ...raw, disposition, responseId: result.responseId, responseSha256: result.responseSha256,
+        inputTokens: usage.inputTokens, cachedInputTokens: usage.cachedInputTokens,
+        cacheWriteInputTokens: usage.cacheWriteInputTokens,
+        outputTokens: usage.outputTokens, reasoningTokens: usage.reasoningTokens, totalTokens: usage.totalTokens,
+        estimatedCostUsd: usage.estimatedCostUsd, latencyMs: result.latencyMs, classifiedAt: Date.now(),
+      };
+      db.recordCategoricalClassification(id, classification, {
+        attemptId: claim.attemptId, outcome: "response", occurredAt: Date.now(), httpStatus: result.httpStatus,
+        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, resolvedModel: result.modelReturned,
+        latencyMs: result.latencyMs, errorCategory: null, cachedInputTokens: usage.cachedInputTokens,
+        cacheWriteInputTokens: usage.cacheWriteInputTokens, reasoningTokens: usage.reasoningTokens,
+        totalTokens: usage.totalTokens, responseId: result.responseId,
+        responseSha256: result.responseSha256, estimatedCostUsd: usage.estimatedCostUsd,
+        responseServiceTier: result.serviceTier,
+      });
+      receiptRecorded = true;
+      this.deps.health.recordClassifier(true);
+      const updated = db.mentionRow(id);
+      if (updated) {
+        this.deps.hub.broadcast("mention", rowToDTO(updated));
+        this.deps.hub.broadcast("company", this.snapshot(claimed.company_id));
+      }
+    } catch (error) {
+      const e = error instanceof OpenAIClassifierError ? error : null;
+      const responseSeen = result != null || (e?.status != null && e.status >= 200 && e.status < 300);
+      if (!receiptRecorded) {
+        const outcome: JevAttemptReceipt["outcome"] = e?.outcomeUnknown ? "unknown" : responseSeen ? "response" : e?.status != null ? "rejected" : intentRecorded ? "unknown" : "not_sent";
+        try {
+          db.recordJevAttemptReceipt({
+            attemptId: claim.attemptId, outcome, occurredAt: Date.now(), httpStatus: e?.status ?? result?.httpStatus ?? null,
+            inputTokens: e?.usage?.inputTokens ?? result?.usage.inputTokens ?? null,
+            outputTokens: e?.usage?.outputTokens ?? result?.usage.outputTokens ?? null,
+            resolvedModel: result?.modelReturned ?? e?.returnedModel ?? null, latencyMs: e?.latencyMs ?? result?.latencyMs ?? null,
+            errorCategory: e ? e.outcomeUnknown ? "provider_outcome_unknown" : e.status === 429 ? "rate_limited_or_quota_exhausted" : "provider_rejected_or_response_invalid" : "internal_or_transport_outcome_unknown",
+            cachedInputTokens: e?.usage?.cachedInputTokens ?? result?.usage.cachedInputTokens ?? null, reasoningTokens: e?.usage?.reasoningTokens ?? result?.usage.reasoningTokens ?? null,
+            cacheWriteInputTokens: e?.usage?.cacheWriteInputTokens ?? result?.usage.cacheWriteInputTokens ?? null,
+            totalTokens: e?.usage?.totalTokens ?? result?.usage.totalTokens ?? null, responseId: e?.responseId ?? result?.responseId ?? null,
+            responseSha256: e?.responseSha256 ?? result?.responseSha256 ?? null, estimatedCostUsd: e?.usage?.estimatedCostUsd ?? result?.usage.estimatedCostUsd ?? null,
+            responseServiceTier: e?.serviceTier ?? result?.serviceTier ?? null,
+          });
+          receiptRecorded = true;
+        } catch { /* runtime recovery closes the durable attempt conservatively */ }
+      }
+      const message = e?.message ?? "OpenAI classification failed due to internal processing error";
+      if (e?.retryable && claimed.score_attempts < MAX_JEV_ATTEMPTS) {
+        const retryAt = Date.now() + Math.max(RETRY_BASE_MS * 2 ** (claimed.score_attempts - 1), e.retryAfterMs ?? 0);
+        db.markRetrying(id, `${message}; retry ${claimed.score_attempts + 1} of ${MAX_JEV_ATTEMPTS} is scheduled`, retryAt);
+      } else {
+        const usageCheckRequired = Boolean(e?.outcomeUnknown || responseSeen || e?.status != null && e.status >= 500);
+        db.markFailed(id, `${message}${e?.outcomeUnknown ? "; provider outcome is unknown, reservation retained and retry withheld" : ""}`, usageCheckRequired);
+      }
+      this.deps.health.recordClassifier(false, message);
+      db.logEvent("warn", "classifier", `categorical classification failed for ${id}: ${message}`);
       const updated = db.mentionRow(id);
       if (updated) this.deps.hub.broadcast("mention", rowToDTO(updated));
     }

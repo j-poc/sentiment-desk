@@ -5,6 +5,7 @@ import { Desk } from "./db.js";
 import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
 import { JevClient } from "./jev.js";
+import { OpenAIClassifier } from "./openai-classifier.js";
 import { Pipeline, type JudgeFn } from "./pipeline.js";
 import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
@@ -49,10 +50,21 @@ async function main(): Promise<void> {
     config.jev.maxRequestsPerDay > 0 &&
     config.jev.maxRequestBytesPerDay > 0;
 
+  const openaiAllowedCollectors = intersectCollectorAllowlists(
+    config.openai.allowedCollectors,
+    config.externalSourceCollectors,
+    config.sourceRightsApprovedCollectors,
+  );
+  const openaiDispatchEnabled = config.externalRequestsEnabled && config.openai.apiKey !== "" &&
+    config.openai.accountUseApproved && openaiAllowedCollectors.size > 0 &&
+    config.openai.maxRequestsPerDay > 0 && config.openai.maxRequestBytesPerDay > 0 && config.openai.maxDailyCostMicros > 0;
+  const typeSafeActive = config.classificationProvider === "typesafe";
+  const activeProviderEnabled = typeSafeActive ? jevDispatchEnabled : openaiDispatchEnabled;
+
   const hub = new Hub();
   const health = new HealthTracker(
     config.xBearer !== "",
-    jevDispatchEnabled,
+    typeSafeActive && jevDispatchEnabled,
     config.jev.model,
     config.secUserAgent !== "",
     config.finnhubKey !== "",
@@ -67,6 +79,20 @@ async function main(): Promise<void> {
         .sort(),
       typesafeAccountUseApproved: config.jev.accountUseApproved,
       jevAllowedCollectors: [...jevAllowedCollectors].sort(),
+      openaiAccountUseApproved: config.openai.accountUseApproved,
+      openaiAllowedCollectors: [...openaiAllowedCollectors].sort(),
+      openaiBlockedCollectors: [...config.openai.allowedCollectors].filter((collector) => !openaiAllowedCollectors.has(collector)).sort(),
+    },
+    {
+      provider: config.classificationProvider,
+      model: typeSafeActive ? config.jev.model : config.openai.model,
+      configured: typeSafeActive ? config.jev.apiKey !== "" : config.openai.apiKey !== "",
+      enabled: activeProviderEnabled,
+      blockedReason: activeProviderEnabled ? null : !config.externalRequestsEnabled ? "external requests are disabled"
+        : typeSafeActive ? !config.jev.apiKey ? "TypeSafe API key is missing" : "TypeSafe allowlist, account approval, or daily budget is incomplete"
+          : !config.openai.apiKey ? "OpenAI API key is missing" : !config.openai.accountUseApproved ? "OpenAI account use is not approved"
+            : openaiAllowedCollectors.size === 0 ? "OpenAI source allowlist or rights approval is missing"
+              : config.openai.maxRequestsPerDay <= 0 || config.openai.maxRequestBytesPerDay <= 0 || config.openai.maxDailyCostMicros <= 0 ? "OpenAI daily budgets are disabled" : "OpenAI classifier is unavailable",
     },
   );
 
@@ -76,16 +102,19 @@ async function main(): Promise<void> {
     model: config.jev.model,
     timeoutMs: config.jev.timeoutMs,
   });
+  const openaiClassifier = new OpenAIClassifier({
+    apiKey: config.openai.apiKey, model: config.openai.model, timeoutMs: config.openai.timeoutMs,
+  });
 
   let judge: JudgeFn | null;
   let engineLabel: string;
-  if (jevClient.configured && jevDispatchEnabled) {
+  if (typeSafeActive && jevClient.configured && jevDispatchEnabled) {
     judge = (_state, prepared) => jevClient.judgePrepared(prepared);
     engineLabel = config.jev.model;
   } else {
     judge = null;
     engineLabel = "unconfigured";
-    if (config.externalRequestsEnabled && config.jev.apiKey && !jevDispatchEnabled) {
+    if (typeSafeActive && config.externalRequestsEnabled && config.jev.apiKey && !jevDispatchEnabled) {
       console.log("[desk] Jev dispatch disabled: configure an explicit source allowlist and finite daily limits");
     }
   }
@@ -93,17 +122,22 @@ async function main(): Promise<void> {
   const pipeline = new Pipeline({
     db,
     judge,
+    classifier: !typeSafeActive && openaiClassifier.configured && openaiDispatchEnabled
+      ? (prepared) => openaiClassifier.classifyPrepared(prepared)
+      : null,
+    provider: config.classificationProvider,
     hub,
     health,
     engineLabel,
     inputPricePerMTok: config.jev.inputPricePerMTok,
     concurrency: config.scoreConcurrency,
-    allowedCollectors: jevAllowedCollectors,
+    allowedCollectors: typeSafeActive ? jevAllowedCollectors : openaiAllowedCollectors,
     externalRequestsEnabled: config.externalRequestsEnabled,
     dailyBudget: {
       utcDay: () => new Date().toISOString().slice(0, 10),
-      maxRequests: config.jev.maxRequestsPerDay,
-      maxRequestBytes: config.jev.maxRequestBytesPerDay,
+      maxRequests: typeSafeActive ? config.jev.maxRequestsPerDay : config.openai.maxRequestsPerDay,
+      maxRequestBytes: typeSafeActive ? config.jev.maxRequestBytesPerDay : config.openai.maxRequestBytesPerDay,
+      maxDailyCostMicros: config.openai.maxDailyCostMicros,
     },
     alert: config.alertWebhookUrl
       ? {
@@ -128,7 +162,7 @@ async function main(): Promise<void> {
   // Pending work drains on boot only when Jev is configured. Without a key,
   // real observations remain pending and create no scoring failure attempts.
   // Existing completed scores remain untouched when the current rubric changes.
-  const drained = pipeline.drainPending(5_000);
+  const drained = activeProviderEnabled ? pipeline.drainPending(5_000) : 0;
   if (drained > 0) console.log(`[desk] re-queued ${drained} pending mentions`);
 
   const app = createApp({
@@ -161,7 +195,7 @@ async function main(): Promise<void> {
     if (collectorEnabled("yahoo_quote")) {
       schedulers.push(startQuotesPoller({ market, db, intervalSeconds: config.pollQuotesSeconds }));
     }
-    if (judge) schedulers.push(startJevRetryPoller(pipeline));
+    if (activeProviderEnabled) schedulers.push(startJevRetryPoller(pipeline));
     if (collectorEnabled("google_news_rss") || collectorEnabled("yahoo_finance_rss")) {
       schedulers.push(startRssPoller({
         companies,
@@ -232,21 +266,27 @@ async function main(): Promise<void> {
       ? config.externalSourceCollectors.size === 0
         ? "REQUESTS ENABLED (source allowlist empty)"
         : "REQUESTS ENABLED (source approvals missing)"
-      : judge
+      : activeProviderEnabled
       ? "LIVE"
-      : "AWAITING KEY (mentions stay pending)";
+      : "AWAITING CLASSIFIER CONFIGURATION (mentions stay pending)";
   console.log(`[desk] sentiment desk v${VERSION} ${mode} on http://localhost:${config.port}`);
   if (config.secUserAgent.includes("personal research desk")) {
     console.warn("[desk] SEC_USER_AGENT is the generic default; personalize it in .env (name + email) for long unattended runs.");
   }
   console.log(`[desk] watchlist: ${companies.length} companies | db: ${config.dbPath}`);
   console.log(!config.externalRequestsEnabled
-    ? "[desk] source and Jev requests are paused by EXTERNAL_REQUESTS_ENABLED=false; credentials are unused"
-    : jevClient.configured
+    ? "[desk] external requests are paused by EXTERNAL_REQUESTS_ENABLED=false; credentials are unused"
+    : typeSafeActive && jevClient.configured
     ? `[desk] jev key resolved from ${apiKeySource}`
-    : apiKeySource === "disabled by env"
+    : typeSafeActive && apiKeySource === "disabled by env"
       ? "[desk] Jev disabled by explicit empty TYPESAFE_API_KEY; live observations stay pending."
-      : "[desk] TYPESAFE_API_KEY not found (env or ~/.newsjack/.env). Add it to .env to start scoring.");
+      : typeSafeActive
+        ? "[desk] TYPESAFE_API_KEY not found (env or ~/.newsjack/.env). Add it to .env to start scoring."
+        : !config.openai.apiKey
+          ? "[desk] OpenAI API key missing; real observations stay pending without failures."
+          : !activeProviderEnabled
+            ? "[desk] OpenAI classification blocked by account approval, source rights, or daily budgets."
+            : "[desk] OpenAI Luna categorical classification enabled.");
   if (config.externalRequestsEnabled && !config.finnhubKey)
     console.log("[desk] finnhub: no key — free tier adds news, EPS surprises, earnings dates");
   if (config.externalRequestsEnabled && !(config.redditClientId && config.redditClientSecret))
@@ -255,8 +295,11 @@ async function main(): Promise<void> {
     console.log(`[desk] blocked unapproved source requests: ${[...config.externalSourceCollectors]
       .filter((collector) => !config.sourceRightsApprovedCollectors.has(collector)).sort().join(", ")}`);
   }
-  if (config.externalRequestsEnabled && config.jev.apiKey && !config.jev.accountUseApproved) {
+  if (typeSafeActive && config.externalRequestsEnabled && config.jev.apiKey && !config.jev.accountUseApproved) {
     console.log("[desk] Jev dispatch blocked: TYPESAFE_ACCOUNT_USE_APPROVED is not set");
+  }
+  if (!typeSafeActive && config.externalRequestsEnabled && config.openai.apiKey && !config.openai.accountUseApproved) {
+    console.log("[desk] OpenAI dispatch blocked: OPENAI_ACCOUNT_USE_APPROVED is not set");
   }
 
   let stopping = false;
