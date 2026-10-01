@@ -1,5 +1,32 @@
 # Sentiment Desk completion plan
 
+## Current user-directed rebuild — 2026-10-01
+
+The user rejected the investment UI and explicitly replaced independent human
+labels with independent subagents. This supersedes the human-label requirement
+for the active product-cohort diagnostic; historical human statistical profiles
+remain intact for readback. Agent references are not human ground truth or
+broad population certification. The v2 engineering contract records the new
+observable UI and diagnostic acceptance criteria.
+
+The native goal service currently reports **blocked**, with the existing
+objective unachieved. Available tools do not expose a resume operation. This
+rebuild proceeds under the user's direct request; earlier active-status notes
+below are historical. Root integrates two separate worktrees (company UI and
+agent evaluation), owns real-source extraction/runtime/shared records and Git,
+and uses a GPT-6.1 Sol xhigh advisor plus independent final review.
+
+The authenticated Jev model-list API works. The user authorized spending from
+the existing account balance, and actual billing readback now establishes no available credit, auto-recharge
+off and no payment method. The spending bound is zero new paid requests.
+Source and independent reference labeling can proceed without paid calls.
+
+Default preview remains saved data only. The UI must prioritize selected-company
+history and supporting sources, preserve a useful visible true-empty first run,
+and expose pending/failure/freshness/model-quality limitations. No synthetic
+application records, new Radar expansion, license or release action is allowed.
+The trace is `2026-10-01-investor-workspace-agent-evaluation.md`.
+
 ## Latest native goal status check — 2026-10-01
 
 After the user's latest continuation, the goal service reports the existing

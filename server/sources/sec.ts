@@ -146,6 +146,30 @@ export async function fetchRecent8Ks(opts: {
   return parseRecent8Ks((await res.json()) as SubmissionsBody, opts.cik, opts.ticker, opts.sinceMs);
 }
 
+export const SEC_PRIMARY_ADAPTER_VERSION = "sec-primary-document/2";
+
+/** Keep the event section inside the bounded state instead of spending it on the cover page. */
+export function extractPrimaryDocText(html: string, maxChars = 3_000): string {
+  if (!Number.isSafeInteger(maxChars) || maxChars <= 0) throw new Error("Invalid SEC excerpt limit");
+  const text = html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style|svg|noscript|ix:header|ix:hidden)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<(?:br|\/?(?:div|p|tr|td|section|h[1-6]))\b[^>]*>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&#(x[0-9a-f]+|[0-9]+);?/gi, (_entity, digits: string) => {
+      const codePoint = digits[0]?.toLowerCase() === "x"
+        ? Number.parseInt(digits.slice(1), 16) : Number.parseInt(digits, 10);
+      return codePoint > 0 && codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+        ? String.fromCodePoint(codePoint) : " ";
+    })
+    .replace(/&(nbsp|amp|quot|apos|lt|gt|minus|ndash|mdash|lsquo|rsquo|ldquo|rdquo);/gi, (_entity, name: string) => (
+      ({ nbsp: " ", amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", minus: "−", ndash: "–", mdash: "—", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”" } as Record<string, string>)[name.toLowerCase()] ?? _entity
+    ));
+  // Block boundaries prevent a sentence mentioning an item from being used as a heading.
+  const heading = /(?:^|\n)[\t \u00a0]*Item\s+[1-9]\.[0-9]{2}\b/i.exec(text);
+  return text.slice(heading?.index ?? 0).replace(/\s+/g, " ").trim().slice(0, maxChars);
+}
+
 /** Plain-text extraction from the primary document, bounded for the state block. */
 export async function fetchPrimaryDocText(url: string, userAgent: string, maxChars = 3_000): Promise<string> {
   if (!url) return "";
@@ -157,15 +181,7 @@ export async function fetchPrimaryDocText(url: string, userAgent: string, maxCha
   if (res.status === 429) throw new ProviderRateLimitError("sec", parseRetryAfterMs(res.headers.get("retry-after")), "SEC document HTTP 429");
   if (!res.ok) throw new Error(`SEC document HTTP ${res.status}`);
   const html = await res.text();
-  return html
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(script|style|svg|noscript)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&\w+;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxChars);
+  return extractPrimaryDocText(html, maxChars);
 }
 
 export const ITEM_LABELS: Record<string, string> = {

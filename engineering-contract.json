@@ -1,12 +1,12 @@
 {
   "version": 2,
   "runtime_data_paths": ["data"],
-  "job": "Complete the real-data-only Sentiment Desk operational goal, close false-pass gaps in the independent Jev evidence gate, verify the full acceptance contract, and checkpoint reviewed work to the existing branch.",
+  "job": "Rebuild the selected-company research workspace, fix real SEC event extraction, and evaluate Jev against explicit independently blinded agent references under the user-authorized existing-credit budget; preserve real-data-only recovery and push reviewed checkpoints.",
   "acceptance": [
-    "New observations and research reads use identified real sources; demo and synthetic records never enter product runtime, and legacy_unknown rows stay quarantined from research and Jev paths.",
-    "Jev remains the per-item classifier behind explicit source/account/budget gates, and an authorized real-source cohort passes independent provenance-backed label evaluation with separately reviewed provider-usage, SEC source-to-input, account/budget, and blinded-human-label evidence.",
+    "New observations and research reads use identified real sources; demo and synthetic records never enter product runtime, and legacy_unknown rows stay quarantined from research and Jev paths. SEC extraction prioritizes actual numbered 8-K sections over the cover page, is deterministic and bounded, and versions newly persisted receipts without modifying historical records.",
+    "Jev remains the per-item classifier. An authorized SEC product-cohort run binds real source receipts, exact inputs, two independently blinded agent label sets and adjudication, actual model provenance, and reconciled current usage to a predeclared bounded diagnostic profile. Report agent-reference agreement separately from human ground truth and broad statistical certification. Historical unknown usage remains quarantined, not fabricated as reconciled. Actual account balance and refill settings must bound paid dispatch.",
     "Feed failures, pending judgments, and retries remain persistent, bounded, recoverable, and reachable to the user, including aggregate alert attention counts, prioritized pageable outcomes, responsive source/operations health details, and a visible not-configured webhook state before the first alert.",
-    "Selecting a company updates the chart and evidence workflow on desktop and narrow screens, with accessible controls and truthful units/freshness.",
+    "At1440x900, the selected company, selected date/window, actual historical chart and at least three actual supporting source headlines are visible without scrolling when available. Company selection updates heading, chart and evidence; J/K keeps selection visible. Chart bucket inspection reaches real supporting records and the original source. At390px, there is no horizontal overflow. Pending, historical, loading, error and true-empty states remain distinct, with truthful units, freshness and unvalidated-model disclosure.",
     "The live-data contract and code-bound evidence are current and passing for the scoped live source/persistence path.",
     "Opportunity Radar remains disabled until Sentiment Desk operational acceptance passes.",
     "The verified cohesive checkpoint is pushed to the existing codex/real-data-rebuild GitHub branch.",
@@ -16,7 +16,7 @@
   "design": {
     "existing_patterns": "Retain the existing TypeScript server, SQLite receipts and observations, bounded provider adapters, React/Vite research desk, offline startup verifier, and project-record ETL gate.",
     "data_ownership": "Provider data remains subject to provider-specific access and retention; local SQLite is controlled by the local operator. Unknown-provenance historical rows remain quarantined and are never relabeled. The first-run archive contains a public SEC filing reference plus one actual Jev output from the operator-authorized isolated smoke; exact account terms and spending controls remain unverified.",
-    "boundaries": "Network collection and Jev forwarding default off; source and account approvals are distinct; the read-only first-run endpoint serves a separately typed archival record only when all-time eligible observation history is zero, and never inserts it into Desk data or calculations. Live smoke uses a temporary isolated database; Radar stays disabled.",
+    "boundaries": "Network collection and Jev forwarding default off; source and account approvals are distinct; the read-only first-run endpoint serves a separately typed archival record only when all-time eligible observation history is zero, and never inserts it into Desk data or calculations. Live smoke uses a temporary isolated database; Radar stays disabled. The selected-company workspace reuses the existing request owners and recovery controller. Independent agent references use a separate v3 diagnostic mode; they never attest to human qualification or constitute ground truth.",
     "simplicity": "Use the existing React controls, formatters, tests, and verifiers; no new runtime dependency or synthetic product fixture is introduced.",
     "first_run": {
       "surface": "user_facing",
@@ -29,7 +29,7 @@
     }
   },
   "change_safety": {
-    "checkpoint": "Work is on codex/real-data-rebuild at origin baseline f40c8877c8bf4667e632fa5f6d5d97f6a0810541. Commit the reviewed evidence gate and updated acceptance records, push the same branch, then verify local HEAD against git ls-remote origin refs/heads/codex/real-data-rebuild.",
+    "checkpoint": "Root alone integrates worktree commits into codex/real-data-rebuild from baseline280a20d09b746295e68e258fe93f4da670caf74b, pushes reviewed in-scope source, and verifies the exact remote branch SHA. Restricted/raw runtime evidence stays local and ignored.",
     "rollback": "Revert the new regular commit if required; preserve the local SQLite database and never roll back persisted user data to reverse source code. External requests remain off by default."
   },
   "risks": {
@@ -110,7 +110,7 @@
     }
   ],
   "alignment": {
-    "request": "Complete Sentiment Desk as a real-data-only locally operational research desk, keep Jev as the core classifier, independently evaluate real-source judgments, preserve failure/recovery and evidence workflows, make charts/company selection work end to end, record and verify every gate, push checkpoints to the existing branch, and defer Opportunity Radar. The current user specifically asked investor and UI agents to rate the full build and to improve actionable gaps until their reviews improve.",
+    "request": "Complete Sentiment Desk as a real-data-only locally operational research desk, keep Jev as the core classifier, independently evaluate real-source judgments, preserve failure/recovery and evidence workflows, make charts/company selection work end to end, record and verify every gate, push checkpoints to the existing branch, and defer Opportunity Radar. The current user specifically asked investor and UI agents to rate the full build and to improve actionable gaps until their reviews improve. Latest explicit corrections: improve the inferior investment UI; replace independent human labels with independent subagents; use the Jev account/API within its existing balance; determine remaining details autonomously.",
     "acceptance_checks": [
       {"acceptance_index": 0, "check_ids": ["etl-artifact-check", "offline-source-gates"]},
       {"acceptance_index": 1, "check_ids": ["etl-artifact-check", "offline-source-gates", "real-source-jev-evaluation", "jev-real-source-evidence"]},

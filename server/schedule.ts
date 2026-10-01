@@ -9,7 +9,7 @@ import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl, type FeedFetchResult } from "./sources/rss.js";
 import { searchRecent, XPaginationTokenRejectedError, XNonAdvancingPaginationTokenError, xQuery } from "./sources/x.js";
 import { isFinanceRelevant } from "./scoring.js";
-import { fetchPrimaryDocText, fetchRecent8Ks, fetchTickerCikMap, titleForItems } from "./sources/sec.js";
+import { fetchPrimaryDocText, fetchRecent8Ks, fetchTickerCikMap, titleForItems, SEC_PRIMARY_ADAPTER_VERSION } from "./sources/sec.js";
 import { classifyDeliveryError, processDeliveryItems, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 import {
@@ -463,7 +463,7 @@ export function startSecPoller(deps: {
               deliveryId = recordDelivery({
                 db: deps.db, collector: "sec_edgar", companyId: company.id,
                 requestKey: `sec:${cik}:8-k-document:${f.accessionNo}`, startedAt: documentStartedAt,
-                adapterVersion: "sec-primary-document/1", result: snippet ? "success" : "empty",
+                adapterVersion: SEC_PRIMARY_ADAPTER_VERSION, result: snippet ? "success" : "empty",
                 parsedItemCount: snippet ? 1 : 0, normalizedItems: { url, snippet }, processingExpected: Boolean(snippet),
               });
             } catch (err) {
@@ -471,7 +471,7 @@ export function startSecPoller(deps: {
               recordDelivery({
                 db: deps.db, collector: "sec_edgar", companyId: company.id,
                 requestKey: `sec:${cik}:8-k-document:${f.accessionNo}`, startedAt: documentStartedAt,
-                adapterVersion: "sec-primary-document/1", result: classifyDeliveryError(err),
+                adapterVersion: SEC_PRIMARY_ADAPTER_VERSION, result: classifyDeliveryError(err),
                 parsedItemCount: 0, error: err,
               });
               unavailableDocuments += 1;
@@ -497,7 +497,7 @@ export function startSecPoller(deps: {
                 deliveryId,
                 publisherName: "SEC EDGAR",
                 publisherDomain: "sec.gov",
-                adapterVersion: "sec-primary-document/1",
+                adapterVersion: SEC_PRIMARY_ADAPTER_VERSION,
                 filedAt: f.filedAt ?? undefined,
                 retrievedAt: Date.now(),
               });

@@ -1,5 +1,16 @@
 # Sentiment Desk Agent Board
 
+Current UI and agent-label rebuild at `280a20d`: root owns shared contracts, integration, account/cohort evidence, runtime/browser checks and Git. User replaced required human labels with blinded independent subagents; agent agreement remains distinct from human ground truth. Existing Jev account balance is the authorized spending boundary. Runtime provider/model dispatch remains paused until the actual bound is established.
+
+| Current owner | Owned scope | State |
+|---|---|---|
+| `/root/investor_ui_rebuild` | Frontend in investor-ui worktree | Implementing company research workspace |
+| `/root/agent_evaluation_migration` | Evaluator schemas/reports and tests in agent-evaluation worktree | Implementing explicit agent-label mode, historical human mode preserved |
+| `/root/first_run_observability_advisor` | Read-only GPT-6.1 Sol xhigh product/evaluation decisions | Advisor |
+| `/root` | Shared records/contracts, integration, runtime and account evidence | Working |
+
+The following board entries are historical and do not replace current ownership.
+
 Coordinator: `/root` owns the acceptance contract, integration, records, checks,
 checkpoint, and final verdict. Jev and webhook calls remain disabled for ongoing
 work. One user-authorized SEC-to-Jev request already ran in a separate

@@ -1,12 +1,40 @@
 import { describe, expect, it } from "vitest";
 import {
   eventForItems,
+  extractPrimaryDocText,
   parseRecent8Ks,
   titleForItems,
 } from "../server/sources/sec.js";
 
 const CIK = "0001045810";
 const SINCE = Date.parse("2026-09-01T00:00:00Z");
+
+describe("SEC bounded event extraction", () => {
+  it("retains event text after a long cover page instead of truncating at its heading", () => {
+    const html = `<div>${"Cover page registration information. ".repeat(100)}</div>
+      <p><b>Item&#160;5.02</b> Departure of Directors or Certain Officers.</p>
+      <p>Officer&#8217;s retirement was announced.</p>`;
+    expect(extractPrimaryDocText(html)).toBe("Item 5.02 Departure of Directors or Certain Officers. Officer’s retirement was announced.");
+  });
+
+  it("omits hidden XBRL metadata and does not mistake an inline cross-reference for a section", () => {
+    const html = `<ix:header>Item 1.03 fabricated hidden metadata</ix:header>
+      <p>Cover references Item 1.01 without being a heading.</p>
+      <p>ITEM 8.01 Other Events.</p><p>Actual document text &amp; values.</p>`;
+    expect(extractPrimaryDocText(html)).toBe("ITEM 8.01 Other Events. Actual document text & values.");
+  });
+
+  it("bounds the normalized event excerpt and preserves the beginning when no heading is found", () => {
+    expect(extractPrimaryDocText("<p>Actual unnumbered filing body.</p>", 12)).toBe("Actual unnum");
+    expect(extractPrimaryDocText("<p>Item 2.02 Results.</p><p>" + "x".repeat(5_000) + "</p>")).toHaveLength(3_000);
+    expect(() => extractPrimaryDocText("body", 0)).toThrow("Invalid SEC excerpt limit");
+  });
+
+  it("recognizes split table headings and preserves financial signs and unknown entities", () => {
+    const html = "<p>Cover page</p><table><tr><td>Item</td><td>2.02 Results.</td></tr></table><p>&minus;5 &mdash; &custom;.</p>";
+    expect(extractPrimaryDocText(html)).toBe("Item 2.02 Results. −5 — &custom;.");
+  });
+});
 
 function submissionsFixture(): object {
   return {
