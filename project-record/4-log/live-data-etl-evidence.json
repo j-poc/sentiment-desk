@@ -2,12 +2,12 @@
   "adapter_fingerprints": [
     {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "finnhub"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "finnhub"
     },
     {
@@ -17,12 +17,12 @@
     },
     {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "gdelt_doc_api"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "gdelt_doc_api"
     },
     {
@@ -32,12 +32,12 @@
     },
     {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "google_news_rss"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "google_news_rss"
     },
     {
@@ -46,13 +46,28 @@
       "source_id": "google_news_rss"
     },
     {
+      "path": "server/db.ts",
+      "sha256": "11817593924f76aaedd844401cb2f418c38fbc7d943fe6b46cd0028ede3a6ab2",
+      "source_id": "openai_luna"
+    },
+    {
+      "path": "server/openai-classifier.ts",
+      "sha256": "0511ad155451bfd0d3e4751c4ff0793a88c3153836283d5307becfb68daee174",
+      "source_id": "openai_luna"
+    },
+    {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
+      "source_id": "openai_luna"
+    },
+    {
+      "path": "server/pipeline.ts",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "reddit"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "reddit"
     },
     {
@@ -62,17 +77,17 @@
     },
     {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "sec_edgar"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "sec_edgar"
     },
     {
       "path": "server/sources/sec.ts",
-      "sha256": "d185ca76e08b669f04994f7bbd0f31727d544670a33b407fa187e7a84f6aa6c8",
+      "sha256": "96737469c21ac4c623804a5b07e019d97b7b9b9d06c5a6b524db5f0fd718b49a",
       "source_id": "sec_edgar"
     },
     {
@@ -82,17 +97,17 @@
     },
     {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "typesafe_jev"
     },
     {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "x"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "x"
     },
     {
@@ -102,7 +117,7 @@
     },
     {
       "path": "server/app.ts",
-      "sha256": "b6d95e11e4f85876dc09b6b3110c672b395b671b6fe46c2aeef91047b7463621",
+      "sha256": "8fbf4612d36227242078f141ac4ea6b0333b8437ea7017c115ee801d862a1cc8",
       "source_id": "yahoo_chart"
     },
     {
@@ -112,12 +127,12 @@
     },
     {
       "path": "server/pipeline.ts",
-      "sha256": "0fa27414bd97dd545561b316335140244fe9a5bd27f1efa1d4b64cf82332ea79",
+      "sha256": "41e4c603106977bf40a483658268592290a9232805554b67c5c2718f6dda5439",
       "source_id": "yahoo_finance_rss"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "yahoo_finance_rss"
     },
     {
@@ -127,12 +142,12 @@
     },
     {
       "path": "server/app.ts",
-      "sha256": "b6d95e11e4f85876dc09b6b3110c672b395b671b6fe46c2aeef91047b7463621",
+      "sha256": "8fbf4612d36227242078f141ac4ea6b0333b8437ea7017c115ee801d862a1cc8",
       "source_id": "yahoo_quote"
     },
     {
       "path": "server/schedule.ts",
-      "sha256": "91c07b9fbcc878baaea4c846aa61fefe0e69819335bc7951cbf030e8c759ac18",
+      "sha256": "4ea7f4ef0128d3cf7e1a0981e797960c42737ebfca1aac8485bef7998812f582",
       "source_id": "yahoo_quote"
     },
     {
@@ -146,8 +161,8 @@
       "exit_code": 0,
       "id": "fixture_suite",
       "kind": "fixture",
-      "output_bytes": 1466,
-      "output_digest": "586911ec55cad802ad5ab5bbce88f46e02bec95f3e117ea068e48b0dd4e1a0cc",
+      "output_bytes": 1639,
+      "output_digest": "0bbd1622026fc35386a1866a11c989369a614d39b86a9b04daddb03bef10c701",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -158,17 +173,18 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ],
-      "started_at": "2026-10-01T18:56:36Z",
+      "started_at": "2026-10-01T21:49:53Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "failure_recovery_regressions",
       "kind": "failure",
-      "output_bytes": 1107,
-      "output_digest": "7bb403e0f660e4e00481efb6e0205c3a5a93b807ec87b879379bbde157996486",
+      "output_bytes": 1175,
+      "output_digest": "8451f0d0787cb446c44a7cb9870f157ae9b0287b9eff7a2edde9335dcc317c86",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -179,17 +195,18 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ],
-      "started_at": "2026-10-01T18:58:30Z",
+      "started_at": "2026-10-01T21:53:38Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "pipeline_replay_regressions",
       "kind": "replay",
-      "output_bytes": 638,
-      "output_digest": "214b1811a72c3df4a09f2034d99b0ead38e88cfadb9aa22fb0be0426acd58e38",
+      "output_bytes": 696,
+      "output_digest": "d11ff92adaef9c0316555c7c24860cf85887c4c511068d624013f0e768e069b7",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -200,17 +217,18 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ],
-      "started_at": "2026-10-01T18:59:22Z",
+      "started_at": "2026-10-01T21:55:01Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "offline_source_request_gates",
       "kind": "failure",
-      "output_bytes": 8334,
-      "output_digest": "4e526f09ee8dd60ab8ec33fbaf0e049e66c5d29e24696af463d14d84cb78675d",
+      "output_bytes": 8467,
+      "output_digest": "bd562aafd02f775744907ebf63251a39ff50f66208b67fb1b8dddf73d34c03ad",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -221,17 +239,18 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ],
-      "started_at": "2026-10-01T19:00:03Z",
+      "started_at": "2026-10-01T21:55:41Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
-      "output_bytes": 13190,
-      "output_digest": "09142e8d7abb66bd076b28387c02854c1ad0aa84ae7cd8edd317e30ac05814cf",
+      "output_bytes": 13046,
+      "output_digest": "26470504c4eaac49feadf1d2bab8b3710a123947ec24650972620af94c907a79",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -239,14 +258,14 @@
         "yahoo_quote",
         "yahoo_chart"
       ],
-      "started_at": "2026-10-01T19:00:42Z",
+      "started_at": "2026-10-01T21:56:05Z",
       "status": "PASS"
     }
   ],
-  "code_fingerprint": "711d6b85668b41db32229d216b30e31f853da5c3a2c670ced9e2185fb9455e77",
-  "contract_digest": "57951761ad42479cdfcdf72b04685b1082589dd9a7934bacc90f614df0a90e45",
+  "code_fingerprint": "cf4541c9041f3689f16c7cd82866344e6ec2a3de7e42bc4417df18b2a30d8a28",
+  "contract_digest": "cf29ba125a01df6ae016bee9c7c8da7b7202d454fa7f74773b21218d1cae2ae1",
   "schema_version": 1,
   "standard_digest": "0705643f9c2fe75e6cac32527741200fc200ad745e3904add39e62c6accf9b3d",
   "status": "PASS",
-  "verified_at": "2026-10-01T19:02:45Z"
+  "verified_at": "2026-10-01T21:57:27Z"
 }
