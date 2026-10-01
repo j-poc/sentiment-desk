@@ -33,13 +33,14 @@ by its declared ETL gate and writes to a disposable Compose database.
 | `/root/first_run_design_judge` | GPT-6.1 Sol, xhigh, read-only judge | Compare first-run proposals and acceptance criteria | Complete; Candidate A 23/25, Candidate B 22/25; design judgment, not usability validation |
 | `/root/first_run_advisor` | GPT-6.1 Sol, xhigh, read-only advisor | Real-data/no-demo and publication boundary for retained SEC-to-Jev result | Complete; confirmed retained artifact fields against SQLite; flagged and coordinator corrected one request-digest typo; noted separate unverified account terms |
 | `/root/comment_sicko_audit` | Read-only comment audit | Added comments and suppressions in changed scope | Complete; no dead comments, added suppressions, or misleading code comments |
-| `/root` | Coordinator | Acceptance contract, integration, records, final checks, Git checkpoint, and verdict | Candidate from `f40c8877c8bf4667e632fa5f6d5d97f6a0810541` reviewed. Focused evidence 30/30 and recovery 25/25 pass; typecheck/build pass. Final clean broad run passed389/389 tests across52 files, exit0, in311.34s after event-loop yielding; earlier non-pass logs are preserved. Real-source Jev evidence remains absent. Reviewed source checkpoint `7b1ce1c97d19fe8c092dd6f32c506550331afb0d` is pushed and matched to the remote branch. Latest final ETL status is recorded in the tracked receipt; engineering receipt remains private and full readiness remains blocked on real evidence. |
+| `/root` | Coordinator | Acceptance contract, integration, records, final checks, Git checkpoint, and verdict | Historical implementation baseline `f40c8877c8bf4667e632fa5f6d5d97f6a0810541`; reviewed implementation checkpoint `7b1ce1c97d19fe8c092dd6f32c506550331afb0d` and verification/configuration checkpoint `ad317db38cfec6eef7374056230e78a2b913a01c` were pushed and matched to the remote branch. Focused evidence30/30, recovery25/25, clean broad389/389 across52files, typecheck/build, and scoped ETL pass; earlier failures are preserved. Fresh acceptance review passes indices0,4,5,6, blocks1, and leaves2,3,7 unverified. Native engineering verify stopped at the non-passing review before declared checks; check confirmed no native receipt. Real-source Jev/account evidence and rendered UI remain incomplete. Final record checkpoint identity is established by the exact HEAD/remote readback, not an embedded self-referential SHA. |
 
 The alert implementation and evaluator correction were edited concurrently in
 the shared checkout under disjoint file ownership. The shared filesystem was
 not an enforced isolation boundary. No further concurrent writers are assigned.
 The latest repair and proof gaps are recorded in
 `project-record/4-log/2026-10-01-jev-evidence-gate-repair.md`. The reviewed source checkpoint is pushed. Final frozen ETL status is
-recorded in `project-record/4-log/live-data-etl-evidence.json`; the private
-engineering receipt records the acceptance result. Real-source classification
-and human-label evidence remain absent.
+recorded in `project-record/4-log/live-data-etl-evidence.json`. Private native
+engineering outputs and the independent alignment review record the non-pass;
+no native engineering receipt exists. Real-source classification and
+human-label evidence remain absent.

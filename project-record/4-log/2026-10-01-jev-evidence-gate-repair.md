@@ -222,8 +222,9 @@ matched. Repository visibility remains PUBLIC and authenticated permission
 is ADMIN; no visibility, access, license, merge, or deployment change was made.
 Private evidence and the runtime database remain excluded. These records are
 now frozen for final ETL verification. The authoritative scoped ETL status is
-in `project-record/4-log/live-data-etl-evidence.json`; the private engineering
-receipt holds the full acceptance result. Each must bind to this final
+in `project-record/4-log/live-data-etl-evidence.json`; private native engineering
+outputs and the independent alignment review hold the non-pass result.
+No native engineering receipt exists. Each proof must bind to this final
 source/configuration. The real Jev and independent-evidence commands are
 expected to remain non-pass until actual missing evidence is supplied.
 
@@ -265,10 +266,35 @@ Only a healthy full-coverage public text collector plus healthy quote coverage
 and preserved real pending observations can pass this bounded smoke. This
 scope does not imply that every provider is healthy or that Jev is evaluated.
 
-The final engineering check uses the exact ETL receipt for full-suite proof,
-then independently runs its remaining declared checks. Its private receipt
-and alignment review retain any missing real-source/model/account evidence
-as non-pass. Source records are frozen before ETL execution; private gate
-logs and receipts may change without altering the tracked candidate. Final
-GitHub identity must be read back from the exact branch after the reviewed
-record/configuration checkpoint.
+The engineering contract assigns the exact ETL receipt as full-suite proof.
+The intended native execution did not reach declared checks: the independent
+acceptance review reported blocked coverage, so native verify exited 1 before
+running checks or creating a receipt. Native check exited 1 with missing
+evidence receipt. Actual outputs are retained in the private
+`current-final-engineering-verify.log` and `current-final-engineering-check.log`;
+`current-final-engineering-observation.json` records the observed commands and
+explicitly does not claim a native passing receipt. Source records are frozen
+before ETL execution; private outputs may change without altering the tracked
+candidate. Final GitHub identity must be read back from the exact branch after
+the reviewed record/configuration checkpoint.
+
+The final trail audit found stale checkpoint wording and inaccurate references
+to a native engineering receipt. Those record errors are corrected above;
+the observed gate failure is retained. Verification/configuration checkpoint
+`ad317db38cfec6eef7374056230e78a2b913a01c` was pushed and matched to the exact
+remote branch. Its scoped ETL verify/check passed all five declared checks at
+`2026-10-01T17:24:15Z`. The fresh acceptance reviewer passed criteria 0, 4, 5,
+and 6, blocked criterion 1, and left 2, 3, and 7 unverified because current
+in-app navigation failed with `ERR_BLOCKED_BY_CLIENT`. Both real Jev commands
+exited 2 for absent evidence. Personal-acceptance findings are experimental
+agent review, not human acceptance or calibrated preference prediction.
+
+These record-only corrections invalidate the earlier source fingerprint.
+Application code, checks, and acceptance conditions are unchanged. The final
+tracked ETL receipt must be produced again against these frozen records;
+its actual timestamp and statuses remain authoritative. Native engineering
+acceptance must retain the missing real evidence and unavailable rendering as
+non-pass. Final checkpoint identity is proven by HEAD and exact remote-branch
+readback, avoiding a self-referential commit value inside its own tracked
+proof. The private continuation status records the external owners and
+resume conditions; no more paid Jev input is dispatched.
