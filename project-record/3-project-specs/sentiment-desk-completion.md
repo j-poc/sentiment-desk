@@ -1,5 +1,17 @@
 # Sentiment Desk completion plan
 
+## Latest native goal status check — 2026-10-01
+
+The goal service currently reports the existing Sentiment Desk goal as
+**blocked**. Its objective still matches the acceptance contract, so it was
+not replaced. The user asked to continue; work continues in this turn, but the
+available goal controls provide no resume-to-active action, so automatic
+continuation after this turn is not established. The current evaluation and
+remaining inputs are recorded in
+`project-record/4-log/2026-10-01-goal-resumption-audit.md`. The product remains
+incomplete pending the independently verified real-source evaluation and
+account/source evidence; Opportunity Radar stays disabled.
+
 ## Final local disposition — 2026-10-01T01:02:05Z
 
 The schema-2 ETL receipt passed all five required checks at
@@ -122,7 +134,7 @@ optional credential, webhook, or user database was involved. A fresh complete
 ETL `verify` followed by `check` is still required to bind these outcomes to the
 current frozen tree.
 
-## Current goal state as of 2026-10-01
+## Historical goal state snapshot (earlier on 2026-10-01; superseded above)
 
 The native goal remains **active** while the user asks Codex to continue. A
 frozen-source gate passed at `2026-09-30T21:02:28Z`, and its subsequent
@@ -1356,9 +1368,10 @@ actual company/feed UI and measure alert precision and missed material events.
 Before any Jev request, obtain authorized account-use, telemetry, retention,
 limit, refill, billing, and spend evidence; a descriptive SEC User-Agent
 contact; qualified reviewers and their label artifact; and provider records
-for the 4,700 historical `legacy_unknown` rows. Keep the goal active and
-continue local work while those inputs are unavailable. Do not replace them
-with synthetic observations or model-generated labels.
+for the 4,700 historical `legacy_unknown` rows. Continue authorized local
+work while those inputs are unavailable; the latest native goal status is
+recorded at the top of this plan. Do not replace them with synthetic
+observations or model-generated labels.
 
 ### Handoff quiz
 

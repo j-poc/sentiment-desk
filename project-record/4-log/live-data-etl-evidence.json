@@ -147,7 +147,7 @@
       "id": "fixture_suite",
       "kind": "fixture",
       "output_bytes": 1002,
-      "output_digest": "0cf0a43592e48d30a7c52bcbd8149f5e20eda87932619db7900cc71253c54069",
+      "output_digest": "c80f53550817ec22c7cc80c11a51e479fb25d666cbadcde9b80e0b6c5d9cd37a",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -160,7 +160,7 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T01:03:10Z",
+      "started_at": "2026-10-01T09:12:22Z",
       "status": "PASS"
     },
     {
@@ -168,7 +168,7 @@
       "id": "failure_recovery_regressions",
       "kind": "failure",
       "output_bytes": 1107,
-      "output_digest": "3fb71918c1dc01dad408fbf17dcfeef7e343c57118e8e81fb63f06a484d95f63",
+      "output_digest": "e0f0cc10383a5638cd8bc0f0831bb55f89afe4366af6e80c8505d5b1cf45cca1",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -181,7 +181,7 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T01:04:00Z",
+      "started_at": "2026-10-01T09:13:17Z",
       "status": "PASS"
     },
     {
@@ -189,7 +189,7 @@
       "id": "pipeline_replay_regressions",
       "kind": "replay",
       "output_bytes": 638,
-      "output_digest": "dbfca6713bd150f25b82f8614838f2a86043f7647f96a1c797b43ada5ebb9b13",
+      "output_digest": "a03f9ea7d28fee1a9f579848ba2beb961c458ad7d7dbbb2c8dadd8bc2f5d197b",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -202,15 +202,15 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T01:04:45Z",
+      "started_at": "2026-10-01T09:14:02Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "offline_source_request_gates",
       "kind": "failure",
-      "output_bytes": 8333,
-      "output_digest": "68c5f19e77a179a543f659509dd79a89256d08a00a4abc810d36c5cb17772859",
+      "output_bytes": 8334,
+      "output_digest": "a4c99a2f5a142bca5576d540c85280af5ac1caa5a245f261ff765134c2a4c166",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -223,15 +223,15 @@
         "x",
         "typesafe_jev"
       ],
-      "started_at": "2026-10-01T01:05:16Z",
+      "started_at": "2026-10-01T09:14:33Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
-      "output_bytes": 12946,
-      "output_digest": "07b300b9c1d44acbe63dd964e8d389f446878f090c717cb1bc471e4dc7ece682",
+      "output_bytes": 12853,
+      "output_digest": "0d4f94234090952b4dd173b06ffa3d20f735aa15fce69201baa486c31a001c4a",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -239,14 +239,14 @@
         "yahoo_quote",
         "yahoo_chart"
       ],
-      "started_at": "2026-10-01T01:05:35Z",
+      "started_at": "2026-10-01T09:14:52Z",
       "status": "PASS"
     }
   ],
-  "code_fingerprint": "b36f891333d16adbbf967021704c5c7f040bc67bc2a71271a883e666cb707241",
+  "code_fingerprint": "34d805abfcfd30e59ff239cdd845e9b7e6f1c033a3bd47a69614956b0a8dc14a",
   "contract_digest": "6627428ee1241fdf040fcbcd310ad5b74cd29fc343a19362f2f301a854c501a0",
   "schema_version": 1,
   "standard_digest": "02b3a9ea75ea9e82981cac988f021a78b440bbc0407f3759a62405ffff5bf1a8",
   "status": "PASS",
-  "verified_at": "2026-10-01T01:06:43Z"
+  "verified_at": "2026-10-01T09:15:58Z"
 }
