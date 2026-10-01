@@ -22,8 +22,8 @@ fi
 
 # This isolated Compose file never reads the developer's .env. It deliberately
 # opts into keyless live-source HTTP reads; the source-use approvals come only
-# from the explicit operator environment value above. It cannot spend Jev
-# credits or call optional APIs.
+# from the explicit operator environment value above. Both classifiers and
+# optional APIs are explicitly disabled, regardless of the developer environment.
 cat >"$compose_file" <<EOF
 services:
   sentiment-desk:
@@ -38,6 +38,13 @@ services:
       SOURCE_RIGHTS_APPROVED_COLLECTORS: "$SOURCE_RIGHTS_APPROVED_COLLECTORS"
       TYPESAFE_ACCOUNT_USE_APPROVED: "false"
       TYPESAFE_API_KEY: ""
+      CLASSIFICATION_PROVIDER: "openai_luna"
+      OPENAI_API_KEY: ""
+      OPENAI_ACCOUNT_USE_APPROVED: "false"
+      OPENAI_ALLOWED_COLLECTORS: ""
+      OPENAI_MAX_REQUESTS_PER_DAY: "0"
+      OPENAI_MAX_REQUEST_BYTES_PER_DAY: "0"
+      OPENAI_MAX_DAILY_COST_USD: "0"
       FINNHUB_API_KEY: ""
       REDDIT_CLIENT_ID: ""
       REDDIT_CLIENT_SECRET: ""
@@ -105,6 +112,8 @@ while (Date.now() < deadline) {
     ]);
     if (Object.hasOwn(health, "demo")) throw new Error("Synthetic-mode health leaked into the live API");
     if (health.health?.jev?.enabled !== false) throw new Error("Jev should be disabled in this credential-free smoke check");
+    if (health.health?.classifier?.provider !== "openai_luna" || health.health.classifier.enabled !== false) throw new Error("Luna should be selected and disabled in this credential-free smoke check");
+    if (health.classifierUsage?.requests !== 0) throw new Error("Credential-free source verification must not dispatch a paid classification");
 
     if (mode === "live") {
       const quoteCount = Object.keys(quotes.quotes ?? {}).length;

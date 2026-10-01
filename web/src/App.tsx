@@ -36,7 +36,8 @@ import { StatusBar } from "./components/StatusBar.js";
 import { FirstRunEvidenceBrief, FirstRunNoLocalData } from "./components/FirstRunEvidenceBrief.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
-import { matchesMentionFeedFilter } from "./lib/mention-filters.js";
+import { filterMentionFeed, matchesMentionFeedFilter } from "./lib/mention-filters.js";
+import { operationsAttentionCount } from "./lib/operations-attention.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
@@ -118,24 +119,6 @@ function mergeScoreBucketMentions(...pages: Mention[][]): Mention[] {
   );
 }
 
-function applyFilter(ms: Mention[], f: FilterKey): Mention[] {
-  switch (f) {
-    case "all":
-      // The default view is the investor feed: off-target judgments exist in
-      // the database and behind the explicit filter, not in your face.
-      return ms.filter((m) => m.status !== "off_target");
-    case "bull":
-      return ms.filter((m) => m.score?.sentiment === "positive");
-    case "bear":
-      return ms.filter((m) => m.score?.sentiment === "negative");
-    case "material":
-      return ms.filter((m) => (m.score?.material ?? 0) >= 0.6);
-    case "offtarget":
-      return ms.filter((m) => m.status === "off_target");
-    case "failed":
-      return ms.filter((m) => ["failed", "pending", "retrying", "scoring", "corrupt"].includes(m.status));
-  }
-}
 
 export default function App() {
   const [companies, setCompanies] = useState<CompanySnapshot[]>([]);
@@ -848,22 +831,7 @@ export default function App() {
     && firstRunEvidence.state === "ready"
     && firstRunEvidence.eligibleObservationCount === 0
     && !localObservationArrived;
-  const healthSources = health
-    ? [health.health.rss, health.health.gdelt, health.health.x, health.health.quotes, health.health.sec,
-      health.health.finnhub, health.health.reddit, health.health.classifier ?? health.health.jev]
-    : [];
-  const healthSourceErrors = healthSources.filter((source) =>
-    source.lastErrorAt != null && (source.lastOkAt == null || source.lastErrorAt > source.lastOkAt),
-  ).length;
-  const degradedDeliveries = health?.deliveryHealth.filter((delivery) =>
-    ["partial", "overdue", "failed", "processing"].includes(delivery.state)
-    || delivery.latestIngestionState === "partial"
-    || delivery.latestIngestionState === "failed",
-  ).length ?? 0;
-  const alertAttentionCount = health
-    ? Object.values(health.alertDelivery.counts).reduce((total, count) => total + count, 0)
-    : 0;
-  const healthAttentionCount = healthSourceErrors + degradedDeliveries + alertAttentionCount;
+  const healthAttentionCount = health ? operationsAttentionCount(health) : 0;
   const webhookNotConfigured = health != null && !health.alertDelivery.configured;
   const selectedMentions = (activeMentionFeed?.items ?? []).filter((mention) =>
     mentionIsInWindow(mention, activeMentionFeed?.hours ?? windowHours, clock),
@@ -876,7 +844,7 @@ export default function App() {
   const evidenceBreadthMentions = (activeEvidenceBreadthPage?.items ?? []).filter((mention) =>
     mentionIsInWindow(mention, windowHours, clock),
   );
-  const filteredMentions = useMemo(() => applyFilter(selectedMentions, feedFilter), [selectedMentions, feedFilter]);
+  const filteredMentions = useMemo(() => filterMentionFeed(selectedMentions, feedFilter), [selectedMentions, feedFilter]);
   const mentionsPending = selectedId != null && !activeMentionFeed?.loaded && !activeMentionFeed?.error;
   const mentionsFailed = selectedId != null && activeMentionFeed?.error === true;
   const activeScoreBucketEvidence = scoreBucketEvidence?.companyId === selectedId && scoreBucketEvidence.hours === windowHours
@@ -1211,6 +1179,7 @@ export default function App() {
                             : selectedSeriesScoredItemCount > 0
                             ? `${selectedSeriesScoredItemCount} scored records · ${selectedSeriesLastScoredAt == null ? "latest time unavailable" : `latest ${timeAgo(selectedSeriesLastScoredAt)}`}`
                             : `No scored records in ${windowLabel(windowHours)}`}
+                      {health?.health.classifier?.provider === "openai_luna" && <span title="Luna supplies categories for new records. Historical Jev probabilities and this chart retain their original profile; no synthetic probability or impact is assigned."> · new judgments: Luna</span>}
                     </span>
                     {selected.earningsAt != null && (
                       <span
@@ -1264,12 +1233,6 @@ export default function App() {
                 </div>
               </div>
 
-              {health?.health.classifier?.provider === "openai_luna" && (
-                <p className="mt-2 px-1 text-[11px] leading-relaxed text-white/55" role="note">
-                  New judgments use Luna categories. The index below contains historical Jev scores only; Luna does not create probability or impact points.
-                  {!health.health.classifier.enabled && health.health.classifier.blockedReason && <span className="ml-1 text-amber-200/85">{health.health.classifier.blockedReason}.</span>}
-                </p>
-              )}
               {selectedSeriesReady && !selectedSeriesHasSentiment && health?.health.classifier?.provider === "openai_luna" && chartMode === "sentiment" ? (
                 <section className="panel mt-2 px-3 py-3 text-[12px] text-white/55" role="status">
                   No historical Jev index in this window. Inspect saved source records and categorical judgments below.

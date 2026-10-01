@@ -58,7 +58,7 @@ export function Header({
       <div className="ml-auto flex items-center gap-5 text-[11px] text-white/45">
         {health?.health.classifier?.provider === "openai_luna" && health.classifierUsage ? (
           <span className="tabnum hidden md:inline" title="Estimated input plus output cost of responses with recorded usage; reserved cost also covers unknown outcomes. These are local controls, not provider invoice or balance evidence.">
-            Luna est. {fmtCost(health.classifierUsage.estimatedCostUsd)} · {health.classifierUsage.requests} requests today
+            Luna est. {health.classifierUsage.estimatedCostUsd == null ? "unknown" : fmtCost(health.classifierUsage.estimatedCostUsd)} · {health.classifierUsage.requests} requests today
           </span>
         ) : usage && (
           <span

@@ -5,16 +5,19 @@ explicitly enabled public-source adapters. It starts in saved-data-only mode;
 live requests require per-source configuration. The repository is visible for
 inspection and is not a hosted multi-user data service.
 
-**Jev** (TypeSafe AI System One) is the per-item sentiment and event judge and
-uses one fixed rubric. Live items stay pending by default. A key alone never
-starts scoring: dispatch also requires matching source request and approval
-allowlists, `TYPESAFE_ACCOUNT_USE_APPROVED=true`, and finite daily request and
-request-body-byte limits. These approval settings are operator attestations;
-they do not independently verify source rights or account authority.
+**OpenAI GPT-6 Luna** is selected for new per-item sentiment and event
+classification. It uses strict categorical Structured Outputs through Responses;
+it does not supply Jev probability vectors or a numeric impact index. Missing
+credentials, account/source approvals or finite request, byte and dollar budgets
+leave observations pending. No automatic TypeSafe fallback is permitted.
+[Official model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna).
 
-The core idea is the live "BS meter" pattern: the same structured Jev judgment
-for every item, with the source attached. It is a judgment, not a claim of
-fact-checking.
+Existing genuine Jev judgments remain unchanged under their historical profile.
+Luna categories are stored separately and never become synthetic probabilities,
+confidence percentages, impact points, reaction metrics or numeric alerts.
+Both profiles remain independently unvalidated until their own real-source
+qualification is complete. This build supplies decision support and source
+inspection; it has no autonomous trading authority.
 
 ## What is real
 
@@ -40,56 +43,44 @@ fact-checking.
   watchlist, and selected-company header. Price charts plot only actual
   provider observations inside the selected time window; missing periods are
   left empty and an out-of-window latest quote is never carried forward.
-- **Judgment**: Jev dispatch requires `TYPESAFE_API_KEY`, an explicit
-  `TYPESAFE_ALLOWED_COLLECTORS` value, the same collector in
-  `EXTERNAL_SOURCE_COLLECTORS` and `SOURCE_RIGHTS_APPROVED_COLLECTORS`,
-  `TYPESAFE_ACCOUNT_USE_APPROVED=true`, and positive finite daily limits. Local
-  Node also checks `~/.newsjack/.env` for the key unless the variable is
-  explicitly set empty; Docker Compose passes values from this project’s
-  `.env` only. A key without the remaining controls leaves every observation
-  pending. Existing judgments are not re-scored on startup because the rubric
-  changes.
+- **Judgment**: Luna requests require `OPENAI_API_KEY`, account-use attestation,
+  approved source overlap, and positive finite daily request, serialized-byte and
+  estimated-dollar limits. Preparation records prompt/schema/profile and exact
+  request hashes. Each result retains actual provider/model/response identity,
+  source support and usage; missing evidence is review-required, not neutral.
+  Transport-unknown requests are not resubmitted automatically and retain their
+  worst-case reservation. Cost estimates are not provider invoices or balances.
+  The explicit legacy `typesafe` mode retains its own Jev admission controls.
 
 ## The terminal
 
-Data-dense, dark-only, monospace numerics — the shared language of the
-Bloomberg-style open-source terminals (OpenBB, Neuberg, the React terminal
-clones), applied to sentiment.
+The selected-company workspace links company, history and source evidence:
 
-- **Ticker tape**: indices then every watched ticker, provider price, session
-  change, sentiment dot, and visible age for delayed quotes. Click to select.
-- **Watchlist**: sparkline, quote and source age, index, delta; sortable by
-  movement or alphabet. `j`/`k` or arrow keys to walk it.
-- **Company panel**: sentiment index and comparison windows.
-- **Chart**: defaults to the fixed-scale Jev impact index on one 15-minute grid
-  and one eight-hour decay half-life across every time range. It rebuilds from
-  prior company scores so zooming does not reset or stretch the same historical
-  index point. Buckets expose their item count and impact range on hover, and
-  the chart distinguishes scored judgments from modeled decay. Comparison is
-  opt-in and places only provenance- and currency-identified share-price history
-  in a separate aligned pane with its own scale (`c`); legacy price rows without
-  lineage are excluded.
-- **Mention feed**: filter chips for sentiment, investor relevance, off-target,
-  and unscored items. Rows link to their source and expose Jev judgment,
-  publisher time, collection time, and scoring metadata. The separate
-  similar-title review shows provisional record matches, publisher domains,
-  collection sources, time span, and Jev disagreement; it is an inspection aid
-  and never changes the chart or rankings.
-- **Right rail**: top movers by the difference between 3 h and trailing 24 h
-  Jev weighted-mean impact, the recent tape, and desk health (source failures,
-  Jev errors, cost today).
-- **Status bar**: engine state, p50 score latency, market session (open /
-  pre-market / after hours / closed in ET), stream state, SSE clients, DB size.
-- **Opportunity Radar**: per-company comparison of Jev event categories across
-  equal current and prior windows, with exact-normalized headline groups,
-  distinct publisher counts, directional mix, source links, and delivery
-  coverage. It remains disabled until Sentiment Desk operational gates pass and
-  is not currently an operational feature.
+- **Watchlist**: saved-history and quote freshness; click to select or use `j`/`k`.
+  A sparkline requires actual scored records in its window.
+- **Company workspace**: starts at seven days of saved history and previews three
+  distinct actual source titles. Exact-title repetitions are labeled as rows,
+  without claiming independent reporting.
+- **Historical chart**: genuine Jev impact index on a fixed minus100 to plus100
+  scale, a15-minute grid and an eight-hour decay half-life. Dashed decay is
+  distinguished from scored buckets. Clicking a bucket or using its keyboard
+  table opens the supporting records. Optional price comparison has a separate
+  currency scale and plots only sourced provider observations. Luna categories
+  do not populate this legacy chart; absent history is explicit.
+- **Source feed**: bullish, bearish, material, off-target and unscored/review
+  filters work with each profile. Luna shows supported categories and source
+  quotations; Jev shows its actual probability-derived fields. The drawer links
+  the saved collection URL and records source/model request provenance.
+- **Sources & operations**: selected-provider gates, source failures, pending
+  alert delivery and estimated/reserved usage. Failed health refresh preserves
+  the last received evidence and remains visible.
+- **First run**: a real historical SEC-to-Jev archive is read-only and excluded
+  from local observations, charts and usage. New setup guidance follows Luna;
+  the archive is not presented as a Luna output or live quality proof.
+- **Opportunity Radar**: disabled until Sentiment Desk operational gates pass.
 
-Nothing here is investment advice. The meter is a Jev-derived, weighted mean of
-scored source records in the recent window, with a 24-hour fallback when that
-window is empty. Repeated or syndicated coverage can count more than once; it
-does not measure independent investor opinion or price securities.
+Historical Jev metrics summarize scored source records, not stock returns or
+independent investor opinion. Repeated coverage can count more than once.
 
 ## Repository rights
 
@@ -117,6 +108,14 @@ local server:
 npm run dev:web
 ```
 
+To enable the new classifier, configure an OpenAI API key locally and explicitly
+set `OPENAI_ACCOUNT_USE_APPROVED=true`, a matching `OPENAI_ALLOWED_COLLECTORS`
+entry and finite `OPENAI_MAX_REQUESTS_PER_DAY`,
+`OPENAI_MAX_REQUEST_BYTES_PER_DAY` and `OPENAI_MAX_DAILY_COST_USD` values.
+External requests and source rights must be enabled separately. All defaults
+keep dispatch off. Do not paste keys in Git, logs or issue descriptions.
+
+For a legacy Jev run, explicitly set `CLASSIFICATION_PROVIDER=typesafe`.
 To enable Jev only after confirming the exact source and account terms, set the
 key, allowed collector IDs, and both finite daily limits in `.env`. Supported
 collector IDs are `google_news_rss`, `yahoo_finance_rss`, `gdelt_doc_api`,
@@ -128,14 +127,16 @@ provider-reported input tokens. Hard maxima are 100 request attempts and
 The SEC's [EDGAR reuse FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions)
 states public filing content is free to access and reuse, subject to SEC
 policies and fair-access limits. This is the only currently documented narrow
-source path for a first real-source Jev evaluation; configure a descriptive
+source path for a first real-source classification evaluation; configure a descriptive
 `SEC_USER_AGENT`, set `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` to collect only
-EDGAR filings, and separately set `TYPESAFE_ALLOWED_COLLECTORS=sec_edgar` to
-allow those filings to be sent to Jev for that evaluation. Jev's effective
-allowlist is the intersection of both lists, so a Jev-only collector setting
+EDGAR filings, and separately set `OPENAI_ALLOWED_COLLECTORS=sec_edgar` for
+Luna, or `TYPESAFE_ALLOWED_COLLECTORS=sec_edgar` only when explicitly selecting
+the legacy provider. Effective forwarding is the intersection of request,
+rights and provider lists, so a provider-only collector setting
 cannot forward retained records from a source that is currently disabled.
-Real-source Jev accuracy has not been evaluated: all current live observations
-remain pending, and synthetic checks establish integration only. The frozen
+Real-source classification quality remains unvalidated. Isolated fixture
+checks establish logic only; retained historical judgments and a single actual
+SEC-to-Jev smoke do not qualify the new Luna profile. The frozen
 labeling, sampling, metrics, and pass/fail rules are in
 [`sentiment-desk-completion.md`](project-record/3-project-specs/sentiment-desk-completion.md).
 The TypeSafe [current agreement](https://typesafe.ai/legal/mca) says each
@@ -169,7 +170,8 @@ enabled, only collectors listed in both `EXTERNAL_SOURCE_COLLECTORS` and
 an operator attestation, not independent verification of rights. Credentials
 alone do not enable a collector. Jev additionally requires the authorized
 account owner's `TYPESAFE_ACCOUNT_USE_APPROVED=true`, a Jev allowlist, and
-finite request/byte ceilings. Keep publisher feeds and Yahoo quote/chart
+finite request/byte ceilings when explicitly selected. Luna has its own account,
+source, request/byte/USD controls described above. Keep publisher feeds and Yahoo quote/chart
 endpoints out of the approval list until their exact use rights are established.
 
 Production:
@@ -187,9 +189,9 @@ source and account terms are confirmed, set `EXTERNAL_REQUESTS_ENABLED=true`
 and matching source-by-source request and approval lists. For example,
 `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` plus
 `SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar` enables SEC filings only; SEC
-still requires a valid `SEC_USER_AGENT`. Jev remains disabled unless the
-authorized account owner sets `TYPESAFE_ACCOUNT_USE_APPROVED=true`, its key,
-`TYPESAFE_ALLOWED_COLLECTORS=sec_edgar`, and finite daily budgets are configured.
+still requires a valid `SEC_USER_AGENT`. Luna remains disabled until its own key,
+account/source flags and positive finite request/byte/USD caps are configured.
+The legacy provider requires explicit selection plus its separate flags and caps.
 Optional Finnhub, Reddit, and X credentials do not enable those sources unless
 both their request and approval entries are present.
 
@@ -216,7 +218,8 @@ use `docker compose logs -f sentiment-desk`.
 
 The application has no synthetic-data runtime. All displayed mentions must
 come from configured source collectors, and all sentiment/event judgments
-must come from Jev. Unconfigured judgments stay pending; generated fixtures
+must come from the recorded provider. New categorical judgments use Luna;
+historical Jev probabilities retain their own provenance. Unconfigured judgments stay pending; generated fixtures
 are confined to automated tests and frozen evaluations. Existing simulation
 rows from older versions remain stored for auditability but are excluded from
 the UI, aggregates, retry queue, and usage totals. EDGAR filings without
@@ -236,9 +239,16 @@ recreates the container, then removes only its temporary volume.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `CLASSIFICATION_PROVIDER` | `openai_luna` | selected new-record classifier; `typesafe` explicitly selects the legacy path |
+| `OPENAI_API_KEY` | empty | direct OpenAI API credential; never derived from Codex/ChatGPT authentication |
+| `OPENAI_ACCOUNT_USE_APPROVED` | `false` | authorized account-use attestation; not independent account/terms verification |
+| `OPENAI_ALLOWED_COLLECTORS` | empty | classifier admission intersected with enabled and rights-approved sources |
+| `OPENAI_MAX_REQUESTS_PER_DAY` | `0` | durable UTC-day request reservation cap |
+| `OPENAI_MAX_REQUEST_BYTES_PER_DAY` | `0` | durable serialized request-byte cap |
+| `OPENAI_MAX_DAILY_COST_USD` | `0` | finite daily estimated cost cap; unknown/unpriced outcomes retain reservation |
 | `TYPESAFE_API_KEY` | — | Jev credentials; local Node also checks `~/.newsjack/.env`. A key alone does not enable scoring. Set an explicit empty value to disable fallback. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
-| `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and Jev requests; the default serves saved local data only. |
+| `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and selected-classifier requests; the default serves saved local data only. |
 | `EXTERNAL_SOURCE_COLLECTORS` | empty | Comma-separated real collectors permitted to make network requests; examples include `sec_edgar`, `google_news_rss`, `yahoo_quote`, and `yahoo_chart`. Empty means no source polling or remote chart requests. |
 | `SOURCE_RIGHTS_APPROVED_COLLECTORS` | empty | Separate operator-attestation allowlist; a requested collector without this entry cannot make requests. It does not independently prove rights. |
 | `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
@@ -258,7 +268,7 @@ recreates the container, then removes only its temporary volume.
 | `BACKFILL_DAYS` | `5` | Finnhub company-news backfill window |
 | `RSS_CONCURRENCY` | `2` | maximum concurrent RSS requests; provider requests are spaced one second apart |
 | `INDICES` | `SPY,QQQ,^VIX` | context rows on the tape (never scored) |
-| `SCORE_CONCURRENCY` | `6` | maximum concurrent Jev calls after source and budget admission |
+| `SCORE_CONCURRENCY` | `6` | maximum concurrent classifier calls after source and budget admission |
 | `DB_PATH` | `./data/desk.db` | SQLite file |
 | `COMPANIES_PATH` | `./config/companies.json` | watchlist |
 
@@ -271,7 +281,11 @@ an accent color.
 Jev applies the same fixed rubric to every item. The schema covers sentiment,
 company and investor relevance, materiality, novelty, credibility, event type,
 magnitude, surprise, and takeaway. Its SHA-256 is stored on every judgment.
-Jev is the only per-item sentiment and event classifier. The Radar uses Jev's
+Luna uses a separately versioned categorical prompt/schema based on supported
+sentiment, event, takeaway, aboutness and relevance concepts. A supported
+quotation and summary are required before accepting sufficient evidence. Its
+boolean material label is not Jev materiality, and no scalar fields are
+invented. The disabled Radar retains historical Jev's
 saved event type and sentiment; it makes no additional model call.
 
 ## API
@@ -288,7 +302,7 @@ saved event type and sentiment; it makes no additional model call.
 | `GET /api/validation?hours=` | watchlist-wide signal validation summary |
 | `GET /api/quotes` | latest quotes for tickers and indices |
 | `GET /api/tape?limit=` | latest scored mentions across companies |
-| `GET /api/health` | sources, Jev health, usage, events, DB size |
+| `GET /api/health` | sources, selected classifier, legacy Jev health, estimated/reserved usage, events, DB size |
 | `GET /api/stream` | SSE: `hello`, `mention`, `company`, `quotes`, `ping` |
 
 ## Architecture
@@ -299,7 +313,8 @@ server/
   config.ts     env + credential chain + watchlist loading (zod-validated)
   db.ts         node:sqlite schema and queries
   rubric.ts     the fixed question set + hash
-  jev.ts        TypeSafe client: /v1/systemone, retries, contract validation
+  openai-classifier.ts  categorical Luna Responses adapter, bounded schema/provenance/usage
+  jev.ts        Legacy TypeSafe client: /v1/systemone, retries, contract validation
   scoring.ts    legacy rubric-era scoring module (not a separate Radar classifier)
   pipeline.ts   queue, Jev judgments, state building, snapshots, broadcasts
   radar.ts      deterministic headline/publisher and window aggregation

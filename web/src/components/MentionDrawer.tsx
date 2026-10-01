@@ -347,7 +347,9 @@ export function MentionDrawer({
                     <span>HTTP result</span><span className="tabnum text-right text-white/60">{attempt.httpStatus == null ? "unknown" : attempt.httpStatus}</span>
                     <span>tokens</span><span className="tabnum text-right text-white/60">{attempt.inputTokens == null ? "unknown" : `${attempt.inputTokens} in / ${attempt.outputTokens ?? "?"} out`}</span>
                     {attempt.provider === "openai_luna" && <>
+                      <span>service tier</span><span className="truncate text-right text-white/60">{attempt.serviceTier ?? "unknown"} · requested {attempt.serviceTierRequested ?? "unknown"}</span>
                       <span>cached / reasoning</span><span className="tabnum text-right text-white/60">{attempt.cachedInputTokens ?? "?"} / {attempt.reasoningTokens ?? "?"}</span>
+                      <span>cache write</span><span className="tabnum text-right text-white/60">{attempt.cacheWriteInputTokens ?? "unknown"}</span>
                       <span>cost estimate</span><span className="tabnum text-right text-white/60">{attempt.estimatedCostUsd == null ? "unknown" : `$${attempt.estimatedCostUsd.toFixed(6)}`}</span>
                       <span>reserved cost</span><span className="tabnum text-right text-white/60">{attempt.reservedCostUsd == null ? "unknown" : `$${attempt.reservedCostUsd.toFixed(6)}`}</span>
                       <span>response ID</span><span className="truncate text-right text-white/60" title={attempt.responseId ?? undefined}>{attempt.responseId ?? "not recorded"}</span>

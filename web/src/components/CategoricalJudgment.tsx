@@ -23,9 +23,12 @@ export function CategoricalJudgment({ judgment, detail = false }: { judgment: Ca
             <dt>Investor relevance</dt><dd>{judgment.investorRelevant == null ? "Uncertain" : judgment.investorRelevant ? "Yes" : "No"}</dd>
             <dt>Evidence sufficient</dt><dd>{judgment.evidenceSufficient ? "Model says yes" : "No — needs review"}</dd>
             <dt>Model returned</dt><dd className="break-all">{judgment.modelReturned ?? "Not recorded"}</dd>
+            <dt>Service tier</dt><dd>{judgment.serviceTier ?? "Not recorded"} · requested {judgment.serviceTierRequested}</dd>
             <dt>Completed</dt><dd>{dayTime(judgment.classifiedAt)}</dd>
             <dt>Estimated total</dt><dd>{judgment.estimatedCostUsd == null ? "Unknown" : `$${judgment.estimatedCostUsd.toFixed(6)}`} · not an invoice</dd>
             <dt>Input / output</dt><dd>{judgment.inputTokens ?? "Unknown"} / {judgment.outputTokens ?? "Unknown"} tokens</dd>
+            <dt>Cache read / write</dt><dd>{judgment.cachedInputTokens ?? "Unknown"} / {judgment.cacheWriteInputTokens ?? "Unknown"} tokens</dd>
+            <dt>Reasoning</dt><dd>{judgment.reasoningTokens ?? "Unknown"} tokens · included in output</dd>
             <dt>Response ID</dt><dd className="break-all">{judgment.responseId ?? "Not recorded"}</dd>
             <dt>Prompt digest</dt><dd className="break-all">{judgment.promptSha256}</dd>
             <dt>Response digest</dt><dd className="break-all">{judgment.responseSha256}</dd>

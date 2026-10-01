@@ -21,9 +21,10 @@ describe("Desk source coverage disclosure", () => {
     expect(html).toContain("Reddit and X are the only direct social collectors");
     expect(html).toContain("Feed access does not by itself establish rights");
     expect(html).toContain("SOURCE_RIGHTS_APPROVED_COLLECTORS");
-    expect(html).toContain("TYPESAFE_ACCOUNT_USE_APPROVED=true");
+    expect(html).toContain("OPENAI_ACCOUNT_USE_APPROVED=true");
+    expect(html).toContain("finite daily request, byte and dollar limits");
     expect(html).toContain("operator attestations");
-    expect(html).toContain("Checking source, Jev, and webhook status");
+    expect(html).toContain("Checking source, classifier, and webhook status");
     expect(html).not.toContain("External requests are paused.");
   });
 

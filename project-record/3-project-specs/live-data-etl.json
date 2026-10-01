@@ -1,7 +1,7 @@
 {
   "applicability": "required",
   "schema_version": 2,
-  "reason": "Sentiment Desk processes real public-source observations and discovery metadata through source-bound adapters, preserves observation, publication, retrieval, and ingestion timing where supported, and forwards eligible retained observations to Jev. External requests remain default-off; this contract does not claim generally live or production-current output.",
+  "reason": "Sentiment Desk processes identified real-source observations through bounded programmatic adapters. New classification selects OpenAI GPT-6 Luna with strict categories and durable spending reservations; historical Jev probabilities retain their own profile. Requests default off and live_claim is false.",
   "live_claim": false,
   "runtime_data_paths": [
     "data"
@@ -9,7 +9,7 @@
   "evidence_path": "project-record/4-log/live-data-etl-evidence.json",
   "max_evidence_age_hours": 24,
   "documentation_review": {
-    "reviewed_at": "2026-09-30",
+    "reviewed_at": "2026-10-01",
     "runtime": "Local Node.js v26.10.0; npm 11.19.1; package engine requires Node >=22.",
     "references": [
       {
@@ -56,30 +56,46 @@
         "source": "TypeSafe Master Customer Agreement",
         "url": "https://typesafe.ai/legal/mca",
         "finding": "The current page shows a 2026-09-23 revision. Only a representative with authority may accept for a Customer. Telemetry includes classifications and may be processed without restriction. TypeSafe makes no Customer Data retention promise; account-specific usage limits and billing settings depend on the unavailable Order/account records."
+      },
+      {
+        "source": "OpenAI GPT-6 Luna and Structured Outputs",
+        "url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+        "finding": "Official current model documentation supports Responses and Structured Outputs. This adapter uses strict categorical output; probability distributions and Jev scalar compatibility are not assumed."
+      },
+      {
+        "source": "OpenAI Responses request and tier policy",
+        "url": "https://developers.openai.com/api/reference/resources/responses/methods/create",
+        "finding": "Explicit service_tier:default prevents inherited auto-tier settings; store:false and no tools are set. Refusal, incomplete output, actual returned model and tier, raw response digest and usage remain distinct."
+      },
+      {
+        "source": "OpenAI Standard pricing and cache accounting",
+        "url": "https://developers.openai.com/api/docs/pricing",
+        "finding": "Reviewed2026-10-01 short input Standard Luna rates: ordinary input USD0.10/M, cached input0.01/M, cache-write0.125/M, output0.50/M. Reasoning tokens are included in output. Reservation uses the maximum documented input rate and the bounded request-byte/output profile; missing or unsupported accounting stays unpriced and reserved."
       }
     ]
   },
   "status": "partial",
-  "operational_status": "2026-10-01 continuation after checkpoint 786b19720ea0a28df6272cc65c530389eb6accfd: the user authorized TypeSafe use and said a balance should remain. A fresh isolated app process used only SEC EDGAR and Jev 1.13.0 with a temporary contact-bearing SEC User-Agent, a one-request/day cap, a 40,000-byte/day request cap, and no other feeds or webhooks. It recorded 27 SEC delivery receipts (5 successful, 22 empty), two actual filing observations from two issuers, one Jev HTTP 200 classification, and one pending filing. The Tesla result was neutral/corporate_action with 2,978 input tokens and 387 output tokens; the application input-cost estimate was USD 0.000125076, not provider invoice evidence. A saved-data-only Codex preview showed the real source receipt, classification, and one chart point. Main data/desk.db was unchanged. This proves one isolated real-source integration path, not Jev quality, a 30-issuer cohort, or ongoing live operation. The whole-build engineering review returned FAIL for the full goal with no new reproducible code defect. Previous investor/UI scores are historical and are not a current whole-build score. User TypeSafe permission is granted; account Order, refill, balance, telemetry/retention, limits, rejected-request billing, numeric spend ceiling, two independent human labels, 30-issuer provenance-backed cohort, source-specific non-SEC rights, and provider usage records for 4,700 legacy_unknown observations remain open. Default SEC_USER_AGENT is not configured. The prior five-check ETL PASS is scoped to its declared fixture/recovery/offline/keyless smoke checks. live_claim remains false. No demo or synthetic application data was added; Opportunity Radar remains disabled.",
+  "operational_status": "2026-10-01 current migration: user superseded new Jev classification with OpenAI GPT-6 Luna and independent blinded subagent references. A48-document real SEC frame across15 issuers and deterministic source-only30-case sample are retained privately with actual source hashes. New classifications use a separate categorical table and never populate Jev numeric metrics. Direct OPENAI_API_KEY and OpenAI account balance/finite spend readback are absent; no paid Luna request or quality result exists. Jev account readback shows USD0.00 available credit, auto-recharge off and no payment method, so no new Jev request is authorized by its existing-balance budget. Historical one-SEC Jev smoke remains an integration example only. UI and local checks are undergoing final integration; historical ETL receipts do not prove this candidate. Main database unchanged; no demo/synthetic runtime data; Radar disabled.",
   "observation_lineage": {
     "new_observations": "Must reference an immutable source_deliveries.id recorded before pipeline ingestion; collector, company, and adapter version must match.",
     "historical_unlinked": "Retained rows without a stored delivery_id are not backfilled with invented lineage and are identified as unlinked historical records in the detail UI.",
     "enforcement": "Pipeline rejects missing receipt IDs; the database checks the referenced receipt and its source identity."
   },
   "source_request_policy": {
-    "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults to false and gates all external polling, chart retrieval, Jev calls, and operator retry.",
+    "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults false and gates collectors, price reads, selected-provider classification and retry.",
     "source_allowlist": "EXTERNAL_SOURCE_COLLECTORS defaults to empty. A source request runs only when EXTERNAL_REQUESTS_ENABLED is true and its collector appears in both EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. The latter is an operator attestation, not independent verification of rights.",
     "jev_forwarding": "TYPESAFE_ALLOWED_COLLECTORS is intersected with EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true, a non-empty key, and positive finite daily request and request-body-byte limits. This account-use flag is also an operator attestation, not evidence of account authority or terms.",
-    "verification": "The offline-startup verifier proves default-off startup makes zero fetches; verifies each of nine isolated collectors reaches only its guarded path when both source lists admit it; proves missing approval makes zero fetches; and checks Jev blocked without account attestation or matching three-way source lists. All outbound fetches in this verifier are intercepted before network access. The separate user-attested live Compose smoke result and scope are recorded below.",
+    "verification": "Guarded offline-startup verifies default-off zero fetches, each isolated collector, source approvals, historical TypeSafe selection and new Luna key/account/allowlist/cost gates. Outbound fetches are intercepted before network access. The independent authorized keyless Compose check uses only five source endpoints and explicitly disables both classifiers, credentials, account flags and Luna budgets.",
     "live_smoke": {
       "reviewed_at": "2026-09-30",
       "status": "PASS",
       "historical_result": "PASS",
       "command": "env SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart DOCKER_CONTEXT=colima-sentiment-desk-verify ./scripts/verify-live-compose.sh",
-      "scope": "Isolated temporary Compose project; five keyless public collector paths only; TypeSafe, Finnhub, Reddit, and X disabled.",
+      "scope": "Isolated temporary Compose project; five keyless public collector paths only; both classifiers, Finnhub, Reddit and X disabled.",
       "evidence": "The latest authorized_keyless_live_smoke status, timestamp, code fingerprint, and output digests are recorded in project-record/4-log/live-data-etl-evidence.json after the final frozen-source verify/check. The 2026-09-30T19:15:49Z PASS against fingerprint 955e0d1da431315907dc117a3cfdc21e3222e476b4847e962f783f33684c44cf is historical; the earlier 2026-09-29 Compose result remains historical_result.",
       "limitation": "This bounded result proves only the configured keyless source delivery and container recreation path. It does not establish endpoint-specific rights, complete source coverage, Jev quality, provider billing, or production readiness."
-    }
+    },
+    "openai_forwarding": "CLASSIFICATION_PROVIDER defaults openai_luna. Dispatch requires a non-empty OPENAI_API_KEY, OPENAI_ACCOUNT_USE_APPROVED=true, an intersected OPENAI_ALLOWED_COLLECTORS/source-request/source-rights allowlist, and positive finite daily request, byte and USD caps. All caps default zero. No automatic TypeSafe fallback. Unknown/unpriced outcomes retain the reservation; retries need explicit operator review."
   },
   "rights_review": {
     "as_of": "2026-09-29",
@@ -232,6 +248,14 @@
       "time": "Provider-created time when supplied; absent time stays unknown. Retrieval and ingestion are separate.",
       "retention": "Optional source enabled only with the operator's Reddit app credentials; normalized items and parsed-item digests only. No raw response retention.",
       "rights": "The current Reddit Data API Terms limit the granted User Content license to the app-use context, require separate agreement for commercial or otherwise unpermitted uses, and restrict AI model training without rightsholder permission. The project's approved use, inference handling, retention, and removal duties are unverified; keep disabled."
+    },
+    {
+      "name": "OpenAI GPT-6 Luna categorical classification",
+      "required": false,
+      "identity": "Separate immutable observation/request/profile/response bindings, returned model and service tier. No numeric Jev compatibility.",
+      "time": "Classification completion is distinct from source publication/observation time; new delivery does not refresh old evidence.",
+      "retention": "store:false on bounded Responses requests; local categories, usage and receipt digests. Provider account-specific retention controls are not independently verified.",
+      "rights": "User requested the OpenAI replacement. Direct API credential, OpenAI account approval/collector allowlists and a finite own-account budget must be configured before dispatch; no Codex or TypeSafe credential reuse."
     }
   ],
   "historical_evidence_ledger": {
@@ -311,7 +335,7 @@
       "command": "npm run verify:jev-sanity",
       "covers": "Historical ten-case fictional sanity pilot using isolated test databases; reports only test-fixture agreement and is not real-source quality, classifier calibration, or release evidence.",
       "status": "PASS",
-      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234\u2013370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     },
     "no_synthetic_runtime": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run verify:offline-startup; production browser and API readback at http://127.0.0.1:8795/ against isolated saved data",
@@ -376,7 +400,7 @@
         ],
         "evidence": "All nine real external collector IDs were checked against config, adapter/poller bounds, delivery health, allowlist probes, rights records, and user-visible scope. The Sentiment Desk now exposes one-response RSS uncertainty, GDELT cap behavior, SEC/Finnhub/Reddit/X time windows, price-only endpoints, missing direct source families, optional social collectors, and per-source rights caveat. Trace: project-record/4-log/2026-09-29-source-scope-disclosure.md."
       },
-      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays “Configured feeds only. This desk does not cover the entire public web or all investor activity.” Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
+      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays \u201cConfigured feeds only. This desk does not cover the entire public web or all investor activity.\u201d Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
     },
     "legacy_provider_usage_audit": {
       "command": "Reconcile legacy TypeSafe request payloads and provider usage for the previously stopped loopback process",
@@ -490,7 +514,7 @@
       "command": "Isolated local application process using the supported SEC collector and Jev dispatch path",
       "covers": "One real SEC filing through source delivery receipt, Jev request, persisted judgment, and saved-data UI; integration only, not a quality evaluation or ongoing live-operations claim.",
       "status": "PASS",
-      "evidence": "2026-10-01T09:41:27Z–09:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
+      "evidence": "2026-10-01T09:41:27Z\u201309:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
     }
   },
   "sources": [
@@ -722,7 +746,7 @@
       "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display/retention rights remain unverified.",
       "consumer_paths": [
         "price-series API",
-        "selected-company sentiment × price chart"
+        "selected-company sentiment \u00d7 price chart"
       ],
       "coverage_limit": "Only provider points inside the requested window are drawn; cache/network/local-store provenance stays visible. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
       "acquisition": {
@@ -889,6 +913,45 @@
         ]
       },
       "source_mode": "live_observation"
+    },
+    {
+      "id": "openai_luna",
+      "provider": "OpenAI GPT-6 Luna",
+      "endpoint": "POST https://api.openai.com/v1/responses",
+      "freshness_budget_seconds": 604800,
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "request_started_at",
+        "responded_at"
+      ],
+      "revision_policy": "Separate categorical profile with exact request/prompt/schema/profile and actual response-byte digests. Historical Jev records are not rewritten.",
+      "rights": "restricted",
+      "rights_evidence": "User directed replacement; separate direct OpenAI account approval and source-forwarding flags are required. Direct key/account spending evidence unavailable, no live call.",
+      "consumer_paths": [
+        "Categorical per-item judgment",
+        "Desk source card and detail drawer",
+        "Operations receipts and spending controls"
+      ],
+      "coverage_limit": "Derived model categories, independently unvalidated. Never input to Jev probabilities/index, threshold alerts or reaction-memory. Cannot upgrade source freshness or completeness.",
+      "acquisition": {
+        "method": "api",
+        "adapter_paths": [
+          "server/openai-classifier.ts",
+          "server/pipeline.ts",
+          "server/db.ts"
+        ]
+      },
+      "source_mode": "live_observation"
     }
   ],
   "checks": [
@@ -916,7 +979,8 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ]
     },
     {
@@ -945,11 +1009,12 @@
         "tests/jev.test.ts",
         "tests/jev-budget.test.ts",
         "tests/app-jev-attempts.test.ts",
+        "tests/openai-classifier.test.ts",
         "--maxWorkers=1",
         "--testTimeout=20000"
       ],
       "timeout_seconds": 600,
-      "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers.",
+      "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks.",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -960,7 +1025,8 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ]
     },
     {
@@ -977,11 +1043,12 @@
         "tests/provider-pollers.test.ts",
         "tests/app-price.test.ts",
         "tests/series-chart-state.test.ts",
+        "tests/openai-classifier.test.ts",
         "--maxWorkers=1",
         "--testTimeout=20000"
       ],
       "timeout_seconds": 600,
-      "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures.",
+      "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks.",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -992,7 +1059,8 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ]
     },
     {
@@ -1016,7 +1084,8 @@
         "finnhub",
         "reddit",
         "x",
-        "typesafe_jev"
+        "typesafe_jev",
+        "openai_luna"
       ]
     },
     {
@@ -1041,9 +1110,9 @@
     }
   ],
   "gate_execution_scope": {
-    "reviewed_before_execution": "2026-09-29",
-    "safe_checks": "Test suites use isolated temporary SQLite and in-memory fixtures. verify:offline-startup builds dist and writes temp state while intercepting non-loopback fetches before network. The keyless live smoke reads only its five exact allowlisted public endpoints, uses a temporary Docker project/database volume, calls no Jev or credentialed optional provider, and removes its volume/network in cleanup.",
-    "not_run": "The TypeSafe live smoke and credentialed Reddit/X/Finnhub checks are excluded because TypeSafe account-use, billing/spend, and source-specific terms remain unresolved."
+    "reviewed_before_execution": "2026-10-01",
+    "safe_checks": "All declared commands inspected. Tests use isolated technical fixtures/temp SQLite. Offline startup builds dist/temp state with all outbound provider calls intercepted. Keyless Compose reads only the five explicitly rights-attested collectors in a disposable project and retained-volume recovery, then removes its own volume/network. OpenAI and TypeSafe calls cannot run from that smoke; no developer .env is read.",
+    "not_run": "OpenAI live smoke/quality qualification is blocked by missing direct API credential and finite own-account spending evidence. New Jev calls are blocked by its actual zero-credit balance. Credentialed optional collectors remain disabled; no provider invoice or historical-usage reconciliation is inferred."
   },
   "known_gaps": [
     "Raw upstream bodies are not retained. Delivery digests cover normalized parsed items and cannot prove parser correctness or replay raw bytes; Jev replay uses normalized observation fields.",
@@ -1059,6 +1128,7 @@
     "The offline classifier evaluator consumes caller-prepared local JSON. It records the exact analyzed run digest but cannot authenticate TypeSafe receipts or independently verify reported scores/token counts; passing metrics require separate auditable provider evidence.",
     "Provider pacing and cooldowns reduce this application's request bursts but do not verify current provider quotas, contract permissions, or behavior across multiple independent application processes. Exact provider terms and project-specific rights remain open.",
     "The default local database still contains migrated legacy_unknown observations with saved Jev judgments. Their original collector and source/model-use provenance were not verified; latest code quarantines them from research and excludes their saved usage from current operational totals while preserving the historical rows for audit. Port 127.0.0.1:8787 currently has no listener. A controlled offline process on 127.0.0.1:8794 served an isolated SQLite backup copy and the browser showed no legacy_unknown rows in the exercised feed, but the historical lineage of the original rows remains unaudited; see project-record/4-log/2026-09-28-legacy-source-quarantine.md.",
-    "2026-10-01: one isolated real SEC-to-Jev integration smoke used a temporary contact-bearing SEC User-Agent and one request/day cap. It produced two SEC filing observations from two issuers and one classification; it does not satisfy the 30-issuer frozen evaluation or establish model quality. The current checkout still has no configured SEC_USER_AGENT, and the account balance/refill/spend ceiling remain unverified."
+    "2026-10-01: one isolated real SEC-to-Jev integration smoke used a temporary contact-bearing SEC User-Agent and one request/day cap. It produced two SEC filing observations from two issuers and one classification; it does not satisfy the 30-issuer frozen evaluation or establish model quality. The current checkout still has no configured SEC_USER_AGENT, and the account balance/refill/spend ceiling remain unverified.",
+    "2026-10-01 current superseding scope: Luna live compatibility/quality/account-budget evidence remain blocked; independent-agent references are bounded diagnostics, not human ground truth. Historical declarations and ledger entries retain their original dates and are not current activation instructions."
   ]
 }

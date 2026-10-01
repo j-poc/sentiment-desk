@@ -3,12 +3,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CategoricalClassification, Mention } from "../web/src/lib/api.js";
 import { CategoricalJudgment } from "../web/src/components/CategoricalJudgment.js";
-import { matchesMentionFeedFilter } from "../web/src/lib/mention-filters.js";
+import { filterMentionFeed, matchesMentionFeedFilter } from "../web/src/lib/mention-filters.js";
 import { retryAvailabilityFor } from "../web/src/lib/retryAvailability.js";
 
 // Isolated UI contract fixture; never inserted into a product database or preview.
 const judgment: CategoricalClassification = {
   provider: "openai_luna", modelRequested: "gpt-6-luna", modelReturned: "gpt-6-luna",
+  serviceTierRequested: "default", serviceTier: "default", cacheWriteInputTokens: 0,
   promptVersion: "test", promptSha256: "a".repeat(64), schemaVersion: "test", schemaSha256: "b".repeat(64),
   sentiment: "positive", eventType: "product", takeaway: "product_win", about: true,
   investorRelevant: true, material: true, evidenceSufficient: true,
@@ -41,6 +42,18 @@ describe("Luna category presentation", () => {
     expect(html).not.toContain("neutral");
   });
 
+  it("keeps missing usage, model tier and costs visible instead of substituting zero", () => {
+    const html = renderToStaticMarkup(createElement(CategoricalJudgment, {
+      judgment: { ...judgment, inputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null,
+        reasoningTokens: null, outputTokens: null, totalTokens: null, serviceTier: null, estimatedCostUsd: null },
+      detail: true,
+    }));
+    expect(html).toContain("Unknown / Unknown tokens");
+    expect(html).toContain("Estimated total</dt><dd>Unknown");
+    expect(html).toContain("Not recorded · requested default");
+    expect(html).not.toContain("$0.000000");
+  });
+
   it("routes categories to matching filters and excludes unresolved or off-target labels", () => {
     expect(matchesMentionFeedFilter(categoryMention("classified"), "bull")).toBe(true);
     expect(matchesMentionFeedFilter(categoryMention("classified"), "material")).toBe(true);
@@ -49,6 +62,22 @@ describe("Luna category presentation", () => {
     expect(matchesMentionFeedFilter(categoryMention("review_required"), "bull")).toBe(false);
     expect(matchesMentionFeedFilter(categoryMention("excluded"), "offtarget")).toBe(true);
     expect(matchesMentionFeedFilter(categoryMention("excluded"), "material")).toBe(false);
+  });
+
+  it("retains fetched Luna records through the displayed feed filter and hides exclusions by default", () => {
+    const positive = { ...categoryMention("classified"), id: "positive" };
+    const negative = { ...categoryMention("classified"), id: "negative", classification: { ...judgment, sentiment: "negative" as const, material: false } };
+    const excluded = { ...categoryMention("excluded"), id: "excluded" };
+    const review = { ...categoryMention("review_required"), id: "review" };
+    const historicalExcluded = { id: "legacy-offtarget", status: "off_target", score: null } as Mention;
+    const page = [positive, negative, excluded, review, historicalExcluded];
+    const ids = (filter: Parameters<typeof filterMentionFeed>[1]) => filterMentionFeed(page, filter).map(({ id }) => id);
+    expect(ids("all")).toEqual(["positive", "negative", "review"]);
+    expect(ids("bull")).toEqual(["positive"]);
+    expect(ids("bear")).toEqual(["negative"]);
+    expect(ids("material")).toEqual(["positive"]);
+    expect(ids("offtarget")).toEqual(["excluded", "legacy-offtarget"]);
+    expect(ids("failed")).toEqual(["review"]);
   });
 
   it("uses the selected provider's retry gates even when legacy Jev is enabled", () => {

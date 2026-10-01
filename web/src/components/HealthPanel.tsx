@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getJSON, type AlertDeliveryHistoryPage, type AlertDeliveryRecord, type HealthDTO } from "../lib/api.js";
+import { operationsAttentionCount } from "../lib/operations-attention.js";
 import { fmtCost, shortTime, timeAgo } from "../lib/format.js";
 
 function Row({ label, value, wrap = false }: { label: string; value: string; wrap?: boolean }) {
@@ -39,7 +40,9 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
       {health.classifierUsage && (
         <>
           <Row label="Luna dispatched / reserved today" value={`${health.classifierUsage.requests} / ${health.classifierUsage.reservedRequests}`} />
-          <Row label="Luna cost estimate / reserved" value={`${fmtCost(health.classifierUsage.estimatedCostUsd)} / ${fmtCost(health.classifierUsage.reservedCostUsd)}`} />
+          <Row label="Luna cost estimate / reserved" value={`${health.classifierUsage.estimatedCostUsd == null ? "unknown" : fmtCost(health.classifierUsage.estimatedCostUsd)} / ${fmtCost(health.classifierUsage.reservedCostUsd)}`} />
+          {health.classifierUsage.unpricedAttempts > 0 && <Row label="Known cost subtotal · incomplete" value={`${fmtCost(health.classifierUsage.knownCostSubtotalUsd)} · ${health.classifierUsage.unpricedAttempts} unpriced request(s)`} wrap />}
+          {health.classifierUsage.usageIncompleteAttempts > 0 && <Row label="Incomplete token receipts" value={String(health.classifierUsage.usageIncompleteAttempts)} />}
           <Row label="Luna unknown outcomes" value={String(health.classifierUsage.unknownOutcomes)} />
           <p className="mt-1 text-[9.5px] text-white/40">Input plus output estimates are not invoices or account balances. Unknown outcomes retain their full cost reservation.</p>
         </>
@@ -151,17 +154,7 @@ export function DeskHealthDisclosure({ health, loadState = "loading" }: { health
         : "Checking source, classifier, and webhook status…"}
     </p>
   );
-  const degradedDeliveries = health.deliveryHealth.filter((delivery) =>
-    ["partial", "overdue", "failed"].includes(delivery.state)
-    || delivery.latestIngestionState === "partial"
-    || delivery.latestIngestionState === "failed",
-  ).length;
-  const blockedSources = health.health.sourceApproval.blockedRequestedCollectors.length;
-  const sourceErrors = [health.health.rss, health.health.gdelt, health.health.x, health.health.quotes,
-    health.health.sec, health.health.finnhub, health.health.reddit, health.health.classifier ?? health.health.jev]
-    .filter((source) => source.lastErrorAt != null && (source.lastOkAt == null || source.lastErrorAt > source.lastOkAt)).length;
-  const alertsNeedingAttention = Object.values(health.alertDelivery.counts).reduce((sum, count) => sum + count, 0);
-  const operationalIssues = degradedDeliveries + sourceErrors + blockedSources + alertsNeedingAttention;
+  const operationalIssues = operationsAttentionCount(health);
   const mode = health.externalRequestsEnabled ? "external requests enabled" : "saved data only";
   return (
     <>

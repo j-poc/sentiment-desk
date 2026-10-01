@@ -116,3 +116,91 @@ accessible score/time/price context. The current category/card/drawer/filter and
 provider retry/health changes pass20 focused tests and typecheck; web build
 passes with an existing bundle-size advisory. These checks use isolated technical
 fixtures only and do not insert fixture data into the runtime preview.
+
+
+## Integration and accounting review
+
+The separate Luna evaluator is integrated at ea32650 from worktree9280e347.
+It validates pure source provenance, exact seeded selection, the production
+prompt/schema/profile and each request attempt. Its10 focused tests and
+typecheck pass. Missing paid runs remain UNVERIFIED; agent reference diagnostics
+never constitute human ground truth or a substitute for independent provider
+usage/account evidence.
+
+The backend advisor identified omissions around automatic tier inheritance,
+cache-write pricing, terminal receipt classification, post-response local
+failure metadata, restart budget closure and nullable totals. The backend
+owner repairs these with isolated focused checks. Root updates the UI to show
+unknown total costs, known subtotal and unpriced/incomplete request counts,
+actual returned tier, cache read/write and reasoning usage. Those14 focused
+UI tests and root typecheck pass. No model call is involved.
+
+Actual IAB browser observation of saved data at1280x720 proves NVIDIA selection,
+a36-bucket historical chart, three actual distinct headlines in the first view,
+chart bucket→three saved source records→detail drawer, and J/K→Oracle selection
+remaining visible at y396–449. Historical unlinked source receipts and saved
+collector links remain explicitly identified. The browser host ignored the
+requested viewport override;1440x900 and390px are unverified. No screenshot or
+UI observation supplied ingestion.
+
+The public-library references are now routed through the shared canonical
+`/Users/jurgis/.codex/references/public-libraries` location; the Documents folder
+is an alias to the same catalog, so the scoped deferral rationale is unchanged.
+
+The current ETL declaration adds OpenAI as a separate source, retains
+live_claim=false, and explicitly disables both paid classifiers in the keyless
+Compose verifier. Declared commands have been inspected for side effects; the
+final source-bound verify/check waits for backend integration. The engineering
+contract replaces the active Jev evaluation command with the separate Luna
+profile while preserving historical Jev evidence. Missing credentials/budget
+continue to block live qualification.
+
+
+## Final local candidate and independent review
+
+Backend96dc426 was integrated as dbb8d0f; exact company-identity evaluation
+repair60d588d was integrated as3838940. The GPT-6.1 Sol xhigh advisor
+confirmed that the final request tier/rate policy, atomic cost adjustment,
+unknown receipt handling, metadata fallback, restart day closure and nullable
+accounting repairs resolve its findings.
+
+The fresh whole-build detector found a duplicate Jev-only display filter and
+an active operations strip that omitted blocked-source/incomplete-accounting
+signals. Root removed the duplicate filter and shared the operations count
+between both surfaces. The reviewer independently re-read both repairs and
+found no remaining defect in those two paths;19 focused tests pass. The broad
+pre-repair suite ran434/435, with its sole failure an obsolete TypeSafe-specific
+copy assertion. That assertion now follows the selected Luna provider and the
+focused rendered-scope test passes. Root typecheck passes; production dependency
+audit reports zero vulnerabilities. The fresh default/allowlist verifier passes
+all nine guarded source paths and the separate Luna key/account/collector/USD
+gates with zero actual outbound provider traffic.
+
+Two fresh-context blinded agents each labeled the same30 actual SEC cases from
+15 issuers, using the committed exact categorical prompt and bounded inputs.
+The frozen input packet, original labels, provenance and rationale artifacts
+remain private. Three cases differed across11 fields; a third fresh blinded
+agent received the unchanged inputs and disputed field names, without primary
+values or model output. Original disagreements are preserved. Neither primary
+set represented negative sentiment; all3class sentiment qualification is thus
+unverified even before the absent paid model run. The final schema/code-bound
+pilot report is computed only after the final clean checkpoint; no missing
+OpenAI balance, budget, provider output, invoice or reviewer model resolution
+evidence is invented. No human calibration claim is made.
+
+The integrated backend now serves the actual isolated saved-data preview at
+http://127.0.0.1:54835/. Its health read returned200 in1.464seconds, selected
+openai_luna/gpt-6-luna with configured:false/enabled:false, zero dispatched
+requests, external requests off and Radar off. The actual browser shows NVIDIA,
+542 historical records and36 chart buckets plus real supporting headlines.
+New-provider context is kept compact in the company metadata; the plot remains
+explicitly Historical Jev. The screenshot and API evidence remain local.
+No real Luna categorical output exists; fixture rendering is not a live proof.
+
+Final verification reads the authoritative generated ETL receipt and then checks
+its code/contract fingerprint. This trace is frozen before that run so it cannot
+invalidate the receipt afterward. The artifact records its exact five check
+outcomes/timestamps/log digests. Source-only checkpoints remain eligible for
+reviewed push while full live classification, three-class quality, billing
+reconciliation, broader scale and exact responsive viewport proof are blocked
+or unverified. No PR, merge, deployment, access, billing or license change occurs.

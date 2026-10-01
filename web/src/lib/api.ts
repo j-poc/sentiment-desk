@@ -35,6 +35,8 @@ export interface CategoricalClassification {
   provider: "openai_luna";
   modelRequested: string;
   modelReturned: string | null;
+  serviceTierRequested: "default";
+  serviceTier: string | null;
   promptVersion: string;
   promptSha256: string;
   schemaVersion: string;
@@ -53,6 +55,7 @@ export interface CategoricalClassification {
   responseSha256: string;
   inputTokens: number | null;
   cachedInputTokens: number | null;
+  cacheWriteInputTokens: number | null;
   outputTokens: number | null;
   reasoningTokens: number | null;
   totalTokens: number | null;
@@ -167,6 +170,9 @@ export interface JevAttemptSummary {
   latencyMs: number | null;
   errorCategory: string | null;
   cachedInputTokens?: number | null;
+  cacheWriteInputTokens?: number | null;
+  serviceTierRequested?: "default";
+  serviceTier?: string | null;
   reasoningTokens?: number | null;
   totalTokens?: number | null;
   estimatedCostUsd?: number | null;
@@ -378,11 +384,16 @@ export interface HealthDTO {
   classifierUsage?: {
     requests: number;
     reservedRequests: number;
-    inputTokens: number;
-    cachedInputTokens: number;
-    outputTokens: number;
-    reasoningTokens: number;
-    estimatedCostUsd: number;
+    inputTokens: number | null;
+    cachedInputTokens: number | null;
+    cacheWriteInputTokens: number | null;
+    outputTokens: number | null;
+    reasoningTokens: number | null;
+    totalTokens: number | null;
+    estimatedCostUsd: number | null;
+    knownCostSubtotalUsd: number;
+    unpricedAttempts: number;
+    usageIncompleteAttempts: number;
     reservedCostUsd: number;
     unknownOutcomes: number;
   };

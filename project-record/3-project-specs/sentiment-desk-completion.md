@@ -44,6 +44,16 @@ agent references will qualify the exact Luna profile; fixture passes do not
 establish real classification quality. Current native goal wording cannot be
 edited/resumed through the available status-only tool and remains blocked.
 
+Two primary fresh-context agents have now completed30-case blinded reference
+sets from15 actual SEC issuers, with a third blinded review of the3 disputed
+cases. Their original disagreements and unsupported labels are retained.
+Negative sentiment is absent from the primary cohort, so the declared3class
+quality target is not qualified. The new backend/UI and evaluator are integrated;
+local tests and request/recovery controls do not replace a direct authorized
+OpenAI run or provider usage/budget evidence. The actual integrated preview
+remains saved data only. Final scoped ETL and pushed-source readback are kept
+in their authoritative receipts; full build completion is not claimed.
+
 The entries below are historical and do not supersede this current scope.
 
 ## Latest native goal status check — 2026-10-01

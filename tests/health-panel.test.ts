@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AlertDeliveryStatus, DeskHealthDisclosure, HealthPanel } from "../web/src/components/HealthPanel.js";
 import type { HealthDTO, SourceHealth } from "../web/src/lib/api.js";
+import { operationsAttentionCount } from "../web/src/lib/operations-attention.js";
 
 const sourceHealth: SourceHealth = {
   enabled: false,
@@ -48,6 +49,31 @@ const blockedHealth: HealthDTO = {
 };
 
 describe("HealthPanel source approval disclosure", () => {
+  it("flags blocked sources and incomplete classifier accounting in the collapsed operations count", () => {
+    const health = { ...blockedHealth, classifierUsage: {
+      requests: 2, reservedRequests: 1, inputTokens: null, cachedInputTokens: null,
+      cacheWriteInputTokens: null, outputTokens: null, reasoningTokens: null, totalTokens: null,
+      estimatedCostUsd: null, knownCostSubtotalUsd: 0, reservedCostUsd: 0.2,
+      unpricedAttempts: 2, usageIncompleteAttempts: 2, unknownOutcomes: 1,
+    } };
+    expect(operationsAttentionCount(health)).toBe(3);
+    const html = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health }));
+    expect(html).toContain("3 signals");
+  });
+  it("separates a known Luna cost subtotal from an incomplete daily estimate", () => {
+    const html = renderToStaticMarkup(createElement(HealthPanel, { health: {
+      ...blockedHealth,
+      classifierUsage: { requests: 2, reservedRequests: 1, inputTokens: null,
+        cachedInputTokens: null, cacheWriteInputTokens: null, outputTokens: null,
+        reasoningTokens: null, totalTokens: null, estimatedCostUsd: null,
+        knownCostSubtotalUsd: 0.1, reservedCostUsd: 0.2, unpricedAttempts: 1,
+        usageIncompleteAttempts: 1, unknownOutcomes: 0 },
+    } }));
+    expect(html).toContain("unknown / $0.200");
+    expect(html).toContain("$0.100 · 1 unpriced request(s)");
+    expect(html).toContain("Incomplete token receipts");
+    expect(html).not.toContain("$0.00 / $0.20");
+  });
   it("distinguishes loading operations from an unavailable response", () => {
     const loading = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health: null, loadState: "loading" }));
     const failed = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health: null, loadState: "failed" }));

@@ -91,6 +91,7 @@ async function verifyCollectorGate(
     jev?: { apiKey: string; allowedCollectors: string; expectedEnabled: boolean };
     sourceRightsApproved?: boolean;
     typesafeAccountUseApproved?: boolean;
+    luna?: { apiKey: string; allowedCollectors: string; accountApproved: boolean; maxDailyCostUsd: string; expectedEnabled: boolean };
   } = {},
 ): Promise<void> {
   const directory = mkdtempSync(path.join(tmpdir(), `sentiment-desk-allowlist-${collector}-`));
@@ -117,6 +118,13 @@ async function verifyCollectorGate(
       EXTERNAL_REQUESTS_ENABLED: "true",
       EXTERNAL_SOURCE_COLLECTORS: collector,
       SOURCE_RIGHTS_APPROVED_COLLECTORS: options.sourceRightsApproved === false ? "" : collector,
+      CLASSIFICATION_PROVIDER: options.luna ? "openai_luna" : "typesafe",
+      OPENAI_API_KEY: options.luna?.apiKey ?? "",
+      OPENAI_ACCOUNT_USE_APPROVED: options.luna?.accountApproved ? "true" : "false",
+      OPENAI_ALLOWED_COLLECTORS: options.luna?.allowedCollectors ?? "",
+      OPENAI_MAX_REQUESTS_PER_DAY: options.luna ? "1" : "0",
+      OPENAI_MAX_REQUEST_BYTES_PER_DAY: options.luna ? "40000" : "0",
+      OPENAI_MAX_DAILY_COST_USD: options.luna?.maxDailyCostUsd ?? "0",
       TYPESAFE_ACCOUNT_USE_APPROVED: options.typesafeAccountUseApproved ? "true" : "false",
       TYPESAFE_API_KEY: options.jev?.apiKey ?? "",
       TYPESAFE_ALLOWED_COLLECTORS: options.jev?.allowedCollectors ?? "",
@@ -192,6 +200,12 @@ async function verifyCollectorGate(
     assert.equal(counters.jev?.enabled, options.jev?.expectedEnabled ?? false,
       "Jev dispatch must match the account approval, key, budget, and three-way source allowlist intersection");
 
+    const selectedClassifier = (health.health as { classifier?: { provider: string; enabled: boolean } }).classifier;
+    assert.ok(selectedClassifier, "the selected classifier must be disclosed");
+    assert.equal(selectedClassifier.provider, options.luna ? "openai_luna" : "typesafe");
+    assert.equal(selectedClassifier.enabled, options.luna?.expectedEnabled ?? options.jev?.expectedEnabled ?? false);
+    if (options.luna) assert.equal(counters.jev?.enabled, false, "Luna selection must never enable a TypeSafe fallback");
+
     if (sourceIsApproved && collector === "yahoo_chart") {
       const response = await fetch(`http://127.0.0.1:${port}/api/companies/apple/price?ticker=AAPL&hours=24`);
       assert.equal(response.status, 502, "the guarded chart request should fail visibly at the fetch boundary");
@@ -263,6 +277,13 @@ async function main(): Promise<void> {
       HOST: "127.0.0.1",
       PORT: String(port),
       NETWORK_GUARD_LOG: guardLog,
+      CLASSIFICATION_PROVIDER: "openai_luna",
+      OPENAI_API_KEY: "unused-offline-verification-key",
+      OPENAI_ACCOUNT_USE_APPROVED: "true",
+      OPENAI_ALLOWED_COLLECTORS: "sec_edgar",
+      OPENAI_MAX_REQUESTS_PER_DAY: "1",
+      OPENAI_MAX_REQUEST_BYTES_PER_DAY: "40000",
+      OPENAI_MAX_DAILY_COST_USD: "1",
       TYPESAFE_API_KEY: "unused-offline-verification-key",
       TYPESAFE_ALLOWED_COLLECTORS: "sec_edgar",
       TYPESAFE_MAX_REQUESTS_PER_DAY: "10",
@@ -311,7 +332,7 @@ async function main(): Promise<void> {
     assert.equal(health.externalRequestsEnabled, false);
 
     const counters = (health.health ?? {}) as Record<string, { enabled?: boolean; ok?: number; fail?: number }>;
-    for (const source of ["rss", "gdelt", "x", "quotes", "sec", "finnhub", "reddit", "jev"]) {
+    for (const source of ["rss", "gdelt", "x", "quotes", "sec", "finnhub", "reddit", "jev", "classifier"]) {
       assert.equal(counters[source]?.enabled, false, `${source} must remain disabled without explicit opt-in`);
       assert.equal(counters[source]?.ok, 0, `${source} must not report startup traffic`);
       assert.equal(counters[source]?.fail, 0, `${source} must not attempt startup traffic`);
@@ -330,7 +351,7 @@ async function main(): Promise<void> {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ confirmNewCharge: true, reviewedProviderUsage: true }),
     });
-    assert.equal(retryResponse.status, 503, "Jev retry must stay unavailable while external requests are paused");
+    assert.equal(retryResponse.status, 503, "Classifier retry must stay unavailable while external requests are paused");
 
     const attempts = existsSync(guardLog) ? readFileSync(guardLog, "utf8") : "";
     assert.equal(attempts, "", `server attempted external fetches while paused: ${attempts}`);
@@ -361,7 +382,13 @@ async function main(): Promise<void> {
       },
       typesafeAccountUseApproved: true,
     });
-    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, a missing source approval made zero fetches, and Jev stayed disabled without account-use attestation or a matching source allowlist. All outbound fetches were intercepted before network access.`);
+    const lunaGate = { apiKey: "unused-offline-verification-key", allowedCollectors: "sec_edgar", accountApproved: true, maxDailyCostUsd: "1", expectedEnabled: true };
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, apiKey: "", expectedEnabled: false } });
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, accountApproved: false, expectedEnabled: false } });
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, allowedCollectors: "google_news_rss", expectedEnabled: false } });
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, maxDailyCostUsd: "0", expectedEnabled: false } });
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: lunaGate });
+    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, a missing source approval made zero fetches, and Jev stayed disabled without account-use attestation or a matching source allowlist. Luna gates separately required a key, account approval, approved source overlap and a nonzero dollar cap, with no TypeSafe fallback. All outbound fetches were intercepted before network access.`);
   } finally {
     try {
       if (child && exitResult == null) {

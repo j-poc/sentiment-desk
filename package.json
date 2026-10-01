@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Real-time company sentiment desk. Mentions are scored per-item by Jev (TypeSafe AI System One) with a fixed typed rubric; a live dashboard shows the meter, deltas, and the evidence behind every point.",
+  "description": "Real-source company research desk with bounded OpenAI GPT-6 Luna categorical classification, preserved historical Jev scores, and source-linked evidence.",
   "engines": {
     "node": ">=22"
   },
@@ -22,7 +22,8 @@
     "verify:local-read-capacity": "npm run build && python3 scripts/verify-local-read-capacity.py",
     "evaluate:jev-labels": "tsx scripts/evaluate-jev-labels.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "evaluate:luna-labels": "tsx scripts/evaluate-luna-labels.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

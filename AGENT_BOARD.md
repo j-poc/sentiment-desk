@@ -1,13 +1,16 @@
 # Sentiment Desk Agent Board
 
-Current checkpoint baseline `0f1623e`: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
+Current checkpoint baseline `3838940`: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
 
 | Current owner | Owned scope | State |
 |---|---|---|
-| `/root/investor_ui_rebuild` | OpenAI client, backend categorical persistence/queue/config/health/API, matching tests and env example in investor-ui worktree | Implementing; UI commits already integrated |
-| `/root/agent_evaluation_migration` | Separate categorical Luna evaluation/CLI/tests in agent-evaluation worktree | Implementing; historical agent Jev evaluation already integrated |
-| `/root/first_run_observability_advisor` | Read-only GPT-6.1 Sol xhigh model/account/evaluation decisions | Scoped migration advice complete |
-| `/root` | Web, shared records/contracts, source cohort/labels, integration, runtime/browser proof and Git | Working |
+| `/root/investor_ui_rebuild` | OpenAI client, backend categorical persistence/queue/config/health/API, matching tests and env example in investor-ui worktree | Complete and integrated at dbb8d0f;75 focused backend checks/typecheck pass |
+| `/root/agent_evaluation_migration` | Separate categorical Luna evaluation/CLI/tests in agent-evaluation worktree | Complete; evaluator integrated at ea32650 and identity repair at3838940;10 focused tests/typecheck pass |
+| `/root/first_run_observability_advisor` | Read-only GPT-6.1 Sol xhigh model/account/evaluation decisions | Final scoped read confirms tier/accounting/receipt/restart repairs; no remaining defect in reviewed paths |
+| `/root/whole_build_luna_review` | Independent entire-build review and two scoped rechecks | Found duplicate feed filter and omitted operations attention; root repaired both, re-read confirmed with19 focused passes; full live/quality proof remains absent |
+| `/root/luna_blind_reference_a`, `/root/luna_blind_reference_b` | Two fresh-context blinded30case real SEC reference sets | Complete; original3case/11field disagreements preserved |
+| `/root/luna_blind_adjudicator` | Fresh blinded third review of3 disputed real inputs | Complete; unsupported labels remain null, no model outputs seen |
+| `/root` | Web, shared records/contracts, source cohort/labels, integration, runtime/browser proof and Git | Final scoped ETL/Git verification; OpenAI live activation blocked |
 
 The following board entries are historical and do not replace current ownership.
 
