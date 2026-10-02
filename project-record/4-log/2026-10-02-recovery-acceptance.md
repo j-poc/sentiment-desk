@@ -14,7 +14,7 @@ narrow screens, and the redundant header clock is hidden below the small-screen
 breakpoint while saved-data and connection status remain visible.
 
 Root integrated isolated worker commits b6c84b5, c7d6ea4 and 0c0c08d as
-90863a4, 3ca4552 and64dd4e1. The integrated focused suite passes29 checks in
+90863a4, 3ca4552 and 64dd4e1. The integrated focused suite passes 29 checks in
 five files; typecheck, production build and diff hygiene pass. Controller
 regressions distinguish stale HTTP-success, failure, caught-up application,
 no repeated first-arrival feed revision and later retry. Fixture results prove
@@ -22,27 +22,27 @@ controller behavior, not real market observations.
 
 Actual Codex in-app browser checks on the rebuilt candidate establish:
 
-- 390x844: document width390, rightmost visible header edge382; phone company
+- 390x844: document width 390, rightmost visible header edge 382; phone company
 selection updates NVIDIA heading, actual historical chart and saved evidence.
-- 1440x900: document width1440; selected NVIDIA, 7D window, real historical Jev
+- 1440x900: document width 1440; selected NVIDIA, 7D window, real historical Jev
 chart and three supporting headlines are visible together. Headline bottoms
-are638,693 and748px; chart canvas ends at496px. These are old saved records,
+are 638, 693 and 748px; chart canvas ends at 496px. These are old saved records,
 not current market facts or new Luna output.
 - Desktop stock click and native J/K move between NVIDIA and Oracle. The chart's
 keyboard table opens a real saved bucket and its source record/detail drawer.
 The selected historical item explicitly shows an unlinked receipt and a saved
 Finnhub provider URL; publisher identity and source time are not invented.
 - The fresh isolated database initially returns zero eligible observations;
-history HTTP503 is shown as unknown rather than confirmed empty. On recovery,
+history HTTP 503 is shown as unknown rather than confirmed empty. On recovery,
 the actual archived SEC example is separately inspectable and supplies no chart.
-- One maintained Tesla Yahoo RSS cycle stores13 identified real observations
-linked to one actual version3 delivery receipt. No constructed source records,
+- One maintained Tesla Yahoo RSS cycle stores 13 identified real observations
+linked to one actual version 3 delivery receipt. No constructed source records,
 Jev outputs or Luna outputs are inserted. Scoring stays pending.
 - The fault proxy replays an exact previously returned empty companies response
-at first arrival. The next15-second history poll retrieves Tesla history,
+at first arrival. The next 15-second history poll retrieves Tesla history,
 without reloading selected evidence pages. The archive disappears.
-- A separate fault phase fails every company read with HTTP503. History polls
-retry every15 seconds while retaining saved research, then normal HTTP200 and
+- A separate fault phase fails every company read with HTTP 503. History polls
+retry every 15 seconds while retaining saved research, then normal HTTP 200 and
 real read-only POST lookup restore state automatically. The stale warning
 clears. No provider or model request is made by the served API.
 
@@ -50,20 +50,20 @@ The initial GET-only verification proxy omitted the application's read-only
 POST lookup and therefore caused a legitimate stale warning. The partial
 artifacts remain; the final proxy forwards only that bounded lookup path and
 its successful recovery is separately recorded. The first-arrival trace's
-second company503 belongs to the spark reader and is not claimed as a failed
+second company 503 belongs to the spark reader and is not claimed as a failed
 backend snapshot. The separate all-company-failure phase supplies that proof.
-Private runtime manifests bind source revision64dd4e1, executable hash, exact
+Private runtime manifests bind source revision 64dd4e1, executable hash, exact
 source/receipt records, API states, browser captures and proxy event logs.
 Main data/desk.db is not modified by these UI/recovery observations.
 
 A fresh bounded local read run on the protected online backup of data/desk.db
-identifies c2d9e982 and the unchanged server bundle. It reads12,509 observations,
-12,509 judgments,101,032 receipts and69,316 price points. Source DB/WAL hashes
+identifies c2d9e982 and the unchanged server bundle. It reads 12,509 observations,
+12,509 judgments, 101,032 receipts and 69,316 price points. Source DB/WAL hashes
 match before and after, copied core counts and SQLite integrity pass, and
-outbound guard attempts are zero. Default workload:96 serial reads in4,315ms,
-96 eight-worker interleaved reads in2,004ms, and24 company-series reads in46ms.
-All24 first-page mention checks return2,301 identified rows. Mixed-route p95
-is233-247ms. The health report's row count denotes SSE clients; it is not a
+outbound guard attempts are zero. Default workload: 96 serial reads in 4,315ms,
+96 eight-worker interleaved reads in 2,004ms, and 24 company-series reads in 46ms.
+All 24 first-page mention checks return 2,301 identified rows. Mixed-route p95
+is 233-247ms. The health report's row count denotes SSE clients; it is not a
 health-record count. This short saved-data run is not sustained, multi-tenant,
 write, production capacity or an SLO claim. Later UI-only changes do not alter
 the measured server executable, database or read paths.
@@ -74,13 +74,13 @@ bounded-evidence requirements. No new architecture or financial calculation is
 introduced. Root owns contracts, records, runtime, integration and Git; one
 writer uses the reused investor-ui worktree, with read-only independent review.
 Worktrees separate checkout state, not filesystem access. Public Data Hub guide
-and locator were read and its loopback health returned200; no profile expansion,
+and locator were read and its loopback health returned 200; no profile expansion,
 refresh, provider-client migration or source freeze change was performed.
 
-The requested Sol/xhigh advisor recommends freezing all18 unused retained SEC
+The requested Sol/xhigh advisor recommends freezing all 18 unused retained SEC
 cases as a separate exhaustive diagnostic extension if more reference coverage
 is pursued. Those inputs have no established negative stratum. This pass does
-not select cases by desired label, modify the original30-case pilot/references,
+not select cases by desired label, modify the original 30-case pilot/references,
 or attribute fresh labels to old reviewer identities. New API qualification
 remains blocked by absent direct OpenAI credentials/account budget evidence,
 missing actual classifier outputs/usage reconciliation, and missing required
@@ -92,14 +92,17 @@ recorded separately; local repairs do not turn full acceptance into a pass.
 Independent engineering-bullshit-detector review passes the scoped recovery,
 phone layout and desktop first-screen repairs and retains full-build FAIL for
 missing live Luna and required reference coverage. It independently recomputes
-all20 runtime-proof artifact hashes after the observer and guarded API stop;
+all 20 runtime-proof artifact hashes after the observer and guarded API stop;
 zero mismatches remain. Observer tab, proxy and guarded API were owned and are
 closed/stopped; the saved-data preview remains available. These results are
-bounded engineering evidence, not an arbitrary10/10 endorsement.
+bounded engineering evidence, not an arbitrary 10/10 endorsement.
 
-The final source/docs freeze requires fresh scoped ETL verify/check and reviewed
-GitHub readback. The gate owns its separate receipt with exit statuses and
-fingerprint. Native alignment retains blocked/unverified full acceptance; a
+The first integrated freeze passed all five scoped ETL checks at
+2026-10-02T00:01:44Z. Its source checkpoint 5778862 was pushed with exact
+branch readback. The declaration then received a status-only correction for the now-verified desktop and phone
+proof. The final source/records freeze requires a fresh scoped ETL verify/check
+and reviewed GitHub readback. The gate owns its separate receipt with exit
+statuses and fingerprint. Native alignment retains blocked/unverified full acceptance; a
 local repair cannot waive the real-source Luna criterion or authorize release.
 Source staging and push exclude private normalized source data, observer logs,
 credentials, databases, dependencies and generated builds. Existing GitHub
