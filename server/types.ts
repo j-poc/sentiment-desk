@@ -15,6 +15,22 @@ export type EvidenceChannel = "news" | "filing" | "social" | "market_context";
 export type TimeBasis = "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown";
 export type DeliveryHealthState = "current" | "processing" | "overdue" | "failed" | "partial" | "never" | "disabled";
 
+export type SecDocumentRole = "8k_primary" | "earnings_exhibit_99_1";
+export type SecDocumentOutcome = "success" | "empty" | "failed" | "invalid" | "rate_limited";
+export type SecSelectionReason = "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link";
+export type SecItem202Link = { kind: "linked"; itemCode: "2.02"; exhibitNumber: "99.1"; supportingText: string } | { kind: "unverified"; reason: "missing_item_body" | "missing_results_attachment_reference" | "different_results_exhibit" | "ambiguous_results_reference" | "conflicting_table_description" };
+export interface SecDocumentAttempt {
+  role: SecDocumentRole; url: string; startedAt: number; completedAt: number; retrievedAt: number | null;
+  httpStatus: number | null; outcome: SecDocumentOutcome; bodyBytes: number | null; bodySha256: string | null;
+  excerpt: string; errorCode: string | null;
+}
+export interface SecDocumentContext {
+  version: "sec-document-context/1"; cik: string; accessionNo: string; primaryUrl: string;
+  acceptedAt: number; filedAt: number | null; classificationInputStatus: "ready" | "incomplete";
+  selectionReason: SecSelectionReason; item202Link: SecItem202Link | null; selectedRole: SecDocumentRole | null; selectedUrl: string | null;
+  documents: SecDocumentAttempt[];
+}
+
 /** Historical verification evidence shown separately from live Desk observations. */
 export interface ArchivedRun {
   label: string;
@@ -209,6 +225,7 @@ export interface MentionDTO {
   score: MentionScore | null;
   classification?: CategoricalClassification | null;
   error: string | null;
+  secDocumentContext?: SecDocumentContext | null;
 }
 
 /** Minimal persisted evidence used by the deterministic Radar aggregation. */

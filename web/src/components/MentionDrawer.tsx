@@ -189,7 +189,7 @@ export function MentionDrawer({
             <span>collected {timeAgo(mention.retrievedAt)}</span>
           </div>
           <div className="mt-1 text-[10px] text-white/35">
-            source request receipt · {mention.source.deliveryId == null ? "unlinked · historical record" : mention.source.deliveryId.slice(0, 12)}
+            {mention.secDocumentContext ? "filing-evidence operation" : "source request receipt"} · {mention.source.deliveryId == null ? "unlinked · historical record" : mention.source.deliveryId.slice(0, 12)}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-md border border-white/[0.07] bg-white/[0.02] px-2.5 py-2" role="group" aria-label="Source attribution">
             <div className="min-w-0">
@@ -228,6 +228,26 @@ export function MentionDrawer({
           {mention.snippet && mention.snippet !== mention.title && (
             <p className="mt-2 text-[12px] leading-relaxed text-white/55">{mention.snippet}</p>
           )}
+          {mention.secDocumentContext && (() => {
+            const context = mention.secDocumentContext!;
+            const parent = context.documents.find((doc) => doc.role === "8k_primary");
+            const selected = context.documents.find((doc) => doc.role === context.selectedRole && doc.url === context.selectedUrl);
+            const selectionSummary = context.classificationInputStatus !== "ready"
+              ? "No filing text selected"
+              : context.selectedRole === "earnings_exhibit_99_1"
+                ? "Earnings release selected from Item 2.02"
+                : "Primary 8-K text selected";
+            return <details className="mt-3 rounded-md border border-white/[0.08] px-3 py-2 text-[10.5px] text-white/60">
+              <summary className="cursor-pointer">SEC filing and document evidence</summary>
+              <div className="mt-2 space-y-2">
+                <div>Accepted {shortTime(context.acceptedAt)} · filing date {mention.filedAt == null ? "unknown" : dayTime(mention.filedAt)}</div>
+                {context.item202Link?.kind === "linked" && <div>Item 2.02 attachment statement: <span className="text-white/75">{context.item202Link.supportingText}</span></div>}
+                {selected && <div><a className="underline" href={selected.url} target="_blank" rel="noreferrer">Text source: {selected.role === "earnings_exhibit_99_1" ? "Exhibit 99.1" : "Primary 8-K"}</a> · retrieved {selected.retrievedAt == null ? "unknown" : shortTime(selected.retrievedAt)}<div className="mt-1 break-words">body SHA-256 {selected.bodySha256 ?? "unavailable"}</div></div>}
+                {parent && <div><a className="underline" href={parent.url} target="_blank" rel="noreferrer">Parent 8-K filing</a> · retrieved {parent.retrievedAt == null ? "unknown" : shortTime(parent.retrievedAt)}<p className="mt-1 whitespace-pre-wrap">{parent.excerpt || "No usable parent excerpt retained."}</p><div className="break-words">body SHA-256 {parent.bodySha256 ?? "unavailable"}</div></div>}
+                <div>{selectionSummary}</div>
+              </div>
+            </details>;
+          })()}
 
           {s ? (
             <>

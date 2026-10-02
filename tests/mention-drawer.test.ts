@@ -44,6 +44,37 @@ function renderDrawer(retryAvailability: RetryAvailability, mention: Mention = f
 }
 
 describe("MentionDrawer retry availability", () => {
+  it("discloses selected Exhibit 99.1 and parent 8-K provenance from the saved filing operation", () => {
+    const context = {
+      version: "sec-document-context/1" as const, cik: "2488", accessionNo: "0000002488-26-000121",
+      primaryUrl: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/amd-20260804.htm",
+      acceptedAt: 1_790_000_000_000, filedAt: 1_789_900_000_000,
+      classificationInputStatus: "ready" as const, selectionReason: "unique_exhibit_selected" as const,
+      item202Link: { kind: "linked" as const, itemCode: "2.02" as const, exhibitNumber: "99.1" as const, supportingText: "Press release & attached as Exhibit 99.1 <script>" },
+      selectedRole: "earnings_exhibit_99_1" as const,
+      selectedUrl: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/q22026991.htm",
+      documents: [
+        { role: "8k_primary" as const, url: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/amd-20260804.htm", startedAt: 1, completedAt: 2, retrievedAt: 2, httpStatus: 200, outcome: "success" as const, bodyBytes: 300, bodySha256: "a".repeat(64), excerpt: "The parent 8-K excerpt", errorCode: null },
+        { role: "earnings_exhibit_99_1" as const, url: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/q22026991.htm", startedAt: 3, completedAt: 4, retrievedAt: 4, httpStatus: 200, outcome: "success" as const, bodyBytes: 400, bodySha256: "b".repeat(64), excerpt: "The exhibit excerpt", errorCode: null },
+      ],
+    };
+    const mention = {
+      ...failedMention, source: { ...failedMention.source, kind: "sec" as const, url: context.selectedUrl, collector: "sec_edgar" as const, deliveryId: "receipt-123" },
+      collector: "sec_edgar" as const, publisherName: "SEC EDGAR", publisherDomain: "sec.gov",
+      filedAt: context.filedAt, secDocumentContext: context,
+    } satisfies Mention;
+    const html = renderDrawer(retryAvailabilityFor(null), mention);
+    expect(html).toContain("filing-evidence operation");
+    expect(html).toContain("Text source: Exhibit 99.1");
+    expect(html).toContain("Parent 8-K filing");
+    expect(html).toContain("The parent 8-K excerpt");
+    expect(html).toContain("Item 2.02 attachment statement");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("body SHA-256");
+    expect(html).toContain("Earnings release selected from Item 2.02");
+    expect(html).not.toContain("unique_exhibit_selected");
+  });
+
   it("hides retry for unknown health, paused external requests, and disabled Jev", () => {
     const unavailableStates = [
       retryAvailabilityFor(null),

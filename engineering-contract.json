@@ -5,7 +5,7 @@
   ],
   "job": "Replace new-record classification with OpenAI GPT-6 Luna, preserve genuine historical Jev probabilities, rebuild the selected-company workspace, and qualify the new categorical profile against independently blinded real-source agent references; keep all paid calls bounded and checkpoint reviewed source.",
   "acceptance": [
-    "New observations and research reads use identified real sources; demo and synthetic records never enter product runtime, and legacy_unknown rows stay quarantined from research and Jev paths. SEC extraction prioritizes actual numbered 8-K sections over the cover page, is deterministic and bounded, and versions newly persisted receipts without modifying historical records.",
+    "New observations and research reads use identified real sources; demo and synthetic records never enter product runtime, and legacy_unknown rows stay quarantined from research and Jev paths. SEC extraction prioritizes actual numbered 8-K sections over the cover page, is deterministic and bounded, and versions newly persisted receipts without modifying historical records. For new Item 2.02 filings, the source adapter selects only a unique same-accession HTML Exhibit 99.1 explicitly identified by the visible results section, preserves bounded primary/exhibit request evidence outside classifier input, and emits no observation for incomplete acquisition. Legacy receipts, stable input revision semantics, prompt/schema/profile and historical judgments remain unchanged.",
     "OpenAI GPT-6 Luna is the selected classifier for new records, using strict categorical outputs with exact prompt/schema/request/response provenance and complete usage. No Luna category is converted into a Jev probability, confidence or impact value, or mixed into legacy numeric charts, reaction memory or threshold alerts. Missing credentials, source/account approval or finite budgets leave items pending without TypeSafe fallback. Unknown outcomes retain their reservation and require operator review. A frozen real SEC cohort of at least30 cases across at least8 configured issuers binds two independent blinded agent reference sets to the exact new prompt and request profile. Predeclared diagnostic targets remain macro-F1>=0.80, represented-class precision/recall>=0.70 and inclusion precision>=0.90 with all3 sentiment classes represented; unresolved and failed cases remain in the denominator. Agent agreement is separate from human ground truth and statistical certification. A missing API credential, live run, usage reconciliation or source/reference evidence blocks live qualification; no quality pass is inferred from fixtures.",
     "Feed failures, pending judgments, and retries remain persistent, bounded, recoverable, and reachable to the user, including aggregate alert attention counts, prioritized pageable outcomes, responsive source/operations health details, and a visible not-configured webhook state before the first alert.",
     "At1440x900, the selected company, selected date/window, actual historical chart and at least three actual supporting source headlines are visible without scrolling when available. Company selection updates heading, chart and evidence; J/K keeps selection visible. Chart bucket inspection reaches real supporting records and the original source. At390px, there is no horizontal overflow. Pending, historical, loading, error and true-empty states remain distinct, with truthful units, freshness and unvalidated-model disclosure.",
@@ -16,8 +16,8 @@
   ],
   "owner": "Jurgis owns the product decision and local deployment; source/account operators own their access attestations.",
   "design": {
-    "existing_patterns": "Retain the existing TypeScript server, SQLite receipts and observations, bounded provider adapters, React/Vite research desk, offline startup verifier, and project-record ETL gate.",
-    "data_ownership": "Public provider source data remains under provider-specific access/retention rights; local SQLite is operator controlled. Unknown-provenance historical rows remain quarantined. The read-only first-run archive is one actual historical SEC-to-Jev observation outside research counts/charts. New Luna classifications are product-derived data acquired through the user-authorized OpenAI API route; direct API credentials and an OpenAI spending bound are currently absent, so live qualification is blocked.",
+    "existing_patterns": "Retain the existing TypeScript server, SQLite receipts and observations, bounded provider adapters, React/Vite research desk, offline startup verifier, and project-record ETL gate. The new SEC document evidence is an optional bounded receipt context, with no separate relationship service or new dependencies.",
+    "data_ownership": "Public provider source data remains under provider-specific access/retention rights; local SQLite is operator controlled. Unknown-provenance historical rows remain quarantined. The read-only first-run archive is one actual historical SEC-to-Jev observation outside research counts/charts. New Luna classifications are product-derived data acquired through the user-authorized OpenAI API route; direct API credentials and an OpenAI spending bound are currently absent, so live qualification is blocked. SEC parent and selected exhibit are product-managed public-source data; partial acquisition is operation evidence only and creates no pending model input.",
     "boundaries": "Network collection and Jev forwarding default off; source and account approvals are distinct; the read-only first-run endpoint serves a separately typed archival record only when all-time eligible observation history is zero, and never inserts it into Desk data or calculations. Live smoke uses a temporary isolated database; Radar stays disabled. The selected-company workspace reuses the existing request owners and recovery controller. Independent agent references use a separate v3 diagnostic mode; they never attest to human qualification or constitute ground truth. New OpenAI dispatch requires its own credential, account/source allowlists and daily request/byte/USD caps, default zero; TypeSafe is never an implicit fallback. New categorical rows have a separate persistence profile and terminal classified/excluded/review_required states. Historical probability records and quarantine remain unchanged.",
     "simplicity": "Use the existing React controls, formatters, tests, and verifiers; no new runtime dependency or synthetic product fixture is introduced.",
     "first_run": {
@@ -41,7 +41,7 @@
     }
   },
   "change_safety": {
-    "checkpoint": "Root alone integrates worktree commits into codex/real-data-rebuild from baseline280a20d09b746295e68e258fe93f4da670caf74b, pushes reviewed in-scope source, and verifies the exact remote branch SHA. Restricted/raw runtime evidence stays local and ignored.",
+    "checkpoint": "Root alone integrates reviewed worktree changes into codex/real-data-rebuild from 3ab2f8c076adc93c95af0bdfe148b8f666ca2193, pushes explicit in-scope source, and verifies exact remote branch SHA. Restricted/raw runtime evidence stays local and ignored.",
     "rollback": "Revert the new regular commit if required; preserve the local SQLite database and never roll back persisted user data to reverse source code. External requests remain off by default."
   },
   "risks": {
@@ -229,6 +229,27 @@
         "tests/health-panel.test.ts"
       ],
       "timeout_seconds": 120
+    },
+    {
+      "id": "sec-linked-exhibit",
+      "covers": [
+        "workflow_success",
+        "workflow_failure",
+        "resource_bounds",
+        "persistence_recovery"
+      ],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "--maxWorkers=1",
+        "--testTimeout=20000",
+        "tests/sec-evidence.test.ts",
+        "tests/sec.test.ts",
+        "tests/provider-pollers.test.ts"
+      ],
+      "timeout_seconds": 120
     }
   ],
   "alignment": {
@@ -238,7 +259,8 @@
         "acceptance_index": 0,
         "check_ids": [
           "etl-artifact-check",
-          "offline-source-gates"
+          "offline-source-gates",
+          "sec-linked-exhibit"
         ]
       },
       {

@@ -9,7 +9,7 @@ import { tierForHost } from "./sources/tiers.js";
 import { fetchFeed, googleNewsUrl, yahooFinanceUrl, type FeedFetchResult } from "./sources/rss.js";
 import { searchRecent, XPaginationTokenRejectedError, XNonAdvancingPaginationTokenError, xQuery } from "./sources/x.js";
 import { isFinanceRelevant } from "./scoring.js";
-import { fetchPrimaryDocText, fetchRecent8Ks, fetchTickerCikMap, titleForItems, SEC_PRIMARY_ADAPTER_VERSION } from "./sources/sec.js";
+import { fetchRecent8Ks, fetchTickerCikMap, titleForItems, fetchFilingEvidence, SEC_EVIDENCE_ADAPTER_VERSION, type SecFilingEvidence } from "./sources/sec.js";
 import { classifyDeliveryError, processDeliveryItems, recordDelivery } from "./delivery.js";
 import { scheduleTask, type SchedulerControl } from "./scheduler.js";
 import {
@@ -423,8 +423,10 @@ export function startSecPoller(deps: {
   health: HealthTracker;
   intervalSeconds: number;
   fetchFilings?: typeof fetchRecent8Ks;
+  fetchEvidence?: typeof fetchFilingEvidence;
 }): SchedulerControl {
   const fetchFilings = deps.fetchFilings ?? fetchRecent8Ks;
+  const fetchEvidence = deps.fetchEvidence ?? fetchFilingEvidence;
   let running = false;
   for (const company of deps.companies) {
     if (deps.cikByTicker.has(company.ticker)) continue;
@@ -457,25 +459,19 @@ export function startSecPoller(deps: {
             let snippet = "";
             const documentStartedAt = Date.now();
             const url = f.primaryDocUrl || `https://www.sec.gov/Archives/edgar/data/${Number(f.cik)}/${f.accessionNo.replace(/-/g, "")}/`;
-            let deliveryId: string;
-            try {
-              snippet = await fetchPrimaryDocText(f.primaryDocUrl, deps.userAgent);
-              deliveryId = recordDelivery({
-                db: deps.db, collector: "sec_edgar", companyId: company.id,
-                requestKey: `sec:${cik}:8-k-document:${f.accessionNo}`, startedAt: documentStartedAt,
-                adapterVersion: SEC_PRIMARY_ADAPTER_VERSION, result: snippet ? "success" : "empty",
-                parsedItemCount: snippet ? 1 : 0, normalizedItems: { url, snippet }, processingExpected: Boolean(snippet),
-              });
-            } catch (err) {
-              if (err instanceof ProviderRateLimitError) throw err;
-              recordDelivery({
-                db: deps.db, collector: "sec_edgar", companyId: company.id,
-                requestKey: `sec:${cik}:8-k-document:${f.accessionNo}`, startedAt: documentStartedAt,
-                adapterVersion: SEC_PRIMARY_ADAPTER_VERSION, result: classifyDeliveryError(err),
-                parsedItemCount: 0, error: err,
-              });
-              unavailableDocuments += 1;
-              continue;
+            const evidence: SecFilingEvidence = await fetchEvidence(f, deps.userAgent);
+            snippet = evidence.selected?.excerpt ?? "";
+            const selectedUrl = evidence.selected?.url ?? url;
+            const deliveryId = recordDelivery({
+              db: deps.db, collector: "sec_edgar", companyId: company.id,
+              requestKey: `sec:${cik}:8-k-evidence:${f.accessionNo}`, startedAt: documentStartedAt,
+              adapterVersion: SEC_EVIDENCE_ADAPTER_VERSION, result: evidence.result,
+              parsedItemCount: evidence.selected ? 1 : 0, normalizedItems: evidence.context,
+              secDocumentContext: evidence.context, processingExpected: Boolean(evidence.selected),
+              error: evidence.context.classificationInputStatus === "incomplete" ? `SEC earnings input incomplete: ${evidence.context.selectionReason}` : undefined,
+            });
+            if (evidence.result === "rate_limited") {
+              throw new ProviderRateLimitError("sec", evidence.rateLimit?.retryAfterMs, `SEC ${evidence.rateLimit?.phase ?? "document"} HTTP 429`);
             }
             if (!snippet) {
               unavailableDocuments += 1;
@@ -487,7 +483,7 @@ export function startSecPoller(deps: {
                 kind: "sec",
                 scoped: true,
                 sourceName: "SEC EDGAR",
-                sourceUrl: url,
+                sourceUrl: selectedUrl,
                 tier: "filing",
                 title: titleForItems(f.formType, f.items),
                 snippet,
@@ -497,9 +493,10 @@ export function startSecPoller(deps: {
                 deliveryId,
                 publisherName: "SEC EDGAR",
                 publisherDomain: "sec.gov",
-                adapterVersion: SEC_PRIMARY_ADAPTER_VERSION,
+                adapterVersion: SEC_EVIDENCE_ADAPTER_VERSION,
                 filedAt: f.filedAt ?? undefined,
-                retrievedAt: Date.now(),
+                retrievedAt: evidence.selected!.retrievedAt,
+                responseDigest: evidence.selected!.bodySha256,
               });
               itemProcessed(didInsert);
               return didInsert;
