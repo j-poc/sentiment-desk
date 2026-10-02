@@ -162,12 +162,22 @@ export default function App() {
   const evidenceBreadthPageRef = useRef<EvidenceBreadthState | null>(evidenceBreadthPage);
   const scoreBucketEvidenceRef = useRef<ScoreBucketEvidenceState | null>(scoreBucketEvidence);
   const mentionFeedHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const operationsDisclosureRef = useRef<HTMLDetailsElement | null>(null);
   const scoreBucketHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const openDrawerMention = useCallback((mention: Mention | null) => {
     drawerMentionIdRef.current = mention?.id ?? null;
     setDrawerMention(mention);
   }, []);
   const closeDrawer = useCallback(() => openDrawerMention(null), [openDrawerMention]);
+  const openOperationsFromDrawer = useCallback(() => {
+    closeDrawer();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const disclosure = operationsDisclosureRef.current;
+      if (!disclosure) return;
+      disclosure.open = true;
+      disclosure.querySelector<HTMLElement>("summary")?.focus();
+    }));
+  }, [closeDrawer]);
   const openAlertEvidence = useCallback(async (companyId: string, observationId: string) => {
     try {
       const mention = (await lookupMentionsByIds(companyId, [observationId]))[0];
@@ -892,9 +902,7 @@ export default function App() {
     }
   };
 
-  const showMentionFeed = (groupFilter: ExactTitleGroupFilter = null) => {
-    setFeedFilter("all");
-    setFeedGroupFilter(groupFilter);
+  const focusMentionFeed = () => {
     requestAnimationFrame(() => {
       const heading = mentionFeedHeadingRef.current;
       if (!heading) return;
@@ -904,6 +912,18 @@ export default function App() {
       });
       heading.focus({ preventScroll: true });
     });
+  };
+
+  const showMentionFeed = (groupFilter: ExactTitleGroupFilter = null) => {
+    setFeedFilter("all");
+    setFeedGroupFilter(groupFilter);
+    focusMentionFeed();
+  };
+
+  const showUnscoredHistory = () => {
+    setFeedFilter("failed");
+    setFeedGroupFilter(null);
+    focusMentionFeed();
   };
 
   const inspectScoreBucket = useCallback(async (
@@ -1068,7 +1088,7 @@ export default function App() {
             <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />
           )}
           {researchView === "desk" && (
-            <details className="desk-operations">
+            <details id="desk-operations" ref={operationsDisclosureRef} className="desk-operations">
               <summary>
                 <span>Sources &amp; operations</span>
                 <span className="desk-operations-summary">
@@ -1355,6 +1375,8 @@ export default function App() {
                 onRetry={() => setSnapshotRevision((revision) => revision + 1)}
                 onRetryRefresh={() => void refreshBackendSnapshot()}
                 onShowRecords={showMentionFeed}
+                onShowUnscoredHistory={showUnscoredHistory}
+                recentlyRetrievedCount={selected?.sourceRecords24h ?? 0}
                 onOpenMention={openDrawerMention}
               />
 
@@ -1515,6 +1537,7 @@ export default function App() {
       retryAvailability={retryAvailability}
       refreshWarning={drawerRefreshWarning}
       onRetryRefresh={() => void refreshBackendSnapshot()}
+      onOpenOperations={openOperationsFromDrawer}
     />
     </>
   );

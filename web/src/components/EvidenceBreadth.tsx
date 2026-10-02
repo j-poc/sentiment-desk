@@ -16,6 +16,8 @@ export function EvidenceBreadth({
   onRetry,
   onRetryRefresh,
   onShowRecords,
+  onShowUnscoredHistory,
+  recentlyRetrievedCount = 0,
   onOpenMention,
 }: {
   mentions: Mention[];
@@ -28,6 +30,8 @@ export function EvidenceBreadth({
   onRetry: () => void;
   onRetryRefresh: () => void;
   onShowRecords: (filter?: ExactTitleGroupFilter) => void;
+  onShowUnscoredHistory?: () => void;
+  recentlyRetrievedCount?: number;
   onOpenMention: (mention: Mention) => void;
 }) {
   const summary = summarizeEvidenceBreadth(mentions);
@@ -108,11 +112,21 @@ export function EvidenceBreadth({
               );
             })}
           </div>
-          {loaded && mentions.length === 0 && <p className="evidence-breadth-status" role="status">No saved source records in this {period} window.</p>}
+          {loaded && mentions.length === 0 && <p className="evidence-breadth-status" role="status">No saved source records by source time in this {period} window.</p>}
+          {loaded && mentions.length === 0 && recentlyRetrievedCount > 0 && (
+            <p className="evidence-breadth-caveat" role="note">
+              {recentlyRetrievedCount} source {recentlyRetrievedCount === 1 ? "record was" : "records were"} retrieved in the last 24 hours; source time may fall outside this window.
+            </p>
+          )}
           {loaded && mentions.length > 0 && summary.scoredRecordCount === 0 && <p className="evidence-breadth-status" role="status">No scored records in these {summary.sourceRecordCount} saved rows.</p>}
           <button type="button" className="evidence-breadth-link" aria-controls="mention-feed-panel" onClick={() => onShowRecords()}>
             Open full mention feed <span aria-hidden="true">↓</span>
           </button>
+          {loaded && mentions.length === 0 && recentlyRetrievedCount > 0 && onShowUnscoredHistory && (
+            <button type="button" className="evidence-breadth-link" aria-controls="mention-feed-panel" onClick={onShowUnscoredHistory}>
+              Open unscored history <span aria-hidden="true">↓</span>
+            </button>
+          )}
           <details className="evidence-coverage">
             <summary>Coverage and title analysis <span>{summary.scoredRecordCount} Jev scored{categorical.length > 0 ? ` · ${classified.length} Luna classified` : ""} · {summary.exactHeadlineCount} exact-title groups</span></summary>
             {categorical.length > 0 && <p className="evidence-breadth-metrics">

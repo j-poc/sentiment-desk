@@ -21,9 +21,9 @@ const company = {
 } satisfies CompanySnapshot;
 
 describe("watchlist Jev mean labels", () => {
-  function renderWatchlist(quotes: Record<string, Quote> = {}) {
+  function renderWatchlist(quotes: Record<string, Quote> = {}, companies: CompanySnapshot[] = [company]) {
     return renderToStaticMarkup(createElement(Watchlist, {
-      companies: [company],
+      companies,
       selectedId: company.id,
       sparks: {},
       quotes,
@@ -77,5 +77,19 @@ describe("watchlist Jev mean labels", () => {
     expect(accessibleName).toContain("source time unknown");
     expect(accessibleName).toContain("cached delivery retrieved");
     expect(html).toMatch(/cached \d+m ago · source time unknown/);
+  });
+
+  it("labels recent source retrieval explicitly when there is no scored index", () => {
+    const pendingCompany = {
+      ...company,
+      index: null,
+      indexWindow: null,
+      indexRecordCount: 0,
+      delta: null,
+      sourceRecords24h: 1,
+    } satisfies CompanySnapshot;
+    const html = renderWatchlist({}, [pendingCompany]);
+
+    expect(html).toContain("1 source record retrieved in 24h · no scored index");
   });
 });

@@ -63,7 +63,7 @@ export function Watchlist({
         const historyStatus = c.indexRecordCount > 0
           ? `${c.indexRecordCount} scored records${c.indexWindow ? ` in ${c.indexWindow}` : ""}`
           : c.sourceRecords24h > 0
-            ? `${c.sourceRecords24h} saved · no scored index`
+            ? `${c.sourceRecords24h} source ${c.sourceRecords24h === 1 ? "record" : "records"} retrieved in 24h · no scored index`
             : c.latestSourceCollectedAt != null
               ? `Saved history · latest ${timeAgo(c.latestSourceCollectedAt)}`
               : "No saved history";

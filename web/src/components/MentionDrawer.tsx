@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { JevAttemptSummary, Mention } from "../lib/api.js";
+import type { JevAttemptSummary, Mention, MentionStatus } from "../lib/api.js";
 import { getJSON, retryMention } from "../lib/api.js";
 import type { RetryAvailability } from "../lib/retryAvailability.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
@@ -47,6 +47,32 @@ function collectorLabel(collector: string): string {
   return collector === "google_news_rss" ? "Google News RSS" : collector;
 }
 
+function exactTimestamp(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(ms));
+}
+
+function mentionStatusLabel(status: MentionStatus): string {
+  switch (status) {
+    case "pending": return "Judgment pending";
+    case "scoring": return "Classification in progress";
+    case "retrying": return "Retry queued";
+    case "scored": return "Historical Jev judgment";
+    case "classified": return "Luna classification available";
+    case "excluded": return "Excluded by classifier";
+    case "review_required": return "Operator review required";
+    case "off_target": return "Outside selected company";
+    case "failed": return "Classification failed";
+    case "corrupt": return "Saved judgment needs attention";
+  }
+}
+
 type RetryState =
   | { type: "idle" }
   | { type: "confirming"; chargeConfirmed: boolean; usageReviewed: boolean }
@@ -64,12 +90,14 @@ export function MentionDrawer({
   retryAvailability,
   refreshWarning = false,
   onRetryRefresh,
+  onOpenOperations,
 }: {
   mention: Mention | null;
   onClose: () => void;
   retryAvailability: RetryAvailability;
   refreshWarning?: boolean;
   onRetryRefresh?: () => void;
+  onOpenOperations?: () => void;
 }) {
   const providerLabel = retryAvailability.kind === "available" ? retryAvailability.providerLabel ?? "Jev" : "classifier";
   const providerName = retryAvailability.kind === "available" ? retryAvailability.providerName ?? "TypeSafe" : "provider";
@@ -225,9 +253,6 @@ export function MentionDrawer({
           <h2 className={`font-semibold leading-snug text-desk-bright ${s && s.takeaway !== "routine" ? "mt-1 text-[13px] text-white/60" : "mt-2 text-[15px]"}`}>
             {mention.title}
           </h2>
-          {mention.snippet && mention.snippet !== mention.title && (
-            <p className="mt-2 text-[12px] leading-relaxed text-white/55">{mention.snippet}</p>
-          )}
           {mention.secDocumentContext && (() => {
             const context = mention.secDocumentContext!;
             const parent = context.documents.find((doc) => doc.role === "8k_primary");
@@ -237,17 +262,54 @@ export function MentionDrawer({
               : context.selectedRole === "earnings_exhibit_99_1"
                 ? "Earnings release selected from Item 2.02"
                 : "Primary 8-K text selected";
-            return <details className="mt-3 rounded-md border border-white/[0.08] px-3 py-2 text-[10.5px] text-white/60">
-              <summary className="cursor-pointer">SEC filing and document evidence</summary>
-              <div className="mt-2 space-y-2">
-                <div>Accepted {shortTime(context.acceptedAt)} · filing date {mention.filedAt == null ? "unknown" : dayTime(mention.filedAt)}</div>
-                {context.item202Link?.kind === "linked" && <div>Item 2.02 attachment statement: <span className="text-white/75">{context.item202Link.supportingText}</span></div>}
-                {selected && <div><a className="underline" href={selected.url} target="_blank" rel="noreferrer">Text source: {selected.role === "earnings_exhibit_99_1" ? "Exhibit 99.1" : "Primary 8-K"}</a> · retrieved {selected.retrievedAt == null ? "unknown" : shortTime(selected.retrievedAt)}<div className="mt-1 break-words">body SHA-256 {selected.bodySha256 ?? "unavailable"}</div></div>}
-                {parent && <div><a className="underline" href={parent.url} target="_blank" rel="noreferrer">Parent 8-K filing</a> · retrieved {parent.retrievedAt == null ? "unknown" : shortTime(parent.retrievedAt)}<p className="mt-1 whitespace-pre-wrap">{parent.excerpt || "No usable parent excerpt retained."}</p><div className="break-words">body SHA-256 {parent.bodySha256 ?? "unavailable"}</div></div>}
-                <div>{selectionSummary}</div>
-              </div>
-            </details>;
+            return <>
+              <section className="mt-3 rounded-md border border-white/[0.09] bg-white/[0.025] px-3 py-2.5" aria-label="SEC filing status and selected documents">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="micro">Judgment status</span>
+                  <span role="status" className="text-[11px] font-medium text-amber-100/85">{mentionStatusLabel(mention.status)}</span>
+                  <span className="ml-auto text-[9.5px] text-white/40">{context.classificationInputStatus === "ready" ? "source input ready" : "source input incomplete"}</span>
+                </div>
+                <p className="mt-1.5 break-words text-[10.5px] text-white/55">8-K · accession {context.accessionNo}</p>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10.5px]">
+                  {selected && <a className="underline underline-offset-2" href={selected.url} target="_blank" rel="noreferrer">Open selected {selected.role === "earnings_exhibit_99_1" ? "Exhibit 99.1" : "primary 8-K"}</a>}
+                  {parent && <a className="underline underline-offset-2 text-white/65" href={parent.url} target="_blank" rel="noreferrer">Parent 8-K filing</a>}
+                </div>
+                {context.item202Link?.kind === "linked" && <p className="mt-1.5 text-[10px] leading-relaxed text-white/45">Item 2.02 identifies the selected results attachment: {context.item202Link.supportingText}</p>}
+                <div className="mt-1.5 space-y-0.5 text-[10px] text-white/45">
+                  <div>Filed {context.filedAt == null ? "unknown" : <time dateTime={new Date(context.filedAt).toISOString()}>{exactTimestamp(context.filedAt)}</time>}</div>
+                  <div>SEC accepted <time dateTime={new Date(context.acceptedAt).toISOString()}>{exactTimestamp(context.acceptedAt)}</time></div>
+                  {selected?.retrievedAt != null && <div>Retrieved <time dateTime={new Date(selected.retrievedAt).toISOString()}>{exactTimestamp(selected.retrievedAt)}</time></div>}
+                </div>
+                {mention.status === "pending" && onOpenOperations && (
+                  <button
+                    type="button"
+                    aria-controls="desk-operations"
+                    title="Open current source, classifier, and usage gates"
+                    onClick={onOpenOperations}
+                    className="mt-2 min-h-8 rounded border border-white/10 bg-white/[0.035] px-2.5 py-1 text-left text-[10.5px] text-white/70 hover:bg-white/[0.07] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300"
+                  >
+                    See why judgment is pending
+                  </button>
+                )}
+              </section>
+              {mention.snippet && mention.snippet !== mention.title && <details className="sec-document-excerpt mt-2 rounded-md border border-white/[0.08] px-3 py-2 text-[10.5px] text-white/60">
+                <summary className="cursor-pointer select-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Read the selected SEC excerpt · {mention.snippet.length.toLocaleString()} characters</summary>
+                <p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{mention.snippet}</p>
+              </details>}
+              <details className="mt-2 rounded-md border border-white/[0.08] px-3 py-2 text-[10.5px] text-white/60">
+                <summary className="cursor-pointer select-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">More filing evidence</summary>
+                <div className="mt-2 space-y-2">
+                  {context.item202Link?.kind === "linked" && <div>Item 2.02 attachment statement: <span className="text-white/75">{context.item202Link.supportingText}</span></div>}
+                  {selected && <div><a className="underline" href={selected.url} target="_blank" rel="noreferrer">Text source: {selected.role === "earnings_exhibit_99_1" ? "Exhibit 99.1" : "Primary 8-K"}</a> · retrieved {selected.retrievedAt == null ? "unknown" : <time dateTime={new Date(selected.retrievedAt).toISOString()}>{exactTimestamp(selected.retrievedAt)}</time>}<div className="mt-1 break-words">body SHA-256 {selected.bodySha256 ?? "unavailable"}</div><p className="mt-1 whitespace-pre-wrap break-words">{selected.excerpt || mention.snippet || "No selected excerpt retained."}</p></div>}
+                  {parent && <div><a className="underline" href={parent.url} target="_blank" rel="noreferrer">Parent 8-K filing</a> · retrieved {parent.retrievedAt == null ? "unknown" : <time dateTime={new Date(parent.retrievedAt).toISOString()}>{exactTimestamp(parent.retrievedAt)}</time>}<p className="mt-1 whitespace-pre-wrap break-words">{parent.excerpt || "No usable parent excerpt retained."}</p><div className="break-words">body SHA-256 {parent.bodySha256 ?? "unavailable"}</div></div>}
+                  <div>{selectionSummary}</div>
+                </div>
+              </details>
+            </>;
           })()}
+          {!mention.secDocumentContext && mention.snippet && mention.snippet !== mention.title && (
+            <p className="mt-2 text-[12px] leading-relaxed text-white/55">{mention.snippet}</p>
+          )}
 
           {s ? (
             <>

@@ -64,6 +64,35 @@ describe("evidence breadth summary", () => {
     expect(markup).toContain("Positive 1 of 1");
   });
 
+  it("distinguishes recent retrieval from source-time windows and points to unscored history", () => {
+    const markup = renderToStaticMarkup(createElement(EvidenceBreadth, {
+      mentions: [], hours: 168, loaded: true, error: false, hasMore: false, now: 1_000,
+      refreshWarning: false, recentlyRetrievedCount: 1,
+      onRetry: () => undefined, onRetryRefresh: () => undefined,
+      onShowRecords: () => undefined, onShowUnscoredHistory: () => undefined,
+      onOpenMention: () => undefined,
+    }));
+
+    expect(markup).toContain("No saved source records by source time in this 7D window.");
+    expect(markup).toContain("1 source record was retrieved in the last 24 hours; source time may fall outside this window.");
+    expect(markup).toContain("Open unscored history");
+    expect(markup).toContain("Open full mention feed");
+  });
+
+  it("keeps the normal feed action when current source-time records exist", () => {
+    const markup = renderToStaticMarkup(createElement(EvidenceBreadth, {
+      mentions: [mention("current", "Acme reports a result", "neutral", "wire.example")],
+      hours: 168, loaded: true, error: false, hasMore: false, now: 1_000,
+      refreshWarning: false, recentlyRetrievedCount: 1,
+      onRetry: () => undefined, onRetryRefresh: () => undefined,
+      onShowRecords: () => undefined, onShowUnscoredHistory: () => undefined,
+      onOpenMention: () => undefined,
+    }));
+
+    expect(markup).toContain("Open full mention feed");
+    expect(markup).not.toContain("Open unscored history");
+  });
+
   it("shows repeated titles as a share of the scored first-page sample", () => {
     const markup = renderToStaticMarkup(createElement(EvidenceBreadth, {
       mentions: [

@@ -69,7 +69,7 @@ export function Header({
           </span>
         )}
         <span className="tabnum hidden sm:inline">
-          {totalMentions} source records/24h
+          {totalMentions} source {totalMentions === 1 ? "record" : "records"} retrieved in 24h
         </span>
         <span
           className="flex whitespace-nowrap items-center gap-1 font-medium tracking-[0.04em] sm:gap-1.5 sm:tracking-wider"

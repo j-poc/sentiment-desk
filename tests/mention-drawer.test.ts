@@ -35,15 +35,68 @@ const failedMention = {
   error: "Provider unavailable",
 } satisfies Mention;
 
-function renderDrawer(retryAvailability: RetryAvailability, mention: Mention = failedMention): string {
+function renderDrawer(
+  retryAvailability: RetryAvailability,
+  mention: Mention = failedMention,
+  onOpenOperations?: () => void,
+): string {
   return renderToStaticMarkup(createElement(MentionDrawer, {
     mention,
     onClose: () => undefined,
     retryAvailability,
+    onOpenOperations,
   }));
 }
 
 describe("MentionDrawer retry availability", () => {
+  it("puts SEC status and lineage before a collapsed saved excerpt", () => {
+    const excerpt = "Quarterly results excerpt with revenue and margin details.";
+    const context = {
+      version: "sec-document-context/1" as const, cik: "2488", accessionNo: "0000002488-26-000121",
+      primaryUrl: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/amd-20260804.htm",
+      acceptedAt: 1_790_000_000_000, filedAt: 1_789_900_000_000,
+      classificationInputStatus: "ready" as const, selectionReason: "unique_exhibit_selected" as const,
+      item202Link: { kind: "linked" as const, itemCode: "2.02" as const, exhibitNumber: "99.1" as const, supportingText: "The results release is attached as Exhibit 99.1." },
+      selectedRole: "earnings_exhibit_99_1" as const,
+      selectedUrl: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/q22026991.htm",
+      documents: [
+        { role: "8k_primary" as const, url: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/amd-20260804.htm", startedAt: 1, completedAt: 2, retrievedAt: 2, httpStatus: 200, outcome: "success" as const, bodyBytes: 300, bodySha256: "a".repeat(64), excerpt: "The parent filing excerpt.", errorCode: null },
+        { role: "earnings_exhibit_99_1" as const, url: "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/q22026991.htm", startedAt: 3, completedAt: 4, retrievedAt: 4, httpStatus: 200, outcome: "success" as const, bodyBytes: 400, bodySha256: "b".repeat(64), excerpt, errorCode: null },
+      ],
+    };
+    const mention = {
+      ...failedMention,
+      status: "pending" as const,
+      snippet: excerpt,
+      source: { ...failedMention.source, kind: "sec" as const, url: context.selectedUrl, collector: "sec_edgar" as const, deliveryId: "receipt-123" },
+      collector: "sec_edgar" as const,
+      filedAt: context.filedAt,
+      secDocumentContext: context,
+    } satisfies Mention;
+    const html = renderDrawer(retryAvailabilityFor(null), mention, () => undefined);
+    const lineageIndex = html.indexOf("Open selected Exhibit 99.1");
+    const excerptDisclosureIndex = html.indexOf("Read the selected SEC excerpt");
+    const excerptIndex = html.indexOf(excerpt);
+
+    expect(html).toContain("Judgment pending");
+    expect(html).toContain("Judgment status");
+    expect(html).toContain("source input ready");
+    expect(html).toContain("See why judgment is pending");
+    expect(html).toContain('aria-controls="desk-operations"');
+    expect(html).toContain('dateTime="1970-01-01T00:00:00.002Z"');
+    expect(html).toContain('dateTime="1970-01-01T00:00:00.004Z"');
+    expect(html).toContain("Parent 8-K filing");
+    expect(lineageIndex).toBeGreaterThan(-1);
+    expect(excerptDisclosureIndex).toBeGreaterThan(lineageIndex);
+    expect(excerptIndex).toBeGreaterThan(html.indexOf("</summary>", excerptDisclosureIndex));
+    expect(html).not.toMatch(/<details[^>]*open/);
+  });
+
+  it("keeps non-SEC source snippets directly visible", () => {
+    const html = renderDrawer(retryAvailabilityFor(null));
+    expect(html).toContain("A real saved item with a failed judgment.");
+  });
+
   it("discloses selected Exhibit 99.1 and parent 8-K provenance from the saved filing operation", () => {
     const context = {
       version: "sec-document-context/1" as const, cik: "2488", accessionNo: "0000002488-26-000121",
