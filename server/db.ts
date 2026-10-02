@@ -1,11 +1,15 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { z } from "zod";
 import type {
   CollectorId,
   CategoricalClassification,
+  CategoricalBucketCursor,
+  CategoricalBucketEvidencePage,
+  CategoricalTrendCounts,
+  CategoricalTrendLineage,
   Company,
   EvidenceChannel,
   MentionDTO,
@@ -25,6 +29,66 @@ import { researchPublisherDomain } from "./publisher-domain.js";
 // but only observations with an identified collector can enter live research
 // or current operational usage totals.
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
+const CATEGORICAL_BUCKET_MS = 15 * 60_000;
+const REAL_CATEGORICAL_FILTER = `m.collector NOT IN ('demo_simulation', 'legacy_unknown')
+  AND COALESCE(m.engine, '') <> 'demo-sim'
+  AND c.provider = 'openai_luna' AND c.model_requested = 'gpt-6-luna' AND c.model_returned = 'gpt-6-luna'
+  AND c.prompt_version <> '' AND length(c.prompt_sha256) = 64 AND c.prompt_sha256 NOT GLOB '*[^0-9a-f]*'
+  AND c.schema_version <> '' AND length(c.schema_sha256) = 64 AND c.schema_sha256 NOT GLOB '*[^0-9a-f]*'
+  AND c.response_id <> '' AND length(c.response_sha256) = 64 AND c.response_sha256 NOT GLOB '*[^0-9a-f]*'
+  AND typeof(c.input_tokens) = 'integer' AND c.input_tokens >= 0
+  AND typeof(c.output_tokens) = 'integer' AND c.output_tokens >= 0
+  AND typeof(c.total_tokens) = 'integer' AND c.total_tokens >= 0
+  AND typeof(c.latency_ms) = 'integer' AND c.latency_ms >= 0
+  AND c.disposition IN ('classified', 'review_required', 'excluded')
+  AND (c.sentiment IS NULL OR c.sentiment IN ('positive', 'neutral', 'negative'))
+  AND c.classified_at >= 0 AND c.classified_at <= ?
+  AND m.delivery_id IS NOT NULL AND m.source_url GLOB 'https://*'
+  AND m.retrieved_at <= c.classified_at AND o.adapter_version = d.adapter_version
+  AND d.id = m.delivery_id AND d.collector = m.collector AND d.company_id = m.company_id
+  AND d.result IN ('success', 'partial')`;
+const CATEGORICAL_COUNTS_SQL = `
+  COUNT(*) AS total,
+  SUM(CASE WHEN c.disposition='classified' AND c.sentiment='positive' THEN 1 ELSE 0 END) AS positive,
+  SUM(CASE WHEN c.disposition='classified' AND c.sentiment='neutral' THEN 1 ELSE 0 END) AS neutral,
+  SUM(CASE WHEN c.disposition='classified' AND c.sentiment='negative' THEN 1 ELSE 0 END) AS negative,
+  SUM(CASE WHEN c.disposition='review_required' OR (c.disposition='classified' AND c.sentiment IS NULL) THEN 1 ELSE 0 END) AS review_required,
+  SUM(CASE WHEN c.disposition='excluded' THEN 1 ELSE 0 END) AS excluded`;
+
+interface CategoricalSnapshotToken {
+  companyId: string;
+  fromMs: number;
+  throughMs: number;
+  windowHours: number;
+  bucketMs: number;
+  maxRowId: number;
+}
+
+interface CategoricalAggregateRow extends Record<string, number | null> {
+  bucket_start_ms: number;
+  total: number | null;
+  positive: number | null;
+  neutral: number | null;
+  negative: number | null;
+  review_required: number | null;
+  excluded: number | null;
+}
+
+function categoricalCounts(row?: Partial<CategoricalAggregateRow> | null): CategoricalTrendCounts {
+  const counts: CategoricalTrendCounts = {
+    positive: Number(row?.positive ?? 0),
+    neutral: Number(row?.neutral ?? 0),
+    negative: Number(row?.negative ?? 0),
+    reviewRequired: Number(row?.review_required ?? 0),
+    excluded: Number(row?.excluded ?? 0),
+    total: Number(row?.total ?? 0),
+  };
+  if (Object.values(counts).some((value) => !Number.isSafeInteger(value) || value < 0)
+    || counts.positive + counts.neutral + counts.negative + counts.reviewRequired + counts.excluded !== counts.total) {
+    throw new Error("Stored Luna category counts are inconsistent");
+  }
+  return counts;
+}
 
 const SEC_OUTCOMES = new Set(["success", "empty", "failed", "invalid", "rate_limited"]);
 const SEC_REASONS = new Set(["primary_selected", "unique_exhibit_selected", "missing_exhibit", "ambiguous_exhibit", "invalid_exhibit_link", "primary_unavailable", "exhibit_unavailable", "unverified_event_link"]);
@@ -546,9 +610,18 @@ export interface DeliverySourceSchedule {
   healthCompanyOnly?: boolean;
 }
 
+export class CategoricalSnapshotUnavailableError extends Error {
+  constructor() { super("categorical_snapshot_unavailable"); }
+}
+
+export class InvalidCategoricalBucketError extends Error {
+  constructor(message = "invalid_categorical_bucket") { super(message); }
+}
+
 export class Desk {
   private readonly db: DatabaseSync;
   private readonly runtimeId: string;
+  private readonly categoricalSnapshotSecret = randomBytes(32);
   private closed = false;
 
   constructor(dbPath: string) {
@@ -1954,6 +2027,184 @@ export class Desk {
       eventType: r.event_type,
       takeaway: r.takeaway,
     }));
+  }
+
+  /** Saved GPT-6 Luna observations, bucketed by classification availability. */
+  categoricalTrendSnapshot(companyId: string, windowHours: number, now = Date.now()): {
+    companyId: string;
+    windowHours: number;
+    fromMs: number;
+    throughMs: number;
+    bucketMs: number;
+    snapshotGeneration: string;
+    snapshotKey: string;
+    counts: CategoricalTrendCounts;
+    aggregates: Array<{ bucketStartMs: number; counts: CategoricalTrendCounts }>;
+    eligibleObservationCount: number;
+    candidateClassificationCount: number;
+    withheldInvalidCount: number;
+    latestClassifiedAt: number | null;
+    lineages: CategoricalTrendLineage[];
+  } {
+    if (!Number.isSafeInteger(windowHours) || windowHours < 1 || windowHours > 168 || !Number.isSafeInteger(now) || now < 0) {
+      throw new Error("invalid_categorical_window");
+    }
+    const fromMs = now - windowHours * 60 * 60_000;
+    const throughMs = now;
+    const maxRow = this.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM categorical_classifications").get() as { max_row_id: number };
+    const maxRowId = Number(maxRow.max_row_id);
+    if (!Number.isSafeInteger(maxRowId) || maxRowId < 0) throw new Error("categorical_row_id_out_of_range");
+    const snapshot = { companyId, fromMs, throughMs, windowHours, bucketMs: CATEGORICAL_BUCKET_MS, maxRowId };
+    const snapshotKey = this.encodeCategoricalSnapshot(snapshot);
+    const baseJoin = `FROM mentions m
+      JOIN source_observations o ON o.id=m.id
+      JOIN categorical_classifications c ON c.observation_id=m.id
+      JOIN source_deliveries d ON d.id=m.delivery_id`;
+    const scope = `m.company_id=? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
+      AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
+    const validScope = `m.company_id=? AND ${REAL_CATEGORICAL_FILTER}
+      AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
+    const candidateRow = this.db.prepare(`SELECT COUNT(*) AS count FROM mentions m
+      JOIN source_observations o ON o.id=m.id
+      JOIN categorical_classifications c ON c.observation_id=m.id
+      WHERE ${scope} AND c.provider='openai_luna' AND c.model_requested='gpt-6-luna'`).get(
+      companyId, fromMs, throughMs, maxRowId,
+    ) as { count: number };
+    const aggregateRows = this.db.prepare(`SELECT (c.classified_at / ${CATEGORICAL_BUCKET_MS}) * ${CATEGORICAL_BUCKET_MS} AS bucket_start_ms,
+      ${CATEGORICAL_COUNTS_SQL}
+      ${baseJoin} WHERE ${validScope}
+      GROUP BY bucket_start_ms ORDER BY bucket_start_ms`).all(
+      companyId, throughMs, fromMs, throughMs, maxRowId,
+    ) as unknown as CategoricalAggregateRow[];
+    const aggregates = aggregateRows.map((row) => ({ bucketStartMs: Number(row.bucket_start_ms), counts: categoricalCounts(row) }));
+    const counts = aggregates.reduce<CategoricalTrendCounts>((total, row) => ({
+      positive: total.positive + row.counts.positive,
+      neutral: total.neutral + row.counts.neutral,
+      negative: total.negative + row.counts.negative,
+      reviewRequired: total.reviewRequired + row.counts.reviewRequired,
+      excluded: total.excluded + row.counts.excluded,
+      total: total.total + row.counts.total,
+    }), { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 });
+    const latestRow = this.db.prepare(`SELECT MAX(c.classified_at) AS latest ${baseJoin} WHERE ${validScope}`)
+      .get(companyId, throughMs, fromMs, throughMs, maxRowId) as { latest: number | null };
+    const lineageRows = this.db.prepare(`SELECT c.prompt_version, c.prompt_sha256, c.schema_version, c.schema_sha256, COUNT(*) AS count
+      ${baseJoin} WHERE ${validScope}
+      GROUP BY c.prompt_version, c.prompt_sha256, c.schema_version, c.schema_sha256
+      ORDER BY count DESC, c.prompt_version, c.schema_version`).all(
+      companyId, throughMs, fromMs, throughMs, maxRowId,
+    ) as Array<{ prompt_version: string; prompt_sha256: string; schema_version: string; schema_sha256: string; count: number }>;
+    const candidateClassificationCount = Number(candidateRow.count);
+    const eligibleObservationCount = counts.total;
+    return {
+      companyId, windowHours, fromMs, throughMs, bucketMs: CATEGORICAL_BUCKET_MS,
+      snapshotGeneration: this.runtimeId, snapshotKey, counts, aggregates,
+      eligibleObservationCount, candidateClassificationCount,
+      withheldInvalidCount: Math.max(0, candidateClassificationCount - eligibleObservationCount),
+      latestClassifiedAt: latestRow.latest == null ? null : Number(latestRow.latest),
+      lineages: lineageRows.map((row) => ({
+        promptVersion: row.prompt_version, promptSha256: row.prompt_sha256,
+        schemaVersion: row.schema_version, schemaSha256: row.schema_sha256, count: Number(row.count),
+      })),
+    };
+  }
+
+  categoricalBucketEvidence(input: {
+    companyId: string;
+    snapshotKey: string;
+    bucketStartMs: number;
+    bucketDurationMs?: number;
+    limit: number;
+    cursor: CategoricalBucketCursor | null;
+  }): CategoricalBucketEvidencePage {
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100
+      || !Number.isSafeInteger(input.bucketStartMs) || input.bucketStartMs < 0) {
+      throw new InvalidCategoricalBucketError();
+    }
+    const snapshot = this.decodeCategoricalSnapshot(input.snapshotKey, input.companyId);
+    const bucketDurationMs = input.bucketDurationMs ?? snapshot.bucketMs;
+    if (![snapshot.bucketMs, snapshot.bucketMs * 2, snapshot.bucketMs * 4, snapshot.bucketMs * 12, snapshot.bucketMs * 24].includes(bucketDurationMs)
+      || input.bucketStartMs % bucketDurationMs !== 0) throw new InvalidCategoricalBucketError();
+    const fromMs = Math.max(snapshot.fromMs, input.bucketStartMs);
+    const throughMs = Math.min(snapshot.throughMs, input.bucketStartMs + bucketDurationMs);
+    if (fromMs >= throughMs) throw new InvalidCategoricalBucketError();
+    const baseJoin = `FROM mentions m
+      JOIN source_observations o ON o.id=m.id
+      JOIN categorical_classifications c ON c.observation_id=m.id
+      JOIN source_deliveries d ON d.id=m.delivery_id`;
+    const scope = `m.company_id=? AND ${REAL_CATEGORICAL_FILTER}
+      AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
+    if (input.cursor) {
+      if (!Number.isSafeInteger(input.cursor.classifiedAt) || input.cursor.classifiedAt < fromMs || input.cursor.classifiedAt >= throughMs
+        || typeof input.cursor.id !== "string" || input.cursor.id.length < 1 || input.cursor.id.length > 200) {
+        throw new InvalidCategoricalBucketError("invalid_cursor");
+      }
+      const cursorExists = this.db.prepare(`SELECT 1 AS ok ${baseJoin}
+        WHERE ${scope} AND m.id=? AND c.classified_at=? LIMIT 1`).get(
+        input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId,
+        input.cursor.id, input.cursor.classifiedAt,
+      );
+      if (!cursorExists) throw new InvalidCategoricalBucketError("invalid_cursor");
+    }
+    const countRow = this.db.prepare(`SELECT ${CATEGORICAL_COUNTS_SQL} ${baseJoin}
+      WHERE ${scope}`).get(input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId) as CategoricalAggregateRow;
+    const cursorClause = input.cursor
+      ? "AND (c.classified_at < ? OR (c.classified_at = ? AND m.id < ?))"
+      : "";
+    const cursorParams = input.cursor ? [input.cursor.classifiedAt, input.cursor.classifiedAt, input.cursor.id] : [];
+    const rows = this.db.prepare(`SELECT m.* ${baseJoin}
+      WHERE ${scope} ${cursorClause}
+      ORDER BY c.classified_at DESC, m.id DESC LIMIT ?`).all(
+      input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId,
+      ...cursorParams, input.limit + 1,
+    ) as unknown as MentionRow[];
+    const hasMore = rows.length > input.limit;
+    const pageRows = hasMore ? rows.slice(0, input.limit) : rows;
+    const items = pageRows.map(rowToDTO);
+    if (items.some((item) => item.classification == null || item.status === "corrupt")) {
+      throw new Error("Stored Luna classification failed DTO validation");
+    }
+    const last = items.at(-1);
+    return {
+      companyId: input.companyId,
+      snapshotKey: input.snapshotKey,
+      bucketStartMs: input.bucketStartMs,
+      bucketDurationMs,
+      fromMs,
+      throughMs,
+      counts: categoricalCounts(countRow),
+      items,
+      nextCursor: hasMore && last?.classification ? { classifiedAt: last.classification.classifiedAt, id: last.id } : null,
+    };
+  }
+
+  private encodeCategoricalSnapshot(snapshot: CategoricalSnapshotToken): string {
+    const payload = Buffer.from(JSON.stringify(snapshot)).toString("base64url");
+    const signature = createHmac("sha256", this.categoricalSnapshotSecret).update(`v1.${payload}`).digest("base64url");
+    return `v1.${payload}.${signature}`;
+  }
+
+  private decodeCategoricalSnapshot(snapshotKey: string, companyId: string): CategoricalSnapshotToken {
+    if (typeof snapshotKey !== "string" || snapshotKey.length > 2048) throw new CategoricalSnapshotUnavailableError();
+    const parts = snapshotKey.split(".");
+    if (parts.length !== 3 || parts[0] !== "v1") throw new CategoricalSnapshotUnavailableError();
+    const expected = createHmac("sha256", this.categoricalSnapshotSecret).update(`v1.${parts[1]}`).digest();
+    let actual: Buffer;
+    try { actual = Buffer.from(parts[2]!, "base64url"); } catch { throw new CategoricalSnapshotUnavailableError(); }
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new CategoricalSnapshotUnavailableError();
+    try {
+      const parsed = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as CategoricalSnapshotToken;
+      const maxRow = this.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM categorical_classifications").get() as { max_row_id: number };
+      if (parsed.companyId !== companyId || !Number.isSafeInteger(parsed.fromMs) || !Number.isSafeInteger(parsed.throughMs)
+        || parsed.fromMs < 0 || parsed.throughMs <= parsed.fromMs || !Number.isSafeInteger(parsed.windowHours)
+        || parsed.windowHours < 1 || parsed.windowHours > 168 || parsed.bucketMs !== CATEGORICAL_BUCKET_MS
+        || !Number.isSafeInteger(parsed.maxRowId) || parsed.maxRowId < 0 || parsed.maxRowId > Number(maxRow.max_row_id)) {
+        throw new CategoricalSnapshotUnavailableError();
+      }
+      return parsed;
+    } catch (error) {
+      if (error instanceof CategoricalSnapshotUnavailableError) throw error;
+      throw new CategoricalSnapshotUnavailableError();
+    }
   }
 
   upsertPricePoint(input: {

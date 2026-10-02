@@ -145,7 +145,7 @@ export function MentionCard({
       )}
       {m.status === "corrupt" && (
         <div className="mt-2 text-[11px] text-amber-300/80" title={m.error ?? ""}>
-          stored Jev score is incomplete; score withheld
+          Stored model result is incomplete; result withheld
         </div>
       )}
 

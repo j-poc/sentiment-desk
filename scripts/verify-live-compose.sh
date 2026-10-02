@@ -82,16 +82,36 @@ run_api_check() {
   mode=$1
   min_db_bytes=${2:-0}
   compose exec -T \
-  -e "SMOKE_MODE=$mode" \
-  -e "SMOKE_DB_MIN_BYTES=$min_db_bytes" \
+    -e "SMOKE_MODE=$mode" \
+    -e "SMOKE_DB_MIN_BYTES=$min_db_bytes" \
     -e "SMOKE_OBSERVATION_ID=${3:-}" \
+    -e "SMOKE_CHART_POINT_AT=${4:-}" \
+    -e "SMOKE_CHART_DELIVERY_ID=${5:-}" \
+    -e "SMOKE_COMPANY_ID=${6:-}" \
+    -e "SMOKE_TICKER=${7:-}" \
     sentiment-desk node --input-type=module - <<'NODE'
 const mode = process.env.SMOKE_MODE;
 const minDbBytes = Number(process.env.SMOKE_DB_MIN_BYTES ?? 0);
 const expectedObservationId = process.env.SMOKE_OBSERVATION_ID ?? "";
+const expectedChartPointAt = Number(process.env.SMOKE_CHART_POINT_AT ?? 0);
+const expectedChartDeliveryId = process.env.SMOKE_CHART_DELIVERY_ID ?? "";
+const expectedCompanyId = process.env.SMOKE_COMPANY_ID ?? "";
+const expectedTicker = process.env.SMOKE_TICKER ?? "";
 const deadline = Date.now() + (mode === "live" ? 600_000 : 120_000);
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const validChartPoint = (point) => point?.collector === "yahoo_chart"
+  && Number.isSafeInteger(point.t) && point.t > 0 && point.t <= Date.now()
+  && Number.isFinite(point.price) && point.price > 0
+  && /^[A-Z]{3}$/.test(point.currency ?? "")
+  && Number.isSafeInteger(point.retrievedAt) && point.retrievedAt > 0 && point.retrievedAt <= Date.now()
+  && typeof point.adapterVersion === "string" && point.adapterVersion.startsWith("yahoo-chart/")
+  && typeof point.deliveryId === "string" && point.deliveryId.length > 0;
 let last = "API is not ready";
+let chartRead = null;
+let chartAttempts = 0;
+let lastChartAttemptAt = 0;
+let recoveryChartChecked = false;
+let recoveryChartPreserved = false;
 
 while (Date.now() < deadline) {
   try {
@@ -131,18 +151,60 @@ while (Date.now() < deadline) {
       const quoteSource = (health.deliveryHealth ?? []).find((source) =>
         source.collector === "yahoo_quote" && source.state === "current" && source.coverageCount >= source.targetCount,
       );
-      if (quoteCount > 0 && quoteSource && sourceDelivery && operationalSource && pending && companies.length > 0 && health.dbSizeBytes > 0) {
-        console.log(`LIVE_SMOKE_RESULT quotes=${quoteCount} companies=${companies.length} dbSizeBytes=${health.dbSizeBytes} pendingId=${pending.id} collector=${pending.collector} timeBasis=${pending.timeBasis}`);
+      const chartSource = (health.deliveryHealth ?? []).find((source) =>
+        source.collector === "yahoo_chart" && source.state === "current" && source.coverageCount >= source.targetCount,
+      );
+      const chartCompany = companies.find((company) => typeof company.id === "string" && typeof company.ticker === "string");
+      if (!chartRead && chartCompany && chartAttempts < 2 && Date.now() - lastChartAttemptAt >= 60_000) {
+        chartAttempts += 1;
+        lastChartAttemptAt = Date.now();
+        try {
+          const query = new URLSearchParams({ ticker: chartCompany.ticker, hours: "72" });
+          const response = await fetch(`http://127.0.0.1:8787/api/companies/${encodeURIComponent(chartCompany.id)}/price?${query}`, { signal: AbortSignal.timeout(20_000) });
+          if (!response.ok) {
+            last = `chart consumer returned HTTP ${response.status}`;
+          } else {
+            const result = await response.json();
+            const point = (result.points ?? []).find(validChartPoint);
+            if (point) chartRead = {
+              companyId: chartCompany.id,
+              ticker: chartCompany.ticker,
+              pointAt: Math.floor(point.t / 1_000) * 1_000,
+              deliveryId: point.deliveryId,
+              pointCount: result.points.length,
+            };
+            else last = "chart consumer returned no receipt-backed Yahoo chart point";
+          }
+        } catch (error) {
+          last = error instanceof Error ? error.message : String(error);
+        }
+      }
+      if (quoteCount > 0 && quoteSource && chartSource && chartRead && sourceDelivery && operationalSource && pending && companies.length > 0 && health.dbSizeBytes > 0) {
+        console.log(`LIVE_SMOKE_RESULT quotes=${quoteCount} companies=${companies.length} dbSizeBytes=${health.dbSizeBytes} pendingId=${pending.id} collector=${pending.collector} timeBasis=${pending.timeBasis} chartPointAt=${chartRead.pointAt} chartDeliveryId=${chartRead.deliveryId} chartPoints=${chartRead.pointCount} companyId=${chartRead.companyId} ticker=${chartRead.ticker}`);
         break;
       }
-      last = `waiting for live quotes, a current public collector sweep, and a real keyless pending news/filing observation (quotes=${quoteCount}, deliveries=${health.deliveries?.length ?? 0}, tape=${tape?.length ?? 0})`;
+      last = `waiting for a current Yahoo chart, quote, public collector sweep, and real keyless pending news/filing observation (chart=${Boolean(chartSource)}, chartRead=${Boolean(chartRead)}, quotes=${quoteCount}, deliveries=${health.deliveries?.length ?? 0}, tape=${tape?.length ?? 0})`;
     } else {
       const persisted = expectedObservationId && (tape ?? []).some((mention) => mention.id === expectedObservationId && mention.status === "pending");
-      if (persisted && health.dbSizeBytes >= minDbBytes && health.dbSizeBytes > 0 && companies.length > 0) {
-        console.log(`RECOVERY_SMOKE_RESULT companies=${companies.length} dbSizeBytes=${health.dbSizeBytes} pendingObservationPreserved=true`);
+      const chartSource = (health.deliveryHealth ?? []).find((source) =>
+        source.collector === "yahoo_chart" && source.state === "current" && source.coverageCount >= source.targetCount,
+      );
+      if (!recoveryChartChecked && persisted && chartSource && expectedCompanyId && expectedTicker && expectedChartPointAt > 0 && expectedChartDeliveryId) {
+        recoveryChartChecked = true;
+        const query = new URLSearchParams({ ticker: expectedTicker, hours: "72" });
+        const response = await fetch(`http://127.0.0.1:8787/api/companies/${encodeURIComponent(expectedCompanyId)}/price?${query}`, { signal: AbortSignal.timeout(20_000) });
+        if (response.ok) {
+          const result = await response.json();
+          recoveryChartPreserved = result.delivery === "local_store" && (result.points ?? []).some((point) =>
+            validChartPoint(point) && Math.floor(point.t / 1_000) * 1_000 === expectedChartPointAt && point.deliveryId === expectedChartDeliveryId,
+          );
+        }
+      }
+      if (persisted && recoveryChartPreserved && health.dbSizeBytes >= minDbBytes && health.dbSizeBytes > 0 && companies.length > 0) {
+        console.log(`RECOVERY_SMOKE_RESULT companies=${companies.length} dbSizeBytes=${health.dbSizeBytes} pendingObservationPreserved=true yahooChartPointAndReceiptPreserved=true`);
         break;
       }
-      last = `persisted observation not ready (size=${health.dbSizeBytes}, expectedAtLeast=${minDbBytes}, observationPresent=${Boolean(persisted)})`;
+      last = `persisted observation or Yahoo chart point and source receipt not ready (size=${health.dbSizeBytes}, expectedAtLeast=${minDbBytes}, observationPresent=${Boolean(persisted)}, chartSource=${Boolean(chartSource)}, chartPreserved=${recoveryChartPreserved})`;
     }
   } catch (error) {
     last = error instanceof Error ? error.message : String(error);
@@ -161,14 +223,18 @@ printf '%s\n' "$live_result"
 run_host_api_check
 db_size=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*dbSizeBytes=\([0-9][0-9]*\).*$/\1/p')
 observation_id=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*pendingId=\([^ ]*\).*$/\1/p')
-if [ -z "$db_size" ] || [ -z "$observation_id" ]; then
-  echo "Live smoke did not return a persisted pending observation and database size." >&2
+chart_point_at=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*chartPointAt=\([0-9][0-9]*\).*$/\1/p')
+chart_delivery_id=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*chartDeliveryId=\([^ ]*\).*$/\1/p')
+company_id=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*companyId=\([^ ]*\).*$/\1/p')
+ticker=$(printf '%s\n' "$live_result" | sed -n 's/^LIVE_SMOKE_RESULT .*ticker=\([^ ]*\).*$/\1/p')
+if [ -z "$db_size" ] || [ -z "$observation_id" ] || [ -z "$chart_point_at" ] || [ -z "$chart_delivery_id" ] || [ -z "$company_id" ] || [ -z "$ticker" ]; then
+  echo "Live smoke did not return persisted pending observation and receipt-backed Yahoo chart evidence." >&2
   exit 1
 fi
 
 echo "Recreating the container while retaining its isolated database volume..."
 compose down
 compose up -d
-run_api_check recovery "$db_size" "$observation_id"
+run_api_check recovery "$db_size" "$observation_id" "$chart_point_at" "$chart_delivery_id" "$company_id" "$ticker"
 run_host_api_check
 echo "Live Compose smoke and persistent-volume recovery passed."

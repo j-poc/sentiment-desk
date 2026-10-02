@@ -63,6 +63,66 @@ export interface CategoricalClassification {
   latencyMs: number;
   classifiedAt: number;
 }
+
+export interface CategoricalTrendCounts {
+  positive: number;
+  neutral: number;
+  negative: number;
+  reviewRequired: number;
+  excluded: number;
+  total: number;
+}
+
+export interface CategoricalTrendPoint {
+  bucketStartMs: number;
+  fromMs: number;
+  throughMs: number;
+  counts: CategoricalTrendCounts;
+}
+
+export interface CategoricalTrendLineage {
+  promptVersion: string;
+  promptSha256: string;
+  schemaVersion: string;
+  schemaSha256: string;
+  count: number;
+}
+
+export interface CategoricalTrendResult {
+  companyId: string;
+  windowHours: number;
+  fromMs: number;
+  throughMs: number;
+  bucketMs: number;
+  timeBasis: "classification_available_at";
+  countBasis: "immutable_source_observation";
+  snapshotGeneration: string;
+  snapshotKey: string;
+  points: CategoricalTrendPoint[];
+  counts: CategoricalTrendCounts;
+  eligibleObservationCount: number;
+  candidateClassificationCount: number;
+  withheldInvalidCount: number;
+  latestClassifiedAt: number | null;
+  lineages: CategoricalTrendLineage[];
+}
+
+export interface CategoricalBucketCursor {
+  classifiedAt: number;
+  id: string;
+}
+
+export interface CategoricalBucketEvidencePage {
+  companyId: string;
+  snapshotKey: string;
+  bucketStartMs: number;
+  bucketDurationMs: number;
+  fromMs: number;
+  throughMs: number;
+  counts: CategoricalTrendCounts;
+  items: Mention[];
+  nextCursor: CategoricalBucketCursor | null;
+}
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
 export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
 export interface SecDocumentAttempt { role: "8k_primary" | "earnings_exhibit_99_1"; url: string; startedAt: number; completedAt: number; retrievedAt: number | null; httpStatus: number | null; outcome: "success" | "empty" | "failed" | "invalid" | "rate_limited"; bodyBytes: number | null; bodySha256: string | null; excerpt: string; errorCode: string | null; }
@@ -506,6 +566,88 @@ export async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> 
   const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   return (await res.json()) as T;
+}
+
+const categoricalCountsSchema = z.object({
+  positive: z.number().int().nonnegative(), neutral: z.number().int().nonnegative(),
+  negative: z.number().int().nonnegative(), reviewRequired: z.number().int().nonnegative(), excluded: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+}).strict().superRefine((counts, context) => {
+  const sum = counts.positive + counts.neutral + counts.negative + counts.reviewRequired + counts.excluded;
+  if (sum !== counts.total) context.addIssue({ code: "custom", message: "Categorical counts do not sum to total" });
+});
+
+const categoricalTrendSchema = z.object({
+  companyId: z.string().min(1), windowHours: z.number().int().min(1).max(168),
+  fromMs: z.number().int().nonnegative(), throughMs: z.number().int().positive(), bucketMs: z.literal(900000),
+  timeBasis: z.literal("classification_available_at"), countBasis: z.literal("immutable_source_observation"),
+  snapshotGeneration: z.string().uuid(), snapshotKey: z.string().min(1).max(2048),
+  points: z.array(z.object({ bucketStartMs: z.number().int().nonnegative(), fromMs: z.number().int().nonnegative(), throughMs: z.number().int().positive(), counts: categoricalCountsSchema }).strict()),
+  counts: categoricalCountsSchema,
+  eligibleObservationCount: z.number().int().nonnegative(), candidateClassificationCount: z.number().int().nonnegative(),
+  withheldInvalidCount: z.number().int().nonnegative(), latestClassifiedAt: z.number().int().nonnegative().nullable(),
+  lineages: z.array(z.object({ promptVersion: z.string().min(1), promptSha256: z.string().regex(/^[a-f0-9]{64}$/), schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/), count: z.number().int().positive() }).strict()),
+}).strict().superRefine((result, context) => {
+  if (result.counts.total !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Trend totals do not match eligible observations" });
+  if (result.counts.positive + result.counts.neutral + result.counts.negative + result.counts.reviewRequired + result.counts.excluded !== result.counts.total) {
+    context.addIssue({ code: "custom", message: "Trend categories do not reconcile to the total" });
+  }
+  if (result.candidateClassificationCount - result.withheldInvalidCount !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Candidate and withheld counts do not reconcile" });
+  if (result.lineages.reduce((sum, lineage) => sum + lineage.count, 0) !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Lineage counts do not reconcile" });
+  if (result.points.reduce((sum, point) => sum + point.counts.total, 0) !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Bucket counts do not reconcile" });
+  const expectedPointCount = Math.floor((result.throughMs - 1) / result.bucketMs)
+    - Math.floor(result.fromMs / result.bucketMs) + 1;
+  if (result.points.length !== expectedPointCount || result.points.some((point, index) => {
+    const expectedStart = Math.floor(result.fromMs / result.bucketMs) * result.bucketMs + index * result.bucketMs;
+    return point.bucketStartMs !== expectedStart
+      || point.fromMs !== Math.max(result.fromMs, expectedStart)
+      || point.throughMs !== Math.min(result.throughMs, expectedStart + result.bucketMs);
+  })) context.addIssue({ code: "custom", message: "Trend intervals do not cover the complete window" });
+  if (result.points.some((point) => point.fromMs >= point.throughMs || point.fromMs < result.fromMs || point.throughMs > result.throughMs
+    || point.bucketStartMs % result.bucketMs !== 0
+    || point.counts.positive + point.counts.neutral + point.counts.negative + point.counts.reviewRequired + point.counts.excluded !== point.counts.total)) {
+    context.addIssue({ code: "custom", message: "Trend bucket bounds are invalid" });
+  }
+});
+
+const categoricalMentionSchema = z.object({
+  id: z.string().min(1), companyId: z.string().min(1), title: z.string(),
+  source: z.object({ url: z.string().url(), collector: z.string().min(1), deliveryId: z.string().min(1) }).passthrough(),
+  classification: z.object({
+    provider: z.literal("openai_luna"), modelRequested: z.literal("gpt-6-luna"), modelReturned: z.literal("gpt-6-luna"),
+    promptVersion: z.string().min(1), promptSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    disposition: z.enum(["classified", "review_required", "excluded"]),
+    sentiment: z.enum(["positive", "neutral", "negative"]).nullable(), classifiedAt: z.number().int().nonnegative(),
+  }).passthrough(),
+}).passthrough();
+
+const categoricalBucketSchema = z.object({
+  companyId: z.string().min(1), snapshotKey: z.string().min(1).max(2048),
+  bucketStartMs: z.number().int().nonnegative(), bucketDurationMs: z.union([z.literal(900000), z.literal(1800000), z.literal(3600000), z.literal(10800000), z.literal(21600000)]),
+  fromMs: z.number().int().nonnegative(), throughMs: z.number().int().positive(),
+  counts: categoricalCountsSchema, items: z.array(categoricalMentionSchema),
+  nextCursor: z.object({ classifiedAt: z.number().int().nonnegative(), id: z.string().min(1).max(200) }).strict().nullable(),
+}).strict();
+
+export async function getCategoricalTrend(companyId: string, hours: number): Promise<CategoricalTrendResult> {
+  const result = await withReadDeadline((signal) => getJSON<unknown>(
+    `/api/companies/${encodeURIComponent(companyId)}/categorical-series?hours=${encodeURIComponent(String(hours))}`, signal,
+  ));
+  return categoricalTrendSchema.parse(result) as CategoricalTrendResult;
+}
+
+export async function getCategoricalBucket(input: {
+  companyId: string; snapshotKey: string; bucketStartMs: number; bucketDurationMs?: number; limit: number; cursor?: CategoricalBucketCursor | null;
+}): Promise<CategoricalBucketEvidencePage> {
+  const bucketDurationMs = input.bucketDurationMs ?? 900_000;
+  if (![900_000, 1_800_000, 3_600_000, 10_800_000, 21_600_000].includes(bucketDurationMs)) throw new Error("Unsupported Luna bucket duration");
+  const params = new URLSearchParams({ snapshot: input.snapshotKey, at: String(input.bucketStartMs), span: String(bucketDurationMs), limit: String(input.limit) });
+  if (input.cursor) params.set("cursor", JSON.stringify(input.cursor));
+  const result = await withReadDeadline((signal) => getJSON<unknown>(
+    `/api/companies/${encodeURIComponent(input.companyId)}/categorical-bucket?${params}`, signal,
+  ));
+  return categoricalBucketSchema.parse(result) as unknown as CategoricalBucketEvidencePage;
 }
 
 export async function readBackendSnapshot(): Promise<{

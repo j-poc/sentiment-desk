@@ -5,5 +5,5 @@ minVersion = "v8.25.0"
 useDefault = true
 
 [allowlist]
-description = "Local mutable runtime databases are not source and are never checkpointed."
-paths = ['''(^|/)data/''']
+description = "Local mutable databases and ignored private run artifacts are not source and are never checkpointed."
+paths = ['''(^|/)data/''', '''(^|/)\.engineering-evidence/''']

@@ -33,7 +33,9 @@ import { AlertDeliveryStatus, HealthPanel } from "./components/HealthPanel.js";
 import { SourceCoverageDisclosure } from "./components/SourceCoverageDisclosure.js";
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
-import { FirstRunEvidenceBrief, FirstRunNoLocalData } from "./components/FirstRunEvidenceBrief.js";
+import { FirstRunEvidenceBrief } from "./components/FirstRunEvidenceBrief.js";
+import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
+import { initialChartViewForEvidence } from "./lib/categorical-chart.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { filterMentionFeed, matchesMentionFeedFilter } from "./lib/mention-filters.js";
@@ -150,6 +152,14 @@ export default function App() {
   const [outcomeRefreshRevision, setOutcomeRefreshRevision] = useState(0);
   const [windowHours, setWindowHours] = useState(168);
   const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("sentiment");
+  const [chartView, setChartView] = useState<"luna" | "jev">("luna");
+  const chartViewRef = useRef(chartView);
+  const chartViewChoiceRef = useRef<"automatic" | "manual">("automatic");
+  const autoChartViewIdentityRef = useRef<string | null>(null);
+  const [categoricalChartSnapshot, setCategoricalChartSnapshot] = useState<{
+    key: string;
+    eligibleObservationCount: number;
+  } | null>(null);
   const [feedFilter, setFeedFilter] = useState<FilterKey>("all");
   const [feedGroupFilter, setFeedGroupFilter] = useState<ExactTitleGroupFilter>(null);
   const [sortMode, setSortMode] = useState<"delta" | "alpha">("delta");
@@ -169,6 +179,22 @@ export default function App() {
     setDrawerMention(mention);
   }, []);
   const closeDrawer = useCallback(() => openDrawerMention(null), [openDrawerMention]);
+  const chooseChartView = useCallback((next: "luna" | "jev", manual = true) => {
+    chartViewRef.current = next;
+    if (manual) chartViewChoiceRef.current = "manual";
+    setChartView(next);
+  }, []);
+  const reportCategoricalChartSnapshot = useCallback((snapshot: {
+    companyId: string;
+    windowHours: number;
+    eligibleObservationCount: number;
+  }) => {
+    const key = `${snapshot.companyId}:${snapshot.windowHours}`;
+    setCategoricalChartSnapshot((current) => current?.key === key
+      && current.eligibleObservationCount === snapshot.eligibleObservationCount
+      ? current
+      : { key, eligibleObservationCount: snapshot.eligibleObservationCount });
+  }, []);
   const openOperationsFromDrawer = useCallback(() => {
     closeDrawer();
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -312,7 +338,7 @@ export default function App() {
   }, []);
 
   const refreshPrice = useCallback(async () => {
-    if (chartModeRef.current !== "comparison") return;
+    if (chartViewRef.current !== "jev" || chartModeRef.current !== "comparison") return;
     const id = selectedIdRef.current;
     if (!id) return;
     const hours = windowRef.current;
@@ -503,8 +529,8 @@ export default function App() {
       scoreBucketRequestSeq.current += 1;
     }
     if (reset) setSparks({});
-    void refreshSeries();
-    void refreshPrice();
+    if (chartViewRef.current === "jev") void refreshSeries();
+    if (chartViewRef.current === "jev" && chartModeRef.current === "comparison") void refreshPrice();
   }, [refreshPrice, refreshSeries]);
 
   useEffect(() => {
@@ -519,8 +545,8 @@ export default function App() {
   }, [firstRunEvidence, refreshBackendSnapshot]);
 
   useEffect(() => {
-    if (chartMode === "comparison") void refreshPrice();
-  }, [chartMode, refreshPrice]);
+    if (chartView === "jev" && chartMode === "comparison") void refreshPrice();
+  }, [chartMode, chartView, refreshPrice]);
 
   // Initial load: refresh authoritative server snapshots.
   useEffect(() => {
@@ -603,12 +629,12 @@ export default function App() {
           bucketRefreshTimer = window.setTimeout(() => {
             bucketRefreshTimer = null;
             lastSeriesRefresh = Date.now();
-            void refreshSeries(m.companyId);
+            if (chartViewRef.current === "jev") void refreshSeries(m.companyId);
           }, 1_000);
         } else if (now - lastSeriesRefresh > 8_000) {
           lastSeriesRefresh = now;
-          void refreshSeries();
-          void refreshPrice();
+          if (chartViewRef.current === "jev") void refreshSeries();
+          if (chartViewRef.current === "jev" && chartModeRef.current === "comparison") void refreshPrice();
         }
       },
       onCompany: (s) => setCompanies((prev) => prev.map((c) => (c.id === s.id ? s : c))),
@@ -621,17 +647,33 @@ export default function App() {
     };
   }, [refreshBackendSnapshot, refreshSeries, refreshPrice]);
 
-  // Series + price for the selected company: on select/window change and on timers.
+  // Read saved history when selection changes; only poll while that chart is active.
   useEffect(() => {
     if (!selectedId) return;
     void refreshSeries(selectedId);
-    void refreshPrice();
+    if (chartView === "jev" && chartMode === "comparison") void refreshPrice();
+    if (chartView !== "jev") return;
     const t = setInterval(() => {
       void refreshSeries(selectedId);
-      void refreshPrice();
+      if (chartModeRef.current === "comparison") void refreshPrice();
     }, 30_000);
     return () => clearInterval(t);
-  }, [selectedId, windowHours, refreshSeries, refreshPrice]);
+  }, [selectedId, windowHours, chartView, chartMode, refreshSeries, refreshPrice]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const identity = `${selectedId}:${windowHours}`;
+    if (autoChartViewIdentityRef.current === identity) return;
+    const view = initialChartViewForEvidence({
+      manualSelection: chartViewChoiceRef.current === "manual",
+      categoricalCount: categoricalChartSnapshot?.key === identity ? categoricalChartSnapshot.eligibleObservationCount : null,
+      historicalStatus: selectedSeriesReady ? "ready" : selectedSeriesError ? "error" : "loading",
+      hasHistoricalData: selectedSeriesHasSentiment,
+    });
+    if (view == null) return;
+    autoChartViewIdentityRef.current = identity;
+    if (view !== chartViewRef.current) chooseChartView(view, false);
+  }, [categoricalChartSnapshot, chooseChartView, selectedId, selectedSeriesError, selectedSeriesHasSentiment, selectedSeriesReady, windowHours]);
 
   // Each Desk filter has its own server-side cursor. Failed and pending work
   // is unbounded by age so an old provider failure remains recoverable.
@@ -807,11 +849,11 @@ export default function App() {
       else if (e.key === "f") {
         const i = FILTERS.findIndex((f) => f.key === feedFilter);
         setFeedFilter(FILTERS[(i + 1) % FILTERS.length]?.key ?? "all");
-      } else if (e.key === "c") setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"));
+      } else if (e.key === "c" && chartView === "jev") setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drawerMention, feedFilter]);
+  }, [chartView, drawerMention, feedFilter]);
 
   // Fresh, high-strength events across the whole watchlist: the speed lane.
   const breaking = useMemo(
@@ -837,9 +879,6 @@ export default function App() {
     || companies.some((company) => company.latestSourceCollectedAt != null)
     || tape.some(isApplicationMention)
     || Boolean(activeMentionFeed?.loaded && activeMentionFeed.items.some(isApplicationMention));
-  const firstRunUndetermined = researchView === "desk"
-    && firstRunEvidence.state !== "ready"
-    && !localObservationArrived;
   const firstRunActive = researchView === "desk"
     && firstRunEvidence.state === "ready"
     && firstRunEvidence.eligibleObservationCount === 0
@@ -1136,25 +1175,6 @@ export default function App() {
                 hours={windowHours}
                 onHours={setWindowHours}
               />
-            ) : firstRunActive ? (
-              <FirstRunNoLocalData
-                company={selected.name}
-                ticker={selected.ticker}
-                state="empty"
-                secCollectorEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.secCollectorEnabled}
-                jevSecScoringEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.jevSecScoringEnabled}
-                classifierProvider={firstRunEvidence.state === "ready" ? firstRunEvidence.classifierProvider : health?.health.classifier?.provider}
-                classifierSecClassificationEnabled={firstRunEvidence.state === "ready" && firstRunEvidence.classifierSecClassificationEnabled === true}
-                classifierBlockedReason={firstRunEvidence.state === "ready" ? firstRunEvidence.classifierBlockedReason : health?.health.classifier?.blockedReason}
-              />
-            ) : firstRunUndetermined ? (
-              <FirstRunNoLocalData
-                company={selected.name}
-                ticker={selected.ticker}
-                state={firstRunEvidence.state === "loading" ? "checking" : "unavailable"}
-                secCollectorEnabled={false}
-                jevSecScoringEnabled={false}
-              />
             ) : (
             <>
               <div className="selected-company panel shrink-0 px-3 py-2.5 sm:px-4">
@@ -1195,14 +1215,20 @@ export default function App() {
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-white/40">
                     <span>
-                      {selected.sector} · {windowLabel(windowHours)} saved window · {selectedSeriesError
-                        ? "score history unavailable"
-                          : !selectedSeriesReady
+                      {selected.sector} · {windowLabel(windowHours)} saved window · Historical Jev: {selectedSeriesError
+                        ? "unavailable"
+                        : !selectedSeriesReady
                             ? "loading saved history"
                             : selectedSeriesScoredItemCount > 0
                             ? `${selectedSeriesScoredItemCount} scored records · ${selectedSeriesLastScoredAt == null ? "latest time unavailable" : `latest ${timeAgo(selectedSeriesLastScoredAt)}`}`
                             : `No scored records in ${windowLabel(windowHours)}`}
-                      {health?.health.classifier?.provider === "openai_luna" && <span title="Luna supplies categories for new records. Historical Jev probabilities and this chart retain their original profile; no synthetic probability or impact is assigned."> · new judgments: Luna</span>}
+                      {health?.health.classifier?.provider === "openai_luna" && (
+                        <span title={health.health.classifier.enabled
+                          ? "Luna is available for new categorical classifications. Historical Jev probabilities and this chart retain their original profile; no synthetic probability or impact is assigned."
+                          : `New Luna classifications are paused: ${health.health.classifier.blockedReason ?? "classifier is unavailable"}. Historical Jev data keeps its original profile.`}>
+                          {health.health.classifier.enabled ? " · Luna ready" : " · Luna paused"}
+                        </span>
+                      )}
                     </span>
                     {selected.earningsAt != null && (
                       <span
@@ -1243,7 +1269,7 @@ export default function App() {
                       key={w.h}
                       onClick={() => setWindowHours(w.h)}
                       aria-pressed={windowHours === w.h}
-                      className={`flex items-center justify-between gap-2 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      className={`chart-range-control flex items-center justify-between gap-2 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
                         windowHours === w.h
                           ? "bg-white/[0.09] text-white"
                           : "text-white/40 hover:bg-white/[0.04] hover:text-white/70"
@@ -1256,6 +1282,68 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="chart-view-tabs" role="tablist" aria-label={`${selected.name} sentiment chart`}>
+                <button
+                  id="chart-tab-luna"
+                  type="button"
+                  role="tab"
+                  aria-selected={chartView === "luna"}
+                  aria-controls="chart-panel-luna"
+                  tabIndex={chartView === "luna" ? 0 : -1}
+                  onClick={() => chooseChartView("luna")}
+                  onKeyDown={(event) => {
+                    if (["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) {
+                      event.preventDefault();
+                      const next = event.key === "Home" || event.key === "ArrowLeft" ? "luna" : "jev";
+                      chooseChartView(next);
+                      requestAnimationFrame(() => document.getElementById(`chart-tab-${next}`)?.focus());
+                    }
+                  }}
+                >Luna categories</button>
+                <button
+                  id="chart-tab-jev"
+                  type="button"
+                  role="tab"
+                  aria-selected={chartView === "jev"}
+                  aria-controls="chart-panel-jev"
+                  tabIndex={chartView === "jev" ? 0 : -1}
+                  onClick={() => chooseChartView("jev")}
+                  onKeyDown={(event) => {
+                    if (["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) {
+                      event.preventDefault();
+                      const next = event.key === "Home" || event.key === "ArrowLeft" ? "luna" : "jev";
+                      chooseChartView(next);
+                      requestAnimationFrame(() => document.getElementById(`chart-tab-${next}`)?.focus());
+                    }
+                  }}
+                >Historical Jev</button>
+              </div>
+              <div id="chart-panel-luna" role="tabpanel" aria-labelledby="chart-tab-luna" hidden={chartView !== "luna"} className="mt-2">
+                <CategoricalTrendChart
+                  key={`${selected.id}:${windowHours}`}
+                  companyId={selected.id}
+                  hours={windowHours}
+                  active={chartView === "luna"}
+                  classifierEnabled={health?.health.classifier?.provider === "openai_luna" && health.health.classifier.enabled}
+                  blockedReason={health?.health.classifier?.provider === "openai_luna" ? health.health.classifier.blockedReason : null}
+                  onOpenMention={openDrawerMention}
+                  onOpenOperations={openOperationsFromDrawer}
+                  onViewHistoricalJev={() => {
+                    chooseChartView("jev");
+                    requestAnimationFrame(() => document.getElementById("chart-tab-jev")?.focus());
+                  }}
+                  onSnapshot={reportCategoricalChartSnapshot}
+                />
+              </div>
+              <div id="chart-panel-jev" role="tabpanel" aria-labelledby="chart-tab-jev" hidden={chartView !== "jev"}>
+                {chartView === "jev" && <>
+              {categoricalChartSnapshot?.key === selectedSeriesKey && categoricalChartSnapshot.eligibleObservationCount === 0 && (
+                <section className="panel mt-2 px-3 py-2.5 text-[12px] text-white/65" role="status">
+                  Historical Jev only. No Luna categories are saved for this company and window.
+                  {health && !health.externalRequestsEnabled && " External requests are paused."}
+                  <button type="button" className="ml-2 rounded border border-white/10 px-2 py-1 text-white/80" onClick={() => chooseChartView("luna")}>View Luna status</button>
+                </section>
+              )}
               {selectedSeriesReady && !selectedSeriesHasSentiment && health?.health.classifier?.provider === "openai_luna" && chartMode === "sentiment" ? (
                 <section className="panel mt-2 px-3 py-3 text-[12px] text-white/55" role="status">
                   No historical Jev index in this window. Inspect saved source records and categorical judgments below.
@@ -1363,6 +1451,8 @@ export default function App() {
                   </div>
                 </div>
               </div>}
+                </>}
+              </div>
 
               <EvidenceBreadth
                 mentions={evidenceBreadthMentions}

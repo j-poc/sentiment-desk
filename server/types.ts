@@ -167,6 +167,66 @@ export interface CategoricalClassification {
   classifiedAt: number;
 }
 
+export interface CategoricalTrendCounts {
+  positive: number;
+  neutral: number;
+  negative: number;
+  reviewRequired: number;
+  excluded: number;
+  total: number;
+}
+
+export interface CategoricalTrendPoint {
+  bucketStartMs: number;
+  fromMs: number;
+  throughMs: number;
+  counts: CategoricalTrendCounts;
+}
+
+export interface CategoricalTrendLineage {
+  promptVersion: string;
+  promptSha256: string;
+  schemaVersion: string;
+  schemaSha256: string;
+  count: number;
+}
+
+export interface CategoricalTrendResult {
+  companyId: string;
+  windowHours: number;
+  fromMs: number;
+  throughMs: number;
+  bucketMs: number;
+  timeBasis: "classification_available_at";
+  countBasis: "immutable_source_observation";
+  snapshotGeneration: string;
+  snapshotKey: string;
+  points: CategoricalTrendPoint[];
+  counts: CategoricalTrendCounts;
+  eligibleObservationCount: number;
+  candidateClassificationCount: number;
+  withheldInvalidCount: number;
+  latestClassifiedAt: number | null;
+  lineages: CategoricalTrendLineage[];
+}
+
+export interface CategoricalBucketCursor {
+  classifiedAt: number;
+  id: string;
+}
+
+export interface CategoricalBucketEvidencePage {
+  companyId: string;
+  snapshotKey: string;
+  bucketStartMs: number;
+  bucketDurationMs: number;
+  fromMs: number;
+  throughMs: number;
+  counts: CategoricalTrendCounts;
+  items: MentionDTO[];
+  nextCursor: CategoricalBucketCursor | null;
+}
+
 export interface MentionScore {
   sentiment: "negative" | "neutral" | "positive";
   pPos: number;

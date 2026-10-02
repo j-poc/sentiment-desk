@@ -1,3 +1,4 @@
+import type { CategoricalBucketCursor, CategoricalBucketEvidencePage, CategoricalTrendCounts, CategoricalTrendResult } from "./types.js";
 import type { Desk, JevAttemptReceipt, ModelProvider, RawMentionInput } from "./db.js";
 import { rowToDTO } from "./db.js";
 import { createHash } from "node:crypto";
@@ -778,4 +779,75 @@ export class Pipeline {
       ),
     };
   }
+
+  categoricalSeries(companyId: string, windowHours: number, now = Date.now()): CategoricalTrendResult {
+    const snapshot = this.deps.db.categoricalTrendSnapshot(companyId, windowHours, now);
+    const aggregateByStart = new Map(snapshot.aggregates.map((item) => [item.bucketStartMs, item.counts]));
+    const points: CategoricalTrendResult["points"] = [];
+    const firstBucket = Math.floor(snapshot.fromMs / snapshot.bucketMs) * snapshot.bucketMs;
+    for (let bucketStartMs = firstBucket; bucketStartMs < snapshot.throughMs; bucketStartMs += snapshot.bucketMs) {
+      const fromMs = Math.max(snapshot.fromMs, bucketStartMs);
+      const throughMs = Math.min(snapshot.throughMs, bucketStartMs + snapshot.bucketMs);
+      if (fromMs < throughMs) points.push({
+        bucketStartMs,
+        fromMs,
+        throughMs,
+        counts: aggregateByStart.get(bucketStartMs) ?? emptyCategoricalTrendCounts(),
+      });
+    }
+    const sum = points.reduce<CategoricalTrendCounts>((counts, point) => addCategoricalTrendCounts(counts, point.counts), emptyCategoricalTrendCounts());
+    if (!sameCategoricalTrendCounts(sum, snapshot.counts) || sum.total !== snapshot.eligibleObservationCount) {
+      throw new Error("Luna category trend totals did not reconcile to the saved classification count");
+    }
+    return {
+      companyId: snapshot.companyId,
+      windowHours: snapshot.windowHours,
+      fromMs: snapshot.fromMs,
+      throughMs: snapshot.throughMs,
+      bucketMs: snapshot.bucketMs,
+      timeBasis: "classification_available_at",
+      countBasis: "immutable_source_observation",
+      snapshotGeneration: snapshot.snapshotGeneration,
+      snapshotKey: snapshot.snapshotKey,
+      points,
+      counts: snapshot.counts,
+      eligibleObservationCount: snapshot.eligibleObservationCount,
+      candidateClassificationCount: snapshot.candidateClassificationCount,
+      withheldInvalidCount: snapshot.withheldInvalidCount,
+      latestClassifiedAt: snapshot.latestClassifiedAt,
+      lineages: snapshot.lineages,
+    };
+  }
+
+  categoricalBucketEvidence(input: {
+    companyId: string;
+    snapshotKey: string;
+    bucketStartMs: number;
+    bucketDurationMs?: number;
+    limit: number;
+    cursor: CategoricalBucketCursor | null;
+  }): CategoricalBucketEvidencePage {
+    return this.deps.db.categoricalBucketEvidence(input);
+  }
+}
+
+function emptyCategoricalTrendCounts(): CategoricalTrendCounts {
+  return { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 };
+}
+
+function addCategoricalTrendCounts(a: CategoricalTrendCounts, b: CategoricalTrendCounts): CategoricalTrendCounts {
+  return {
+    positive: a.positive + b.positive,
+    neutral: a.neutral + b.neutral,
+    negative: a.negative + b.negative,
+    reviewRequired: a.reviewRequired + b.reviewRequired,
+    excluded: a.excluded + b.excluded,
+    total: a.total + b.total,
+  };
+}
+
+function sameCategoricalTrendCounts(a: CategoricalTrendCounts, b: CategoricalTrendCounts): boolean {
+  return a.positive === b.positive && a.neutral === b.neutral && a.negative === b.negative
+    && a.reviewRequired === b.reviewRequired
+    && a.excluded === b.excluded && a.total === b.total;
 }

@@ -2,9 +2,9 @@ import type { CategoricalClassification } from "../lib/api.js";
 import { dayTime, sentimentColor } from "../lib/format.js";
 
 export function CategoricalJudgment({ judgment, detail = false }: { judgment: CategoricalClassification; detail?: boolean }) {
-  const state = judgment.disposition === "review_required" ? "Needs evidence review"
-    : judgment.disposition === "excluded" ? "Excluded from company research"
-      : judgment.sentiment ?? "Direction uncertain";
+  const state = judgment.disposition === "excluded" ? "Excluded from company research"
+    : judgment.disposition === "review_required" || judgment.sentiment == null ? "Needs evidence review"
+      : judgment.sentiment;
   return (
     <section className="mt-2 text-[12px] leading-relaxed" aria-label="Luna categorical judgment">
       <div className="flex flex-wrap items-center gap-2">

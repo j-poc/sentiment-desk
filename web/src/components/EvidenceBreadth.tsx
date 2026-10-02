@@ -97,7 +97,7 @@ export function EvidenceBreadth({
               const publisher = mention.publisherName || mention.source.name;
               const timeBasis = mention.publishedAt != null ? "publisher time"
                 : mention.providerObservedAt != null ? "provider observed" : "retrieved";
-              const sentiment = mention.score ? `${mention.score.sentiment} · ${mention.score.impact > 0 ? "+" : ""}${mention.score.impact.toFixed(0)} impact` : mention.classification ? `Luna · ${mention.classification.disposition === "classified" ? mention.classification.sentiment ?? "direction uncertain" : mention.classification.disposition.replaceAll("_", " ")}` : mention.status.replaceAll("_", " ");
+              const sentiment = mention.score ? `${mention.score.sentiment} · ${mention.score.impact > 0 ? "+" : ""}${mention.score.impact.toFixed(0)} impact` : mention.classification ? `Luna · ${mention.classification.disposition === "excluded" ? "excluded" : mention.classification.disposition === "review_required" || mention.classification.sentiment == null ? "needs evidence review" : mention.classification.sentiment}` : mention.status.replaceAll("_", " ");
               return (
                 <button
                   className="evidence-record"

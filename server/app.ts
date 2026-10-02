@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { CategoricalSnapshotUnavailableError, InvalidCategoricalBucketError } from "./db.js";
 import type { AlertDeliveryCursor, Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor, ScoreBucketCursor } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
@@ -12,7 +13,7 @@ import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
 import { forwardReturn, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
-import type { ArchivedRun } from "./types.js";
+import type { ArchivedRun, CategoricalBucketCursor } from "./types.js";
 
 /**
  * HTTP surface: read APIs, an explicitly confirmed single-item Jev retry, and
@@ -70,6 +71,10 @@ const scoreBucketCursorSchema = z.object({
   scoredAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   id: z.string().min(1).max(200),
 });
+const categoricalBucketCursorSchema = z.object({
+  classifiedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  id: z.string().min(1).max(200),
+}).strict();
 const alertDeliveryCursorSchema = z.object({
   priority: z.union([z.literal(0), z.literal(1), z.literal(2)]),
   createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -362,6 +367,56 @@ export function createApp(deps: AppDeps): Hono {
     const id = c.req.param("id");
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
     return c.json(deps.pipeline.series(id, hours));
+  });
+
+  app.get("/api/companies/:id/categorical-series", (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown_company" }, 404);
+    const rawHours = c.req.query("hours") ?? "24";
+    if (!/^\d{1,3}$/.test(rawHours)) return c.json({ error: "invalid_categorical_window" }, 400);
+    const hours = Number(rawHours);
+    if (!Number.isSafeInteger(hours) || hours < 1 || hours > 168) return c.json({ error: "invalid_categorical_window" }, 400);
+    try {
+      return c.json(deps.pipeline.categoricalSeries(id, hours));
+    } catch (error) {
+      if (error instanceof Error && error.message === "invalid_categorical_window") return c.json({ error: "invalid_categorical_window" }, 400);
+      throw error;
+    }
+  });
+
+  app.get("/api/companies/:id/categorical-bucket", (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown_company" }, 404);
+    const snapshotKey = c.req.query("snapshot") ?? "";
+    const rawBucket = c.req.query("at") ?? "";
+    const rawSpan = c.req.query("span") ?? "900000";
+    const rawLimit = c.req.query("limit") ?? "50";
+    if (!snapshotKey || snapshotKey.length > 2048 || !/^\d{1,16}$/.test(rawBucket) || !/^\d{1,8}$/.test(rawSpan) || !/^\d{1,3}$/.test(rawLimit)) {
+      return c.json({ error: "invalid_categorical_bucket" }, 400);
+    }
+    const bucketStartMs = Number(rawBucket);
+    const bucketDurationMs = Number(rawSpan);
+    const limit = Number(rawLimit);
+    if (!Number.isSafeInteger(bucketStartMs) || ![900_000, 1_800_000, 3_600_000, 10_800_000, 21_600_000].includes(bucketDurationMs)
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      return c.json({ error: "invalid_categorical_bucket" }, 400);
+    }
+    const rawCursor = c.req.query("cursor");
+    let cursor: CategoricalBucketCursor | null = null;
+    if (rawCursor != null) {
+      let decoded: unknown;
+      try { decoded = JSON.parse(rawCursor); } catch { return c.json({ error: "invalid_cursor" }, 400); }
+      const parsed = categoricalBucketCursorSchema.safeParse(decoded);
+      if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
+      cursor = parsed.data;
+    }
+    try {
+      return c.json(deps.pipeline.categoricalBucketEvidence({ companyId: id, snapshotKey, bucketStartMs, bucketDurationMs, limit, cursor }));
+    } catch (error) {
+      if (error instanceof CategoricalSnapshotUnavailableError) return c.json({ error: "categorical_snapshot_unavailable" }, 409);
+      if (error instanceof InvalidCategoricalBucketError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
   });
 
   app.get("/api/companies/:id/score-bucket", (c) => {
