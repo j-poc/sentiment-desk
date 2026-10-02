@@ -90,7 +90,7 @@ describe("optional provider rate limits", () => {
     db.close();
   });
 
-  it("scores SEC filings only when source document text is available", async () => {
+  it("omits the earnings wrapper unless its linked results exhibit is available", async () => {
     const db = new Desk(":memory:");
     db.seedCompanies([companies[0]!]);
     const acceptedAt = new Date().toISOString();
@@ -108,7 +108,8 @@ describe("optional provider rate limits", () => {
           } },
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      if (url.endsWith("/available.htm")) return new Response("Actual SEC filing text", { status: 200 });
+      if (url.endsWith("/available.htm")) return new Response(`<p>Item 2.02 Results of Operations. The company announced financial results in a press release that is attached hereto as Exhibit 99.1.</p><table><tr><td>99.1</td><td>Press Release</td><td><a href="release.htm">Release</a></td></tr></table>`, { status: 200, headers: { "content-type": "text/html" } });
+      if (url.endsWith("/release.htm")) return new Response("<p>Item 2.02 Actual SEC filing result figures.</p>", { status: 200, headers: { "content-type": "text/html" } });
       return new Response("document unavailable", { status: 503 });
     });
     globalThis.fetch = request;
@@ -125,13 +126,13 @@ describe("optional provider rate limits", () => {
 
     try {
       await control.stop();
-      expect(request).toHaveBeenCalledTimes(3);
+      expect(request).toHaveBeenCalledTimes(4);
       expect(ingest).toHaveBeenCalledTimes(1);
       expect(ingest).toHaveBeenCalledWith(expect.objectContaining({
         sourceItemId: "0000000001-26-000003",
-        snippet: "Actual SEC filing text",
+        snippet: "Item 2.02 Actual SEC filing result figures.",
         deliveryId: expect.any(String),
-        adapterVersion: "sec-primary-document/2",
+        adapterVersion: "sec-filing-evidence/1",
       }));
       expect(db.deliverySummary().find((row) => row.collector === "sec_edgar" && row.adapterVersion === "sec-submissions/1"))
         .toMatchObject({ result: "partial", parsedItemCount: 3, error: "2 SEC filing document(s) unavailable; omitted from Jev input" });

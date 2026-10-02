@@ -9,13 +9,13 @@
   "evidence_path": "project-record/4-log/live-data-etl-evidence.json",
   "max_evidence_age_hours": 24,
   "documentation_review": {
-    "reviewed_at": "2026-10-01",
+    "reviewed_at": "2026-10-02",
     "runtime": "Local Node.js v26.10.0; npm 11.19.1; package engine requires Node >=22.",
     "references": [
       {
         "source": "SEC EDGAR submissions API and fair-access guidance",
         "url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces",
-        "finding": "Public submissions/XBRL APIs are described by SEC; requests require declared User-Agent and aggregate access stays at or below 10 requests/second. No contact-bearing SEC_USER_AGENT is configured."
+        "finding": "Current official submissions/public-document and fair-access guidance was reviewed. Requests identify the operator and are bounded below the SEC aggregate ten-per-second limit by maintained 125ms per-process spacing. The configured User-Agent has already supported real isolated SEC proof; no re-entry is requested. Multiple process pacing is not coordinated."
       },
       {
         "source": "GDELT DOC 2.0",
@@ -71,11 +71,21 @@
         "source": "OpenAI Standard pricing and cache accounting",
         "url": "https://developers.openai.com/api/docs/pricing",
         "finding": "Reviewed2026-10-01 short input Standard Luna rates: ordinary input USD0.10/M, cached input0.01/M, cache-write0.125/M, output0.50/M. Reasoning tokens are included in output. Reservation uses the maximum documented input rate and the bounded request-byte/output profile; missing or unsupported accounting stays unpriced and reserved."
+      },
+      {
+        "source": "SEC Form 8-K, SEC873(02-25), Item2.02",
+        "url": "https://www.sec.gov/files/form8-k.pdf",
+        "finding": "Item2.02 includes the text of a public results announcement. The narrow adapter requires the visible results section expressly identify a unique same-accession HTML99.1; a generic table link alone is insufficient. Other exhibit numbers and unrecognized references remain incomplete coverage."
+      },
+      {
+        "source": "Node.js exact current globals documentation",
+        "url": "https://nodejs.org/api/globals.html",
+        "finding": "Current official documentation identifies Nodev26.10.0, matching local runtime, and documents fetch/AbortSignal. The versioned v26.10.0 globals URL was inaccessible; the current official URL was verified rather than treating the failed URL as proof."
       }
     ]
   },
   "status": "partial",
-  "operational_status": "2026-10-02 recovery acceptance: OpenAI GPT-6 Luna remains the selected new-record categorical classifier, with historical Jev probabilities kept separate. The frozen 30-case real SEC agent-reference pilot spans 15 issuers but has 28 neutral, 1 positive, 1 unsupported, no negative class and 3 unresolved fields. Direct OPENAI_API_KEY, own-account finite budget/readback, actual Luna outputs and usage reconciliation are absent; live qualification remains blocked. Jev account readback shows USD0.00 credit and auto-recharge off. Actual saved-data browser proof at 1440x900 shows NVIDIA, its historical chart and three real headlines in one view; 390x844 has no horizontal overflow, and company selection plus chart-source drilldown work. An isolated maintained Yahoo RSS cycle stored 13 real pending Tesla observations linked to one receipt. Stale successful and failed company snapshots recovered on later history polls without reloading selected evidence pages; both classifiers remained off. A short local read run passed against a protected real-data backup, but sustained scale and investor value remain unverified. The current final scoped ETL result is owned by project-record/4-log/live-data-etl-evidence.json after source/record freeze. The main database is unchanged; no demo or synthetic runtime records were added; Radar stays disabled.",
+  "operational_status": "2026-10-02 selected SEC evidence checkpoint: the sec-filing-evidence/1 adapter selects only a visible same-document Item 2.02 relationship and one same-accession HTML99.1 results attachment. On the final source, all eight retained real document pairs passed scheduler/SQLite replay and restart without new revisions; nine isolated technical safety cases passed. A two-request authorized live fetch of historical AMD primary and Exhibit99.1 produced one receipt-linked pending input, no model output. Legacy migration preserved existing core rows and values. Actual IAB proof verifies NVIDIA at1440x900 with its historical Jev chart and three saved headlines above fold, J/K navigation and keyboard bucket-to-source drilldown; both saved chart and selected SEC drawer at390x844 had documentWidth390. Selected/parent links, body hashes and separate source/retrieval clocks are visible. Both paid classifiers stayed off, no demo or synthetic product rows were inserted and original SQLite remains unchanged. OpenAI GPT-6 Luna remains the selected new-record categorical classifier, with historical genuine Jev outputs kept separate. Its direct API credential/account spending route, actual outputs/usage reconciliation and three-class qualification remain blocked. Independent agent references are diagnostics, not ground truth or probability calibration; the retained and linked release extensions still contain no negative class. Short isolated saved-data reads passed but sustained scale and investor value remain unverified. Independent whole-build review is FAIL for those operational gates. The final scoped ETL result is owned by project-record/4-log/live-data-etl-evidence.json after tracked source and records freeze; exact GitHub commit/readback is recorded separately. Radar stays disabled.",
   "observation_lineage": {
     "new_observations": "Must reference an immutable source_deliveries.id recorded before pipeline ingestion; collector, company, and adapter version must match.",
     "historical_unlinked": "Retained rows without a stored delivery_id are not backfilled with invented lineage and are identified as unlinked historical records in the detail UI.",
@@ -222,7 +232,7 @@
       "required": true,
       "identity": "CIK, accession number, form type, and filing items.",
       "time": "Filing date and EDGAR acceptanceDateTime are separate. Acceptance is used as the source-declared event timestamp; missing timestamps stay unknown.",
-      "retention": "Normalized filing metadata and bounded extracted text are stored; acquisition receipts keep adapter versions and a digest of normalized parsed items, not raw SEC bytes. The source model receives the normalized excerpt.",
+      "retention": "Normalized metadata and bounded selected excerpt are stored. New SEC document operation receipts retain at most two bounded document attempt contexts, complete-body SHA256/byte counts only after full successful retrieval, role/URL/time/outcome, and source-only supporting Item2.02 passage. Raw HTML is not stored in product SQLite; private real-source verification artifacts remain excluded from Git. Parent context stays outside model input.",
       "rights": "The SEC Webmaster FAQ says EDGAR public filing content is free to access and reuse; SEC.gov also permits copying/further distribution without SEC permission, subject to stated exceptions and mark/non-endorsement limits. The app gates SEC requests on a descriptive User-Agent with contact information. TypeSafe account terms, telemetry, retention, and billing still require account-owner review before forwarding filing text. A tested packaged SEC connector contract available on the host says ui_display=false, so it is not substituted into this display product."
     },
     {
@@ -644,7 +654,7 @@
     {
       "id": "sec_edgar",
       "provider": "SEC EDGAR submissions and filing documents",
-      "endpoint": "https://data.sec.gov/submissions/CIK##########.json",
+      "endpoint": "SEC submissions metadata plus bounded https://www.sec.gov/Archives/edgar/data/{CIK}/{accession}/{HTML} document requests",
       "freshness_budget_seconds": 604800,
       "delivery_states": [
         "network",
@@ -662,15 +672,15 @@
         "acceptance_time",
         "ingested_at"
       ],
-      "revision_policy": "CIK/accession/form identity; amendments are separate observations; normalized excerpts and parsed-content digest are kept, not raw bytes.",
+      "revision_policy": "Existing accession identity and stable normalized title/snippet/canonicalURL/publisher/filedAt input revision semantics are unchanged. Genuine new selected-exhibit inputs are new immutable revisions; changed retrieval clocks or raw-tail digests alone do not create model work. Each acquisition attempt retains a separate receipt.",
       "rights": "retained",
-      "rights_evidence": "SEC public-filing reuse is documented subject to exceptions; forwarding text to Jev is separately blocked pending TypeSafe account-use evidence. A contact-bearing SEC_USER_AGENT is not configured.",
+      "rights_evidence": "User source-use attestation and SEC public-filing reuse guidance support narrow public EDGAR acquisition subject to exceptions. Existing configured contact-bearing User-Agent is not requested again. Classification needs its separate selected-provider account/credential/budget route; no model dispatch is enabled by source acquisition.",
       "consumer_paths": [
         "/api/companies/:id/mentions",
         "/api/tape",
         "Desk mention cards and drawer"
       ],
-      "coverage_limit": "CIK-mapped filings only; rate and User-Agent gate applies. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
+      "coverage_limit": "CIK-mapped filings with valid declared metadata only. Item2.02 supports a unique same-accession HTML99.1 explicitly linked to results in the visible primary body. Missing, unsafe, ambiguous, failed, empty, 99.2-only, inline-only or unrecognized attachment language remains incomplete with no new observation. Recent delivery never resets filing/acceptance age. Requests remain globally opt-in.",
       "acquisition": {
         "method": "api",
         "adapter_paths": [
@@ -1010,11 +1020,12 @@
         "tests/jev-budget.test.ts",
         "tests/app-jev-attempts.test.ts",
         "tests/openai-classifier.test.ts",
+        "tests/sec-evidence.test.ts",
         "--maxWorkers=1",
         "--testTimeout=20000"
       ],
       "timeout_seconds": 600,
-      "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks.",
+      "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks. New SEC selected-document failure/context/replay tests remain offline technical fixtures, not product data or classifier quality evidence.",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -1044,11 +1055,12 @@
         "tests/app-price.test.ts",
         "tests/series-chart-state.test.ts",
         "tests/openai-classifier.test.ts",
+        "tests/sec-evidence.test.ts",
         "--maxWorkers=1",
         "--testTimeout=20000"
       ],
       "timeout_seconds": 600,
-      "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks.",
+      "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks. New SEC selected-document failure/context/replay tests remain offline technical fixtures, not product data or classifier quality evidence.",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -1129,6 +1141,7 @@
     "Provider pacing and cooldowns reduce this application's request bursts but do not verify current provider quotas, contract permissions, or behavior across multiple independent application processes. Exact provider terms and project-specific rights remain open.",
     "The default local database still contains migrated legacy_unknown observations with saved Jev judgments. Their original collector and source/model-use provenance were not verified; latest code quarantines them from research and excludes their saved usage from current operational totals while preserving the historical rows for audit. Port 127.0.0.1:8787 currently has no listener. A controlled offline process on 127.0.0.1:8794 served an isolated SQLite backup copy and the browser showed no legacy_unknown rows in the exercised feed, but the historical lineage of the original rows remains unaudited; see project-record/4-log/2026-09-28-legacy-source-quarantine.md.",
     "2026-10-01: one isolated real SEC-to-Jev integration smoke used a temporary contact-bearing SEC User-Agent and one request/day cap. It produced two SEC filing observations from two issuers and one classification; it does not satisfy the 30-issuer frozen evaluation or establish model quality. The current checkout still has no configured SEC_USER_AGENT, and the account balance/refill/spend ceiling remain unverified.",
-    "2026-10-01 current superseding scope: Luna live compatibility/quality/account-budget evidence remain blocked; independent-agent references are bounded diagnostics, not human ground truth. Historical declarations and ledger entries retain their original dates and are not current activation instructions."
+    "2026-10-01 current superseding scope: Luna live compatibility/quality/account-budget evidence remain blocked; independent-agent references are bounded diagnostics, not human ground truth. Historical declarations and ledger entries retain their original dates and are not current activation instructions.",
+    "2026-10-02 source repair scope: supported same-document grammar and visible exhibit-table cells improve narrow explicitly linked HTML99.1 acquisition. Blank spacer cells are skipped; the first nonempty description cell must positively match the document kind. Generic, unknown or conflicting descriptions, unsupported grammar, inline-only results and other exhibit numbers remain incomplete coverage. Visible-text filtering handles static hidden attributes, inline hidden styles and inherited script/XBRL-hidden elements, not a rendered CSS/JavaScript browser. This does not establish exhaustive SEC coverage, current source freshness, Luna qualification, negative-class references, sustained scale or product value. Historical no-User-Agent assertions describe earlier dated environments and are not a request for contact information."
   ]
 }

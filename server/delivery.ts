@@ -61,6 +61,7 @@ export function recordDelivery(opts: {
   normalizedItems?: unknown;
   error?: unknown;
   processingExpected?: boolean;
+  secDocumentContext?: SourceDeliveryInput["secDocumentContext"];
 }): string {
   return opts.db.recordDelivery({
     collector: opts.collector,
@@ -74,6 +75,7 @@ export function recordDelivery(opts: {
     adapterVersion: opts.adapterVersion,
     error: opts.error == null ? null : (opts.error instanceof Error ? opts.error.message : String(opts.error)),
     processingRequired: opts.processingExpected,
+    secDocumentContext: opts.secDocumentContext,
   });
 }
 

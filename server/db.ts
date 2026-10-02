@@ -16,6 +16,7 @@ import type {
   SourceKind,
   SourceTier,
   TimeBasis,
+  SecDocumentContext,
 } from "./types.js";
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
@@ -24,6 +25,53 @@ import { researchPublisherDomain } from "./publisher-domain.js";
 // but only observations with an identified collector can enter live research
 // or current operational usage totals.
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
+
+const SEC_OUTCOMES = new Set(["success", "empty", "failed", "invalid", "rate_limited"]);
+const SEC_REASONS = new Set(["primary_selected", "unique_exhibit_selected", "missing_exhibit", "ambiguous_exhibit", "invalid_exhibit_link", "primary_unavailable", "exhibit_unavailable", "unverified_event_link"]);
+function serializeSecDocumentContext(value: SecDocumentContext): string {
+  if (value.version !== "sec-document-context/1" || !/^\d{1,10}$/.test(value.cik) || !/^\d{10}-\d{2}-\d{6}$/.test(value.accessionNo)
+    || !Number.isSafeInteger(value.acceptedAt) || (value.filedAt != null && !Number.isSafeInteger(value.filedAt))
+    || !SEC_REASONS.has(value.selectionReason) || !["ready", "incomplete"].includes(value.classificationInputStatus)
+    || (value.item202Link != null && (value.item202Link.kind === "linked"
+      ? value.item202Link.itemCode !== "2.02" || value.item202Link.exhibitNumber !== "99.1" || value.item202Link.supportingText.length > 1500
+      : value.item202Link.kind !== "unverified" || !["missing_item_body", "missing_results_attachment_reference", "different_results_exhibit", "ambiguous_results_reference", "conflicting_table_description"].includes(value.item202Link.reason)))
+    || !Array.isArray(value.documents) || value.documents.length > 2) throw new Error("SEC document context is invalid");
+  for (const doc of value.documents) {
+    if (!["8k_primary", "earnings_exhibit_99_1"].includes(doc.role) || !SEC_OUTCOMES.has(doc.outcome)
+      || typeof doc.url !== "string" || doc.url.length > 2048 || typeof doc.excerpt !== "string" || doc.excerpt.length > 3000
+      || !Number.isSafeInteger(doc.startedAt) || !Number.isSafeInteger(doc.completedAt)
+      || (doc.retrievedAt != null && !Number.isSafeInteger(doc.retrievedAt))
+      || (doc.bodyBytes != null && (!Number.isSafeInteger(doc.bodyBytes) || doc.bodyBytes < 0))
+      || (doc.bodySha256 != null && !/^[a-f0-9]{64}$/.test(doc.bodySha256))
+      || (doc.errorCode != null && !/^(?:http_429|http_error|redirect_rejected|content_type|body_too_large|timeout|request_failed|invalid_primary_url)$/.test(doc.errorCode))) throw new Error("SEC document attempt is invalid");
+  }
+  if (value.documents.length < 1 || value.documents[0]?.role !== "8k_primary"
+    || value.documents[0]?.url !== value.primaryUrl
+    || (value.documents.length === 2 && value.documents[1]?.role !== "earnings_exhibit_99_1")) throw new Error("SEC document attempt order is invalid");
+  const archiveDirectory = `https://www.sec.gov/Archives/edgar/data/${Number(value.cik)}/${value.accessionNo.replace(/-/g, "")}/`;
+  for (const doc of value.documents) {
+    if (doc.errorCode !== "invalid_primary_url" && (!doc.url.startsWith(archiveDirectory) || !/^[^/]+\.htm(?:l)?$/i.test(doc.url.slice(archiveDirectory.length)) || /[?#]/.test(doc.url))) {
+      throw new Error("SEC document URL is outside the filing archive directory");
+    }
+    if (doc.completedAt < doc.startedAt || (doc.retrievedAt != null && (doc.retrievedAt < doc.startedAt || doc.retrievedAt > doc.completedAt))) {
+      throw new Error("SEC document attempt clocks are inconsistent");
+    }
+  }
+  const selected = value.documents.find((doc) => doc.role === value.selectedRole && doc.url === value.selectedUrl);
+  if (value.classificationInputStatus === "ready") {
+    if (!value.selectedRole || !value.selectedUrl || !selected || selected.outcome !== "success" || !selected.excerpt
+      || selected.retrievedAt == null || selected.bodySha256 == null
+      || (value.selectedRole === "earnings_exhibit_99_1" && value.item202Link?.kind !== "linked")) throw new Error("Ready SEC context lacks validated selected evidence");
+  } else if (value.selectedRole != null || value.selectedUrl != null) throw new Error("Incomplete SEC context cannot select a document");
+  if (value.selectionReason === "unverified_event_link" && value.item202Link?.kind !== "unverified") throw new Error("Unverified event link reason lacks its validation outcome");
+  const json = JSON.stringify(value);
+  if (Buffer.byteLength(json) > 64 * 1024) throw new Error("SEC document context exceeds 64 KiB");
+  return json;
+}
+function parseSecDocumentContext(json: string | null | undefined): SecDocumentContext | null {
+  if (json == null) return null;
+  try { return JSON.parse(serializeSecDocumentContext(JSON.parse(json) as SecDocumentContext)) as SecDocumentContext; } catch { return null; }
+}
 
 function processIsAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
@@ -136,6 +184,7 @@ CREATE TABLE IF NOT EXISTS source_deliveries (
   adapter_version TEXT NOT NULL,
   error TEXT,
   processing_required INTEGER NOT NULL DEFAULT 0 CHECK (processing_required IN (0, 1)),
+  sec_document_context_json TEXT,
   CHECK (parsed_item_count >= 0),
   CHECK (result IN ('success', 'empty', 'partial', 'failed', 'rate_limited', 'invalid'))
 );
@@ -289,6 +338,7 @@ export interface MentionRow {
   id: string;
   company_id: string;
   delivery_id: string | null;
+  sec_document_context_json?: string | null;
   source_name: string;
   source_url: string;
   source_kind: string;
@@ -474,6 +524,7 @@ export interface SourceDeliveryInput {
   error?: string | null;
   /** True when each fetched item must pass through its domain-specific processor. */
   processingRequired?: boolean;
+  secDocumentContext?: SecDocumentContext | null;
 }
 
 export interface SourceIngestionOutcomeInput {
@@ -529,6 +580,7 @@ export class Desk {
     if (!deliveryCols.has("processing_required")) {
       this.db.exec("ALTER TABLE source_deliveries ADD COLUMN processing_required INTEGER NOT NULL DEFAULT 0 CHECK (processing_required IN (0, 1))");
     }
+    if (!deliveryCols.has("sec_document_context_json")) this.db.exec("ALTER TABLE source_deliveries ADD COLUMN sec_document_context_json TEXT");
     const jevAttemptCols = new Set(
       (this.db.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name),
     );
@@ -689,7 +741,7 @@ export class Desk {
       SELECT o.id, o.company_id, o.source_name, o.source_url, o.source_kind, o.source_tier,
         o.title, o.snippet, o.publisher_published_at AS published_at, o.publisher_published_at,
         o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector, o.delivery_id,
-        o.publisher_name, o.publisher_domain, o.filed_at, o.scoped,
+        o.publisher_name, o.publisher_domain, o.filed_at, o.scoped, d.sec_document_context_json AS sec_document_context_json,
         COALESCE(c.disposition, j.status) AS status, j.sentiment, j.confidence, j.p_pos, j.p_neu, j.p_neg, j.about, j.material,
         j.novel, j.credible, j.investor_relevant, j.event_type, j.takeaway, j.magnitude,
         j.surprise, j.event_score, j.impact, j.weight, j.exclude, j.engine, j.input_tokens,
@@ -712,6 +764,7 @@ export class Desk {
         c.estimated_cost_usd AS classification_estimated_cost_usd, c.latency_ms AS classification_latency_ms,
         c.classified_at AS classification_classified_at
       FROM source_observations o JOIN jev_judgments j ON j.observation_id = o.id
+      LEFT JOIN source_deliveries d ON d.id = o.delivery_id
       LEFT JOIN categorical_classifications c ON c.observation_id = o.id`);
   }
 
@@ -815,9 +868,21 @@ export class Desk {
     const deliveryId = m.deliveryId ?? null;
     if (deliveryId != null) {
       const delivery = this.db.prepare(
-        `SELECT collector, company_id, adapter_version, result FROM source_deliveries WHERE id = ?`,
-      ).get(deliveryId) as { collector: string; company_id: string | null; adapter_version: string; result: string } | undefined;
+        `SELECT collector, company_id, adapter_version, result, sec_document_context_json FROM source_deliveries WHERE id = ?`,
+      ).get(deliveryId) as { collector: string; company_id: string | null; adapter_version: string; result: string; sec_document_context_json: string | null } | undefined;
       if (!delivery) throw new Error("Source observation references a missing delivery receipt");
+      const secContext = parseSecDocumentContext(delivery.sec_document_context_json);
+      if (delivery.sec_document_context_json != null && !secContext) throw new Error("SEC delivery context is invalid");
+      if (secContext) {
+        const selectedDoc = secContext.documents.find((doc) => doc.role === secContext.selectedRole && doc.url === secContext.selectedUrl);
+        if (secContext.classificationInputStatus !== "ready" || secContext.accessionNo !== sourceItemId
+          || secContext.selectedUrl !== m.sourceUrl || !selectedDoc || selectedDoc.outcome !== "success"
+          || selectedDoc.excerpt !== m.snippet || selectedDoc.retrievedAt !== m.retrievedAt
+          || selectedDoc.bodySha256 !== m.responseDigest
+          || m.publishedAt !== secContext.acceptedAt || (m.filedAt ?? null) !== secContext.filedAt) {
+          throw new Error("SEC observation does not match its selected filing document evidence");
+        }
+      }
       if (delivery.collector !== collector || delivery.company_id !== m.companyId || delivery.adapter_version !== adapterVersion) {
         throw new Error("Source observation does not match its delivery receipt");
       }
@@ -1402,20 +1467,29 @@ export class Desk {
   recordDelivery(delivery: SourceDeliveryInput): string {
     if (delivery.collector === "demo_simulation") throw new Error("Synthetic deliveries cannot be recorded by the application");
     if (delivery.collector === "legacy_unknown") throw new Error("Source collector provenance is required before recording a delivery");
+    if (delivery.secDocumentContext != null && delivery.collector !== "sec_edgar") throw new Error("SEC document context can only be stored on SEC deliveries");
+    const secContextJson = delivery.secDocumentContext == null ? null : serializeSecDocumentContext(delivery.secDocumentContext);
     const id = randomUUID();
     this.db.prepare(
       `INSERT OR IGNORE INTO source_deliveries
        (id, collector, company_id, request_key_hash, started_at, completed_at, result,
-        parsed_item_count, response_digest, adapter_version, error, processing_required)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        parsed_item_count, response_digest, adapter_version, error, processing_required, sec_document_context_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id, delivery.collector, delivery.companyId,
       createHash("sha256").update(delivery.requestKey).digest("hex"), delivery.startedAt,
       delivery.completedAt, delivery.result, delivery.parsedItemCount,
       delivery.responseDigest ?? null, delivery.adapterVersion,
-      delivery.error ? delivery.error.slice(0, 500) : null, delivery.processingRequired ? 1 : 0,
+      delivery.error ? delivery.error.slice(0, 500) : null, delivery.processingRequired ? 1 : 0, secContextJson,
     );
     return id;
+  }
+
+  /** Read the immutable SEC context attached to one delivery receipt. */
+  secDeliveryContext(deliveryId: string): SecDocumentContext | null {
+    const row = this.db.prepare("SELECT sec_document_context_json FROM source_deliveries WHERE id = ? AND collector = 'sec_edgar'")
+      .get(deliveryId) as { sec_document_context_json: string | null } | undefined;
+    return parseSecDocumentContext(row?.sec_document_context_json);
   }
 
   startDeliveryIngestion(deliveryId: string, expectedCount: number, startedAt = Date.now()): void {
@@ -2280,6 +2354,7 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     score,
     classification,
     error: status === "corrupt" ? (r.score_error ?? "Stored judgment is incomplete and was withheld.") : r.score_error,
+    secDocumentContext: parseSecDocumentContext(r.sec_document_context_json),
   };
 }
 

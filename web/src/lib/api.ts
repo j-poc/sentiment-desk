@@ -65,6 +65,8 @@ export interface CategoricalClassification {
 }
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
 export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
+export interface SecDocumentAttempt { role: "8k_primary" | "earnings_exhibit_99_1"; url: string; startedAt: number; completedAt: number; retrievedAt: number | null; httpStatus: number | null; outcome: "success" | "empty" | "failed" | "invalid" | "rate_limited"; bodyBytes: number | null; bodySha256: string | null; excerpt: string; errorCode: string | null; }
+export interface SecDocumentContext { version: "sec-document-context/1"; cik: string; accessionNo: string; primaryUrl: string; acceptedAt: number; filedAt: number | null; classificationInputStatus: "ready" | "incomplete"; selectionReason: "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link"; item202Link: { kind: "linked"; itemCode: "2.02"; exhibitNumber: "99.1"; supportingText: string } | { kind: "unverified"; reason: string } | null; selectedRole: SecDocumentAttempt["role"] | null; selectedUrl: string | null; documents: SecDocumentAttempt[]; }
 
 export interface ArchivedRun {
   label: string;
@@ -144,6 +146,7 @@ export interface Mention {
   score: MentionScore | null;
   classification?: CategoricalClassification | null;
   error: string | null;
+  secDocumentContext?: SecDocumentContext | null;
 }
 
 export interface MentionPage {

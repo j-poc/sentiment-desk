@@ -1,5 +1,26 @@
 # Sentiment Desk Agent Board
 
+## Current October 2 SEC evidence repair
+
+Baseline is pushed `3ab2f8c`; current source candidate is isolated on
+`codex/sec-exhibit-context`. The native goal is active; its older Jev wording
+is superseded by the user-selected OpenAI GPT-6 Luna direction in current
+contracts. Paid classifiers remain disabled for verification. Full Luna
+qualification, three-class reference coverage, sustained scale and investor
+value remain separate non-passes. Routine coding, records, builds and Git do
+not require action-rehearsal under the current installed skill.
+
+| Owner | Current scope | Status |
+|---|---|---|
+| /root/sec_exhibit_candidate_impl | Coupled SEC selector, bounded document attempts, receipt migration/DTO, source drawer and focused tests | Complete and frozen; eight retained source pairs and nine safety cases pass |
+| /root/sec_exhibit_design_judge | Requested Sol/xhigh design comparison, factual linkage grammar and account route | Advice complete; actual serving model unavailable |
+| /root/sec_exhibit_whole_build_review | Independent entire-build review plus concrete source falsifiers | Source/UI repair scoped PASS; whole-build FAIL for live Luna qualification |
+| /root/sec_traceability_comment_audit | Native read-only comment/suppression audit adaptation | Final changed source/test audit: no actionable comments, suppressions or private-path dependencies |
+| /root | Contracts, source freezes, runtime/UI/replay proof, integration, native gates and reviewed GitHub push | Source/UI/live/replay/migration proof complete; final scoped gates and exact reviewed push recorded separately |
+
+The following migration/recovery entries preserve historical evidence and do
+not replace current ownership or final gate receipts.
+
 Current implementation baseline follows pushed `cc2fd29`; the final full-cohort evaluation repair is under checkpoint review: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
 
 | Current owner | Owned scope | State |
