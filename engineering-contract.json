@@ -187,6 +187,44 @@
       "timeout_seconds": 120
     },
     {
+      "id": "categorical-chart",
+      "covers": [
+        "workflow_success",
+        "workflow_failure",
+        "change_review"
+      ],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "--maxWorkers=1",
+        "--testTimeout=20000",
+        "tests/categorical-chart.test.ts",
+        "tests/categorical-judgment.test.ts",
+        "tests/categorical-series.test.ts"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "radar-disabled",
+      "covers": [
+        "workflow_success",
+        "workflow_failure",
+        "change_review"
+      ],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "--maxWorkers=1",
+        "--testTimeout=20000",
+        "tests/radar.test.ts"
+      ],
+      "timeout_seconds": 120
+    },
+    {
       "id": "first-run-evidence",
       "covers": [
         "workflow_success",
@@ -276,21 +314,26 @@
       {
         "acceptance_index": 2,
         "check_ids": [
-          "etl-artifact-check"
+          "categorical-chart",
+          "offline-source-gates",
+          "production-build"
         ]
       },
       {
         "acceptance_index": 3,
         "check_ids": [
           "etl-artifact-check",
-          "production-build"
+          "offline-source-gates",
+          "first-run-evidence"
         ]
       },
       {
         "acceptance_index": 4,
         "check_ids": [
           "etl-artifact-check",
-          "offline-source-gates"
+          "offline-source-gates",
+          "production-build",
+          "bounded-luna-classifier"
         ]
       },
       {
@@ -303,12 +346,19 @@
       {
         "acceptance_index": 6,
         "check_ids": [
+          "radar-disabled",
+          "offline-source-gates"
+        ]
+      },
+      {
+        "acceptance_index": 7,
+        "check_ids": [
           "github-checkpoint",
           "committed-diff-check"
         ]
       },
       {
-        "acceptance_index": 7,
+        "acceptance_index": 8,
         "check_ids": [
           "first-run-evidence",
           "etl-artifact-check",
