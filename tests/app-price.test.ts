@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { createApp, type AppDeps } from "../server/app.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
+import { derivePriceChartState, derivePriceRefreshLabels } from "../web/src/App.js";
+import { SeriesChart } from "../web/src/components/SeriesChart.js";
 
 const now = Date.parse("2026-09-28T08:00:00.000Z");
 const hour = 60 * 60 * 1000;
@@ -14,6 +18,7 @@ function appWithPricePoints(
   sourceLatestAt: number | null,
   storedPoints: TestPricePoint[] = [],
   refreshError: Error | null = null,
+  countLegacyRows: () => number = () => 3,
 ) {
   const market = {
     priceSeries: vi.fn(async () => {
@@ -41,6 +46,7 @@ function appWithPricePoints(
     db: {
       companies: vi.fn(() => [{ id: "acme", name: "Acme", ticker: "ACME", sector: "Technology", aliases: [], color: "#123456" }]),
       priceWindow: vi.fn((_ticker: string, since: number) => savedRows.filter((point) => point.t >= since)),
+      legacyUnknownPriceRowCount: vi.fn(countLegacyRows),
     } as unknown as AppDeps["db"],
     dbPath: "/not-used/desk.db",
     pipeline: {} as AppDeps["pipeline"],
@@ -62,6 +68,7 @@ async function getPrice(app: ReturnType<typeof createApp>) {
     sourceLatestAt: number | null;
     resampling: string;
     refreshError: string | null;
+    quarantine: { legacyUnknownRows: number; scope: "all_saved_history" };
   }>;
 }
 
@@ -84,6 +91,7 @@ describe("price API source timestamps", () => {
 
     expect(body.points).toEqual([]);
     expect(body.sourceLatestAt).toBe(lastFridayClose);
+    expect(body.quarantine).toEqual({ legacyUnknownRows: 3, scope: "all_saved_history" });
   });
 
   it("returns actual in-window observations at their provider timestamps without filling gaps", async () => {
@@ -203,5 +211,62 @@ describe("price API source timestamps", () => {
     expect(body.points).toEqual([]);
     expect(body.sourceLatestAt).toBe(older.t);
     expect(body.refreshError).toBe("provider unavailable");
+  });
+
+  it("reads legacy quarantine count after the awaited provider refresh without changing provider arguments or observations", async () => {
+    const order: string[] = [];
+    const refreshed = { t: now - 30_000, price: 112, currency: "USD" };
+    const count = vi.fn(() => { order.push("count"); return 7; });
+    const { app, market } = appWithPricePoints([refreshed], refreshed.t, [], null, count);
+    market.priceSeries.mockImplementation(async () => {
+      order.push("refresh");
+      return {
+        points: [{ ...refreshed, collector: "yahoo_chart" as const, retrievedAt: now, adapterVersion: "yahoo-chart/1", deliveryId: "fixture-delivery-id" }],
+        delivery: "network" as const, servedAt: now, sourceLatestAt: refreshed.t, cacheAgeMs: null,
+      };
+    });
+
+    const body = await getPrice(app);
+
+    expect(order).toEqual(["refresh", "count"]);
+    expect(market.priceSeries).toHaveBeenCalledWith("ACME", 24);
+    expect(body.points).toMatchObject([{ t: refreshed.t, price: refreshed.price, currency: "USD" }]);
+    expect(body.quarantine).toEqual({ legacyUnknownRows: 7, scope: "all_saved_history" });
+  });
+
+  it("preserves the exact mixed-currency failure response without returning quarantine metadata", async () => {
+    const values = [
+      { t: now - 2 * minute, price: 100, currency: "USD" },
+      { t: now - minute, price: 100, currency: "EUR" },
+    ];
+    const { app } = appWithPricePoints(values, now - minute);
+
+    const response = await app.request("/api/companies/acme/price?ticker=ACME&hours=24");
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "price_currency_mismatch" });
+  });
+
+  it("does not present a successful empty refresh-failure DTO's quarantine count as current in the App chart", async () => {
+    const savedOutsideWindow = { t: now - 36 * hour, price: 125.5, currency: "USD", retrievedAt: now - 36 * hour };
+    const { app } = appWithPricePoints([], null, [savedOutsideWindow], new Error("provider unavailable"), () => 2883);
+    const response = await app.request("/api/companies/acme/price?ticker=ACME&hours=24");
+    expect(response.status).toBe(200);
+    const dto = await response.json();
+    expect(dto).toMatchObject({ points: [], refreshError: "provider unavailable", quarantine: { legacyUnknownRows: 2883, scope: "all_saved_history" } });
+    const headerLabels = derivePriceRefreshLabels(dto, true, false, dto.points.length);
+    expect(headerLabels.label).toBe("refresh failed · no verified points in this window");
+    expect(headerLabels.titleDetail).toBe("refresh failed; no verified price points are available in this window");
+    expect(headerLabels.label).not.toMatch(/saved series|saved data retained/i);
+    expect(headerLabels.titleDetail).not.toMatch(/saved series|saved data retained/i);
+    const chartState = derivePriceChartState(dto, false, false);
+    const html = renderToStaticMarkup(createElement(SeriesChart, {
+      points: [], hours: 24, loading: false, mode: "comparison", price: dto.points, currency: null,
+      latestPriceAt: dto.sourceLatestAt, latestScoreAvailableAt: null, ...chartState,
+    }));
+    expect(chartState.priceError).toBe(true);
+    expect(html).toContain("Price history unavailable");
+    expect(html).not.toContain("2,883 legacy price rows");
+    expect(html).not.toMatch(/saved series|saved data retained/i);
   });
 });

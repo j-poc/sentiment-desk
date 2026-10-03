@@ -8,7 +8,7 @@ import {
   rankIC,
   hasStrongIdentity,
   shouldAlert,
-  smoothedSeries,
+  weightedBucketSeries,
   summarizeReactions,
   weightedIndex,
 } from "../server/scoring.js";
@@ -142,70 +142,56 @@ describe("weightedIndex", () => {
   });
 });
 
-describe("smoothedSeries", () => {
-  const fiveMin = 5 * 60_000;
+describe("weightedBucketSeries", () => {
+  const bucket = 15 * 60_000;
 
-  it("jumps toward the event impact, then decays toward neutral", () => {
-    const now = 5 * fiveMin;
-    const items = [{ availableAt: 2.5 * fiveMin, impact: 80, weight: 1 }];
-    const s = smoothedSeries(items, 5 * fiveMin, fiveMin, now);
-    expect(s[0]?.v).toBeNull();
-    expect(s[1]?.v).toBeNull();
-    const at = s[2]?.v ?? 0; // alpha = (0.2 + 0.8) * 0.8 -> 80% of the way to 80
-    expect(at).toBeCloseTo(64, 0);
-    expect(s[3]?.v ?? 0).toBeLessThan(at);
-    expect(s[4]?.v ?? 0).toBeLessThan(s[3]?.v ?? 0);
-  });
-
-  it("is continuous after the first event: no null gaps for the chart", () => {
-    const now = 8 * fiveMin;
-    const items = [
-      { availableAt: 1 * fiveMin, impact: -60, weight: 0.8 },
-      { availableAt: 6 * fiveMin, impact: 70, weight: 0.9 },
+  it("computes an order-invariant weighted mean and matching count and record spread", () => {
+    const records = [
+      { availableAt: bucket + 1, impact: -60, weight: 1, scoredAt: bucket + 1 },
+      { availableAt: bucket + 2, impact: 40, weight: 3, scoredAt: bucket + 2 },
+      { availableAt: bucket + 3, impact: 95, weight: 0 },
     ];
-    const s = smoothedSeries(items, 8 * fiveMin, fiveMin, now);
-    for (const p of s.slice(1)) expect(p.v).not.toBeNull();
-  });
-
-  it("exposes bucket item count, impact spread, and actual scoring completion time", () => {
-    const now = 4 * fiveMin;
-    const s = smoothedSeries([
-      { availableAt: 2.1 * fiveMin, impact: -80, weight: 0.7, scoredAt: 9_000 },
-      { availableAt: 2.8 * fiveMin, impact: 45, weight: 0.9, scoredAt: 12_000 },
-    ], 4 * fiveMin, fiveMin, now);
-
-    expect(s[2]).toMatchObject({
-      n: 2,
-      itemImpactMin: -80,
-      itemImpactMax: 45,
-      lastScoredAt: 12_000,
+    const forward = weightedBucketSeries(records, 3 * bucket, bucket, 3 * bucket);
+    const reversed = weightedBucketSeries([...records].reverse(), 3 * bucket, bucket, 3 * bucket);
+    expect(forward).toEqual(reversed);
+    expect(forward[1]).toMatchObject({
+      v: 15,
+      n: 3,
+      itemImpactMin: -60,
+      itemImpactMax: 95,
+      lastScoredAt: bucket + 2,
     });
-    expect(s[3]?.lastScoredAt).toBeNull();
+    expect(forward[1]?.v).toBe(weightedIndex(records.slice(0, 2)));
   });
 
-  it("weights how hard an event pulls the index", () => {
-    const now = 2 * fiveMin;
-    const strong = smoothedSeries([{ availableAt: fiveMin, impact: 80, weight: 1 }], 2 * fiveMin, fiveMin, now);
-    const weak = smoothedSeries([{ availableAt: fiveMin, impact: 80, weight: 0.05 }], 2 * fiveMin, fiveMin, now);
-    expect(strong[1]?.v ?? 0).toBeGreaterThan(weak[1]?.v ?? 0);
+  it("keeps empty UTC buckets null and emits no non-null points after the last record", () => {
+    const now = 6 * bucket;
+    const series = weightedBucketSeries([
+      { availableAt: bucket + 1, impact: -20, weight: 1 },
+      { availableAt: 4 * bucket + 1, impact: 60, weight: 1 },
+    ], now, bucket, now);
+    expect(series.map((point) => point.v)).toEqual([null, -20, null, null, 60, null]);
+    expect(series.slice(5).every((point) => point.n === 0 && point.v == null)).toBe(true);
   });
 
-  it("keeps an overlapping timestamp stable when the selected window changes", () => {
-    const hour = 60 * 60_000;
-    const now = 14 * 24 * hour;
-    const items = [
-      { availableAt: now - 50 * hour, impact: -70, weight: 0.9 },
-      { availableAt: now - 20 * hour, impact: 40, weight: 0.8 },
-      { availableAt: now - 9 * hour, impact: 25, weight: 0.7 },
-    ];
-    const narrow = smoothedSeries(items, 6 * hour, bucketMsFor(6), now);
-    const wide = smoothedSeries(items, 7 * 24 * hour, bucketMsFor(168), now);
-    const sharedTime = narrow.find((point) => point.t === wide.find((candidate) => candidate.t === point.t)?.t
-      && point.t >= now - 2 * hour);
+  it("uses the selected half-open time window and retains zero-weight records in count and spread", () => {
+    const start = 3 * bucket + bucket / 2;
+    const now = 6 * bucket + bucket / 2;
+    const result = weightedBucketSeries([
+      { availableAt: start - 1, impact: 90, weight: 1 },
+      { availableAt: start, impact: -10, weight: 1, scoredAt: start },
+      { availableAt: 4 * bucket, impact: 30, weight: 1, scoredAt: 4 * bucket },
+      { availableAt: now, impact: 50, weight: 1, scoredAt: now },
+      { availableAt: now + 1, impact: -90, weight: 1 },
+      { availableAt: 5 * bucket, impact: 90, weight: 0 },
+      { availableAt: NaN, impact: 99, weight: 1 },
+    ], 3 * bucket, bucket, now);
 
-    expect(sharedTime).toBeDefined();
-    expect(sharedTime?.v).not.toBeNull();
-    expect(sharedTime?.v).toBeCloseTo(wide.find((point) => point.t === sharedTime?.t)?.v ?? NaN, 6);
+    expect(result.reduce((total, point) => total + point.n, 0)).toBe(3);
+    expect(result.filter((point) => point.n > 0).map((point) => point.v)).toEqual([-10, 30, null]);
+    expect(result.filter((point) => point.n > 0).map((point) => [point.itemImpactMin, point.itemImpactMax])).toEqual([[-10, -10], [30, 30], [90, 90]]);
+    expect(result.at(-1)?.t).toBe(now);
+    expect(result.at(-1)?.lastScoredAt).toBeNull();
   });
 
   it("uses one display bucket size across all selected windows", () => {

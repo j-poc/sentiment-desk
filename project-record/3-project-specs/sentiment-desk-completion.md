@@ -1,6 +1,6 @@
 # Sentiment Desk completion plan
 
-## Current user-directed rebuild — 2026-10-01
+## Current user-directed rebuild — 2026-10-02
 
 The user rejected the investment UI and explicitly replaced independent human
 labels with independent subagents. This supersedes the human-label requirement
@@ -9,23 +9,29 @@ remain intact for readback. Agent references are not human ground truth or
 broad population certification. The v2 engineering contract records the new
 observable UI and diagnostic acceptance criteria.
 
-The native goal service currently reports **blocked**, with the existing
-objective unachieved. Available tools do not expose a resume operation. This
-rebuild proceeds under the user's direct request; earlier active-status notes
-below are historical. Root integrates two separate worktrees (company UI and
-agent evaluation), owns real-source extraction/runtime/shared records and Git,
-and uses a GPT-6.1 Sol xhigh advisor plus independent final review.
+The native goal service reports **active** as of October 2, 2026, but its stored
+objective still names Jev as the core classifier. Available goal controls do
+not expose objective editing. The user's later direction selects OpenAI GPT-6
+Luna for new classifications while preserving historical Jev records; that
+direction governs this continuation. Root owns chart/data integration, shared
+records, runtime verification and Git, with isolated implementation and
+independent whole-build, investor and UI reviews.
 
-The authenticated Jev model-list API works. The user authorized spending from
-the existing account balance, and actual billing readback now establishes no available credit, auto-recharge
-off and no payment method. The spending bound is zero new paid requests.
-Source and independent reference labeling can proceed without paid calls.
+An earlier Jev account readback established no available credit, auto-recharge
+off and no payment method; that does not establish OpenAI account access or
+budget. The current shell has no direct OpenAI API credential, and no Luna API
+request has been made. Source collection and blinded agent reference labeling
+can proceed without paid model calls; new product classifications remain
+pending until a finite OpenAI account budget is available.
 
 Default preview remains saved data only. The UI must prioritize selected-company
 history and supporting sources, preserve a useful visible true-empty first run,
 and expose pending/failure/freshness/model-quality limitations. No synthetic
 application records, new Radar expansion, license or release action is allowed.
-The trace is `2026-10-01-investor-workspace-agent-evaluation.md`.
+The current continuation and chart review are recorded in
+`project-record/4-log/2026-10-02-luna-chart-completion-review.md` and its
+continuation TSV. The agent-reference extension and limitations are in
+`project-record/4-log/2026-10-02-luna-agent-reference-extension.md`.
 
 ## OpenAI Luna replacement — current scope
 
@@ -36,19 +42,24 @@ compatibility is not established. New records use a distinct categorical
 profile; genuine historical Jev probabilities, numeric indices and archive
 remain unchanged. No invented confidence or one-hot probability is permitted.
 
-Missing OpenAI API credentials currently block a live request. Codex/ChatGPT
-model access does not establish direct API access or billing. Paid dispatch
-requires finite request, byte and USD caps with durable pre-dispatch reservation.
-There is no automatic TypeSafe fallback. The new frozen SEC cohort and blinded
-agent references will qualify the exact Luna profile; fixture passes do not
-establish real classification quality. Current native goal wording cannot be
-edited/resumed through the available status-only tool and remains blocked.
+The current shell has no OpenAI API credential. Codex/ChatGPT model access does
+not establish direct API access or billing; Jev account balance cannot be
+carried over to OpenAI. Any paid dispatch requires a finite OpenAI request,
+byte and USD cap with durable pre-dispatch reservation. There is no automatic
+TypeSafe fallback. The frozen SEC cohort and blinded agent references qualify
+only the exact Luna profile; fixture passes do not establish real
+classification quality. The native goal remains active with stale Jev-core
+objective wording because its status-only controls cannot edit that objective.
 
-Two primary fresh-context agents have now completed30-case blinded reference
-sets from15 actual SEC issuers, with a third blinded review of the3 disputed
-cases. Their original disagreements and unsupported labels are retained.
-Negative sentiment is absent from the primary cohort, so the declared3class
-quality target is not qualified. The new backend/UI and evaluator are integrated;
+Two independent, blinded agents labeled all 48 items in the frozen SEC
+reference frame, with a separate third agent reviewing the three disputed
+cases. The original cohort contains 30 cases from 15 issuers; 18 additional
+cases form a post-hoc diagnostic extension. Each primary reviewer assigned 27
+neutral, one negative, one positive, and 19 null sentiment labels. Agreement
+on all 48 sentiment values includes the 19 matching nulls. Each directional
+class has only one case, and the extension was selected after seeing the
+neutral-heavy pilot. This does not qualify three-class performance or
+establish human ground truth. The new backend/UI and evaluator are integrated;
 local tests and request/recovery controls do not replace a direct authorized
 OpenAI run or provider usage/budget evidence. The actual integrated preview
 remains saved data only. Final scoped ETL and pushed-source readback are kept

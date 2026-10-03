@@ -158,7 +158,7 @@ describe("same-runtime snapshot reconciliation", () => {
     const first = scoredMention("first", 1_500);
     const moved = scoredMention("moved", 1_900);
     const bucket: ReconnectableScoreBucket & { expectedCount: number; loading: boolean } = {
-      companyId: "acme", bucketAt: 2_000, includeFromBoundary: true,
+      companyId: "acme", bucketFromMs: 1_000, bucketThroughMs: 2_000,
       expectedCount: 2, items: [first, moved], loading: false, expectedCountFreshness: "current" as const,
     };
     const demoted = { ...first, status: "off_target" as const, score: null };
@@ -180,7 +180,7 @@ describe("same-runtime snapshot reconciliation", () => {
     const old = scoredMention("old", 1_500);
     const latest = scoredMention("old", 1_750, "Newer event version");
     const bucket = {
-      companyId: "acme", bucketAt: 2_000, includeFromBoundary: true, items: [old], expectedCount: 1,
+      companyId: "acme", bucketFromMs: 1_000, bucketThroughMs: 2_000, items: [old], expectedCount: 1,
     };
     const result = reconcileScoreBucketOnReconnect(
       bucket,

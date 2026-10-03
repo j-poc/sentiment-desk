@@ -334,6 +334,9 @@ export function MentionDrawer({
               <p className="mt-2 text-[10.5px] leading-relaxed text-white/40">
                 Impact is 100 × [P(positive) − P(negative)] impact points; the class is the most likely category. A neutral class can still carry directional impact.
               </p>
+              <p className="mt-2 rounded border border-amber-200/10 bg-amber-100/[0.025] px-2.5 py-2 text-[10px] leading-relaxed text-amber-100/55" role="note">
+                One historical model output, not a share-price move or an independent investor opinion. Jev quality and confidence calibration are unverified{mention.source.deliveryId == null ? "; this source has no linked delivery receipt." : "."}
+              </p>
 
               <div className="mt-3 border-t border-white/[0.05] pt-2">
                 {RUBRIC_ROWS.map((r) => {

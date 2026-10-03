@@ -1,6 +1,17 @@
 # Operational Sentiment Desk, then Opportunity Radar
 
-Status (2026-09-29): The whole-build detector review found a missing saved-feed
+## Current user-directed status — 2026-10-02
+
+OpenAI GPT-6 Luna is the selected classifier for new observations; saved Jev
+judgments remain historical evidence with separate semantics. The goal service
+currently reports active, while its stored objective still says Jev is core.
+The available goal controls cannot edit that text. The local environment has no
+OpenAI API credential or provider spend readback, so no Luna request has been
+made and new classifications remain pending. Keep Opportunity Radar disabled
+until the Sentiment Desk acceptance gates pass. The current work and evidence
+limits are tracked in `project-record/3-project-specs/sentiment-desk-completion.md`.
+
+Historical status (2026-09-29): The whole-build detector review found a missing saved-feed
 recovery path and stale phase-gate records. Server-side filter pagination and
 all-history recovery for pending/failed judgments are implemented and verified;
 the post-review five-check ETL evidence and final reviewer disposition are in
@@ -40,14 +51,15 @@ Radar until the Sentiment Desk gates pass.
 ## Intent
 
 Finish the current local Sentiment Desk before adding Opportunity Radar. The
-desk is complete when a researcher can follow a real source item from public
-collection through Jev's unchanged per-item sentiment judgment into the local
-dashboard, understand source timing and delivery health, and recover the SQLite
-service without losing history.
+desk is complete when a researcher can follow a real source item from
+authorized public collection through its saved OpenAI Luna categorical
+judgment into the local dashboard, understand source timing and delivery
+health, and recover the SQLite service without losing history. Genuine Jev
+judgments remain available only in the clearly labeled historical view; they
+are never treated as Luna categories or used to fill the Luna view.
 
-Jev remains the per-item sentiment and event classifier. The initial Radar
-implementation followed an earlier local Desk gate and compares Jev-scored
-observations already in the local ledger. Later account, source-rights, and
+The initial Radar implementation followed an earlier local Desk gate and
+compares saved Jev-scored observations. Later account, source-rights, and
 real-source-quality gates remain open, so do not expand or promote Radar now.
 Its design preserves publisher identity, source clocks, opposing directions,
 and coverage state rather than turning sentiment or source counts into a claim
@@ -56,10 +68,12 @@ of alpha.
 ## Scope
 
 Phase 1 closes the live-data, identity, timing, health, storage, and dashboard
-gaps. The first Phase 2 release compares event-category counts across equal
-company windows, groups exact-normalized headline copies, and lets the user
-inspect every publisher row, counter-direction, timestamp, and delivery state.
-It adds no second AI classifier. Both phases remain local and single-user.
+gaps. The Sentiment Desk uses a separate OpenAI Luna categorical profile for
+new records, preserving historical Jev judgments without conversion. The first
+Phase 2 Radar release compares event-category counts across equal company
+windows, groups exact-normalized headline copies, and lets the user inspect
+every publisher row, counter-direction, timestamp, and delivery state. Radar
+adds no additional AI classifier. Both phases remain local and single-user.
 Provider enrollment, paid feeds, hosted deployment, and source-code licensing
 are not included.
 

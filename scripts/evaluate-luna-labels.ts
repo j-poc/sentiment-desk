@@ -25,14 +25,21 @@ type OpenAIClassifierModule = {
   estimateOpenAICostUsd(inputTokens: number, cachedInputTokens: number | null, cacheWriteInputTokens: number | null, outputTokens: number, modelReturned: string | null, serviceTier: string | null): number | null;
 };
 
-function argumentsFrom(argv: string[]): { labelsPath: string; runPath?: string; outputPath?: string } {
+function argumentsFrom(argv: string[]): { labelsPath: string; runPath?: string; outputPath?: string; acceptPilotUnverified: boolean } {
   const values = new Map<string, string>();
+  let acceptPilotUnverified = false;
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
     if (key === "--help" || key === "-h") {
       console.log("Usage: npx tsx scripts/evaluate-luna-labels.ts --labels <local-json> [--run <local-json>] [--out <report-json>]");
+      console.log("       Add --accept-pilot-unverified only when a validated pilot diagnostic is expected to remain UNVERIFIED.");
       console.log("This offline command validates the frozen categorical Luna profile and saved run; it makes no network or model calls.");
       process.exit(0);
+    }
+    if (key === "--accept-pilot-unverified") {
+      if (acceptPilotUnverified) throw new Error("--accept-pilot-unverified may be supplied only once");
+      acceptPilotUnverified = true;
+      continue;
     }
     if (!["--labels", "--run", "--out"].includes(key ?? "")) throw new Error(`unsupported argument: ${key ?? "<missing>"}`);
     const value = argv[index + 1];
@@ -43,7 +50,12 @@ function argumentsFrom(argv: string[]): { labelsPath: string; runPath?: string; 
   }
   const labelsPath = values.get("--labels");
   if (!labelsPath) throw new Error("--labels is required");
-  return { labelsPath, runPath: values.get("--run"), outputPath: values.get("--out") };
+  return { labelsPath, runPath: values.get("--run"), outputPath: values.get("--out"), acceptPilotUnverified };
+}
+
+export function evaluatorExitCode(report: { mode?: unknown; status?: unknown }, acceptPilotUnverified: boolean): 0 | 2 {
+  if (acceptPilotUnverified) return report.mode === "luna-agent-reference-pilot" && report.status === "UNVERIFIED" ? 0 : 2;
+  return report.status === "FAIL" || report.status === "UNVERIFIED" ? 2 : 0;
 }
 
 function readJson(filePath: string): { bytes: Buffer; value: unknown } {
@@ -153,7 +165,7 @@ async function main(): Promise<void> {
   const report = await evaluateLunaFiles({ ...args, classifier });
   const output = `${JSON.stringify(report, null, 2)}\n`;
   process.stdout.write(output);
-  if (["FAIL", "UNVERIFIED"].includes(String(report.status))) process.exitCode = 2;
+  process.exitCode = evaluatorExitCode(report, args.acceptPilotUnverified);
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]!) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {

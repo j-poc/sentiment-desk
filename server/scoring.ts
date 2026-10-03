@@ -1,4 +1,5 @@
-import type { SourceTier } from "./types.js";
+import { createHash } from "node:crypto";
+import type { ImpactDistributionBin, SourceTier } from "./types.js";
 import { validateChoiceAnswer, validateNoulAnswer } from "./jev.js";
 import type { EventType, TakeawayKey } from "./rubric.js";
 import { EVENT_TYPES, RUBRIC, TAKEAWAY_KEYS } from "./rubric.js";
@@ -417,6 +418,7 @@ export function shouldAlert(p: AlertCheck): boolean {
 }
 
 export interface WeightedMention {
+  id?: string;
   availableAt: number;
   impact: number;
   weight: number;
@@ -436,6 +438,19 @@ export function weightedIndex(mentions: WeightedMention[]): number | null {
 }
 
 export interface SeriesBucket {
+  /** Inclusive start of the exact window-clipped interval represented. */
+  bucketStartAtMs: number;
+  /** UTC end of this 15-minute score-completion bucket. */
+  bucketEndAtMs: number;
+  /** Deterministic weighted mean of the eligible saved record impacts. */
+  weightedMeanImpact: number | null;
+  /** Number of eligible saved scored records used for both mean and spread. */
+  scoredRecordCount: number;
+  recordImpactMin: number | null;
+  recordImpactMax: number | null;
+  latestRecordScoredAtMs: number | null;
+  bucketSnapshotKey: string | null;
+  /** Legacy aliases retained for existing chart/watchlist callers. */
   t: number;
   v: number | null;
   n: number;
@@ -444,83 +459,108 @@ export interface SeriesBucket {
   lastScoredAt: number | null;
 }
 
-/** Keep the score-time index comparable when users change the visible range. */
-export const SERIES_DECAY_HALF_LIFE_MS = 8 * 60 * 60_000;
 export const SERIES_BUCKET_MS = 15 * 60_000;
+export const IMPACT_HISTOGRAM_BIN_COUNT = 20;
+export const IMPACT_HISTOGRAM_BIN_WIDTH = 10;
+
+/** Unweighted saved-record histogram on fixed ten-point impact bins. */
+export function impactDistribution(impacts: number[]): ImpactDistributionBin[] {
+  const counts = Array<number>(IMPACT_HISTOGRAM_BIN_COUNT).fill(0);
+  for (const impact of impacts) {
+    if (!Number.isFinite(impact) || impact < -100 || impact > 100) continue;
+    const index = Math.min(IMPACT_HISTOGRAM_BIN_COUNT - 1,
+      Math.floor((impact + 100) / IMPACT_HISTOGRAM_BIN_WIDTH));
+    counts[index] = (counts[index] ?? 0) + 1;
+  }
+  return counts.map((count, index) => ({
+    from: -100 + index * IMPACT_HISTOGRAM_BIN_WIDTH,
+    through: -100 + (index + 1) * IMPACT_HISTOGRAM_BIN_WIDTH,
+    includeThrough: index === IMPACT_HISTOGRAM_BIN_COUNT - 1,
+    count,
+  }));
+}
 
 /**
- * Reconstructed score-availability index over a window. A judgment enters the
- * series only when its completed score became available; between judgments the
- * displayed index decays toward neutral with one fixed half-life, independent
- * of the selected window. Prior events seed the visible range so zooming does
- * not reset the state. This is a model-derived summary, not an observed market
- * measure or an independently validated crowd-sentiment series.
+ * Observed score-time buckets. Each point is the weighted mean of actual,
+ * non-negative-weight judgments with valid impact completed in that UTC
+ * bucket. Each represented interval is half-open [start, end). Empty buckets
+ * stay null; no carry-forward or decay is calculated.
  */
-export function smoothedSeries(
+export function weightedBucketSeries(
   mentions: WeightedMention[],
   windowMs: number,
   bucketMs: number,
   nowMs: number,
-  halfLifeMs = SERIES_DECAY_HALF_LIFE_MS,
 ): SeriesBucket[] {
-  const start = nowMs - windowMs;
+  const start = nowMs - Math.max(0, windowMs);
   const safeBucketMs = Math.max(1, bucketMs);
-  const safeHalfLifeMs = Math.max(1, halfLifeMs);
-  const sorted = mentions
-    .filter((m) => m.availableAt <= nowMs)
-    .sort((a, b) => a.availableAt - b.availableAt);
-
   const first = Math.floor(start / safeBucketMs) * safeBucketMs;
   const last = Math.ceil(nowMs / safeBucketMs) * safeBucketMs;
+  const valid = mentions
+    .filter((mention) => Number.isFinite(mention.availableAt)
+      && Number.isFinite(mention.impact)
+      && Number.isFinite(mention.weight)
+      && mention.impact >= -100
+      && mention.impact <= 100
+      && mention.availableAt >= start
+      && mention.availableAt < nowMs
+      && mention.weight >= 0)
+    // A canonical tie-break makes floating-point summation independent of DB
+    // row order when multiple judgments share a completion timestamp.
+    .sort((a, b) => a.availableAt - b.availableAt
+      || a.impact - b.impact
+      || a.weight - b.weight
+      || (a.scoredAt ?? 0) - (b.scoredAt ?? 0)
+      || (a.id ?? "").localeCompare(b.id ?? ""));
   const out: SeriesBucket[] = [];
-  let v = 0;
-  let stateAt: number | null = null;
-  let mi = 0;
+  let cursor = 0;
 
-  const applyEvent = (event: WeightedMention): void => {
-    if (stateAt != null && event.availableAt > stateAt) {
-      v *= Math.exp(-((event.availableAt - stateAt) * Math.LN2) / safeHalfLifeMs);
-    }
-    const w = Math.min(1, Math.max(0.05, event.weight));
-    const alpha = Math.min(1, 0.2 + 0.8 * w) * 0.8;
-    v = v + alpha * (event.impact - v);
-    stateAt = event.availableAt;
-  };
-
-  // Reconstruct the exact state before the displayed window instead of
-  // treating every zoom level as a fresh index that starts at neutral.
-  while (mi < sorted.length && (sorted[mi]?.availableAt ?? Infinity) < first) {
-    applyEvent(sorted[mi++]!);
-  }
-
-  for (let t = first; t < last; t += safeBucketMs) {
-    const sampleAt = Math.min(t + safeBucketMs, nowMs);
-    let n = 0;
-    let itemImpactMin: number | null = null;
-    let itemImpactMax: number | null = null;
-    let lastScoredAt: number | null = null;
-    while (mi < sorted.length && (sorted[mi]?.availableAt ?? Infinity) <= sampleAt) {
-      const m = sorted[mi++]!;
-      applyEvent(m);
-      n += 1;
-      itemImpactMin = itemImpactMin == null ? m.impact : Math.min(itemImpactMin, m.impact);
-      itemImpactMax = itemImpactMax == null ? m.impact : Math.max(itemImpactMax, m.impact);
-      if (Number.isFinite(m.scoredAt)) {
-        lastScoredAt = lastScoredAt == null ? m.scoredAt! : Math.max(lastScoredAt, m.scoredAt!);
+  for (let bucketStart = first; bucketStart < last; bucketStart += safeBucketMs) {
+    const from = Math.max(start, bucketStart);
+    const through = Math.min(nowMs, bucketStart + safeBucketMs);
+    const bucket: WeightedMention[] = [];
+    while (cursor < valid.length) {
+      const mention = valid[cursor]!;
+      if (mention.availableAt < from) {
+        cursor += 1;
+        continue;
       }
+      if (mention.availableAt >= through) break;
+      bucket.push(mention);
+      cursor += 1;
     }
-    if (stateAt != null && sampleAt > stateAt) {
-      v *= Math.exp(-((sampleAt - stateAt) * Math.LN2) / safeHalfLifeMs);
-      stateAt = sampleAt;
-    }
-    const hasState = stateAt != null;
+    const impacts = bucket.map((mention) => mention.impact);
+    const value = weightedIndex(bucket);
+    const count = bucket.length;
+    const minimum = impacts.length ? Math.min(...impacts) : null;
+    const maximum = impacts.length ? Math.max(...impacts) : null;
+    const latest = bucket.reduce<number | null>(
+      (current, mention) => Number.isFinite(mention.scoredAt)
+        ? Math.max(current ?? mention.scoredAt!, mention.scoredAt!)
+        : current,
+      null,
+    );
+    const snapshotKey = bucket.length === 0 ? null : createHash("sha256").update(
+      [...bucket]
+        .sort((a, b) => (a.id ?? "").localeCompare(b.id ?? ""))
+        .map((mention) => `${mention.id ?? ""}\u0000${mention.scoredAt ?? mention.availableAt}\u0000${mention.impact}\u0000${mention.weight}\n`)
+        .join(""),
+    ).digest("hex");
     out.push({
-      t: sampleAt,
-      v: hasState ? round2(v) : null,
-      n,
-      itemImpactMin,
-      itemImpactMax,
-      lastScoredAt,
+      bucketStartAtMs: from,
+      bucketEndAtMs: through,
+      bucketSnapshotKey: snapshotKey,
+      weightedMeanImpact: value,
+      scoredRecordCount: count,
+      recordImpactMin: minimum,
+      recordImpactMax: maximum,
+      latestRecordScoredAtMs: latest,
+      t: through,
+      v: value,
+      n: count,
+      itemImpactMin: minimum,
+      itemImpactMax: maximum,
+      lastScoredAt: latest,
     });
   }
   return out;

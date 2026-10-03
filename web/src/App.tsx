@@ -36,6 +36,9 @@ import { StatusBar } from "./components/StatusBar.js";
 import { FirstRunEvidenceBrief } from "./components/FirstRunEvidenceBrief.js";
 import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
 import { initialChartViewForEvidence } from "./lib/categorical-chart.js";
+import { refreshedScoreBucketState, scoreBucketEvidenceBaseline, scoreBucketSnapshotMatches } from "./lib/series-chart-state.js";
+import { scoreBucketRetryMode } from "./lib/score-bucket-retry.js";
+import { isScoreBucketCoverage, sameScoreBucketCoverage } from "../../shared/score-bucket-coverage.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { filterMentionFeed, matchesMentionFeedFilter } from "./lib/mention-filters.js";
@@ -62,6 +65,31 @@ const WINDOWS = [
   { h: 72, label: "3D" },
   { h: 168, label: "7D" },
 ];
+
+export function derivePriceChartState(
+  source: PriceSeriesDTO | null,
+  loading: boolean,
+  transportError: boolean,
+): { priceLoading: boolean; priceError: boolean; priceQuarantine: PriceSeriesDTO["quarantine"] | undefined } {
+  return {
+    priceLoading: loading,
+    priceError: transportError || source?.refreshError != null,
+    priceQuarantine: source?.quarantine,
+  };
+}
+
+export function derivePriceRefreshLabels(
+  source: PriceSeriesDTO | null,
+  ready: boolean,
+  transportError: boolean,
+  pointCount: number,
+): { label: string | null; titleDetail: string | null } {
+  if (!transportError && source?.refreshError == null) return { label: null, titleDetail: null };
+  if (!ready) return { label: "price history unavailable", titleDetail: "price request failed" };
+  return pointCount > 0
+    ? { label: "refresh failed · keeping saved series", titleDetail: "refresh failed; verified saved points remain visible" }
+    : { label: "refresh failed · no verified points in this window", titleDetail: "refresh failed; no verified price points are available in this window" };
+}
 
 function windowLabel(hours: number): string {
   return WINDOWS.find((window) => window.h === hours)?.label ?? `${hours}H`;
@@ -100,12 +128,23 @@ type EvidenceBreadthState = {
 type ScoreBucketEvidenceState = {
   companyId: string;
   hours: number;
-  bucketAt: number;
-  includeFromBoundary: boolean;
+  bucketFromMs: number;
+  bucketThroughMs: number;
   expectedCount: number;
+  matchingRecordCount: number;
+  impactBin: number | null;
   expectedCountFreshness: "current" | "refreshing" | "error";
   items: Mention[];
   nextCursor: ScoreBucketEvidencePage["nextCursor"];
+  snapshotKey: string | null;
+  recordCount: number;
+  weightedMeanImpact: number | null;
+  recordImpactMin: number | null;
+  recordImpactMax: number | null;
+  impactDistribution: ScoreBucketEvidencePage["impactDistribution"];
+  coverageSummary: ScoreBucketEvidencePage["coverageSummary"] | null;
+  snapshotStale: boolean;
+  selectionExpired: boolean;
   loading: boolean;
   loadingMore: boolean;
   error: boolean;
@@ -274,14 +313,14 @@ export default function App() {
   const selectedSeriesHistoryLatestScoredAt = selectedSeriesReady ? seriesLatestScoreAvailableAt : null;
   const selectedSeriesError = selectedSeriesKey != null && seriesLoadErrorKey === selectedSeriesKey;
   const selectedSeriesLastScoredAt = selectedSeries.reduce<number | null>(
-    (latest, point) => point.n > 0 && point.lastScoredAt != null
-      ? Math.max(latest ?? point.lastScoredAt, point.lastScoredAt)
+    (latest, point) => point.scoredRecordCount > 0 && point.latestRecordScoredAtMs != null
+      ? Math.max(latest ?? point.latestRecordScoredAtMs, point.latestRecordScoredAtMs)
       : latest,
     null,
   );
   const selectedSeriesHasSentiment = selectedSeriesLastScoredAt != null;
-  const selectedSeriesScoredItemCount = selectedSeries.reduce((total, point) => total + point.n, 0);
-  const selectedSeriesScoredBucketCount = selectedSeries.filter((point) => point.n > 0).length;
+  const selectedSeriesScoredItemCount = selectedSeries.reduce((total, point) => total + point.scoredRecordCount, 0);
+  const selectedSeriesScoredBucketCount = selectedSeries.filter((point) => point.scoredRecordCount > 0).length;
   const selectedSeriesFreshness = !selectedSeriesReady && !selectedSeriesError
     ? "loading scores…"
     : selectedSeriesError
@@ -297,6 +336,8 @@ export default function App() {
   const selectedPriceSource = selectedPriceReady ? priceSource : null;
   const selectedPriceError = selectedSeriesKey != null && priceLoadErrorKey === selectedSeriesKey;
   const selectedPricePending = chartMode === "comparison" && selectedSeriesKey != null && !selectedPriceReady && !selectedPriceError;
+  const selectedPriceChartState = derivePriceChartState(selectedPriceSource, selectedPricePending, selectedPriceError);
+  const selectedPriceRefreshLabels = derivePriceRefreshLabels(selectedPriceSource, selectedPriceReady, selectedPriceError, selectedPrice.length);
   const chartHasPrice = chartMode === "comparison" && selectedPrice.length >= 2;
   const chartLoading = selectedSeriesKey != null && (
     (!selectedSeriesReady && !selectedSeriesError)
@@ -305,7 +346,7 @@ export default function App() {
 
   const refreshSeries = useCallback(async (companyId?: string) => {
     const id = companyId ?? selectedIdRef.current;
-    if (!id) return;
+    if (!id) return null;
     const hours = windowRef.current;
     const requestKey = `${id}:${hours}`;
     const requestSeq = ++seriesRequestSeq.current;
@@ -321,12 +362,23 @@ export default function App() {
         setSeriesLoadErrorKey(null);
         setScoreBucketEvidence((current) => {
           if (!current || current.companyId !== id || current.hours !== hours) return current;
-          const expectedCount = result.points.find((point) => point.t === current.bucketAt)?.n ?? 0;
-          return current.expectedCount === expectedCount && current.expectedCountFreshness === "current"
+          const refreshedState = refreshedScoreBucketState(result.points, current);
+          return current.expectedCount === refreshedState.expectedCount
+            && current.expectedCountFreshness === "current"
+            && current.snapshotStale === refreshedState.snapshotStale
+            && current.selectionExpired === refreshedState.selectionExpired
             ? current
-            : { ...current, expectedCount, expectedCountFreshness: "current" };
+            : {
+                ...current,
+                expectedCount: refreshedState.expectedCount,
+                expectedCountFreshness: "current",
+                snapshotStale: refreshedState.snapshotStale,
+                selectionExpired: refreshedState.selectionExpired,
+              };
         });
+        return result;
       }
+      return null;
     } catch {
       if (seriesRequestSeq.current === requestSeq && selectedIdRef.current === id && windowRef.current === hours) {
         setSeriesLoadErrorKey(requestKey);
@@ -334,6 +386,7 @@ export default function App() {
           ? { ...current, expectedCountFreshness: "error" }
           : current);
       }
+      return null;
     }
   }, []);
 
@@ -367,7 +420,9 @@ export default function App() {
       setPriceResultKey(requestKey);
       setPriceLoadErrorKey(null);
     } catch {
-      if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) setPriceLoadErrorKey(requestKey);
+      if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) {
+        setPriceLoadErrorKey(requestKey);
+      }
     }
   }, []);
 
@@ -966,8 +1021,9 @@ export default function App() {
   };
 
   const inspectScoreBucket = useCallback(async (
-    bucketAt: number,
-    includeFromBoundary: boolean,
+    bucketFromMs: number,
+    bucketThroughMs: number,
+    expectedSnapshotKey: string | null,
     expectedCount: number,
     returnFocus?: HTMLButtonElement,
   ) => {
@@ -979,16 +1035,22 @@ export default function App() {
     setFeedGroupFilter(null);
     setFeedFilter("all");
     setScoreBucketEvidence({
-      companyId, hours, bucketAt, includeFromBoundary, expectedCount,
+      companyId, hours, bucketFromMs, bucketThroughMs, expectedCount,
+      matchingRecordCount: expectedCount, impactBin: null,
       expectedCountFreshness: "current", items: [],
-      nextCursor: null, loading: true, loadingMore: false, error: false, loadMoreError: false,
+      nextCursor: null, snapshotKey: null, recordCount: expectedCount,
+      weightedMeanImpact: null, recordImpactMin: null, recordImpactMax: null,
+      impactDistribution: [], coverageSummary: null, snapshotStale: false,
+      selectionExpired: false,
+      loading: true, loadingMore: false, error: false, loadMoreError: false,
     });
     const params = new URLSearchParams({
-      through: String(bucketAt),
+      from: String(bucketFromMs),
+      through: String(bucketThroughMs),
       hours: String(hours),
-      includeFromBoundary: String(includeFromBoundary),
       limit: "50",
     });
+    if (expectedSnapshotKey) params.set("snapshot", expectedSnapshotKey);
     try {
       const page = await getJSON<ScoreBucketEvidencePage>(
         `/api/companies/${encodeURIComponent(companyId)}/score-bucket?${params}`,
@@ -996,40 +1058,186 @@ export default function App() {
       if (requestSeq !== scoreBucketRequestSeq.current || selectedIdRef.current !== companyId || windowRef.current !== hours) return;
       const items = page.items.filter((mention) => isApplicationMention(mention)
         && mention.status === "scored" && mention.score != null);
-      setScoreBucketEvidence((current) => !current || current.bucketAt !== bucketAt || current.companyId !== companyId
+      const coverageValid = isScoreBucketCoverage(page.coverageSummary, page.recordCount, bucketFromMs, bucketThroughMs);
+      const snapshotStale = page.bucketFromMs !== bucketFromMs || page.bucketThroughMs !== bucketThroughMs
+        || !scoreBucketSnapshotMatches(expectedSnapshotKey, expectedCount, page.snapshotKey, page.recordCount)
+        || page.matchingRecordCount !== page.recordCount || page.impactBin !== null
+        || page.impactDistribution.reduce((total, bin) => total + bin.count, 0) !== page.recordCount
+        || !coverageValid;
+      setScoreBucketEvidence((current) => !current || current.bucketThroughMs !== bucketThroughMs || current.companyId !== companyId
         ? current
-        : { ...current, items, nextCursor: page.nextCursor, loading: false, error: false });
-    } catch {
+        : {
+            ...current,
+            items,
+            nextCursor: page.nextCursor,
+            snapshotKey: page.snapshotKey,
+            recordCount: page.recordCount,
+            matchingRecordCount: page.matchingRecordCount,
+            impactBin: page.impactBin,
+            weightedMeanImpact: page.weightedMeanImpact,
+            recordImpactMin: page.recordImpactMin,
+            recordImpactMax: page.recordImpactMax,
+            impactDistribution: page.impactDistribution,
+            coverageSummary: coverageValid ? page.coverageSummary : null,
+            snapshotStale,
+            loading: false,
+            error: false,
+          });
+    } catch (error) {
       if (requestSeq !== scoreBucketRequestSeq.current) return;
-      setScoreBucketEvidence((current) => !current || current.bucketAt !== bucketAt || current.companyId !== companyId
+      const snapshotStale = error instanceof Error && error.message.includes("-> 409");
+      setScoreBucketEvidence((current) => !current || current.bucketThroughMs !== bucketThroughMs || current.companyId !== companyId
         ? current
-        : { ...current, loading: false, error: true });
+        : { ...current, loading: false, error: !snapshotStale, snapshotStale });
     }
   }, []);
+
+  const selectScoreBucketImpactBin = async (impactBin: number | null, retry = false) => {
+    const current = activeScoreBucketEvidence;
+    if (!current || current.loading || current.snapshotStale || current.snapshotKey == null
+      || (impactBin != null && (!Number.isInteger(impactBin) || impactBin < 0 || impactBin >= 20))) return;
+    if (impactBin === current.impactBin && !retry) return;
+    const requestSeq = ++scoreBucketRequestSeq.current;
+    const expectedMatchingCount = impactBin == null
+      ? current.recordCount
+      : current.impactDistribution.find((bin) => bin.from === -100 + impactBin * 10)?.count ?? -1;
+    setScoreBucketEvidence((latest) => !latest || latest.companyId !== current.companyId || latest.bucketThroughMs !== current.bucketThroughMs
+      ? latest
+      : {
+          ...latest,
+          impactBin,
+          matchingRecordCount: expectedMatchingCount,
+          items: [],
+          nextCursor: null,
+          loading: true,
+          loadingMore: false,
+          error: false,
+          loadMoreError: false,
+        });
+    const params = new URLSearchParams({
+      from: String(current.bucketFromMs),
+      through: String(current.bucketThroughMs),
+      hours: String(current.hours),
+      limit: "50",
+      snapshot: current.snapshotKey,
+    });
+    if (impactBin != null) params.set("impactBin", String(impactBin));
+    try {
+      const page = await getJSON<ScoreBucketEvidencePage>(
+        `/api/companies/${encodeURIComponent(current.companyId)}/score-bucket?${params}`,
+      );
+      if (requestSeq !== scoreBucketRequestSeq.current || selectedIdRef.current !== current.companyId
+        || windowRef.current !== current.hours) return;
+      const validRows = page.items.every((mention) => {
+        const impact = mention.score?.impact;
+        if (impactBin == null) return true;
+        const from = -100 + impactBin * 10;
+        const through = from + 10;
+        return impact != null && impact >= from && (impactBin === 19 ? impact <= through : impact < through);
+      });
+      const snapshotStale = page.snapshotKey !== current.snapshotKey
+        || page.recordCount !== current.recordCount
+        || page.matchingRecordCount !== expectedMatchingCount
+        || page.impactBin !== impactBin
+        || !validRows
+        || JSON.stringify(page.impactDistribution) !== JSON.stringify(current.impactDistribution)
+        || page.impactDistribution.reduce((total, bin) => total + bin.count, 0) !== page.recordCount
+        || current.coverageSummary == null
+        || !isScoreBucketCoverage(page.coverageSummary, page.recordCount, current.bucketFromMs, current.bucketThroughMs)
+        || !sameScoreBucketCoverage(current.coverageSummary, page.coverageSummary);
+      const items = page.items.filter((mention) => isApplicationMention(mention)
+        && mention.status === "scored" && mention.score != null);
+      setScoreBucketEvidence((latest) => !latest || latest.companyId !== current.companyId || latest.bucketThroughMs !== current.bucketThroughMs
+        ? latest
+        : {
+            ...latest,
+            items: snapshotStale ? [] : items,
+            nextCursor: snapshotStale ? null : page.nextCursor,
+            matchingRecordCount: page.matchingRecordCount,
+            impactBin: page.impactBin,
+            snapshotStale,
+            loading: false,
+            error: false,
+          });
+    } catch (error) {
+      if (requestSeq !== scoreBucketRequestSeq.current) return;
+      const snapshotStale = error instanceof Error && error.message.includes("-> 409");
+      setScoreBucketEvidence((latest) => !latest || latest.companyId !== current.companyId || latest.bucketThroughMs !== current.bucketThroughMs
+        ? latest
+        : { ...latest, loading: false, error: !snapshotStale, snapshotStale });
+    }
+  };
+
+  const reloadScoreBucketEvidence = useCallback(async () => {
+    const current = activeScoreBucketEvidence;
+    if (!current) return;
+    const requestSeq = scoreBucketRequestSeq.current;
+    const refreshed = await refreshSeries(current.companyId);
+    if (requestSeq !== scoreBucketRequestSeq.current
+      || selectedIdRef.current !== current.companyId
+      || windowRef.current !== current.hours
+      || !refreshed) return;
+    const baseline = scoreBucketEvidenceBaseline(refreshed.points, current.bucketFromMs, current.bucketThroughMs);
+    if (!baseline) {
+      setScoreBucketEvidence((latest) => !latest || latest.companyId !== current.companyId || latest.bucketFromMs !== current.bucketFromMs
+        ? latest
+        : { ...latest, expectedCount: 0, expectedCountFreshness: "current", selectionExpired: true, snapshotStale: true });
+      return;
+    }
+    void inspectScoreBucket(
+      baseline.bucketFromMs,
+      baseline.bucketThroughMs,
+      baseline.snapshotKey,
+      baseline.recordCount,
+    );
+  }, [activeScoreBucketEvidence, inspectScoreBucket, refreshSeries]);
+
+  const retryScoreBucketEvidence = () => {
+    const current = activeScoreBucketEvidence;
+    if (current && scoreBucketRetryMode(current) === "same-snapshot") {
+      void selectScoreBucketImpactBin(current.impactBin, true);
+      return;
+    }
+    void reloadScoreBucketEvidence();
+  };
 
   const loadOlderScoreBucketEvidence = async () => {
     const current = activeScoreBucketEvidence;
     if (!current || !current.nextCursor || current.loading || current.loadingMore || current.error) return;
     const requestSeq = scoreBucketRequestSeq.current;
     const cursor = current.nextCursor;
-    setScoreBucketEvidence((latest) => !latest || latest.bucketAt !== current.bucketAt || latest.companyId !== current.companyId
+    setScoreBucketEvidence((latest) => !latest || latest.bucketThroughMs !== current.bucketThroughMs || latest.companyId !== current.companyId
       ? latest
       : { ...latest, loadingMore: true, loadMoreError: false });
     const params = new URLSearchParams({
-      through: String(current.bucketAt),
+      from: String(current.bucketFromMs),
+      through: String(current.bucketThroughMs),
       hours: String(current.hours),
-      includeFromBoundary: String(current.includeFromBoundary),
       limit: "50",
       cursor: JSON.stringify(cursor),
+      snapshot: current.snapshotKey ?? "",
     });
+    if (current.impactBin != null) params.set("impactBin", String(current.impactBin));
     try {
       const page = await getJSON<ScoreBucketEvidencePage>(
         `/api/companies/${encodeURIComponent(current.companyId)}/score-bucket?${params}`,
       );
       if (requestSeq !== scoreBucketRequestSeq.current) return;
+      if (page.bucketFromMs !== current.bucketFromMs || page.bucketThroughMs !== current.bucketThroughMs
+        || page.snapshotKey !== current.snapshotKey || page.recordCount !== current.recordCount
+        || page.matchingRecordCount !== current.matchingRecordCount || page.impactBin !== current.impactBin
+        || JSON.stringify(page.impactDistribution) !== JSON.stringify(current.impactDistribution)
+        || current.coverageSummary == null
+        || !isScoreBucketCoverage(page.coverageSummary, page.recordCount, current.bucketFromMs, current.bucketThroughMs)
+        || !sameScoreBucketCoverage(current.coverageSummary, page.coverageSummary)) {
+        setScoreBucketEvidence((latest) => !latest || latest.bucketThroughMs !== current.bucketThroughMs || latest.companyId !== current.companyId
+          ? latest
+          : { ...latest, snapshotStale: true, loadingMore: false, loadMoreError: false });
+        return;
+      }
       const items = page.items.filter((mention) => isApplicationMention(mention)
         && mention.status === "scored" && mention.score != null);
-      setScoreBucketEvidence((latest) => !latest || latest.bucketAt !== current.bucketAt || latest.companyId !== current.companyId
+      setScoreBucketEvidence((latest) => !latest || latest.bucketThroughMs !== current.bucketThroughMs || latest.companyId !== current.companyId
         ? latest
         : {
             ...latest,
@@ -1038,11 +1246,12 @@ export default function App() {
             loadingMore: false,
             loadMoreError: false,
           });
-    } catch {
+    } catch (error) {
       if (requestSeq !== scoreBucketRequestSeq.current) return;
-      setScoreBucketEvidence((latest) => !latest || latest.bucketAt !== current.bucketAt || latest.companyId !== current.companyId
+      const snapshotStale = error instanceof Error && error.message.includes("-> 409");
+      setScoreBucketEvidence((latest) => !latest || latest.bucketThroughMs !== current.bucketThroughMs || latest.companyId !== current.companyId
         ? latest
-        : { ...latest, loadingMore: false, loadMoreError: true });
+        : { ...latest, loadingMore: false, loadMoreError: !snapshotStale, snapshotStale: snapshotStale || latest.snapshotStale });
     }
   };
 
@@ -1068,7 +1277,7 @@ export default function App() {
       });
       heading.focus({ preventScroll: true });
     });
-  }, [activeScoreBucketEvidence?.bucketAt]);
+  }, [activeScoreBucketEvidence?.bucketThroughMs]);
 
   return (
     <>
@@ -1226,7 +1435,7 @@ export default function App() {
                         <span title={health.health.classifier.enabled
                           ? "Luna is available for new categorical classifications. Historical Jev probabilities and this chart retain their original profile; no synthetic probability or impact is assigned."
                           : `New Luna classifications are paused: ${health.health.classifier.blockedReason ?? "classifier is unavailable"}. Historical Jev data keeps its original profile.`}>
-                          {health.health.classifier.enabled ? " · Luna ready" : " · Luna paused"}
+                          {health.health.classifier.enabled ? " · Luna ready" : " · New Luna classifications paused"}
                         </span>
                       )}
                     </span>
@@ -1346,29 +1555,29 @@ export default function App() {
               )}
               {selectedSeriesReady && !selectedSeriesHasSentiment && health?.health.classifier?.provider === "openai_luna" && chartMode === "sentiment" ? (
                 <section className="panel mt-2 px-3 py-3 text-[12px] text-white/55" role="status">
-                  No historical Jev index in this window. Inspect saved source records and categorical judgments below.
+                  No saved Jev-scored records in this window. Inspect saved source records and categorical judgments below.
                   <button type="button" className="ml-2 rounded border border-white/10 px-2 py-1 text-white/75" onClick={() => setChartMode("comparison")}>Inspect saved price history</button>
                 </section>
               ) : <div className="panel mt-2 shrink-0">
                 <div className="panel-head chart-panel-head">
                   <div className="chart-panel-topline">
                     <span className="micro">
-                      {chartMode === "comparison" ? "Historical Jev Impact Index + Price" : "Historical Jev Impact Index"}
+                      {chartMode === "comparison" ? "Historical Jev Weighted Mean + Price" : "Historical Jev Weighted Mean"}
                     </span>
                     <button
                       onClick={() => setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"))}
                       aria-pressed={chartMode === "comparison"}
-                  aria-label={chartMode === "comparison" ? "Switch to Jev impact index only" : "Compare Jev impact index with share price"}
+                      aria-label={chartMode === "comparison" ? "Switch to Jev weighted mean only" : "Compare Jev weighted mean impact with share price"}
                       className="tabnum rounded border border-white/10 px-1.5 py-[1px] hover:bg-white/[0.05]"
                     >
-                      {chartMode === "comparison" ? "Index only" : "Compare price"}
+                      {chartMode === "comparison" ? "Mean only" : "Compare price"}
                       <kbd className="ml-1">c</kbd>
                     </button>
                   </div>
                   <div className="chart-panel-meta flex items-center gap-2 text-[11px] text-white/60">
                     <span className="flex items-center gap-1">
                       <span className="inline-block h-[3px] w-3 rounded-sm bg-gradient-to-r from-rose-400 to-emerald-400" />
-                      Sequential index · fixed 8h decay · −100 to +100
+                      Saved-record weighted mean · impact points −100 to +100
                     </span>
                     <span title="Bars count Jev-scored source records completed in each 15-minute bucket. Repeated coverage may count more than once; bars do not count distinct stories or investors.">
                       <span className="mr-1 inline-block h-[7px] w-[7px] rounded-sm bg-slate-400/70" />scored records / 15m
@@ -1382,8 +1591,8 @@ export default function App() {
                     <span className="text-white/65">
                       {selectedSeriesFreshness}
                     </span>
-                    <span className="flex items-center gap-1 text-white/65" title="Dashed segments show the index fading between buckets with newly scored items.">
-                      <span className="inline-block w-3 border-t border-dashed border-slate-300/80" /> modeled decay
+                    <span className="text-white/65" title="Each populated bar summarizes saved Jev-scored records completed in one UTC-aligned 15-minute bucket. Empty intervals remain blank; no value is carried forward or decayed.">
+                      15m buckets · gaps preserved · no decay
                     </span>
                     {chartMode === "comparison" && (
                       <span className="flex items-center gap-1">
@@ -1393,11 +1602,11 @@ export default function App() {
                     {chartMode === "comparison" && (
                       <span
                         className={selectedPriceError || selectedPriceSource?.refreshError ? "text-amber-200" : "text-white/65"}
-                        title={selectedPriceSource ? `${selectedPriceCollector ?? "Provider unknown"}; delivery ${selectedPrice.at(-1)?.deliveryId ?? "unknown"}; latest source observation ${selectedPriceSource.sourceLatestAt == null ? "time unknown" : new Date(selectedPriceSource.sourceLatestAt).toISOString()}; latest point retrieved ${selectedPriceRetrievedAt == null ? "time unknown" : new Date(selectedPriceRetrievedAt).toISOString()}${selectedPriceSource.refreshError ? "; refresh failed; saved data retained" : ""}; served ${new Date(selectedPriceSource.servedAt).toISOString()}${selectedPriceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`}; only provider-timestamped points with known currency are plotted.` : undefined}
+                        title={selectedPriceSource ? `${selectedPriceCollector ?? "Provider unknown"}; delivery ${selectedPrice.at(-1)?.deliveryId ?? "unknown"}; latest source observation ${selectedPriceSource.sourceLatestAt == null ? "time unknown" : new Date(selectedPriceSource.sourceLatestAt).toISOString()}; latest point retrieved ${selectedPriceRetrievedAt == null ? "time unknown" : new Date(selectedPriceRetrievedAt).toISOString()}${selectedPriceRefreshLabels.titleDetail ? `; ${selectedPriceRefreshLabels.titleDetail}` : ""}; served ${new Date(selectedPriceSource.servedAt).toISOString()}${selectedPriceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`}; only provider-timestamped points with known currency are plotted.` : undefined}
                       >
-                        {selectedPriceError || selectedPriceSource?.refreshError ? selectedPriceReady ? "refresh failed · keeping saved series" : "price history unavailable" : selectedPriceSource
+                        {selectedPriceRefreshLabels.label ?? (selectedPriceSource
                           ? `${selectedPriceCollector ?? "provider unknown"} · ${selectedPriceSource.delivery.replaceAll("_", " ")}${selectedPriceSource.cacheAgeMs == null ? "" : ` ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`} · source ${timeAgo(selectedPriceSource.sourceLatestAt)}`
-                          : "price waiting"}
+                          : "price waiting")}
                       </span>
                     )}
                   </div>
@@ -1415,14 +1624,25 @@ export default function App() {
                       latestPriceAt={selectedPriceSource?.sourceLatestAt ?? null}
                       latestScoreAvailableAt={selectedSeriesHistoryLatestScoredAt}
                       onViewHistory={() => setWindowHours(168)}
-                      onSelectBucket={(bucketAt, includeFromBoundary, returnFocus) => {
-                        const bucket = selectedSeries.find((point) => point.t === bucketAt);
-                        void inspectScoreBucket(bucketAt, includeFromBoundary, bucket?.n ?? 0, returnFocus);
+                      onSelectBucket={(bucketFromMs, bucketThroughMs, returnFocus) => {
+                        const bucket = selectedSeries.find((point) => point.bucketEndAtMs === bucketThroughMs);
+                        void inspectScoreBucket(bucketFromMs, bucketThroughMs, bucket?.bucketSnapshotKey ?? null, bucket?.scoredRecordCount ?? 0, returnFocus);
                       }}
                       bucketEvidence={activeScoreBucketEvidence ? (
                         <ScoreBucketEvidence
-                          bucketAt={activeScoreBucketEvidence.bucketAt}
+                          bucketFromMs={activeScoreBucketEvidence.bucketFromMs}
+                          bucketThroughMs={activeScoreBucketEvidence.bucketThroughMs}
                           expectedCount={activeScoreBucketEvidence.expectedCount}
+                          recordCount={activeScoreBucketEvidence.recordCount}
+                          matchingRecordCount={activeScoreBucketEvidence.matchingRecordCount}
+                          impactBin={activeScoreBucketEvidence.impactBin}
+                          weightedMeanImpact={activeScoreBucketEvidence.weightedMeanImpact}
+                          recordImpactMin={activeScoreBucketEvidence.recordImpactMin}
+                          recordImpactMax={activeScoreBucketEvidence.recordImpactMax}
+                          impactDistribution={activeScoreBucketEvidence.impactDistribution}
+                          coverageSummary={activeScoreBucketEvidence.coverageSummary}
+                          snapshotStale={activeScoreBucketEvidence.snapshotStale}
+                          selectionExpired={activeScoreBucketEvidence.selectionExpired}
                           expectedCountFreshness={activeScoreBucketEvidence.expectedCountFreshness}
                           mentions={activeScoreBucketEvidence.items}
                           loading={activeScoreBucketEvidence.loading}
@@ -1433,18 +1653,14 @@ export default function App() {
                           headingRef={scoreBucketHeadingRef}
                           onClose={closeScoreBucketEvidence}
                           onOpenMention={openDrawerMention}
-                          onRetry={() => void inspectScoreBucket(
-                            activeScoreBucketEvidence.bucketAt,
-                            activeScoreBucketEvidence.includeFromBoundary,
-                            activeScoreBucketEvidence.expectedCount,
-                          )}
+                          onRetry={retryScoreBucketEvidence}
                           refreshWarning={scoreBucketRefreshWarning}
                           onRetryRefresh={() => void refreshBackendSnapshot()}
                           onLoadMore={() => void loadOlderScoreBucketEvidence()}
+                          onSelectImpactBin={(bin) => void selectScoreBucketImpactBin(bin)}
                         />
                       ) : null}
-                      priceLoading={selectedPricePending}
-                      priceError={selectedPriceError}
+                      {...selectedPriceChartState}
                       seriesError={selectedSeriesError}
                       seriesReady={selectedSeriesReady}
                     />

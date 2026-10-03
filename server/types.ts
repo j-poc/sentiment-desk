@@ -332,6 +332,15 @@ export interface CompanySnapshot {
 }
 
 export interface SeriesPoint {
+  bucketStartAtMs: number;
+  bucketEndAtMs: number;
+  weightedMeanImpact: number | null;
+  scoredRecordCount: number;
+  recordImpactMin: number | null;
+  recordImpactMax: number | null;
+  latestRecordScoredAtMs: number | null;
+  bucketSnapshotKey: string | null;
+  /** Compatibility aliases for the existing visual consumers. */
   t: number;
   v: number | null;
   n: number;
@@ -340,7 +349,20 @@ export interface SeriesPoint {
   lastScoredAt: number | null;
 }
 
+export interface ImpactDistributionBin {
+  from: number;
+  through: number;
+  includeThrough: boolean;
+  count: number;
+}
+
 export interface SeriesResult {
+  metric: "weighted_mean_impact";
+  bucketMs: number;
+  windowStartMs: number;
+  windowEndMs: number;
+  loadedRecordCount: number;
+  populatedBucketCount: number;
   points: SeriesPoint[];
   /** Latest Jev completion time across saved identified score history, even outside the visible window. */
   latestScoreAvailableAt: number | null;

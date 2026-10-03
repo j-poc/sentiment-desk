@@ -14,5 +14,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["server", "web/src", "tests", "scripts/evaluate-jev-labels.ts", "vite.config.ts"]
+  "include": ["server", "shared", "web/src", "tests", "scripts/evaluate-jev-labels.ts", "vite.config.ts"]
 }

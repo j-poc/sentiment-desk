@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import { withReadDeadline } from "./bounded-read.js";
+import type { ScoreBucketCoverage } from "../../../shared/score-bucket-coverage.js";
 
 export interface EarningsSurprise {
   percent: number;
@@ -248,9 +249,24 @@ export interface JevAttemptSummary {
 export interface ScoreBucketEvidencePage {
   bucketFromMs: number;
   bucketThroughMs: number;
-  includeFromBoundary: boolean;
+  recordCount: number;
+  matchingRecordCount: number;
+  impactBin: number | null;
+  weightedMeanImpact: number | null;
+  recordImpactMin: number | null;
+  recordImpactMax: number | null;
+  snapshotKey: string;
+  impactDistribution: ImpactDistributionBin[];
+  coverageSummary: ScoreBucketCoverage;
   items: Mention[];
-  nextCursor: { scoredAt: number; id: string } | null;
+  nextCursor: { companyId: string; scoredAt: number; id: string; fromMs: number; throughMs: number; impactBin: number | null; snapshotKey: string } | null;
+}
+
+export interface ImpactDistributionBin {
+  from: number;
+  through: number;
+  includeThrough: boolean;
+  count: number;
 }
 
 export interface ReactionEvent {
@@ -377,6 +393,15 @@ export interface RadarEvidencePageDTO {
 }
 
 export interface SeriesPoint {
+  bucketStartAtMs: number;
+  bucketEndAtMs: number;
+  weightedMeanImpact: number | null;
+  scoredRecordCount: number;
+  recordImpactMin: number | null;
+  recordImpactMax: number | null;
+  latestRecordScoredAtMs: number | null;
+  bucketSnapshotKey: string | null;
+  /** Compatibility aliases retained while chart and watchlist consumers migrate. */
   t: number;
   v: number | null;
   n: number;
@@ -386,6 +411,12 @@ export interface SeriesPoint {
 }
 
 export interface SeriesResult {
+  metric: "weighted_mean_impact";
+  bucketMs: number;
+  windowStartMs: number;
+  windowEndMs: number;
+  loadedRecordCount: number;
+  populatedBucketCount: number;
   points: SeriesPoint[];
   latestScoreAvailableAt: number | null;
 }
@@ -424,6 +455,7 @@ export interface PriceSeriesDTO {
   cacheAgeMs: number | null;
   refreshError: string | null;
   resampling: "source_observations_in_window";
+  quarantine: { legacyUnknownRows: number | null; scope: "all_saved_history" };
 }
 
 export interface SourceHealth {

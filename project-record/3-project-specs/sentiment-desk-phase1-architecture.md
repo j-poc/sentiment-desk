@@ -4,6 +4,16 @@ Status: selected after comparing two storage shapes and an independent review.
 This design does not implement Opportunity Radar. Radar consumes the proven
 observation/judgment records after the Phase 1 acceptance gate.
 
+## Current classifier direction — 2026-10-02
+
+The original Jev-worker description below is historical for new records. The
+user selected OpenAI GPT-6 Luna as the classifier for new records, with strict
+categorical persistence and no Jev fallback. Existing Jev judgments, numeric
+impact semantics and historical charts remain distinct and unchanged. The
+current completion contract in `sentiment-desk-completion.md` governs the Luna
+path; the storage, source-observation and delivery boundaries documented below
+continue to apply where they match that contract.
+
 ## Caller usage
 
 Source adapters submit a provider observation. They do not submit a sentiment

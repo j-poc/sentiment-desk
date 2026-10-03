@@ -34,13 +34,12 @@ export type ReconnectableMentionPage = ReconnectableMentionList & {
 
 export type ReconnectableScoreBucket = {
   companyId: string;
-  bucketAt: number;
-  includeFromBoundary: boolean;
+  bucketFromMs: number;
+  bucketThroughMs: number;
   items: Mention[];
+  snapshotStale?: boolean;
   expectedCountFreshness?: "current" | "refreshing" | "error";
 };
-
-const SCORE_BUCKET_MS = 15 * 60_000;
 
 export function mergeMentionPages(...pages: Mention[][]): Mention[] {
   const byId = new Map<string, Mention>();
@@ -102,13 +101,13 @@ export function reconcileDrawerMentionOnReconnect(
 }
 
 export function scoreBucketContainsMention(
-  bucket: Pick<ReconnectableScoreBucket, "companyId" | "bucketAt" | "includeFromBoundary">,
+  bucket: Pick<ReconnectableScoreBucket, "companyId" | "bucketFromMs" | "bucketThroughMs">,
   mention: Mention,
 ): boolean {
   const scoredAt = mention.score?.scoredAt;
-  if (mention.companyId !== bucket.companyId || mention.status !== "scored" || scoredAt == null) return false;
-  const from = bucket.bucketAt - SCORE_BUCKET_MS;
-  return (bucket.includeFromBoundary ? scoredAt >= from : scoredAt > from) && scoredAt <= bucket.bucketAt;
+  if (mention.companyId !== bucket.companyId || mention.status !== "scored" || scoredAt == null
+    || mention.score == null || mention.score.weight < 0 || mention.score.impact < -100 || mention.score.impact > 100) return false;
+  return scoredAt >= bucket.bucketFromMs && scoredAt < bucket.bucketThroughMs;
 }
 
 export function reconcileScoreBucketOnMention<T extends ReconnectableScoreBucket>(
@@ -123,12 +122,14 @@ export function reconcileScoreBucketOnMention<T extends ReconnectableScoreBucket
     return {
       ...current,
       items: current.items.filter((item) => item.id !== mention.id),
+      snapshotStale: true,
       expectedCountFreshness: "refreshing",
     };
   }
   return {
     ...current,
     items: mergeScoreBucketItems(current.items, [mention]),
+    snapshotStale: true,
     expectedCountFreshness: "refreshing",
   };
 }

@@ -1,11 +1,89 @@
 # Sentiment Desk Agent Board
 
-## Current October 2 SEC evidence repair
+## Active continuation — full-build closeout, 2026-10-02
 
-Baseline is pushed `3ab2f8c`; current source candidate is isolated on
-`codex/sec-exhibit-context`. The native goal is active; its older Jev wording
-is superseded by the user-selected OpenAI GPT-6 Luna direction in current
-contracts. Paid classifiers remain disabled for verification. Full Luna
+The user requires a complete, real-data-only Sentiment Desk, OpenAI GPT-6 Luna
+for new categorical judgments, regular reviewed GitHub checkpoints, and no
+Opportunity Radar until Desk operation is accepted. Historical Jev results
+remain explicitly Jev; no Jev fallback, demo observation, synthetic product
+record, or fabricated price is allowed. Product fixtures stay isolated to tests.
+
+The protected local preview at `http://127.0.0.1:54863/` uses a database copy,
+with external requests and model credentials disabled. NVIDIA's real saved
+history shows 537 Jev-scored records in 33 seven-day buckets, latest score
+`2026-09-28T17:45:12.776Z`; no Luna classifications or eligible price points
+exist. The historical chart uses discrete bucket means, observed spread and
+record counts; gaps remain empty. Each plotted row opens the matching source
+interval. Its histogram contains all 20 impact bands and preserves full bucket
+statistics while source rows filter and paginate. Repeated-title counts are
+disclosures, not verified independent stories or investor opinions.
+
+### Exit evidence
+
+- [x] **Review criteria.** `engineering-contract.json` states observable local,
+  data, source-lineage, retry, UI, no-Radar and GitHub acceptance checks. The
+  native goal still has outdated Jev-core wording; its status-only API cannot
+  edit that objective. The user's later Luna direction governs this work.
+- [x] **Source-record drilldown.** The current NVDA bucket ending at 10:00 UTC
+  has 74 rows, mean +51.97 and observed spread −88 to +100. The [−90,−80) band
+  returns all 6 matching rows, including rows beyond page one, without changing
+  the full count, histogram, mean, spread or snapshot. Clearing the band
+  restores 50+24 unique rows. A mismatched band cursor returns 400 and a stale
+  snapshot returns 409.
+- [x] **Retry recovery.** Independent whole-build review found that Retry was
+  inert when the first bucket request failed before returning a snapshot. It
+  now refreshes the chart baseline first; filtered-page retry retains the
+  valid snapshot. Focused retry/API/component regressions pass.
+- [x] **Independent review.** The engineering-bullshit-detector reviewed the
+  whole build; investment and UI agents independently assessed user utility
+  and interaction. They found the saved-history workflow useful but not
+  operationally ready. Their exact scores and evidence limits are in the
+  current completion review.
+- [ ] **Final local gates and checkpoint.** Re-run tests, typecheck, build,
+  source/security and dependency gates, current scoped ETL `verify`/`check`,
+  update private diagnostic artifacts and the decision trace, then push the
+  reviewed source commit to `codex/real-data-rebuild` and read back its SHA.
+
+### Blocked operational acceptance
+
+Luna is selected in code but has zero requests and zero saved outputs. This
+runtime has no OpenAI API credential or finite account budget readback. Provider
+usage evidence for 4,700 quarantined `legacy_unknown` observations is absent;
+endpoint-specific retention, display and model-processing terms are not
+resolved. The post-hoc agent-reference set is imbalanced and is not ground
+truth, prospective quality proof, or investor-value validation. These gaps
+keep the full product goal open and Opportunity Radar disabled.
+
+## Historical resumed Luna acceptance run at 52bb6f7
+
+At the `52bb6f7` checkpoint the native goal still used obsolete Jev-core
+wording. The user's later direction and `engineering-contract.json` select
+OpenAI GPT-6 Luna for new classifications while preserving historical Jev
+records. The tracked candidate then matched the remote at that checkpoint. The
+post-hoc extension over all 48 items in the frozen real SEC frame has since
+completed, without sentiment-based selection, Luna outputs, provider calls, or
+product database writes. Its separate original-30 and additional-18 results and
+limits are recorded in `2026-10-02-luna-agent-reference-extension.md`.
+Agent references and agreement are not ground truth or Luna quality evidence.
+
+| Owner | Current scope | Status |
+|---|---|---|
+| `/root/reference_design_advisor` | Sol/xhigh critique and independent audit of the post-hoc extension | Complete; artifact integrity PASS; full Luna acceptance BLOCKED |
+| `/root/luna_extension_reference_a` | Fresh blinded GPT-6.1 Sol reference set over the frozen packet | Complete; 48 cases; output retained privately |
+| `/root/luna_extension_reference_b` | Fresh blinded GPT-6 Astra reference set over the same frozen packet | Complete; 48 cases; output retained privately |
+| `/root` | Freeze packet and rubric, integrate/validate separate outputs, update traces and acceptance evidence, rerun gates, checkpoint | References structurally valid; standard pilot evaluation and final gates in progress; no Luna request |
+
+## Historical board entries
+
+Entries below retain earlier scopes and states for traceability. They do not
+describe the current checkout or native goal status.
+
+## Historical October 2 SEC evidence repair
+
+At that time, baseline was pushed at `3ab2f8c`; its source candidate was isolated
+on `codex/sec-exhibit-context`. The user-selected OpenAI GPT-6 Luna direction
+supersedes the older Jev wording in current contracts. Paid classifiers remain
+disabled for verification. Full Luna
 qualification, three-class reference coverage, sustained scale and investor
 value remain separate non-passes. Routine coding, records, builds and Git do
 not require action-rehearsal under the current installed skill.
@@ -21,7 +99,14 @@ not require action-rehearsal under the current installed skill.
 The following migration/recovery entries preserve historical evidence and do
 not replace current ownership or final gate receipts.
 
-Current implementation baseline follows pushed `cc2fd29`; the final full-cohort evaluation repair is under checkpoint review: the latest user requested OpenAI GPT-6 Luna replacement. Official docs support categorical Structured Outputs; no probability-compatible Jev service is established. Root integrates and owns web/shared contracts/runtime/Git. Missing OpenAI credentials block live qualification; paid requests remain off. Historical Jev judgments and unknown-usage quarantine stay intact. The native goal remains blocked and its old Jev-core wording is superseded by the explicit current request in project records.
+At that earlier checkpoint, the implementation baseline followed pushed
+`cc2fd29`; the full-cohort evaluation repair was under review. Official docs
+support categorical Structured Outputs; no probability-compatible Jev service
+is established. Missing OpenAI credentials block live qualification; paid
+requests remain off. Historical Jev judgments and unknown-usage quarantine stay
+intact. The then-current record described the native goal as blocked; its live
+status must be read from the goal tool. The user's later Luna direction
+supersedes the old Jev-core wording.
 
 | Current owner | Owned scope | State |
 |---|---|---|
@@ -35,7 +120,7 @@ Current implementation baseline follows pushed `cc2fd29`; the final full-cohort 
 | `/root/luna_final_contract_advisor` | Read-only GPT-6.1 Sol xhigh final acceptance and reference chronology | Found future unresolved-reference false-pass; root repaired full-cohort eligibility;13 focused evaluator tests/typecheck pass; advisor independently PASS for repair/chronology; original source/ref hashes unchanged; serving model resolution unavailable |
 | `/root` | Web, shared records/contracts, source cohort/labels, integration, runtime/browser proof and Git | Final scoped ETL/Git regeneration after retry repair; OpenAI live activation blocked; no new paid call |
 
-## October 2 recovery and capacity pass
+## Historical October 2 recovery and capacity pass
 
 Baseline is pushed c2d9e982. Observable completion for this bounded pass is:
 a stale successful company snapshot remains retryable until saved source history

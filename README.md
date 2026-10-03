@@ -61,12 +61,15 @@ The selected-company workspace links company, history and source evidence:
 - **Company workspace**: starts at seven days of saved history and previews three
   distinct actual source titles. Exact-title repetitions are labeled as rows,
   without claiming independent reporting.
-- **Historical chart**: genuine Jev impact index on a fixed minus100 to plus100
-  scale, a15-minute grid and an eight-hour decay half-life. Dashed decay is
-  distinguished from scored buckets. Clicking a bucket or using its keyboard
-  table opens the supporting records. Optional price comparison has a separate
-  currency scale and plots only sourced provider observations. Luna categories
-  do not populate this legacy chart; absent history is explicit.
+- **Historical chart**: genuine saved Jev record summaries on a fixed −100 to
+  +100 impact-point scale. Each populated UTC 15-minute bucket shows its
+  weighted mean, record count, and observed minimum/maximum. Empty intervals
+  stay visibly blank; values are never connected, carried forward, or decayed.
+  Clicking a bucket or using its keyboard table opens the complete 20-bin
+  record distribution and paginated source rows for that exact half-open UTC
+  interval. Optional price comparison has a separate currency scale and plots
+  only sourced provider observations. Luna categories do not populate this
+  historical chart; absent history is explicit.
 - **Source feed**: bullish, bearish, material, off-target and unscored/review
   filters work with each profile. Luna shows supported categories and source
   quotations; Jev shows its actual probability-derived fields. The drawer links

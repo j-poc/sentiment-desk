@@ -24,6 +24,7 @@ import type {
 } from "./types.js";
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
+import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js";
 
 // Historical simulation and unverified legacy rows stay in place for audit,
 // but only observations with an identified collector can enter live research
@@ -392,8 +393,13 @@ export interface MentionPageCursor {
 }
 
 export interface ScoreBucketCursor {
+  companyId: string;
   scoredAt: number;
   id: string;
+  fromMs: number;
+  throughMs: number;
+  impactBin: number | null;
+  snapshotKey: string;
 }
 
 export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed";
@@ -616,6 +622,10 @@ export class CategoricalSnapshotUnavailableError extends Error {
 
 export class InvalidCategoricalBucketError extends Error {
   constructor(message = "invalid_categorical_bucket") { super(message); }
+}
+
+export class ScoreBucketSnapshotConflictError extends Error {
+  constructor() { super("score_bucket_snapshot_changed"); }
 }
 
 export class Desk {
@@ -1881,35 +1891,123 @@ export class Desk {
     companyId,
     fromMs,
     throughMs,
-    includeFromBoundary,
     limit,
     cursor,
+    expectedSnapshotKey,
+    impactBin,
   }: {
     companyId: string;
     fromMs: number;
     throughMs: number;
-    includeFromBoundary: boolean;
     limit: number;
     cursor: ScoreBucketCursor | null;
-  }): { items: MentionDTO[]; nextCursor: ScoreBucketCursor | null } {
-    const fromOperator = includeFromBoundary ? ">=" : ">";
-    const cursorClause = cursor
-      ? "AND (scored_at < ? OR (scored_at = ? AND id < ?))"
-      : "";
-    const cursorParams = cursor ? [cursor.scoredAt, cursor.scoredAt, cursor.id] : [];
-    const rows = this.db.prepare(
-      `SELECT * FROM mentions
-       WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
-         AND scored_at ${fromOperator} ? AND scored_at <= ? AND impact IS NOT NULL
-         ${cursorClause}
-       ORDER BY scored_at DESC, id DESC LIMIT ?`,
-    ).all(companyId, fromMs, throughMs, ...cursorParams, limit + 1) as unknown as MentionRow[];
-    const hasMore = rows.length > limit;
-    const last = hasMore ? rows[limit - 1] : undefined;
-    return {
-      items: rows.slice(0, limit).map(rowToDTO),
-      nextCursor: last?.scored_at == null ? null : { scoredAt: last.scored_at, id: last.id },
-    };
+    expectedSnapshotKey?: string | null;
+    impactBin?: number | null;
+  }): {
+    items: MentionDTO[];
+    nextCursor: ScoreBucketCursor | null;
+    snapshotKey: string;
+    recordCount: number;
+    matchingRecordCount: number;
+    impactBin: number | null;
+    impactValues: number[];
+    eligibleRecords: Array<{ id: string; availableAt: number; scoredAt: number; impact: number; weight: number }>;
+    coverageSummary: ReturnType<typeof summarizeScoreBucketCoverage>;
+  } {
+    if (!Number.isSafeInteger(fromMs) || !Number.isSafeInteger(throughMs) || throughMs <= fromMs) {
+      throw new Error("invalid_score_bucket_interval");
+    }
+    if (impactBin != null && (!Number.isInteger(impactBin) || impactBin < 0 || impactBin >= 20)) {
+      throw new Error("invalid_score_bucket_impact_bin");
+    }
+    this.db.exec("BEGIN");
+    try {
+      const eligible = this.db.prepare(
+        `SELECT id, scored_at AS scoredAt, impact, weight, title, time_basis AS timeBasis,
+                publisher_published_at AS publisherPublishedAt,
+                provider_observed_at AS providerObservedAt, delivery_id AS deliveryId FROM mentions
+         WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
+           AND scored_at >= ? AND scored_at < ? AND impact BETWEEN -100 AND 100 AND weight >= 0
+         ORDER BY scored_at, id`,
+      ).all(companyId, fromMs, throughMs) as unknown as Array<{
+        id: string; scoredAt: number; impact: number; weight: number; title: string; timeBasis: string;
+        publisherPublishedAt: number | null; providerObservedAt: number | null; deliveryId: string | null;
+      }>;
+      const coverageSummary = summarizeScoreBucketCoverage(eligible.map((row) => ({
+        title: row.title,
+        scoredAt: row.scoredAt,
+        timeBasis: row.timeBasis,
+        publisherPublishedAt: row.publisherPublishedAt,
+        providerObservedAt: row.providerObservedAt,
+        deliveryId: row.deliveryId,
+      })));
+      const snapshotKey = createHash("sha256").update([...eligible]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((row) => `${row.id}\u0000${row.scoredAt}\u0000${row.impact}\u0000${row.weight}\n`)
+        .join("")).digest("hex");
+      if (expectedSnapshotKey != null && snapshotKey !== expectedSnapshotKey) {
+        throw new ScoreBucketSnapshotConflictError();
+      }
+      if (cursor && (cursor.companyId !== companyId || cursor.fromMs !== fromMs || cursor.throughMs !== throughMs
+        || cursor.impactBin !== (impactBin ?? null) || cursor.snapshotKey !== snapshotKey)) {
+        throw new Error("invalid_score_bucket_cursor");
+      }
+
+      const impactFrom = impactBin == null ? null : -100 + impactBin * 10;
+      const impactThrough = impactBin == null ? null : impactFrom! + 10;
+      const includeImpactThrough = impactBin === 19;
+      const matchingRecordCount = impactBin == null
+        ? eligible.length
+        : eligible.filter((row) => row.impact >= impactFrom!
+          && (includeImpactThrough ? row.impact <= impactThrough! : row.impact < impactThrough!)).length;
+
+      const cursorClause = cursor
+        ? "AND (scored_at < ? OR (scored_at = ? AND id < ?))"
+        : "";
+      const cursorParams = cursor ? [cursor.scoredAt, cursor.scoredAt, cursor.id] : [];
+      const impactClause = impactBin == null
+        ? ""
+        : includeImpactThrough ? "AND impact >= ? AND impact <= ?" : "AND impact >= ? AND impact < ?";
+      const impactParams = impactBin == null ? [] : [impactFrom!, impactThrough!];
+      const rows = this.db.prepare(
+        `SELECT * FROM mentions
+         WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
+           AND scored_at >= ? AND scored_at < ? AND impact BETWEEN -100 AND 100 AND weight >= 0
+           ${impactClause} ${cursorClause}
+         ORDER BY scored_at DESC, id DESC LIMIT ?`,
+      ).all(companyId, fromMs, throughMs, ...impactParams, ...cursorParams, limit + 1) as unknown as MentionRow[];
+      const hasMore = rows.length > limit;
+      const last = hasMore ? rows[limit - 1] : undefined;
+      this.db.exec("COMMIT");
+      return {
+        items: rows.slice(0, limit).map(rowToDTO),
+        nextCursor: last?.scored_at == null ? null : {
+          companyId,
+          scoredAt: last.scored_at,
+          id: last.id,
+          fromMs,
+          throughMs,
+          impactBin: impactBin ?? null,
+          snapshotKey,
+        },
+        snapshotKey,
+        recordCount: eligible.length,
+        matchingRecordCount,
+        impactBin: impactBin ?? null,
+        impactValues: eligible.map((row) => row.impact),
+        coverageSummary,
+        eligibleRecords: eligible.map((row) => ({
+          id: row.id,
+          availableAt: row.scoredAt,
+          scoredAt: row.scoredAt,
+          impact: row.impact,
+          weight: row.weight,
+        })),
+      };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   scoredReactionEventsForCompany(companyId: string, sinceMs: number, asOfMs = Date.now()): Array<{
@@ -1993,6 +2091,7 @@ export class Desk {
 
   /** Identified scored mentions keyed to the time the Jev result became available. */
   scoredMentions(sinceMs: number, asOfMs = Date.now(), companyId?: string): Array<{
+    id: string;
     companyId: string;
     availableAt: number;
     impact: number;
@@ -2005,12 +2104,13 @@ export class Desk {
     const params = companyId == null ? [sinceMs, asOfMs] : [sinceMs, asOfMs, companyId];
     const rows = this.db
       .prepare(
-        `SELECT company_id, scored_at, impact, weight, event_type, takeaway FROM mentions
+        `SELECT id, company_id, scored_at, impact, weight, event_type, takeaway FROM mentions
          WHERE ${REAL_MENTION_FILTER} AND status = 'scored' AND scored_at IS NOT NULL
            AND scored_at >= ? AND scored_at <= ? AND impact IS NOT NULL${companyClause}
          ORDER BY scored_at, id`,
       )
       .all(...params) as unknown as Array<{
+        id: string;
         company_id: string;
         scored_at: number;
         impact: number;
@@ -2019,6 +2119,7 @@ export class Desk {
         takeaway: string;
       }>;
     return rows.map((r) => ({
+      id: r.id,
       companyId: r.company_id,
       availableAt: r.scored_at,
       impact: r.impact,
@@ -2242,6 +2343,13 @@ export class Desk {
       .run(input.ticker, Math.floor(input.t / 1000) * 1000, input.price, input.collector,
         input.currency, Math.floor(input.retrievedAt), input.adapterVersion, input.deliveryId);
     return result.changes > 0;
+  }
+
+  legacyUnknownPriceRowCount(ticker: string): number | null {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM price_points
+      WHERE ticker = ? AND collector = 'legacy_unknown'`).get(ticker) as { count: number | bigint } | undefined;
+    const count = Number(row?.count ?? 0);
+    return Number.isSafeInteger(count) && count >= 0 ? count : null;
   }
 
   priceWindow(ticker: string, sinceMs: number, asOfMs = Date.now()): Array<{

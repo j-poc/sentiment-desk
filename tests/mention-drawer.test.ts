@@ -180,6 +180,8 @@ describe("MentionDrawer retry availability", () => {
     expect(html).toContain("most likely class · NEUTRAL");
     expect(html).toContain("Impact is 100 × [P(positive) − P(negative)] impact points");
     expect(html).toContain("A neutral class can still carry directional impact.");
+    expect(html).toContain("One historical model output, not a share-price move or an independent investor opinion.");
+    expect(html).toContain("Jev quality and confidence calibration are unverified; this source has no linked delivery receipt.");
   });
 
   it("shows the acknowledged retry entry point when Jev and external requests are enabled", () => {

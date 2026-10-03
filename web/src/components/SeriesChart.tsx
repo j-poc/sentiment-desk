@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
-  BaselineSeries,
   ColorType,
   createChart,
   CrosshairMode,
   HistogramSeries,
-  LineStyle,
-  LineType,
   LineSeries,
   type IChartApi,
   type ISeriesApi,
@@ -15,12 +12,14 @@ import {
 import type { PricePoint, SeriesPoint } from "../lib/api.js";
 import { formatChartTimestamp } from "../lib/chart-time.js";
 import { timeAgo } from "../lib/format.js";
-import { sentimentSeriesState } from "../lib/series-chart-state.js";
+import { isValidUtcMilliseconds } from "../lib/chart-time.js";
+import { chartVisibleThroughSeconds, scoreBucketChartTimeline, sentimentSeriesState } from "../lib/series-chart-state.js";
 import { SavedPriceHistoryControl } from "./SavedPriceHistoryControl.js";
 
 function toSec(ms: number): UTCTimestamp {
-  const seconds = Math.floor(ms / 1000);
-  if (!Number.isSafeInteger(seconds)) throw new RangeError("Chart timestamp is outside the UTC time range.");
+  if (!isValidUtcMilliseconds(ms)) throw new RangeError("Chart timestamp must be valid UTC milliseconds.");
+  const seconds = ms / 1000;
+  if (!Number.isFinite(seconds)) throw new RangeError("Chart timestamp is outside the UTC time range.");
   return seconds as UTCTimestamp;
 }
 
@@ -46,6 +45,7 @@ export function SeriesChart({
   priceError = false,
   seriesError = false,
   seriesReady = true,
+  priceQuarantine,
 }: {
   points: SeriesPoint[];
   hours: number;
@@ -56,34 +56,46 @@ export function SeriesChart({
   latestPriceAt: number | null;
   latestScoreAvailableAt: number | null;
   onViewHistory?: () => void;
-  onSelectBucket?: (bucketAt: number, includeFromBoundary: boolean, returnFocus?: HTMLButtonElement) => void;
+  onSelectBucket?: (bucketFromMs: number, bucketThroughMs: number, returnFocus?: HTMLButtonElement) => void;
   bucketEvidence?: ReactNode;
   priceLoading?: boolean;
   priceError?: boolean;
+  priceQuarantine?: unknown;
   seriesError?: boolean;
   seriesReady?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const indexRef = useRef<ISeriesApi<"Baseline"> | null>(null);
-  const decayRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const impactRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const arrivalsRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const priceRef = useRef<ISeriesApi<"Line"> | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const comparison = mode === "comparison";
 
   const drawableSentiment = useMemo(
-    () => points.filter((point) => Number.isFinite(point.t) && (point.v == null || Number.isFinite(point.v))),
+    () => points.filter((point) => Number.isSafeInteger(point.bucketEndAtMs)
+      && (point.weightedMeanImpact == null || Number.isFinite(point.weightedMeanImpact))),
     [points],
   );
+  const chartTimeline = useMemo(() => {
+    try {
+      if (points.some((point) => !isValidUtcMilliseconds(point.bucketEndAtMs)
+        || (point.latestRecordScoredAtMs != null && !isValidUtcMilliseconds(point.latestRecordScoredAtMs)))) {
+        return { entries: [], invalid: true };
+      }
+      return { entries: scoreBucketChartTimeline(drawableSentiment), invalid: false };
+    } catch {
+      return { entries: [], invalid: true };
+    }
+  }, [drawableSentiment, points]);
+  const chartSentiment = chartTimeline.entries;
+  const chartTimelineInvalid = chartTimeline.invalid;
   const sentimentByTime = useMemo(
-    () => new Map(drawableSentiment.map((point) => [Number(toSec(point.t)), point])),
-    [drawableSentiment],
+    () => new Map(chartSentiment.map((entry) => [entry.chartTimeSeconds, entry])),
+    [chartSentiment],
   );
   const sentimentByTimeRef = useRef(sentimentByTime);
   sentimentByTimeRef.current = sentimentByTime;
-  const firstBucketAtRef = useRef<number | null>(drawableSentiment[0]?.t ?? null);
-  firstBucketAtRef.current = drawableSentiment[0]?.t ?? null;
   const onSelectBucketRef = useRef(onSelectBucket);
   onSelectBucketRef.current = onSelectBucket;
   const currencyRef = useRef(currency);
@@ -95,25 +107,24 @@ export function SeriesChart({
     [comparison, price],
   );
   const sentimentState = sentimentSeriesState(drawableSentiment);
-  const { hasSentiment, hasModeledHistory } = sentimentState;
+  const { hasSentiment } = sentimentState;
   const hasPrice = drawablePrice.length >= 2;
   const insufficientPrice = comparison && drawablePrice.length === 1;
-  const hasChartData = sentimentState.hasChartData || drawablePrice.length > 0;
+  const hasChartData = (sentimentState.hasChartData && !chartTimelineInvalid) || drawablePrice.length > 0;
   const waitingForPrice = comparison && priceLoading && drawablePrice.length === 0;
   const latestVisibleScoreAt = drawableSentiment.reduce<number | null>(
-    (latest, point) => point.n > 0 && point.lastScoredAt != null
-      ? Math.max(latest ?? point.lastScoredAt, point.lastScoredAt)
+    (latest, point) => point.scoredRecordCount > 0 && point.latestRecordScoredAtMs != null
+      && isValidUtcMilliseconds(point.latestRecordScoredAtMs)
+      ? Math.max(latest ?? point.latestRecordScoredAtMs, point.latestRecordScoredAtMs)
       : latest,
     null,
   );
-  const lastScoredAt = latestScoreAvailableAt ?? latestVisibleScoreAt;
-  const hasModeledTail = lastScoredAt != null
-    && drawableSentiment.some((point) => point.t > lastScoredAt && point.v != null && point.n === 0);
-  const scorePointCount = drawableSentiment.filter((point) => point.v != null && point.n > 0).length;
-  const hasVisibleModeledIndex = drawableSentiment.some((point) => point.v != null && point.n === 0 && Math.abs(point.v) >= 0.5);
-  const scoredBuckets = drawableSentiment.filter((point) => point.v != null && point.n > 0);
-  const lastPoint = drawableSentiment.at(-1) ?? null;
-  const latestModeledPoint = lastPoint?.v != null && lastPoint.n === 0 ? lastPoint : null;
+  const lastScoredAt = latestScoreAvailableAt != null && isValidUtcMilliseconds(latestScoreAvailableAt)
+    ? latestScoreAvailableAt
+    : latestVisibleScoreAt;
+  const scoredBuckets = chartSentiment
+    .map(({ point }) => point)
+    .filter((point) => point.scoredRecordCount > 0);
 
   // A new chart per mode gives comparison its own price pane while keeping the
   // sentiment-only view at full height. The two panes share one time scale.
@@ -148,43 +159,17 @@ export function SeriesChart({
       },
     });
 
-    const index = chart.addSeries(BaselineSeries, {
+    const impact = chart.addSeries(HistogramSeries, {
       priceScaleId: "left",
-      baseValue: { type: "price", price: 0 },
-      topFillColor1: "rgba(52,211,153,0.2)",
-      topFillColor2: "rgba(52,211,153,0.025)",
-      topLineColor: "#34d399",
-      bottomFillColor1: "rgba(248,113,113,0.025)",
-      bottomFillColor2: "rgba(248,113,113,0.18)",
-      bottomLineColor: "#f87171",
-      lineWidth: 2,
-      lineStyle: LineStyle.Solid,
-      lineType: LineType.WithSteps,
-      baseLineVisible: true,
-      baseLineColor: "rgba(255,255,255,0.35)",
-      baseLineStyle: LineStyle.Dashed,
-      pointMarkersVisible: true,
-      pointMarkersRadius: 2,
-      crosshairMarkerRadius: 4,
+      base: 0,
+      color: "rgba(52,211,153,0.8)",
       priceFormat: { type: "price", precision: 0, minMove: 1 },
       autoscaleInfoProvider: () => ({ priceRange: { minValue: -100, maxValue: 100 } }),
       priceLineVisible: false,
       lastValueVisible: false,
     }, 0);
 
-    const decay = chart.addSeries(LineSeries, {
-      priceScaleId: "left",
-      color: "rgba(203,213,225,0.8)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-      pointMarkersVisible: false,
-      crosshairMarkerVisible: false,
-      priceFormat: { type: "price", precision: 0, minMove: 1 },
-      autoscaleInfoProvider: () => ({ priceRange: { minValue: -100, maxValue: 100 } }),
-      priceLineVisible: false,
-      lastValueVisible: false,
-    }, 0);
-    index.priceScale().applyOptions({
+    impact.priceScale().applyOptions({
       scaleMargins: { top: 0.04, bottom: 0.04 },
       entireTextOnly: true,
     });
@@ -205,7 +190,7 @@ export function SeriesChart({
     }
 
     // Counts get their own synchronized pane so their numeric scale cannot
-    // change the fixed −100..+100 sentiment range or hide the index line.
+    // change the fixed −100..+100 impact range or hide the bucket bars.
     const arrivalsPaneIndex = comparison ? 2 : 1;
     chart.addPane();
     const arrivals = chart.addSeries(HistogramSeries, {
@@ -230,16 +215,15 @@ export function SeriesChart({
       }
 
       const time = Number(param.time);
-      const score = sentimentByTimeRef.current.get(time);
+      const scoreEntry = sentimentByTimeRef.current.get(time);
+      const score = scoreEntry?.point;
       const parts: string[] = [];
-      if (score?.v != null) {
-        const value = `${score.v > 0 ? "+" : ""}${score.v.toFixed(1)}`;
-        const impactRange = score.itemImpactMin != null && score.itemImpactMax != null
-          ? ` · item impacts ${score.itemImpactMin.toFixed(0)} to ${score.itemImpactMax.toFixed(0)}`
+      if (score?.weightedMeanImpact != null && score.scoredRecordCount > 0) {
+        const value = `${score.weightedMeanImpact > 0 ? "+" : ""}${score.weightedMeanImpact.toFixed(1)}`;
+        const impactRange = score.recordImpactMin != null && score.recordImpactMax != null
+          ? ` · record spread ${score.recordImpactMin.toFixed(0)} to ${score.recordImpactMax.toFixed(0)}`
           : "";
-        parts.push(score.n > 0
-          ? `Jev impact index ${value} · ${score.n} scored source ${score.n === 1 ? "record" : "records"}${impactRange}`
-          : `Modeled decay ${value} · no new scored source records`);
+        parts.push(`Jev score-time bucket ending ${formatChartTimestamp(score.bucketEndAtMs)} · weighted mean impact ${value} · ${score.scoredRecordCount} saved source ${score.scoredRecordCount === 1 ? "record" : "records"}${impactRange}`);
       }
       const priceValue = priceSeries ? seriesValue(param.seriesData.get(priceSeries)) : null;
       const activeCurrency = currencyRef.current;
@@ -250,16 +234,15 @@ export function SeriesChart({
 
     const selectScoredBucket = (param: { point?: { x: number; y: number } | null; time?: unknown }) => {
       if (param.point == null || typeof param.time !== "number") return;
-      const point = sentimentByTimeRef.current.get(param.time);
-      if (point?.n) {
-        onSelectBucketRef.current?.(point.t, point.t === firstBucketAtRef.current);
+      const point = sentimentByTimeRef.current.get(param.time)?.point;
+      if (point?.scoredRecordCount) {
+        onSelectBucketRef.current?.(point.bucketStartAtMs, point.bucketEndAtMs);
       }
     };
     chart.subscribeClick(selectScoredBucket);
 
     chartRef.current = chart;
-    indexRef.current = index;
-    decayRef.current = decay;
+    impactRef.current = impact;
     arrivalsRef.current = arrivals;
     priceRef.current = priceSeries;
     const panes = chart.panes();
@@ -271,38 +254,30 @@ export function SeriesChart({
       chart.unsubscribeClick(selectScoredBucket);
       chart.remove();
       chartRef.current = null;
-      indexRef.current = null;
-      decayRef.current = null;
+      impactRef.current = null;
       arrivalsRef.current = null;
       priceRef.current = null;
     };
   }, [comparison]);
 
   useEffect(() => {
-    const index = indexRef.current;
-    const decay = decayRef.current;
+    const impact = impactRef.current;
     const arrivals = arrivalsRef.current;
     const priceSeries = priceRef.current;
     const chart = chartRef.current;
-    if (!index || !decay || !arrivals || !chart) return;
+    if (!impact || !arrivals || !chart) return;
 
-    index.setData(drawableSentiment.map((point) => (
-      point.v != null && point.n > 0
-        ? { time: toSec(point.t), value: point.v }
-        : { time: toSec(point.t) }
-    )));
+    impact.setData(chartSentiment.map(({ point, chartTimeSeconds }) => point.weightedMeanImpact != null && point.scoredRecordCount > 0
+      ? {
+          time: chartTimeSeconds as UTCTimestamp,
+          value: point.weightedMeanImpact,
+          color: point.weightedMeanImpact >= 0 ? "rgba(52,211,153,0.8)" : "rgba(248,113,113,0.82)",
+        }
+      : { time: chartTimeSeconds as UTCTimestamp }));
 
-    decay.setData(drawableSentiment.map((point, indexInSeries) => {
-      const next = drawableSentiment[indexInSeries + 1];
-      const beginsFade = point.n > 0 && next?.n === 0;
-      return point.v != null && (point.n === 0 || beginsFade)
-        ? { time: toSec(point.t), value: point.v }
-        : { time: toSec(point.t) };
-    }));
-
-    arrivals.setData(drawableSentiment
-      .filter((point) => point.n > 0)
-      .map((point) => ({ time: toSec(point.t), value: point.n })));
+    arrivals.setData(chartSentiment.map(({ point, chartTimeSeconds }) => point.scoredRecordCount > 0
+      ? { time: chartTimeSeconds as UTCTimestamp, value: point.scoredRecordCount }
+      : { time: chartTimeSeconds as UTCTimestamp }));
 
     if (priceSeries) {
       priceSeries.setData(drawablePrice.map((point) => ({ time: toSec(point.t), value: point.price })));
@@ -315,26 +290,24 @@ export function SeriesChart({
       const now = Date.now();
       chart.timeScale().setVisibleRange({
         from: toSec(now - hours * 60 * 60 * 1000),
-        to: toSec(now),
+        to: chartVisibleThroughSeconds(now, chartSentiment.at(-1)?.chartTimeSeconds ?? null) as UTCTimestamp,
       });
     }
-  }, [drawableSentiment, drawablePrice, hasChartData, hours]);
+  }, [chartSentiment, drawablePrice, hasChartData, hours]);
 
   const requestError = seriesError || (comparison && priceError);
   const noDataMessage = requestError
     ? "Chart data could not be loaded. Check the source status above."
     : mode === "sentiment"
-      ? "No Jev scores or modeled history in this window."
+      ? "No saved Jev-scored records in this window."
       : insufficientPrice
         ? "One saved price observation; at least two are needed for a line."
         : "No saved Yahoo prices or Jev scores in this window.";
   const noScoreMessage = seriesError
     ? "Sentiment history could not be loaded. Check the source status above."
-    : lastScoredAt != null && lastScoredAt < Date.now() - hours * 60 * 60_000 && !hasVisibleModeledIndex
-      ? `No saved scores or visible index in this window · latest saved score ${timeAgo(lastScoredAt)}`
-      : hasVisibleModeledIndex
-        ? `No new Jev scores in this window · modeled decay from the latest saved score ${lastScoredAt == null ? "at an unknown time" : timeAgo(lastScoredAt)}`
-        : "No Jev-scored items in this window";
+    : lastScoredAt != null && lastScoredAt < Date.now() - hours * 60 * 60_000
+      ? `No saved scores in this window · latest saved score ${timeAgo(lastScoredAt)}`
+      : "No Jev-scored records in this window";
   const canShowLatestSavedHistory = lastScoredAt != null
     && lastScoredAt >= Date.now() - 168 * 60 * 60_000
     && hours < 168
@@ -348,19 +321,35 @@ export function SeriesChart({
         : drawablePrice.length === 0
           ? "No saved Yahoo price points in this window"
           : null;
+  const quarantine = typeof priceQuarantine === "object" && priceQuarantine !== null
+    ? priceQuarantine as { legacyUnknownRows?: unknown; scope?: unknown }
+    : null;
+  const legacyUnknownRows = quarantine?.scope === "all_saved_history"
+    && typeof quarantine.legacyUnknownRows === "number"
+    && Number.isSafeInteger(quarantine.legacyUnknownRows)
+    && quarantine.legacyUnknownRows >= 0
+    ? quarantine.legacyUnknownRows
+    : null;
+  const priceEmptyDisclosure = comparison && drawablePrice.length === 0 && !priceLoading && !priceError
+    ? `No verified Yahoo price points are saved in this window. ${legacyUnknownRows == null
+      ? "Legacy unknown-source price row count is unavailable."
+      : legacyUnknownRows > 0
+        ? `${legacyUnknownRows.toLocaleString("en-US")} legacy price rows are excluded because their source provenance is incomplete. This count covers all saved history for this ticker.`
+        : "No legacy unknown-source price rows were found in all saved history for this ticker."}`
+    : null;
 
   return (
     <div className="relative">
       <div
         ref={containerRef}
         role="img"
-        aria-label={`Sequential Jev impact index on a fixed scale from minus 100 to plus 100. Individual impact is 100 times the difference between Jev's positive and negative probabilities, in impact points. The index updates as each judgment completes and decays toward zero with a fixed eight-hour half-life. Reconstructed by score-completion time, which can cluster records that were published hours apart. Aligned bottom bars count Jev-scored source records completed per 15-minute bucket; repeated coverage may count more than once, and bars do not count distinct stories or investors. This is a model-derived index, not a stock return or validated investor opinion. Solid step marks show ${scorePointCount} buckets when Jev judgments became available; hovering a bucket reveals its source-record count and individual-impact range. Click a scored bucket or use View source records in the keyboard table to inspect saved evidence. Dashed segments show modeled decay between scored buckets. Latest Jev judgment completed ${lastScoredAt == null ? "at an unknown time" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
+        aria-label={`Discrete histogram of observed Jev score-time buckets. Each bar is the weighted mean impact of saved Jev-scored source records completed in that 15-minute bucket, on a fixed scale from minus 100 to plus 100 impact points. Record spread is the minimum and maximum individual impact in the bucket; it is not a confidence interval. Empty buckets are blank gaps; values are never carried forward and no line connects buckets. Repeated coverage may count more than once, and records do not represent distinct investors. This is a model-derived record summary, not a stock return or validated investor opinion. The lower bars count saved scored records per bucket. Click a bucket or use View source records in the keyboard table to inspect evidence. Latest saved Jev score completed ${lastScoredAt == null ? "at an unknown time" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
         className={comparison ? "chart-canvas chart-canvas-comparison" : "chart-canvas chart-canvas-sentiment"}
       />
       {comparison && (
         <>
           <div className="pointer-events-none absolute left-[86px] top-2 z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
-            JEV IMPACT INDEX · FIXED −100 TO +100
+            WEIGHTED MEAN JEV IMPACT · −100 TO +100
           </div>
           <div className="pointer-events-none absolute left-[86px] top-[calc(57.143%+2px)] z-10 rounded bg-[#0c0e14]/85 px-2 py-1 text-[9px] tracking-wide text-white/60">
             SHARE PRICE{currency ? ` · ${currency}` : " · CURRENCY UNKNOWN"}
@@ -369,8 +358,10 @@ export function SeriesChart({
             SCORED RECORDS / 15M
           </div>
           {priceStatus && (
-            <div className="absolute right-[76px] top-[calc(57.143%+36px)] z-10 flex max-w-[calc(100%-100px)] items-center gap-2 rounded bg-[#0c0e14]/85 px-2 py-1 text-[10px] text-white/60">
-              <span>{priceStatus}</span>
+            <div className="absolute right-[76px] top-[calc(57.143%+36px)] z-10 flex max-w-[calc(100%-100px)] flex-wrap items-start gap-x-2 gap-y-1 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10px] leading-relaxed text-white/70">
+              <span>{priceEmptyDisclosure && legacyUnknownRows != null && legacyUnknownRows > 0
+                ? `No verified Yahoo points · ${legacyUnknownRows.toLocaleString("en-US")} legacy rows quarantined`
+                : priceStatus}</span>
               <SavedPriceHistoryControl
                 comparison={comparison}
                 savedPriceCount={drawablePrice.length}
@@ -387,6 +378,16 @@ export function SeriesChart({
           SCORED RECORDS / 15M
         </div>
       )}
+      {chartTimelineInvalid && (
+        <div role="alert" className="absolute left-[76px] top-2 z-20 max-w-[calc(100%-92px)] rounded-md border border-rose-400/30 bg-[#0c0e14]/95 px-2.5 py-1.5 text-[10.5px] text-rose-100/90">
+          Score history is withheld because the response contains invalid score timestamps or duplicate UTC bucket times.
+        </div>
+      )}
+      {priceEmptyDisclosure && (
+        <p role="status" aria-live="polite" className="chart-data-note mt-2 break-words text-[11px] leading-relaxed">
+          {priceEmptyDisclosure}
+        </p>
+      )}
       <div
         ref={tooltipRef}
         className="pointer-events-none absolute right-[76px] top-2 z-20 max-w-[70%] rounded-md border border-desk-line bg-[#0c0e14]/95 px-2.5 py-1 text-[10.5px] text-white/85 tabnum opacity-0 transition-opacity"
@@ -396,7 +397,7 @@ export function SeriesChart({
           loading chart data…
         </div>
       )}
-      {!loading && !waitingForPrice && comparison && !hasSentiment && hasModeledHistory && (
+      {!loading && !waitingForPrice && comparison && !hasSentiment && (
         <div role="status" className="absolute left-[86px] top-9 z-10 flex max-w-[calc(100%-110px)] flex-wrap items-center gap-2 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/65">
           {noScoreMessage}
           {canShowLatestSavedHistory && (
@@ -411,7 +412,7 @@ export function SeriesChart({
           )}
         </div>
       )}
-      {!loading && !waitingForPrice && !comparison && !hasSentiment && hasModeledHistory && (
+      {!loading && !waitingForPrice && !comparison && !hasSentiment && canShowLatestSavedHistory && (
         <div role="status" className="absolute left-[86px] top-2 z-10 flex max-w-[calc(100%-110px)] flex-wrap items-center gap-2 rounded bg-[#0c0e14]/90 px-2 py-1 text-[10.5px] text-white/65">
           {noScoreMessage}
           {canShowLatestSavedHistory && (
@@ -426,76 +427,63 @@ export function SeriesChart({
           )}
         </div>
       )}
-      {!loading && !waitingForPrice && !hasChartData && (
+      {!loading && !waitingForPrice && !chartTimelineInvalid && !hasChartData && !(canShowLatestSavedHistory && !hasSentiment) && (
         <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-[11px] text-white/55">
           <span>{noDataMessage}</span>
         </div>
       )}
-      {comparison && hasModeledTail && !loading && (
-        <span className="sr-only">
-          Score-availability timeline · modelled decay follows the last completed Jev judgment at {new Date(lastScoredAt ?? 0).toISOString()}.
-        </span>
-      )}
-      {comparison && scorePointCount > 0 && (
-        <span className="sr-only">{scorePointCount} sentiment buckets contain newly scored items.</span>
-      )}
       {bucketEvidence}
-      {(scoredBuckets.length > 0 || latestModeledPoint || comparison) && (
+      {(scoredBuckets.length > 0 || comparison) && (
       <details className="chart-data-disclosure">
           <summary>
             Inspect plotted data by keyboard
             <span>{scoredBuckets.length} scored {scoredBuckets.length === 1 ? "bucket" : "buckets"}</span>
           </summary>
           <p className="chart-data-note">
-            {scoredBuckets.length > 0 || latestModeledPoint
-              ? "Score rows show 15-minute bucket ends, not individual publication times. The index decays between scored buckets."
+            {chartTimelineInvalid
+              ? "Score history is withheld because score timestamps are invalid or duplicated."
+              : scoredBuckets.length > 0
+              ? "Each row is one UTC-aligned 15-minute score-completion bucket. The mean uses the saved, eligible scored records counted in that row; zero-weight records remain in the observed record count and spread. Record spread reports their actual minimum and maximum impacts; no confidence interval is inferred. Plot positions preserve each bucket's exact UTC millisecond end time."
               : seriesError
                 ? "Saved Jev score history could not be loaded; score rows are unavailable."
                 : !seriesReady
                   ? "Loading saved Jev score history…"
                   : "No saved Jev score buckets are available in this window."}
-            {latestModeledPoint && " The modeled row is the latest saved index point without a new score."}
             {comparison && " Share-price rows show each saved provider source time and the separate time it was collected."}
           </p>
-          {(scoredBuckets.length > 0 || latestModeledPoint) && (
+          {scoredBuckets.length > 0 && (
             <div className="chart-table-scroll" role="region" aria-label="Plotted score bucket data" tabIndex={0}>
               <table>
                 <caption>Saved Jev score buckets in the selected chart window</caption>
                 <thead>
                   <tr>
                     <th scope="col">Time / state</th>
-                    <th scope="col">Index</th>
+                    <th scope="col">Weighted mean impact</th>
                     <th scope="col">Records</th>
-                    <th scope="col">Item impact range</th>
+                    <th scope="col">Record spread (impact points)</th>
                     <th scope="col">Saved source rows</th>
                   </tr>
                 </thead>
                 <tbody>
                   {scoredBuckets.map((point) => (
-                    <tr key={`score-${point.t}`}>
-                      <th scope="row">{formatChartTimestamp(point.t)}</th>
-                      <td>{point.v! > 0 ? "+" : ""}{point.v!.toFixed(1)}</td>
-                      <td>{point.n}</td>
-                      <td>{point.itemImpactMin == null || point.itemImpactMax == null
+                    <tr key={`score-${point.bucketEndAtMs}`}>
+                      <th scope="row">{formatChartTimestamp(point.bucketEndAtMs)}</th>
+                      <td>{point.weightedMeanImpact == null
+                        ? "Unavailable"
+                        : `${point.weightedMeanImpact > 0 ? "+" : ""}${point.weightedMeanImpact.toFixed(1)}`}</td>
+                      <td>{point.scoredRecordCount}</td>
+                      <td>{point.recordImpactMin == null || point.recordImpactMax == null
                         ? "Not available"
-                        : `${point.itemImpactMin > 0 ? "+" : ""}${point.itemImpactMin.toFixed(0)} to ${point.itemImpactMax > 0 ? "+" : ""}${point.itemImpactMax.toFixed(0)}`}</td>
+                        : `${point.recordImpactMin > 0 ? "+" : ""}${point.recordImpactMin.toFixed(0)} to ${point.recordImpactMax > 0 ? "+" : ""}${point.recordImpactMax.toFixed(0)}`}</td>
                       <td><button type="button" onClick={(event) => onSelectBucket?.(
-                        point.t,
-                        point.t === firstBucketAtRef.current,
+                        point.bucketStartAtMs,
+                        point.bucketEndAtMs,
                         event.currentTarget,
                       )}>
-                        View {point.n} source {point.n === 1 ? "record" : "records"}
+                        View {point.scoredRecordCount} source {point.scoredRecordCount === 1 ? "record" : "records"}
                       </button></td>
                     </tr>
                   ))}
-                  {latestModeledPoint && (
-                    <tr key={`modeled-${latestModeledPoint.t}`}>
-                      <th scope="row">{formatChartTimestamp(latestModeledPoint.t)} · modeled</th>
-                      <td>{latestModeledPoint.v! > 0 ? "+" : ""}{latestModeledPoint.v!.toFixed(1)}</td>
-                      <td>0 new</td>
-                      <td>—</td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>
@@ -522,11 +510,6 @@ export function SeriesChart({
                 </tbody>
               </table>
             </div>
-          )}
-          {comparison && drawablePrice.length === 0 && (
-            <p className="chart-data-note" role="status">
-              {priceStatus ?? "No saved Yahoo price points in this window"}
-            </p>
           )}
         </details>
       )}

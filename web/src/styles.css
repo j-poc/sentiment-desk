@@ -257,6 +257,57 @@ body {
   margin: 0;
 }
 
+.score-bucket-summary {
+  margin: 0;
+  color: rgba(248, 250, 252, 0.9);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-bucket-coverage {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border: 1px solid rgba(170, 184, 205, 0.14);
+  border-radius: 6px;
+  background: rgba(3, 7, 12, 0.28);
+  color: rgba(232, 235, 242, 0.72);
+  font-size: 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-bucket-coverage h3,
+.score-bucket-coverage p { margin: 0; }
+.score-bucket-coverage h3 { margin-bottom: 2px; color: rgba(248, 250, 252, 0.88); font-size: 10px; font-weight: 600; }
+.score-bucket-coverage ul { display: grid; gap: 1px; margin: 2px 0; padding-left: 15px; }
+
+.score-bucket-distribution {
+  flex: 0 0 auto;
+  padding: 6px 8px 4px;
+  border: 1px solid rgba(170, 184, 205, 0.14);
+  border-radius: 6px;
+  background: rgba(3, 7, 12, 0.35);
+}
+
+.score-bucket-bars {
+  display: grid;
+  height: 54px;
+  grid-template-columns: repeat(20, minmax(2px, 1fr));
+  align-items: end;
+  gap: 2px;
+}
+
+.score-bucket-bars span { min-height: 0; border-radius: 2px 2px 0 0; background: rgba(148, 163, 184, 0.35); }
+.score-bucket-bars .is-negative { background: rgba(248, 113, 113, 0.78); }
+.score-bucket-bars .is-positive { background: rgba(52, 211, 153, 0.78); }
+.score-bucket-bars .is-neutral { background: rgba(148, 163, 184, 0.7); }
+
+.score-bucket-axis { display: flex; justify-content: space-between; color: rgba(232, 235, 242, 0.5); font-size: 9px; }
+.score-bucket-bin-details { color: rgba(232, 235, 242, 0.72); font-size: 10px; }
+.score-bucket-bin-details ol { display: grid; max-height: 90px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; margin: 4px 0 0; overflow-y: auto; }
+.score-bucket-bin-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; color: rgba(232, 235, 242, 0.68); font-size: 10px; }
+.score-bucket-bin-filter select { min-width: 0; max-width: 65%; border: 1px solid rgba(170, 184, 205, 0.2); border-radius: 4px; background: #11151d; padding: 3px 6px; color: rgba(248, 250, 252, 0.9); font: inherit; }
+
 .score-bucket-list {
   min-height: 0;
   overflow-x: hidden;
@@ -270,10 +321,12 @@ body {
 
 .score-bucket-heading button:focus-visible,
 .score-bucket-more:focus-visible,
-.score-bucket-error button:focus-visible {
+.score-bucket-error button:focus-visible,
+.score-bucket-bin-details summary:focus-visible {
   outline: 2px solid #60a5fa;
   outline-offset: 2px;
 }
+.score-bucket-bin-filter select:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
 
 .evidence-breadth {
   margin-top: 8px;

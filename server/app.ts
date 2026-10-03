@@ -5,13 +5,13 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { CategoricalSnapshotUnavailableError, InvalidCategoricalBucketError } from "./db.js";
+import { CategoricalSnapshotUnavailableError, InvalidCategoricalBucketError, ScoreBucketSnapshotConflictError } from "./db.js";
 import type { AlertDeliveryCursor, Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor, ScoreBucketCursor } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
-import { forwardReturn, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal } from "./scoring.js";
+import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 import type { ArchivedRun, CategoricalBucketCursor } from "./types.js";
 
@@ -68,9 +68,14 @@ const unscoredCursorSchema = z.object({
   id: z.string().min(1).max(200),
 });
 const scoreBucketCursorSchema = z.object({
+  companyId: z.string().min(1).max(200),
   scoredAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   id: z.string().min(1).max(200),
-});
+  fromMs: z.number().int().max(Number.MAX_SAFE_INTEGER),
+  throughMs: z.number().int().max(Number.MAX_SAFE_INTEGER),
+  impactBin: z.number().int().min(0).max(19).nullable(),
+  snapshotKey: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
 const categoricalBucketCursorSchema = z.object({
   classifiedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   id: z.string().min(1).max(200),
@@ -423,16 +428,24 @@ export function createApp(deps: AppDeps): Hono {
     const id = c.req.param("id");
     if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown company" }, 404);
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
+    const fromMs = Number(c.req.query("from"));
     const throughMs = Number(c.req.query("through"));
     const now = Date.now();
-    if (!Number.isSafeInteger(throughMs) || throughMs < now - hours * 60 * 60_000 - SERIES_BUCKET_MS || throughMs > now) {
+    const oldestPermittedFromMs = now - hours * 60 * 60_000 - SERIES_BUCKET_MS;
+    const sameUtcBucket = Number.isSafeInteger(fromMs) && Number.isSafeInteger(throughMs)
+      && Math.floor(fromMs / SERIES_BUCKET_MS) === Math.floor((throughMs - 1) / SERIES_BUCKET_MS);
+    if (!Number.isSafeInteger(fromMs) || !Number.isSafeInteger(throughMs)
+      || fromMs < oldestPermittedFromMs || throughMs > now || throughMs <= fromMs
+      || throughMs - fromMs > SERIES_BUCKET_MS || !sameUtcBucket) {
       return c.json({ error: "invalid_score_bucket" }, 400);
     }
-    const rawIncludeFromBoundary = c.req.query("includeFromBoundary");
-    if (rawIncludeFromBoundary != null && rawIncludeFromBoundary !== "true" && rawIncludeFromBoundary !== "false") {
-      return c.json({ error: "invalid_score_bucket_boundary" }, 400);
+    const rawSnapshot = c.req.query("snapshot");
+    if (rawSnapshot != null && !/^[a-f0-9]{64}$/.test(rawSnapshot)) return c.json({ error: "invalid_score_bucket_snapshot" }, 400);
+    const rawImpactBin = c.req.query("impactBin");
+    const impactBin = rawImpactBin == null ? null : Number(rawImpactBin);
+    if (rawImpactBin != null && (!Number.isInteger(impactBin) || impactBin! < 0 || impactBin! > 19)) {
+      return c.json({ error: "invalid_score_bucket_impact_bin" }, 400);
     }
-    const includeFromBoundary = rawIncludeFromBoundary === "true";
     const rawCursor = c.req.query("cursor");
     let cursor: ScoreBucketCursor | null = null;
     if (rawCursor != null) {
@@ -444,24 +457,43 @@ export function createApp(deps: AppDeps): Hono {
       }
       const parsed = scoreBucketCursorSchema.safeParse(decoded);
       if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
-      if (parsed.data.scoredAt > throughMs) return c.json({ error: "invalid_cursor" }, 400);
+      if (parsed.data.companyId !== id || parsed.data.scoredAt >= throughMs || parsed.data.scoredAt < fromMs
+        || parsed.data.fromMs !== fromMs || parsed.data.throughMs !== throughMs
+        || parsed.data.impactBin !== impactBin || parsed.data.snapshotKey !== rawSnapshot) {
+        return c.json({ error: "invalid_cursor" }, 400);
+      }
       cursor = parsed.data;
     }
-    const page = deps.db.mentionsForScoreBucket({
-      companyId: id,
-      fromMs: throughMs - SERIES_BUCKET_MS,
-      throughMs,
-      includeFromBoundary,
-      limit: clampNumber(c.req.query("limit"), 1, 100, 50),
-      cursor,
-    });
-    return c.json({
-      bucketFromMs: throughMs - SERIES_BUCKET_MS,
-      bucketThroughMs: throughMs,
-      includeFromBoundary,
-      items: page.items,
-      nextCursor: page.nextCursor,
-    });
+    try {
+      const page = deps.db.mentionsForScoreBucket({
+        companyId: id,
+        fromMs,
+        throughMs,
+        limit: clampNumber(c.req.query("limit"), 1, 100, 50),
+        cursor,
+        expectedSnapshotKey: rawSnapshot,
+        impactBin,
+      });
+      return c.json({
+        bucketFromMs: fromMs,
+        bucketThroughMs: throughMs,
+        recordCount: page.recordCount,
+        matchingRecordCount: page.matchingRecordCount,
+        impactBin: page.impactBin,
+        weightedMeanImpact: weightedIndex(page.eligibleRecords),
+        recordImpactMin: page.impactValues.length ? Math.min(...page.impactValues) : null,
+        recordImpactMax: page.impactValues.length ? Math.max(...page.impactValues) : null,
+        snapshotKey: page.snapshotKey,
+        impactDistribution: impactDistribution(page.impactValues),
+        coverageSummary: page.coverageSummary,
+        items: page.items,
+        nextCursor: page.nextCursor,
+      });
+    } catch (error) {
+      if (error instanceof ScoreBucketSnapshotConflictError) return c.json({ error: "score_bucket_snapshot_changed" }, 409);
+      if (error instanceof Error && error.message === "invalid_score_bucket_interval") return c.json({ error: "invalid_score_bucket" }, 400);
+      throw error;
+    }
   });
 
   app.get("/api/companies/:id/price", async (c) => {
@@ -536,6 +568,7 @@ export function createApp(deps: AppDeps): Hono {
     const sourceLatestAt = [savedHistoryLatestAt, observedLatestAt]
       .filter((value): value is number => value != null && value > 0 && value <= now)
       .reduce<number | null>((latest, value) => Math.max(latest ?? value, value), null);
+    const legacyUnknownRows = deps.db.legacyUnknownPriceRowCount(ticker);
     return c.json({
       points: inWindow.map((point) => ({
         ...point,
@@ -549,6 +582,7 @@ export function createApp(deps: AppDeps): Hono {
       cacheAgeMs,
       refreshError,
       resampling: "source_observations_in_window",
+      quarantine: { legacyUnknownRows, scope: "all_saved_history" as const },
     });
   });
 

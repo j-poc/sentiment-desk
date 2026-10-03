@@ -15,7 +15,7 @@ import {
   hasStrongIdentity,
   parseJudgment,
   shouldAlert,
-  smoothedSeries,
+  weightedBucketSeries,
   summarizeReactions,
   weightedIndex,
 } from "./scoring.js";
@@ -768,11 +768,19 @@ export class Pipeline {
   series(companyId: string, windowHours: number): SeriesResult {
     const now = Date.now();
     const windowMs = windowHours * 60 * 60 * 1000;
+    const bucketMs = bucketMsFor(windowHours);
     // Rebuild from the company's full identified history so an older event
     // still seeds the same index when the user changes the visible window.
     const items = this.deps.db.scoredMentions(0, now, companyId);
+    const points = weightedBucketSeries(items, windowMs, bucketMs, now);
     return {
-      points: smoothedSeries(items, windowMs, bucketMsFor(windowHours), now),
+      metric: "weighted_mean_impact",
+      bucketMs,
+      windowStartMs: now - windowMs,
+      windowEndMs: now,
+      loadedRecordCount: points.reduce((total, point) => total + point.scoredRecordCount, 0),
+      populatedBucketCount: points.filter((point) => point.scoredRecordCount > 0).length,
+      points,
       latestScoreAvailableAt: items.reduce<number | null>(
         (latest, item) => Math.max(latest ?? item.availableAt, item.availableAt),
         null,

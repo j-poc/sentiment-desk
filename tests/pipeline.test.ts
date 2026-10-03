@@ -373,8 +373,11 @@ describe("Jev pipeline recovery", () => {
       expect(activity.sourceRecords24h).toBe(0);
       expect(activity.latestSourceCollectedAt).toBe(scoreAt);
       expect(series.latestScoreAvailableAt).toBe(scoreAt);
+      expect(series.metric).toBe("weighted_mean_impact");
+      expect(series.loadedRecordCount).toBe(0);
+      expect(series.populatedBucketCount).toBe(0);
       expect(series.points.some((point) => point.n > 0)).toBe(false);
-      expect(series.points.some((point) => point.v != null)).toBe(true);
+      expect(series.points.some((point) => point.v != null)).toBe(false);
     } finally {
       db.close();
     }

@@ -1,4 +1,7 @@
 import type { Mention } from "./api.js";
+import { normalizeExactHeadline } from "../../../shared/score-bucket-coverage.js";
+
+export { normalizeExactHeadline } from "../../../shared/score-bucket-coverage.js";
 
 export type MentionFeedEntry =
   | { kind: "mention"; mention: Mention }
@@ -13,10 +16,6 @@ export type MentionFeedEntry =
     };
 
 export type ExactTitleGroupFilter = "repeated" | "mixed" | null;
-
-export function normalizeExactHeadline(title: string): string {
-  return title.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
-}
 
 function publisherKey(mention: Mention): string {
   const value = mention.publisherDomain || mention.publisherName || mention.source.name;

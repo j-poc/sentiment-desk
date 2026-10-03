@@ -36,6 +36,34 @@ function mention(overrides: Partial<RawMention> = {}): RawMention {
 }
 
 describe("Desk observation and judgment storage", () => {
+  it("counts only ticker-scoped legacy_unknown price rows and keeps them outside priceWindow", () => {
+    const db = new Desk(":memory:");
+    const raw = (db as unknown as { db: DatabaseSync }).db;
+    try {
+      db.seedCompanies([company]);
+      raw.prepare("INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("ACME", 1000, 12.5, "legacy_unknown", null, null, "legacy-unknown", null);
+      raw.prepare("INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("ACME", 2000, 13.5, "legacy_unknown", "USD", 2000, "legacy-unknown", null);
+      raw.prepare("INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("ACME", 3000, 14.5, "yahoo_quote", "USD", 3000, "quote/1", null);
+      raw.prepare("INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("OTHER", 1000, 22.5, "legacy_unknown", null, null, "legacy-unknown", null);
+      raw.prepare(`INSERT INTO source_deliveries
+        (id, collector, company_id, request_key_hash, started_at, completed_at, result, parsed_item_count, adapter_version)
+        VALUES ('price-delivery', 'yahoo_chart', NULL, 'test', 1, 2, 'success', 1, 'yahoo-chart/1')`).run();
+      raw.prepare("INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("ACME", 4000, 15.5, "yahoo_chart", "USD", 5000, "yahoo-chart/1", "price-delivery");
+
+      expect(db.legacyUnknownPriceRowCount("ACME")).toBe(2);
+      expect(db.legacyUnknownPriceRowCount("OTHER")).toBe(1);
+      expect(db.priceWindow("ACME", 0, 6000)).toEqual([{
+        t: 4000, price: 15.5, currency: "USD", collector: "yahoo_chart",
+        retrievedAt: 5000, adapterVersion: "yahoo-chart/1", deliveryId: "price-delivery",
+      }]);
+    } finally { db.close(); }
+  });
+
   it("binds a Jev receipt to the immutable request and rejects a terminal receipt before dispatch", () => {
     const db = new Desk(":memory:");
     try {

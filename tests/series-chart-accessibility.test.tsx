@@ -2,21 +2,94 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "vitest";
 import { SeriesChart } from "../web/src/components/SeriesChart.js";
+import type { SeriesPoint } from "../web/src/lib/api.js";
+
+function scorePoint(t: number, v: number | null, n: number, min: number | null, max: number | null, latest: number | null): SeriesPoint {
+  return {
+    bucketStartAtMs: t - 15 * 60_000,
+    bucketEndAtMs: t,
+    bucketSnapshotKey: n > 0 ? "a".repeat(64) : null,
+    weightedMeanImpact: v,
+    scoredRecordCount: n,
+    recordImpactMin: min,
+    recordImpactMax: max,
+    latestRecordScoredAtMs: latest,
+    t, v, n, itemImpactMin: min, itemImpactMax: max, lastScoredAt: latest,
+  };
+}
 
 describe("chart keyboard data inspection", () => {
+  it("contains duplicate timestamps and withholds those rows accessibly", () => {
+    const boundary = Date.parse("2026-09-29T14:45:00.420Z");
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[
+          scorePoint(boundary, -12, 1, -12, -12, boundary),
+          scorePoint(boundary, 34, 1, 34, 34, boundary),
+        ]}
+        hours={24}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={boundary}
+      />,
+    );
+
+    assert.match(html, /role="alert"/);
+    assert.match(html, /Score history is withheld because the response contains invalid score timestamps or duplicate UTC bucket times/);
+    assert.doesNotMatch(html, /View 1 source record/);
+  });
+
+  it("withholds malformed out-of-range bucket and freshness timestamps without crashing", () => {
+    const valid = Date.parse("2026-09-29T14:45:00.420Z");
+    const malformed = scorePoint(Number.MAX_SAFE_INTEGER, 12, 1, 12, 12, Number.MAX_SAFE_INTEGER);
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[malformed]}
+        hours={24}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={valid}
+      />,
+    );
+
+    assert.match(html, /role="alert"/);
+    assert.match(html, /invalid score timestamps or duplicate UTC bucket times/);
+    assert.doesNotMatch(html, /View 1 source record/);
+  });
+
+  it("keeps both exact source rows inspectable when adjacent bucket ends share a display second", () => {
+    const boundary = Date.parse("2026-09-29T14:45:00.000Z");
+    const previous = scorePoint(boundary, -12, 1, -12, -12, boundary);
+    const current = scorePoint(boundary + 420, 34, 1, 34, 34, boundary + 420);
+    current.bucketStartAtMs = boundary;
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[previous, current]}
+        hours={24}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={boundary + 420}
+      />,
+    );
+
+    assert.match(html, /Plot positions preserve each bucket/);
+    assert.equal((html.match(/View 1 source record/g) ?? []).length, 2);
+    assert.match(html, /-12\.0/);
+    assert.match(html, /34\.0/);
+  });
+
   it("exposes each saved comparison price with currency, provider time, and collected time", () => {
     const sourceAt = Date.parse("2026-09-29T14:30:00.000Z");
     const retrievedAt = Date.parse("2026-09-29T14:31:12.000Z");
     const html = renderToStaticMarkup(
       <SeriesChart
-        points={[{
-          t: sourceAt,
-          v: 24,
-          n: 2,
-          itemImpactMin: -12,
-          itemImpactMax: 40,
-          lastScoredAt: sourceAt,
-        }]}
+        points={[scorePoint(sourceAt, 24, 2, -12, 40, sourceAt)]}
         hours={24}
         loading={false}
         mode="comparison"
@@ -43,19 +116,16 @@ describe("chart keyboard data inspection", () => {
     assert.match(html, /USD 184\.52/);
     assert.match(html, /2026-09-29T14:30:00\.000Z/);
     assert.match(html, /2026-09-29T14:31:12\.000Z/);
+    assert.match(html, /Weighted mean impact/);
+    assert.match(html, /Record spread \(impact points\)/);
+    assert.match(html, /not a confidence interval/i);
+    assert.doesNotMatch(html, /modeled decay/i);
   });
 
   it("reports a confirmed empty price window without implying missing score history", () => {
     const html = renderToStaticMarkup(
       <SeriesChart
-        points={[{
-          t: Date.parse("2026-09-29T14:30:00.000Z"),
-          v: -8,
-          n: 1,
-          itemImpactMin: -8,
-          itemImpactMax: -8,
-          lastScoredAt: Date.parse("2026-09-29T14:30:00.000Z"),
-        }]}
+        points={[scorePoint(Date.parse("2026-09-29T14:30:00.000Z"), -8, 1, -8, -8, Date.parse("2026-09-29T14:30:00.000Z"))]}
         hours={24}
         loading={false}
         mode="comparison"
@@ -66,8 +136,49 @@ describe("chart keyboard data inspection", () => {
       />,
     );
 
-    assert.match(html, /No saved Yahoo price points in this window/);
+    assert.match(html, /No verified Yahoo price points are saved in this window/);
     assert.doesNotMatch(html, /Price history unavailable/);
+  });
+
+  it("explains that legacy rows are quarantined across all saved history when the verified window is empty", () => {
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[scorePoint(Date.parse("2026-09-29T14:30:00.000Z"), -8, 1, -8, -8, Date.parse("2026-09-29T14:30:00.000Z"))]}
+        hours={24} loading={false} mode="comparison" price={[]} currency={null}
+        latestPriceAt={null} latestScoreAvailableAt={null}
+        priceQuarantine={{ legacyUnknownRows: 2883, scope: "all_saved_history" }}
+      />,
+    );
+    assert.match(html, /No verified Yahoo price points are saved in this window/);
+    assert.match(html, /2,883 legacy price rows are excluded because their source provenance is incomplete/);
+    assert.match(html, /count covers all saved history for this ticker/);
+  });
+
+  it("distinguishes a confirmed zero legacy count from unavailable or malformed metadata", () => {
+    const base = {
+      points: [], hours: 24, loading: false, mode: "comparison" as const, price: [], currency: null,
+      latestPriceAt: null, latestScoreAvailableAt: null,
+    };
+    const zero = renderToStaticMarkup(<SeriesChart {...base} priceQuarantine={{ legacyUnknownRows: 0, scope: "all_saved_history" }} />);
+    const missing = renderToStaticMarkup(<SeriesChart {...base} />);
+    const malformed = renderToStaticMarkup(<SeriesChart {...base} priceQuarantine={{ legacyUnknownRows: -1, scope: "all_saved_history" } as never} />);
+    assert.match(zero, /No legacy unknown-source price rows were found in all saved history for this ticker/);
+    assert.match(missing, /Legacy unknown-source price row count is unavailable/);
+    assert.match(malformed, /Legacy unknown-source price row count is unavailable/);
+    assert.doesNotMatch(missing, /0 legacy price rows/);
+    assert.doesNotMatch(malformed, /0 legacy price rows/);
+  });
+
+  it("does not show a prior quarantine count during loading or after a stale transport error", () => {
+    const base = {
+      points: [], hours: 24, loading: false, mode: "comparison" as const, price: [], currency: null,
+      latestPriceAt: null, latestScoreAvailableAt: null,
+      priceQuarantine: { legacyUnknownRows: 2883, scope: "all_saved_history" as const },
+    };
+    const loading = renderToStaticMarkup(<SeriesChart {...base} priceLoading />);
+    const error = renderToStaticMarkup(<SeriesChart {...base} priceError />);
+    assert.doesNotMatch(loading, /2,883 legacy price rows/);
+    assert.doesNotMatch(error, /2,883 legacy price rows/);
   });
 
   it("keeps price-only comparison data keyboard-accessible without Jev scores", () => {
@@ -128,13 +239,13 @@ describe("chart keyboard data inspection", () => {
       <SeriesChart {...base} priceLoading />,
     );
     assert.match(loadingMarkup, /Loading saved price history/);
-    assert.doesNotMatch(loadingMarkup, /No saved Yahoo price points in this window/);
+    assert.doesNotMatch(loadingMarkup, /No verified Yahoo price points are saved in this window/);
 
     const failedMarkup = renderToStaticMarkup(
       <SeriesChart {...base} priceError />,
     );
     assert.match(failedMarkup, /Price history unavailable/);
-    assert.doesNotMatch(failedMarkup, /No saved Yahoo price points in this window/);
+    assert.doesNotMatch(failedMarkup, /No verified Yahoo price points are saved in this window/);
   });
 
   it("preserves Jev loading and failure states when the price pane has data", () => {
@@ -173,19 +284,12 @@ describe("chart keyboard data inspection", () => {
     assert.match(failedMarkup, /Saved Yahoo share-price observations/);
   });
 
-  it("offers saved history when the selected window has no visible index or recent scores", () => {
+  it("offers saved history without inventing a value for the empty selected window", () => {
     const now = Date.now();
     const latestScoreAt = now - 48 * 60 * 60_000;
     const html = renderToStaticMarkup(
       <SeriesChart
-        points={[{
-          t: now - 30 * 60_000,
-          v: 0.1,
-          n: 0,
-          itemImpactMin: null,
-          itemImpactMax: null,
-          lastScoredAt: latestScoreAt,
-        }]}
+        points={[scorePoint(now - 30 * 60_000, null, 0, null, null, null)]}
         hours={24}
         loading={false}
         mode="sentiment"
@@ -196,26 +300,19 @@ describe("chart keyboard data inspection", () => {
       />,
     );
 
-    assert.match(html, /No saved scores or visible index in this window/);
+    assert.match(html, /No saved scores in this window/);
     assert.match(html, /latest saved score 2d ago/);
     assert.match(html, /Show 7D history/);
     assert.match(html, /Show the last 7 days of saved Jev history/);
-    assert.doesNotMatch(html, /modeled decay from the latest saved score/);
+    assert.doesNotMatch(html, /decay/);
   });
 
-  it("describes visible modeled movement as decay and links to older saved scores", () => {
+  it("keeps the last scored timestamp as freshness metadata, not as a carried chart value", () => {
     const now = Date.now();
     const latestScoreAt = now - 48 * 60 * 60_000;
     const html = renderToStaticMarkup(
       <SeriesChart
-        points={[{
-          t: now - 30 * 60_000,
-          v: 12,
-          n: 0,
-          itemImpactMin: null,
-          itemImpactMax: null,
-          lastScoredAt: latestScoreAt,
-        }]}
+        points={[scorePoint(now - 30 * 60_000, null, 0, null, null, null)]}
         hours={24}
         loading={false}
         mode="sentiment"
@@ -226,7 +323,8 @@ describe("chart keyboard data inspection", () => {
       />,
     );
 
-    assert.match(html, /No new Jev scores in this window · modeled decay from the latest saved score 2d ago/);
+    assert.match(html, /No saved scores in this window · latest saved score 2d ago/);
     assert.match(html, /Show 7D history/);
+    assert.doesNotMatch(html, /modeled/);
   });
 });
