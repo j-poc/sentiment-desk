@@ -205,3 +205,51 @@ branch with the matching SHA. It contains no `.env`, local database,
 receipts are finalized in subsequent commits on the same branch.
 
 This record is not a PR, merge, deployment, or release authorization.
+
+## Current continuation — 2026-10-03
+
+The preview at `http://127.0.0.1:8799/` is connected to a protected copy of
+the retained database. External requests and model calls are disabled. The
+current view shows 24 configured companies, Apple with 245 historical Jev
+records across 32 seven-day buckets, and the latest saved evidence from four
+days ago. The header reports zero records retrieved in the last 24 hours. The
+chart is labeled Historical Jev, the UI says new Luna classifications are
+paused, and the application reports GPT-6 Luna as unconfigured. No product
+database was changed.
+
+The authenticated TypeSafe `GET /v1/models` read returned only `jev-latest`
+and `jev-preview`. The [TypeSafe API reference](https://api.typesafe.ai/redoc)
+documents model discovery and paid judgment requests, but no account-wide
+usage or billing read. The TypeSafe console stopped at its security-verification
+page, so balance, refill, and spending-limit settings remain unverified. No
+paid TypeSafe or OpenAI judgment request was sent. The current runtime has no
+OpenAI API credential. The TypeSafe model list does not provide GPT-6 Luna.
+
+The latest independent whole-build review still rates full readiness **4/10**.
+The scoped saved-data UI and local recovery checks pass. This review did not
+establish investor value or hosted scale. The current acceptance map is:
+
+| Index | Status | Evidence or remaining limit |
+| ---: | --- | --- |
+| 0 | PASS | Identified real-source handling, no demo rows, SEC extraction and quarantine checks. |
+| 1 | BLOCKED | No direct OpenAI credential, real Luna result, provider usage, account reconciliation, or qualified three-class references. |
+| 2 | UNVERIFIED | No receipt-linked real Luna classifications exercise the categorical chart end to end. |
+| 3 | PASS | Historical Jev chart, real buckets, gaps, and distinct profile disclosure. |
+| 4 | PASS | Saved bucket filtering, full-snapshot counts, and source drilldown. |
+| 5 | UNVERIFIED | Live Luna failure, unknown-usage recovery, and delivery behavior have no real-provider run. |
+| 6 | PASS | Reviewed saved-data investor workflow and responsive UI; customer value is not established. |
+| 7 | PASS | Five-check scoped ETL receipt and current code-bound check. This does not claim all feeds are live. |
+| 8 | PASS | Opportunity Radar remains disabled. |
+| 9 | PASS | The prior checkpoint matched `origin/codex/real-data-rebuild` at `a4200df6a3f94d7bf06b0ff1deac044d8631de69`; this documentation continuation is checked separately after push. |
+| 10 | PASS | Zero-data first-run behavior is implemented and covered by the retained browser and recovery evidence. A fresh profile was not re-opened in this continuation. |
+| 11 | PASS | Unverified legacy prices stay out of the chart and appear only in a count-only disclosure. |
+
+The model gate remains blocked until an OpenAI API credential is configured
+locally, the account's permitted spend and refill behavior are confirmed, and a
+finite USD cap is set for the qualification run. Do not send the key in chat.
+The frozen agent-reference set still has only one negative and one positive
+case per reviewer. It is post-hoc and cannot support the declared class-level
+quality targets. Historical `legacy_unknown` usage remains unreconciled, so its
+price values stay quarantined. Endpoint-specific retention, display,
+model-processing, and deletion terms, sustained scale, and investor value
+remain unverified. Opportunity Radar stays disabled.
