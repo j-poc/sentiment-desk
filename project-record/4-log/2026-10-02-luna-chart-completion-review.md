@@ -197,6 +197,11 @@ Repository: `https://github.com/j-poc/sentiment-desk.git`
 
 Branch: `codex/real-data-rebuild`
 
-Commit and remote SHA: recorded after final commit and GitHub readback.
+GitHub reports the existing repository visibility as `PUBLIC`; this work did
+not change repository visibility or permissions. The reviewed source
+checkpoint `37c0521dce941c125d6a0e63e87e7279d37d028d` is present on the remote
+branch with the matching SHA. It contains no `.env`, local database,
+`.engineering-evidence`, or untracked gate artifact. The remaining evidence
+receipts are finalized in subsequent commits on the same branch.
 
 This record is not a PR, merge, deployment, or release authorization.
