@@ -132,32 +132,10 @@ export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_
 export interface SecDocumentAttempt { role: "8k_primary" | "earnings_exhibit_99_1"; url: string; startedAt: number; completedAt: number; retrievedAt: number | null; httpStatus: number | null; outcome: "success" | "empty" | "failed" | "invalid" | "rate_limited" | "paused"; bodyBytes: number | null; bodySha256: string | null; excerpt: string; errorCode: string | null; }
 export interface SecDocumentContext { version: "sec-document-context/1"; cik: string; accessionNo: string; primaryUrl: string; acceptedAt: number; filedAt: number | null; classificationInputStatus: "ready" | "incomplete"; selectionReason: "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link" | "storage_paused"; item202Link: { kind: "linked"; itemCode: "2.02"; exhibitNumber: "99.1"; supportingText: string } | { kind: "unverified"; reason: string } | null; selectedRole: SecDocumentAttempt["role"] | null; selectedUrl: string | null; documents: SecDocumentAttempt[]; }
 
-export interface ArchivedRun {
-  label: string;
-  company: string;
-  ticker: string;
-  sourceTitle: string;
-  sourceUrl: string;
-  filedAt: number;
-  sourcePublishedAt: number;
-  collectedAt: number;
-  scoredAt: number;
-  receiptId: string;
-  receiptDigest: string;
-  sourceAdapter: string;
-  sentiment: "negative" | "neutral" | "positive";
-  eventType: string;
-  model: string;
-  confidence: number;
-  requestDigest: string;
-  rubricDigest: string;
-}
-
 export interface FirstRunEvidenceDTO {
   eligibleObservationCount: number;
   secCollectorEnabled: boolean;
   jevSecScoringEnabled: boolean;
-  archivedRun: ArchivedRun | null;
   classifierProvider?: "openai_luna" | "typesafe";
   classifierSecClassificationEnabled?: boolean;
   classifierBlockedReason?: string | null;
@@ -216,6 +194,46 @@ export interface Mention {
 export interface MentionPage {
   items: Mention[];
   nextCursor: { orderAt: number; ingestedAt: number; id: string } | null;
+}
+
+export interface FollowedCompanyBaseline {
+  id: string;
+  companyId: string;
+  version: number;
+  capturedAt: number;
+  eligibleObservationCount: number;
+  policyVersion: string;
+}
+
+export interface FollowedEvidenceCursor {
+  companyId: string;
+  baselineId: string;
+  snapshotAt: number;
+  snapshotMaxRowId: number;
+  ingestedAt: number;
+  id: string;
+}
+
+export interface FollowedEvidenceItem extends Mention {
+  publishedBeforeBaseline: boolean;
+  ingestionCompletedAt: number;
+  ingestionFinalizedAfterBaseline: boolean;
+}
+
+export interface FollowedEvidencePage {
+  companyId: string;
+  baseline: FollowedCompanyBaseline | null;
+  asOfAt: number;
+  eligibleObservationsNow: number;
+  withheldFromBaseline: number;
+  newEvidenceCount: number;
+  items: FollowedEvidenceItem[];
+  nextCursor: FollowedEvidenceCursor | null;
+}
+
+export interface FollowedBaselineCaptureResult {
+  baseline: FollowedCompanyBaseline;
+  reused: boolean;
 }
 
 export interface JevAttemptSummary {
@@ -624,6 +642,24 @@ export async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> 
   const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
   return (await res.json()) as T;
+}
+
+export class ApiRequestError extends Error {
+  constructor(readonly status: number, readonly code: string) {
+    super(`${code} (${status})`);
+  }
+}
+
+export async function requestJSON<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body != null && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const response = await fetch(url, { ...init, headers });
+  const body = await response.json().catch(() => null) as { error?: unknown } | null;
+  if (!response.ok) throw new ApiRequestError(
+    response.status,
+    typeof body?.error === "string" ? body.error : "request_failed",
+  );
+  return body as T;
 }
 
 const categoricalCountsSchema = z.object({

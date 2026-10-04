@@ -199,7 +199,7 @@ export class Pipeline {
     });
   }
 
-  private get activeProvider(): ModelProvider { return this.deps.provider ?? "typesafe"; }
+  private get activeProvider(): ModelProvider { return this.deps.provider ?? "openai_luna"; }
   private get activeProviderReady(): boolean {
     return this.activeProvider === "openai_luna" ? Boolean(this.deps.classifier) : Boolean(this.deps.judge);
   }

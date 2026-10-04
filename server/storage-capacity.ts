@@ -109,7 +109,7 @@ export class StorageCapacity {
   }
 
   /** Read-only filesystem preflight, used before opening or migrating a database. */
-  preflight(startup = false, db?: DatabaseSync): StorageStatus {
+  preflight(startup = false, db?: DatabaseSync, requireFullDatabaseReserve = startup): StorageStatus {
     try {
       const pageCount = db ? numericRow(db, "page_count", "page_count") : null;
       const pageSize = db ? numericRow(db, "page_size", "page_size") : null;
@@ -117,7 +117,10 @@ export class StorageCapacity {
       if (db && (pageCount == null || pageSize == null || maxPageCount == null)) {
         return this.failureStatus(Date.now(), "SQLite logical database size could not be measured; collection and migration remain paused.");
       }
-      return this.buildStatus(measureFiles(this.databasePath), Date.now(), pageCount, pageSize, false, startup, maxPageCount);
+      return this.buildStatus(
+        measureFiles(this.databasePath), Date.now(), pageCount, pageSize, false, startup, maxPageCount,
+        requireFullDatabaseReserve,
+      );
     } catch {
       return this.failureStatus(Date.now(), "The database volume could not be measured; collection and classification remain paused.");
     }
@@ -220,6 +223,7 @@ export class StorageCapacity {
     readOnly: boolean,
     startup: boolean,
     maxPageCount: number | null = this.expectedMaxPageCount,
+    requireFullDatabaseReserve = startup,
   ): StorageStatus {
     const measurable = disk.mainBytes != null && disk.familyBytes != null && disk.availableBytes != null && disk.allocatedBytes != null;
     const mainBytes = disk.mainBytes;
@@ -238,11 +242,14 @@ export class StorageCapacity {
       state = "measurement_failed";
       reason = "Storage capacity could not be measured; collection and classification remain paused.";
     } else if (availableBytes! < this.limits.minimumFreeBytes + this.limits.writeHeadroomBytes
-      + (startup ? this.limits.maxDatabaseBytes : 0)) {
+      + (requireFullDatabaseReserve ? this.limits.maxDatabaseBytes : 0)) {
       state = "disk_pressure";
       const requiredFreeBytes = this.limits.minimumFreeBytes + this.limits.writeHeadroomBytes
-        + (startup ? this.limits.maxDatabaseBytes : 0);
-      reason = `Free at least ${requiredFreeBytes} bytes on the data volume before ${startup ? "startup migrations or " : "collection "}resume.`;
+        + (requireFullDatabaseReserve ? this.limits.maxDatabaseBytes : 0);
+      const operation = requireFullDatabaseReserve
+        ? "full startup migrations or collection resume"
+        : startup ? "additive schema migrations or collection resume" : "collection resume";
+      reason = `Free at least ${requiredFreeBytes} bytes on the data volume before ${operation}.`;
     } else if (mainBytes! + this.limits.writeHeadroomBytes >= this.limits.maxDatabaseBytes
       || (logicalDatabaseBytes != null && logicalDatabaseBytes + this.limits.writeHeadroomBytes >= this.limits.maxDatabaseBytes)
       || familyBytes! + this.limits.writeHeadroomBytes >= this.limits.maxFamilyBytes

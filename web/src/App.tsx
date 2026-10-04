@@ -34,6 +34,7 @@ import { SourceCoverageDisclosure } from "./components/SourceCoverageDisclosure.
 import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { FirstRunEvidenceBrief } from "./components/FirstRunEvidenceBrief.js";
+import { FollowedEvidenceBaseline } from "./components/FollowedEvidenceBaseline.js";
 import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
 import { initialChartViewForEvidence } from "./lib/categorical-chart.js";
 import { refreshedScoreBucketState, scoreBucketEvidenceBaseline, scoreBucketSnapshotMatches } from "./lib/series-chart-state.js";
@@ -241,6 +242,7 @@ export default function App() {
       const disclosure = operationsDisclosureRef.current;
       if (!disclosure) return;
       disclosure.open = true;
+      disclosure.scrollIntoView({ behavior: "auto", block: "start" });
       disclosure.querySelector<HTMLElement>("summary")?.focus();
     }));
   }, [closeDrawer]);
@@ -1335,7 +1337,11 @@ export default function App() {
             ))}
           </div>
           {researchView === "desk" && firstRunActive && (
-            <FirstRunEvidenceBrief {...firstRunEvidence} localObservationArrived={localObservationArrived} />
+            <FirstRunEvidenceBrief
+              {...firstRunEvidence}
+              localObservationArrived={localObservationArrived}
+              onOpenOperations={openOperationsFromDrawer}
+            />
           )}
           {researchView === "desk" && (
             <details id="desk-operations" ref={operationsDisclosureRef} className="desk-operations">
@@ -1672,6 +1678,14 @@ export default function App() {
               </div>}
                 </>}
               </div>
+
+              <FollowedEvidenceBaseline
+                key={selected.id}
+                companyId={selected.id}
+                companyName={`${selected.name} (${selected.ticker})`}
+                refreshKey={snapshotRevision}
+                onOpenEvidence={openDrawerMention}
+              />
 
               <EvidenceBreadth
                 mentions={evidenceBreadthMentions}

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { CollectorId, Company } from "./types.js";
@@ -44,20 +43,15 @@ export function boundedUsdMicros(v: string | undefined, maximumUsd: number): num
   return Number.isSafeInteger(micros) && micros >= 0 && micros <= maximumUsd * 1_000_000 ? micros : 0;
 }
 
-export function parseClassificationProvider(value: string | undefined): "openai_luna" | "typesafe" {
+export function parseClassificationProvider(value: string | undefined): "openai_luna" {
   if (value === undefined || value.trim() === "") return "openai_luna";
-  return z.enum(["openai_luna", "typesafe"]).parse(value.trim());
+  const selected = value.trim();
+  if (selected === "typesafe") {
+    throw new Error("CLASSIFICATION_PROVIDER=typesafe is retired; historical Jev records remain readable, while new classifications use OpenAI Luna.");
+  }
+  return z.enum(["openai_luna"]).parse(selected);
 }
 
-const scoreableCollectorSchema = z.enum([
-  "google_news_rss",
-  "yahoo_finance_rss",
-  "gdelt_doc_api",
-  "sec_edgar",
-  "finnhub",
-  "reddit",
-  "x",
-]);
 const externalSourceCollectorSchema = z.enum([
   "google_news_rss",
   "yahoo_finance_rss",
@@ -85,13 +79,6 @@ export function parseSourceRightsApprovedCollectors(value: string | undefined): 
   return parseExternalSourceCollectors(value);
 }
 
-const configuredJevCollectors = z.array(scoreableCollectorSchema).parse(
-  (process.env.TYPESAFE_ALLOWED_COLLECTORS ?? "")
-    .split(",")
-    .map((collector) => collector.trim())
-    .filter(Boolean),
-) satisfies CollectorId[];
-
 export function secContactUserAgent(raw: string | undefined): string {
   const candidate = raw?.trim() ?? "";
   if (!candidate || candidate.length > 256 || /[\u0000-\u001f\u007f]/.test(candidate)) return "";
@@ -100,37 +87,6 @@ export function secContactUserAgent(raw: string | undefined): string {
   const identifier = candidate.replace(contact[0], " ").trim();
   return identifier.length >= 3 ? candidate : "";
 }
-
-/**
- * Credential resolution, mirroring the newsjack chain: process env (which the
- * project .env feeds), then ~/.newsjack/.env as a shared-machine fallback. The
- * value never leaves the server process.
- */
-function readEnvFile(filePath: string): Map<string, string> {
-  const out = new Map<string, string>();
-  try {
-    const text = fs.readFileSync(filePath, "utf8");
-    for (const line of text.split("\n")) {
-      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-      const key = m?.[1];
-      const value = m?.[2];
-      if (key && value != null) out.set(key, value.replace(/^["']|["']$/g, ""));
-    }
-  } catch {
-    /* file absent */
-  }
-  return out;
-}
-
-export function resolveJevApiKey(envKey: string | undefined, readFallback: () => string): string {
-  return envKey !== undefined ? envKey.trim() : readFallback().trim();
-}
-
-const envKey = process.env.TYPESAFE_API_KEY;
-const apiKey = resolveJevApiKey(envKey, () =>
-  readEnvFile(path.join(os.homedir(), ".newsjack", ".env")).get("TYPESAFE_API_KEY") ?? "",
-);
-export const apiKeySource = envKey !== undefined ? (apiKey ? "env" : "disabled by env") : apiKey ? "~/.newsjack/.env" : "missing";
 
 export const VERSION = "0.2.0";
 
@@ -149,19 +105,7 @@ export const config = {
   storage: storageConfig,
   companiesPath: process.env.COMPANIES_PATH?.trim() || path.resolve("config/companies.json"),
   jev: {
-    apiKey,
-    baseUrl: (process.env.TYPESAFE_BASE_URL?.trim() || "https://api.typesafe.ai").replace(/\/+$/, ""),
     model: process.env.TYPESAFE_MODEL?.trim() || "jev-latest",
-    /** Operator attestation; it does not independently verify account terms or authority. */
-    accountUseApproved: parseExplicitBoolean(process.env.TYPESAFE_ACCOUNT_USE_APPROVED),
-    timeoutMs: 30_000,
-    /** List price per million input tokens; output is free. */
-    inputPricePerMTok: 0.042,
-    /** Empty by default: credentials do not imply source/model-use permission. */
-    allowedCollectors: new Set<CollectorId>(configuredJevCollectors),
-    /** Both positive limits are required before the app can dispatch Jev inputs. */
-    maxRequestsPerDay: boundedNonNegativeInt(process.env.TYPESAFE_MAX_REQUESTS_PER_DAY, 100),
-    maxRequestBytesPerDay: boundedNonNegativeInt(process.env.TYPESAFE_MAX_REQUEST_BYTES_PER_DAY, 400_000),
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY?.trim() || "",

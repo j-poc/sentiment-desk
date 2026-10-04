@@ -29,7 +29,7 @@ function makeDesk(health = new HealthTracker(false, false, "unconfigured")) {
 }
 
 describe("first-run evidence API", () => {
-  it("returns the separate verified archive only when no eligible source history exists", async () => {
+  it("reports only evidence and readiness actually present in the local installation", async () => {
     const { db, app, directory } = makeDesk();
     try {
       const empty = await app.request("/api/first-run-evidence");
@@ -38,20 +38,8 @@ describe("first-run evidence API", () => {
       expect(body.eligibleObservationCount).toBe(0);
       expect(body.secCollectorEnabled).toBe(false);
       expect(body.jevSecScoringEnabled).toBe(false);
-      expect(body.archivedRun).toMatchObject({
-        ticker: "TSLA", sentiment: "neutral", eventType: "corporate_action", model: "jev-1.13.0",
-        receiptId: "dca6b627-8b86-4288-bc01-6e88bf3bd072",
-        sourceUrl: "https://www.sec.gov/Archives/edgar/data/1318605/000162828026063820/tsla-20260929.htm",
-        sourceTitle: "8-K 1.01 — Material Definitive Agreement (+2 more)",
-        filedAt: 1790640000000,
-        sourcePublishedAt: 1790714330000,
-        collectedAt: 1790847689506,
-        scoredAt: 1790847689800,
-        receiptDigest: "695a0b359e553f25b39d47b4d9e96bf35df72f8ae9d373f7d5e938e5c84466ee",
-        requestDigest: "4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee",
-        confidence: 0.54,
-      });
-      expect(JSON.stringify(body)).not.toContain("snippet");
+      expect(body).not.toHaveProperty("archivedRun");
+      expect(JSON.stringify(body)).not.toMatch(/Tesla|TSLA|archived|jev-1\.13|dca6b627/);
       const { DatabaseSync } = await import("node:sqlite");
       const raw = new DatabaseSync(join(directory, "desk.db"));
       try {
@@ -69,7 +57,7 @@ describe("first-run evidence API", () => {
         retrievedAt: Date.now() - 60 * 86_400_000, collector: "google_news_rss", sourceItemId: "stale-real-row",
       });
       const stale = await app.request("/api/first-run-evidence");
-      expect(await stale.json()).toMatchObject({ eligibleObservationCount: 1, archivedRun: null });
+      expect(await stale.json()).toMatchObject({ eligibleObservationCount: 1 });
     } finally {
       db.close();
     }
@@ -87,7 +75,10 @@ describe("first-run evidence API", () => {
                ('legacy','acme','legacy','legacy','legacy_unknown','news','legacy','legacy','https://example.test','rss','blog','legacy','',1,1,'legacy_unknown','test')`);
       raw.exec(`INSERT INTO jev_judgments (id,observation_id,status) VALUES ('demo','demo','pending'),('legacy','legacy','pending')`);
       const response = await app.request("/api/first-run-evidence");
-      expect(await response.json()).toMatchObject({ eligibleObservationCount: 0, archivedRun: { ticker: "TSLA" } });
+      const body = await response.json();
+      expect(body).toMatchObject({ eligibleObservationCount: 0 });
+      expect(body).not.toHaveProperty("archivedRun");
+      expect(JSON.stringify(body)).not.toMatch(/Tesla|TSLA|archived|demonstration/);
     } finally {
       raw.close();
       db.close();

@@ -1,12 +1,11 @@
 import { serve } from "@hono/node-server";
-import { VERSION, config, apiKeySource, loadCompanies } from "./config.js";
-import { intersectCollectorAllowlists, intersectJevSourceAllowlist } from "./collector-policy.js";
+import { VERSION, config, loadCompanies } from "./config.js";
+import { intersectCollectorAllowlists } from "./collector-policy.js";
 import { Desk } from "./db.js";
 import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
-import { JevClient } from "./jev.js";
 import { OpenAIClassifier } from "./openai-classifier.js";
-import { Pipeline, type JudgeFn } from "./pipeline.js";
+import { Pipeline } from "./pipeline.js";
 import { createApp } from "./app.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import {
@@ -43,17 +42,6 @@ async function main(): Promise<void> {
   );
   const collectorEnabled = (collector: CollectorId) =>
     config.externalRequestsEnabled && activeSourceCollectors.has(collector);
-  const jevAllowedCollectors = intersectJevSourceAllowlist(
-    config.jev.allowedCollectors,
-    config.externalSourceCollectors,
-    config.sourceRightsApprovedCollectors,
-  );
-  const jevDispatchEnabled = config.externalRequestsEnabled && config.jev.apiKey !== "" &&
-    config.jev.accountUseApproved &&
-    jevAllowedCollectors.size > 0 &&
-    config.jev.maxRequestsPerDay > 0 &&
-    config.jev.maxRequestBytesPerDay > 0;
-
   const openaiAllowedCollectors = intersectCollectorAllowlists(
     config.openai.allowedCollectors,
     config.externalSourceCollectors,
@@ -62,13 +50,12 @@ async function main(): Promise<void> {
   const openaiDispatchEnabled = config.externalRequestsEnabled && config.openai.apiKey !== "" &&
     config.openai.accountUseApproved && openaiAllowedCollectors.size > 0 &&
     config.openai.maxRequestsPerDay > 0 && config.openai.maxRequestBytesPerDay > 0 && config.openai.maxDailyCostMicros > 0;
-  const typeSafeActive = config.classificationProvider === "typesafe";
-  const activeProviderEnabled = typeSafeActive ? jevDispatchEnabled : openaiDispatchEnabled;
+  const activeProviderEnabled = openaiDispatchEnabled;
 
   const hub = new Hub();
   const health = new HealthTracker(
     config.xBearer !== "",
-    typeSafeActive && jevDispatchEnabled,
+    false,
     config.jev.model,
     config.secUserAgent !== "",
     config.finnhubKey !== "",
@@ -81,66 +68,46 @@ async function main(): Promise<void> {
       blockedRequestedCollectors: [...config.externalSourceCollectors]
         .filter((collector) => !config.sourceRightsApprovedCollectors.has(collector))
         .sort(),
-      typesafeAccountUseApproved: config.jev.accountUseApproved,
-      jevAllowedCollectors: [...jevAllowedCollectors].sort(),
+      typesafeAccountUseApproved: false,
+      jevAllowedCollectors: [],
       openaiAccountUseApproved: config.openai.accountUseApproved,
       openaiAllowedCollectors: [...openaiAllowedCollectors].sort(),
       openaiBlockedCollectors: [...config.openai.allowedCollectors].filter((collector) => !openaiAllowedCollectors.has(collector)).sort(),
     },
     {
-      provider: config.classificationProvider,
-      model: typeSafeActive ? config.jev.model : config.openai.model,
-      configured: typeSafeActive ? config.jev.apiKey !== "" : config.openai.apiKey !== "",
+      provider: "openai_luna",
+      model: config.openai.model,
+      configured: config.openai.apiKey !== "",
       enabled: activeProviderEnabled,
       blockedReason: activeProviderEnabled ? null : !config.externalRequestsEnabled ? "external requests are disabled"
-        : typeSafeActive ? !config.jev.apiKey ? "TypeSafe API key is missing" : "TypeSafe allowlist, account approval, or daily budget is incomplete"
-          : !config.openai.apiKey ? "OpenAI API key is missing" : !config.openai.accountUseApproved ? "OpenAI account use is not approved"
-            : openaiAllowedCollectors.size === 0 ? "OpenAI source allowlist or rights approval is missing"
-              : config.openai.maxRequestsPerDay <= 0 || config.openai.maxRequestBytesPerDay <= 0 || config.openai.maxDailyCostMicros <= 0 ? "OpenAI daily budgets are disabled" : "OpenAI classifier is unavailable",
+        : !config.openai.apiKey ? "OpenAI API key is missing" : !config.openai.accountUseApproved ? "OpenAI account use is not approved"
+          : openaiAllowedCollectors.size === 0 ? "OpenAI source allowlist or rights approval is missing"
+            : config.openai.maxRequestsPerDay <= 0 || config.openai.maxRequestBytesPerDay <= 0 || config.openai.maxDailyCostMicros <= 0 ? "OpenAI daily budgets are disabled" : "OpenAI classifier is unavailable",
     },
   );
 
-  const jevClient = new JevClient({
-    apiKey: config.jev.apiKey,
-    baseUrl: config.jev.baseUrl,
-    model: config.jev.model,
-    timeoutMs: config.jev.timeoutMs,
-  });
   const openaiClassifier = new OpenAIClassifier({
     apiKey: config.openai.apiKey, model: config.openai.model, timeoutMs: config.openai.timeoutMs,
   });
 
-  let judge: JudgeFn | null;
-  let engineLabel: string;
-  if (typeSafeActive && jevClient.configured && jevDispatchEnabled) {
-    judge = (_state, prepared) => jevClient.judgePrepared(prepared);
-    engineLabel = config.jev.model;
-  } else {
-    judge = null;
-    engineLabel = "unconfigured";
-    if (typeSafeActive && config.externalRequestsEnabled && config.jev.apiKey && !jevDispatchEnabled) {
-      console.log("[desk] Jev dispatch disabled: configure an explicit source allowlist and finite daily limits");
-    }
-  }
-
   const pipeline = new Pipeline({
     db,
-    judge,
-    classifier: !typeSafeActive && openaiClassifier.configured && openaiDispatchEnabled
+    judge: null,
+    classifier: openaiClassifier.configured && openaiDispatchEnabled
       ? (prepared) => openaiClassifier.classifyPrepared(prepared)
       : null,
-    provider: config.classificationProvider,
+    provider: "openai_luna",
     hub,
     health,
-    engineLabel,
-    inputPricePerMTok: config.jev.inputPricePerMTok,
+    engineLabel: config.openai.model,
+    inputPricePerMTok: 0,
     concurrency: config.scoreConcurrency,
-    allowedCollectors: typeSafeActive ? jevAllowedCollectors : openaiAllowedCollectors,
+    allowedCollectors: openaiAllowedCollectors,
     externalRequestsEnabled: config.externalRequestsEnabled,
     dailyBudget: {
       utcDay: () => new Date().toISOString().slice(0, 10),
-      maxRequests: typeSafeActive ? config.jev.maxRequestsPerDay : config.openai.maxRequestsPerDay,
-      maxRequestBytes: typeSafeActive ? config.jev.maxRequestBytesPerDay : config.openai.maxRequestBytesPerDay,
+      maxRequests: config.openai.maxRequestsPerDay,
+      maxRequestBytes: config.openai.maxRequestBytesPerDay,
       maxDailyCostMicros: config.openai.maxDailyCostMicros,
     },
     alert: config.alertWebhookUrl
@@ -280,17 +247,11 @@ async function main(): Promise<void> {
   console.log(`[desk] watchlist: ${companies.length} companies | db: ${config.dbPath}`);
   console.log(!config.externalRequestsEnabled
     ? "[desk] external requests are paused by EXTERNAL_REQUESTS_ENABLED=false; credentials are unused"
-    : typeSafeActive && jevClient.configured
-    ? `[desk] jev key resolved from ${apiKeySource}`
-    : typeSafeActive && apiKeySource === "disabled by env"
-      ? "[desk] Jev disabled by explicit empty TYPESAFE_API_KEY; live observations stay pending."
-      : typeSafeActive
-        ? "[desk] TYPESAFE_API_KEY not found (env or ~/.newsjack/.env). Add it to .env to start scoring."
-        : !config.openai.apiKey
-          ? "[desk] OpenAI API key missing; real observations stay pending without failures."
-          : !activeProviderEnabled
-            ? "[desk] OpenAI classification blocked by account approval, source rights, or daily budgets."
-            : "[desk] OpenAI Luna categorical classification enabled.");
+    : !config.openai.apiKey
+      ? "[desk] OpenAI API key missing; real observations stay pending without failures."
+      : !activeProviderEnabled
+        ? "[desk] OpenAI classification blocked by account approval, source rights, or daily budgets."
+        : "[desk] OpenAI Luna categorical classification enabled.");
   if (config.externalRequestsEnabled && !config.finnhubKey)
     console.log("[desk] finnhub: no key — free tier adds news, EPS surprises, earnings dates");
   if (config.externalRequestsEnabled && !(config.redditClientId && config.redditClientSecret))
@@ -299,10 +260,7 @@ async function main(): Promise<void> {
     console.log(`[desk] blocked unapproved source requests: ${[...config.externalSourceCollectors]
       .filter((collector) => !config.sourceRightsApprovedCollectors.has(collector)).sort().join(", ")}`);
   }
-  if (typeSafeActive && config.externalRequestsEnabled && config.jev.apiKey && !config.jev.accountUseApproved) {
-    console.log("[desk] Jev dispatch blocked: TYPESAFE_ACCOUNT_USE_APPROVED is not set");
-  }
-  if (!typeSafeActive && config.externalRequestsEnabled && config.openai.apiKey && !config.openai.accountUseApproved) {
+  if (config.externalRequestsEnabled && config.openai.apiKey && !config.openai.accountUseApproved) {
     console.log("[desk] OpenAI dispatch blocked: OPENAI_ACCOUNT_USE_APPROVED is not set");
   }
 

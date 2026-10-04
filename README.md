@@ -50,7 +50,8 @@ inspection; it has no autonomous trading authority.
   source support and usage; missing evidence is review-required, not neutral.
   Transport-unknown requests are not resubmitted automatically and retain their
   worst-case reservation. Cost estimates are not provider invoices or balances.
-  The explicit legacy `typesafe` mode retains its own Jev admission controls.
+  Historical Jev judgments remain readable, but new classification dispatch is
+  Luna-only. The retired TypeSafe route cannot be selected for new inputs.
 
 ## The terminal
 
@@ -77,9 +78,9 @@ The selected-company workspace links company, history and source evidence:
 - **Sources & operations**: selected-provider gates, source failures, pending
   alert delivery and estimated/reserved usage. Failed health refresh preserves
   the last received evidence and remains visible.
-- **First run**: a real historical SEC-to-Jev archive is read-only and excluded
-  from local observations, charts and usage. New setup guidance follows Luna;
-  the archive is not presented as a Luna output or live quality proof.
+- **First run**: the product reports only history and readiness in the current
+  installation. It does not show an out-of-installation archive or a saved
+  result that cannot be verified locally.
 - **Opportunity Radar**: disabled until Sentiment Desk operational gates pass.
 
 Historical Jev metrics summarize scored source records, not stock returns or
@@ -118,14 +119,9 @@ entry and finite `OPENAI_MAX_REQUESTS_PER_DAY`,
 External requests and source rights must be enabled separately. All defaults
 keep dispatch off. Do not paste keys in Git, logs or issue descriptions.
 
-For a legacy Jev run, explicitly set `CLASSIFICATION_PROVIDER=typesafe`.
-To enable Jev only after confirming the exact source and account terms, set the
-key, allowed collector IDs, and both finite daily limits in `.env`. Supported
-collector IDs are `google_news_rss`, `yahoo_finance_rss`, `gdelt_doc_api`,
-`sec_edgar`, `finnhub`, `reddit`, and `x`. The request-byte cap conservatively
-bounds the serialized input volume; the stored cost estimate still uses
-provider-reported input tokens. Hard maxima are 100 request attempts and
-400,000 serialized bytes per UTC day. No source can be sent to Jev by default.
+`CLASSIFICATION_PROVIDER=typesafe` is rejected. Existing Jev judgments remain
+available under their saved historical semantics, but the application does
+not send new input to TypeSafe or silently move failed Jev work to Luna.
 
 The SEC's [EDGAR reuse FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions)
 states public filing content is free to access and reuse, subject to SEC
@@ -133,25 +129,17 @@ policies and fair-access limits. This is the only currently documented narrow
 source path for a first real-source classification evaluation; configure a descriptive
 `SEC_USER_AGENT`, set `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` to collect only
 EDGAR filings, and separately set `OPENAI_ALLOWED_COLLECTORS=sec_edgar` for
-Luna, or `TYPESAFE_ALLOWED_COLLECTORS=sec_edgar` only when explicitly selecting
-the legacy provider. Effective forwarding is the intersection of request,
-rights and provider lists, so a provider-only collector setting
+Luna. Effective forwarding is the intersection of request, rights and
+provider lists, so a provider-only collector setting
 cannot forward retained records from a source that is currently disabled.
-Real-source classification quality remains unvalidated. Isolated fixture
-checks establish logic only; retained historical judgments and a single actual
-SEC-to-Jev smoke do not qualify the new Luna profile. The frozen
+Real-source Luna classification quality remains unvalidated. Isolated fixture
+checks establish logic only; retained historical Jev judgments do not qualify
+the new Luna profile. The frozen
 labeling, sampling, metrics, and pass/fail rules are in
 [`sentiment-desk-completion.md`](project-record/3-project-specs/sentiment-desk-completion.md).
-The TypeSafe [current agreement](https://typesafe.ai/legal/mca) says each
-submitted input consumes credits, grants broad perpetual use of derived
-telemetry including classifications, and restricts using Services or Output
-to develop a similar or competing product. Its [privacy policy](https://typesafe.ai/legal/privacy-policy)
-disclaims model training on Inputs but does not remove the separate telemetry
-terms. The authorized account owner must confirm the current account,
-telemetry, billing, and intended Sentiment Desk use are acceptable under the
-similar/competing-product restriction before enabling Jev; written clarification
-from TypeSafe may be needed. A source allowlist is a technical control, not
-proof of rights.
+A source allowlist is a technical control, not proof of rights. New Luna
+classification remains off until direct OpenAI API access, provider-specific
+permissions, and finite account spending limits are configured.
 
 ```bash
 npm run dev                # saved real data only by default on :8787
@@ -171,9 +159,7 @@ The global opt-in pauses every external request by default; even after it is
 enabled, only collectors listed in both `EXTERNAL_SOURCE_COLLECTORS` and
 `SOURCE_RIGHTS_APPROVED_COLLECTORS` can poll or fetch charts. The second list is
 an operator attestation, not independent verification of rights. Credentials
-alone do not enable a collector. Jev additionally requires the authorized
-account owner's `TYPESAFE_ACCOUNT_USE_APPROVED=true`, a Jev allowlist, and
-finite request/byte ceilings when explicitly selected. Luna has its own account,
+alone do not enable a collector. Luna has its own account,
 source, request/byte/USD controls described above. Keep publisher feeds and Yahoo quote/chart
 endpoints out of the approval list until their exact use rights are established.
 
@@ -194,7 +180,8 @@ and matching source-by-source request and approval lists. For example,
 `SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar` enables SEC filings only; SEC
 still requires a valid `SEC_USER_AGENT`. Luna remains disabled until its own key,
 account/source flags and positive finite request/byte/USD caps are configured.
-The legacy provider requires explicit selection plus its separate flags and caps.
+`CLASSIFICATION_PROVIDER=typesafe` is rejected; persisted Jev classifications
+remain read-only historical records.
 Optional Finnhub, Reddit, and X credentials do not enable those sources unless
 both their request and approval entries are present.
 
@@ -234,7 +221,7 @@ recovery, first obtain and configure source-use approvals for Google News RSS,
 Yahoo Finance RSS, GDELT, Yahoo quote, and Yahoo chart. Then export
 `SOURCE_RIGHTS_APPROVED_COLLECTORS=google_news_rss,yahoo_finance_rss,gdelt_doc_api,yahoo_quote,yahoo_chart`
 and run `./scripts/verify-live-compose.sh`. The script refuses to self-approve
-these sources. It uses a temporary Compose project, disables Jev and optional
+these sources. It uses a temporary Compose project, disables classifier calls and optional
 credentialed sources, checks live quote and news-source health through the API,
 recreates the container, then removes only its temporary volume.
 
@@ -242,23 +229,16 @@ recreates the container, then removes only its temporary volume.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CLASSIFICATION_PROVIDER` | `openai_luna` | selected new-record classifier; `typesafe` explicitly selects the legacy path |
+| `CLASSIFICATION_PROVIDER` | `openai_luna` | new-record classifier; `typesafe` is rejected, historical Jev remains read-only |
 | `OPENAI_API_KEY` | empty | direct OpenAI API credential; never derived from Codex/ChatGPT authentication |
 | `OPENAI_ACCOUNT_USE_APPROVED` | `false` | authorized account-use attestation; not independent account/terms verification |
 | `OPENAI_ALLOWED_COLLECTORS` | empty | classifier admission intersected with enabled and rights-approved sources |
 | `OPENAI_MAX_REQUESTS_PER_DAY` | `0` | durable UTC-day request reservation cap |
 | `OPENAI_MAX_REQUEST_BYTES_PER_DAY` | `0` | durable serialized request-byte cap |
 | `OPENAI_MAX_DAILY_COST_USD` | `0` | finite daily estimated cost cap; unknown/unpriced outcomes retain reservation |
-| `TYPESAFE_API_KEY` | — | Jev credentials; local Node also checks `~/.newsjack/.env`. A key alone does not enable scoring. Set an explicit empty value to disable fallback. |
-| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | override for tests/proxy |
 | `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and selected-classifier requests; the default serves saved local data only. |
 | `EXTERNAL_SOURCE_COLLECTORS` | empty | Comma-separated real collectors permitted to make network requests; examples include `sec_edgar`, `google_news_rss`, `yahoo_quote`, and `yahoo_chart`. Empty means no source polling or remote chart requests. |
 | `SOURCE_RIGHTS_APPROVED_COLLECTORS` | empty | Separate operator-attestation allowlist; a requested collector without this entry cannot make requests. It does not independently prove rights. |
-| `TYPESAFE_MODEL` | `jev-latest` | model id sent with each call |
-| `TYPESAFE_ALLOWED_COLLECTORS` | empty | comma-separated Jev admission list, intersected with `EXTERNAL_SOURCE_COLLECTORS`; no collectors allowed by default |
-| `TYPESAFE_ACCOUNT_USE_APPROVED` | `false` | Authorized account-owner attestation required for Jev dispatch; does not independently verify authority or terms |
-| `TYPESAFE_MAX_REQUESTS_PER_DAY` | `0` | hard cap on Jev request attempts per UTC day; `0` disables dispatch |
-| `TYPESAFE_MAX_REQUEST_BYTES_PER_DAY` | `0` | hard cap on serialized Jev input bytes reserved per UTC day; `0` disables dispatch |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |
 | `SEC_USER_AGENT` | empty (SEC disabled) | required descriptive SEC User-Agent with operator contact information |
 | `POLL_SEC_SECONDS` | `90` | EDGAR submissions poll cadence |

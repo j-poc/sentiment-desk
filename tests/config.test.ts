@@ -3,35 +3,19 @@ import { intersectCollectorAllowlists, intersectJevSourceAllowlist } from "../se
 
 // Config resolution must not inspect the real shared-machine credential file
 // while these tests exercise explicit or empty environment values.
-vi.stubEnv("TYPESAFE_API_KEY", "");
 vi.stubEnv("OPENAI_MAX_DAILY_COST_USD", "");
 const {
   boundedUsdMicros,
   boundedNonNegativeInt,
   config,
+  parseClassificationProvider,
   parseExternalSourceCollectors,
   parseExplicitBoolean,
   parseSourceRightsApprovedCollectors,
   parseExternalRequestsEnabled,
-  resolveJevApiKey,
   secContactUserAgent,
 } = await import("../server/config.js");
 afterAll(() => vi.unstubAllEnvs());
-
-describe("Jev credential resolution", () => {
-  it("does not read the fallback file when the environment variable is present", () => {
-    const readFallback = vi.fn(() => "fallback-key");
-    expect(resolveJevApiKey(" supplied-key ", readFallback)).toBe("supplied-key");
-    expect(resolveJevApiKey("", readFallback)).toBe("");
-    expect(readFallback).not.toHaveBeenCalled();
-  });
-
-  it("reads the fallback only when the environment variable is absent", () => {
-    const readFallback = vi.fn(() => " fallback-key ");
-    expect(resolveJevApiKey(undefined, readFallback)).toBe("fallback-key");
-    expect(readFallback).toHaveBeenCalledOnce();
-  });
-});
 
 describe("external request mode", () => {
   it("defaults to paused and rejects malformed values", () => {
@@ -86,6 +70,14 @@ describe("external request mode", () => {
       new Set(["sec_edgar"]),
       new Set(),
     )).toEqual(new Set());
+  });
+});
+
+describe("new classifier selection", () => {
+  it("uses OpenAI Luna and rejects selecting the retired TypeSafe dispatcher", () => {
+    expect(parseClassificationProvider(undefined)).toBe("openai_luna");
+    expect(parseClassificationProvider(" openai_luna ")).toBe("openai_luna");
+    expect(() => parseClassificationProvider("typesafe")).toThrow(/historical Jev records remain readable/);
   });
 });
 

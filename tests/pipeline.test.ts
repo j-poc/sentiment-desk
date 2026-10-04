@@ -63,7 +63,8 @@ function setup(
   const health = new HealthTracker(true, judge !== null, "jev-latest");
   const hub = new Hub();
   const pipeline = new Pipeline({
-    db, judge: judge ? async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }) : null, hub, health,
+    db, judge: judge ? async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }) : null,
+    provider: "typesafe", hub, health,
     engineLabel: "jev-latest", inputPricePerMTok: 0.042, concurrency: options.concurrency ?? 1,
     allowedCollectors: options.allowedCollectors ?? new Set(["google_news_rss"]),
     externalRequestsEnabled: options.externalRequestsEnabled,
@@ -89,6 +90,25 @@ function setup(
 }
 
 describe("Jev pipeline recovery", () => {
+  it("fails closed to Luna when provider selection is omitted instead of defaulting to TypeSafe", () => {
+    const db = new Desk(":memory:");
+    const judge = vi.fn(async () => ({
+      answers: fixtureAnswers(), model: "jev-1.13.0", inputTokens: 10, outputTokens: 2, latencyMs: 1, httpStatus: 200,
+    }));
+    const pipeline = new Pipeline({
+      db, judge, hub: new Hub(), health: new HealthTracker(false, false, "jev-latest"),
+      engineLabel: "test", inputPricePerMTok: 0, concurrency: 1,
+      allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-04", maxRequests: 1, maxRequestBytes: 10_000 },
+    });
+    try {
+      expect(pipeline.retryFailed("not-found", true)).toBe("classifier_not_configured");
+      expect(judge).not.toHaveBeenCalled();
+    } finally {
+      pipeline.stop();
+      db.close();
+    }
+  });
   it("streams newly persisted pending evidence and coalesces company count updates", async () => {
     vi.useFakeTimers();
     const { db, pipeline, source, hub } = setup(null, { externalRequestsEnabled: false });

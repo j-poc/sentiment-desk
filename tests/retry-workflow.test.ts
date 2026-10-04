@@ -82,7 +82,7 @@ function setup(
   const pipeline = new Pipeline({
     db,
     judge: async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }),
-    provider: options.provider,
+    provider: options.provider ?? "typesafe",
     classifier: options.classifier,
     hub,
     health,

@@ -33,6 +33,23 @@ import { canonicalDatabasePath, DeskWriterLock, WriterAlreadyOwnedError } from "
 // but only observations with an identified collector can enter live research
 // or current operational usage totals.
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
+const FOLLOWED_BASELINE_POLICY = "receipt-ingestion-success/1";
+const MAX_FOLLOWED_BASELINE_OBSERVATIONS = 50_000;
+const FOLLOWED_BASELINE_ELIGIBLE_FILTER = `m.company_id = ?
+  AND m.collector NOT IN ('demo_simulation', 'legacy_unknown')
+  AND COALESCE(m.engine, '') <> 'demo-sim'
+  AND m.delivery_id IS NOT NULL
+  AND d.processing_required = 1
+  AND d.collector = o.collector
+  AND d.company_id = o.company_id
+  AND d.adapter_version = o.adapter_version
+  AND d.result IN ('success', 'partial')
+  AND d.completed_at <= ?
+  AND i.status IN ('success', 'partial')`;
+const FOLLOWED_BASELINE_RECEIPT_JOINS = `
+  JOIN source_observations o ON o.id = m.id
+  JOIN source_deliveries d ON d.id = m.delivery_id
+  JOIN source_ingestions i ON i.delivery_id = d.id`;
 const SQLITE_FULL = 13;
 const CATEGORICAL_BUCKET_MS = 15 * 60_000;
 const CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER = `
@@ -210,14 +227,17 @@ function processIsAlive(pid: number): boolean {
 function hasCurrentReadableSchema(db: DatabaseSync): boolean {
   try {
     const version = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-    if (version?.user_version !== 11) return false;
+    if (version?.user_version !== 12) return false;
     const objects = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name));
     if (!["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
-      "source_deliveries", "source_ingestions", "price_points", "alert_outbox", "desk_runtime_sessions", "jev_request_attempts"]
+      "source_deliveries", "source_ingestions", "followed_company_baselines", "followed_company_baseline_items",
+      "price_points", "alert_outbox", "desk_runtime_sessions", "jev_request_attempts"]
       .every((name) => objects.has(name))) return false;
     const attempts = new Set((db.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name));
     const classifications = new Set((db.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((row) => row.name));
-    return attempts.has("prompt_sha256") && classifications.has("profile_sha256") && classifications.has("attempt_id");
+    const baselineColumns = new Set((db.prepare("PRAGMA table_info(followed_company_baselines)").all() as Array<{ name: string }>).map((row) => row.name));
+    return attempts.has("prompt_sha256") && classifications.has("profile_sha256") && classifications.has("attempt_id")
+      && baselineColumns.has("expected_baseline_id");
   } catch {
     return false;
   }
@@ -363,6 +383,34 @@ WHEN OLD.status <> 'processing' OR NEW.status = 'processing'
 BEGIN SELECT RAISE(ABORT, 'source ingestion outcome is immutable once finalized'); END;
 CREATE TRIGGER IF NOT EXISTS source_ingestions_no_delete BEFORE DELETE ON source_ingestions
 BEGIN SELECT RAISE(ABORT, 'source ingestion outcomes are immutable'); END;
+CREATE TABLE IF NOT EXISTS followed_company_baselines (
+  id TEXT PRIMARY KEY,
+  company_id TEXT NOT NULL REFERENCES companies(id),
+  version INTEGER NOT NULL CHECK (version > 0),
+  capture_key TEXT NOT NULL UNIQUE,
+  expected_baseline_id TEXT,
+  captured_at INTEGER NOT NULL CHECK (captured_at >= 0),
+  eligible_observation_count INTEGER NOT NULL CHECK (eligible_observation_count >= 0),
+  policy_version TEXT NOT NULL,
+  UNIQUE (company_id, version)
+);
+CREATE INDEX IF NOT EXISTS followed_baselines_company_version
+  ON followed_company_baselines(company_id, version DESC);
+CREATE TABLE IF NOT EXISTS followed_company_baseline_items (
+  baseline_id TEXT NOT NULL REFERENCES followed_company_baselines(id),
+  observation_id TEXT NOT NULL REFERENCES source_observations(id),
+  PRIMARY KEY (baseline_id, observation_id)
+);
+CREATE INDEX IF NOT EXISTS followed_baseline_items_observation
+  ON followed_company_baseline_items(observation_id);
+CREATE TRIGGER IF NOT EXISTS followed_company_baselines_no_update BEFORE UPDATE ON followed_company_baselines
+BEGIN SELECT RAISE(ABORT, 'followed company baselines are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS followed_company_baselines_no_delete BEFORE DELETE ON followed_company_baselines
+BEGIN SELECT RAISE(ABORT, 'followed company baselines are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS followed_company_baseline_items_no_update BEFORE UPDATE ON followed_company_baseline_items
+BEGIN SELECT RAISE(ABORT, 'followed company baseline items are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS followed_company_baseline_items_no_delete BEFORE DELETE ON followed_company_baseline_items
+BEGIN SELECT RAISE(ABORT, 'followed company baseline items are immutable'); END;
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -466,6 +514,51 @@ export interface MentionPageCursor {
   orderAt: number;
   ingestedAt: number;
   id: string;
+}
+
+export interface FollowedCompanyBaseline {
+  id: string;
+  companyId: string;
+  version: number;
+  capturedAt: number;
+  eligibleObservationCount: number;
+  policyVersion: string;
+}
+
+export interface FollowedEvidenceCursor {
+  companyId: string;
+  baselineId: string;
+  snapshotAt: number;
+  snapshotMaxRowId: number;
+  ingestedAt: number;
+  id: string;
+}
+
+export interface FollowedEvidenceItem extends MentionDTO {
+  publishedBeforeBaseline: boolean;
+  ingestionCompletedAt: number;
+  ingestionFinalizedAfterBaseline: boolean;
+}
+
+export interface FollowedCompanyEvidencePage {
+  companyId: string;
+  baseline: FollowedCompanyBaseline | null;
+  asOfAt: number;
+  eligibleObservationsNow: number;
+  withheldFromBaseline: number;
+  newEvidenceCount: number;
+  items: FollowedEvidenceItem[];
+  nextCursor: FollowedEvidenceCursor | null;
+}
+
+export class FollowedBaselineConflictError extends Error {
+  constructor(readonly currentBaseline: FollowedCompanyBaseline | null) {
+    super("followed_baseline_changed");
+  }
+}
+
+export class FollowedBaselineLimitError extends Error {
+  constructor() { super("followed_baseline_observation_limit_exceeded"); }
 }
 
 export interface ScoreBucketCursor {
@@ -726,12 +819,19 @@ export class Desk {
     this.storage = new StorageCapacity(canonicalPath, storageLimits);
     let databaseExists = this.storage.hasDatabaseFile();
     let currentSchema = false;
+    let schemaVersion = 0;
     let startupPreflight: StorageStatus;
     if (databaseExists) {
       const probe = new DatabaseSync(canonicalPath, { readOnly: true });
       try {
+        schemaVersion = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
+        if (schemaVersion > 12) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
         currentSchema = hasCurrentReadableSchema(probe);
-        startupPreflight = this.storage.preflight(!currentSchema, probe);
+        // v11->v12 only creates two bounded indexes/tables and installs
+        // triggers. Older upgrades may rebuild legacy rows, so they retain the
+        // full-database startup reserve.
+        const needsFullMigrationReserve = !currentSchema && schemaVersion < 11;
+        startupPreflight = this.storage.preflight(!currentSchema, probe, needsFullMigrationReserve);
       } finally {
         probe.close();
       }
@@ -759,7 +859,11 @@ export class Desk {
         databaseExists = this.storage.hasDatabaseFile();
         if (databaseExists) {
           const probe = new DatabaseSync(canonicalPath, { readOnly: true });
-          try { currentSchema = hasCurrentReadableSchema(probe); }
+          try {
+            const version = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
+            if (version > 12) throw new Error(`unsupported_database_schema_version_${version}`);
+            currentSchema = hasCurrentReadableSchema(probe);
+          }
           finally { probe.close(); }
         }
         if (!databaseExists || !currentSchema) throw error;
@@ -784,6 +888,8 @@ export class Desk {
       this.storage.configurePageLimit(this.db);
       this.exec("PRAGMA journal_mode = WAL");
       if (!currentSchema) {
+        const version = Number((this.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
+        if (version > 12) throw new Error(`unsupported_database_schema_version_${version}`);
         this.exec(SCHEMA);
         this.migrate();
       }
@@ -793,7 +899,7 @@ export class Desk {
       this.prepare("INSERT INTO desk_runtime_sessions(id, pid, started_at) VALUES (?, ?, ?)")
         .run(this.runtimeId, process.pid, Date.now());
       this.recoverUnfinishedJevAttempts();
-      this.exec("PRAGMA user_version = 11");
+      this.exec("PRAGMA user_version = 12");
       this.storageEnforcementEnabled = true;
     } catch (error) {
       try { openedDb?.close(); } catch { /* preserve startup failure */ }
@@ -862,6 +968,12 @@ export class Desk {
 
   /** Migrate the v1 combined table atomically, retaining it for audit/rollback. */
   private migrate(): void {
+    const baselineCols = new Set(
+      (this.prepare("PRAGMA table_info(followed_company_baselines)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (baselineCols.size > 0 && !baselineCols.has("expected_baseline_id")) {
+      this.exec("ALTER TABLE followed_company_baselines ADD COLUMN expected_baseline_id TEXT");
+    }
     const observationCols = new Set(
       (this.prepare("PRAGMA table_info(source_observations)").all() as Array<{ name: string }>).map((row) => row.name),
     );
@@ -2127,6 +2239,212 @@ export class Desk {
          AND id IN (${placeholders})`,
     ).all(companyId, ...ids) as unknown as MentionRow[];
     return rows.map(rowToDTO);
+  }
+
+  captureFollowedCompanyBaseline(input: {
+    companyId: string;
+    captureKey: string;
+    expectedBaselineId: string | null;
+  }): { baseline: FollowedCompanyBaseline; reused: boolean } {
+    if (!z.string().uuid().safeParse(input.captureKey).success ||
+      (input.expectedBaselineId != null && !z.string().uuid().safeParse(input.expectedBaselineId).success)) {
+      throw new Error("invalid_followed_baseline_request");
+    }
+    const capturedAt = Date.now();
+    if (!Number.isSafeInteger(capturedAt) || capturedAt < 0) throw new Error("invalid_followed_baseline_clock");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const priorRequest = this.prepare(
+        `SELECT id, company_id AS companyId, expected_baseline_id AS expectedBaselineId,
+          version, captured_at AS capturedAt,
+          eligible_observation_count AS eligibleObservationCount, policy_version AS policyVersion
+         FROM followed_company_baselines WHERE capture_key = ?`,
+      ).get(input.captureKey) as (FollowedCompanyBaseline & { expectedBaselineId: string | null }) | undefined;
+      if (priorRequest) {
+        if (priorRequest.companyId !== input.companyId) throw new Error("followed_baseline_capture_key_reused");
+        if (priorRequest.expectedBaselineId !== input.expectedBaselineId) {
+          throw new FollowedBaselineConflictError(this.latestFollowedCompanyBaseline(input.companyId));
+        }
+        this.exec("COMMIT");
+        return { baseline: priorRequest, reused: true };
+      }
+
+      const company = this.prepare("SELECT 1 AS present FROM companies WHERE id = ?").get(input.companyId);
+      if (!company) throw new Error("unknown_company");
+      const current = this.latestFollowedCompanyBaseline(input.companyId);
+      if ((current?.id ?? null) !== input.expectedBaselineId) {
+        throw new FollowedBaselineConflictError(current);
+      }
+
+      const eligibleCountRow = this.prepare(
+        `SELECT COUNT(*) AS count
+         FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS}
+         WHERE ${FOLLOWED_BASELINE_ELIGIBLE_FILTER}
+           AND m.ingested_at <= ? AND i.completed_at <= ?`,
+      ).get(input.companyId, capturedAt, capturedAt, capturedAt) as { count: number };
+      const eligibleObservationCount = Number(eligibleCountRow.count);
+      if (!Number.isSafeInteger(eligibleObservationCount) || eligibleObservationCount > MAX_FOLLOWED_BASELINE_OBSERVATIONS) {
+        throw new FollowedBaselineLimitError();
+      }
+
+      const versionRow = this.prepare(
+        "SELECT COALESCE(MAX(version), 0) AS version FROM followed_company_baselines WHERE company_id = ?",
+      ).get(input.companyId) as { version: number };
+      const version = Number(versionRow.version) + 1;
+      const baseline: FollowedCompanyBaseline = {
+        id: randomUUID(), companyId: input.companyId, version, capturedAt,
+        eligibleObservationCount, policyVersion: FOLLOWED_BASELINE_POLICY,
+      };
+      this.prepare(
+        `INSERT INTO followed_company_baselines
+          (id, company_id, version, capture_key, expected_baseline_id, captured_at, eligible_observation_count, policy_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        baseline.id, baseline.companyId, baseline.version, input.captureKey, input.expectedBaselineId, baseline.capturedAt,
+        baseline.eligibleObservationCount, baseline.policyVersion,
+      );
+      const inserted = this.prepare(
+        `INSERT INTO followed_company_baseline_items (baseline_id, observation_id)
+         SELECT ?, m.id
+         FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS}
+         WHERE ${FOLLOWED_BASELINE_ELIGIBLE_FILTER}
+           AND m.ingested_at <= ? AND i.completed_at <= ?`,
+      ).run(baseline.id, input.companyId, capturedAt, capturedAt, capturedAt);
+      if (Number(inserted.changes) !== eligibleObservationCount) throw new Error("followed_baseline_snapshot_count_mismatch");
+      this.exec("COMMIT");
+      return { baseline, reused: false };
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
+  followedCompanyEvidence(input: {
+    companyId: string;
+    limit: number;
+    cursor: FollowedEvidenceCursor | null;
+  }): FollowedCompanyEvidencePage {
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error("invalid_followed_baseline_limit");
+    }
+    this.exec("BEGIN");
+    try {
+      const baseline = this.latestFollowedCompanyBaseline(input.companyId);
+      const asOfAt = input.cursor?.snapshotAt ?? Math.max(Date.now(), baseline?.capturedAt ?? 0);
+      if (!Number.isSafeInteger(asOfAt) || asOfAt < 0 ||
+        (input.cursor != null && (!Number.isSafeInteger(input.cursor.snapshotMaxRowId) || input.cursor.snapshotMaxRowId < 0))) {
+        throw new Error("invalid_followed_baseline_snapshot");
+      }
+      if (input.cursor && (input.cursor.companyId !== input.companyId || input.cursor.baselineId !== baseline?.id)) {
+        throw new FollowedBaselineConflictError(baseline);
+      }
+
+      const maxRow = this.prepare(
+      `SELECT COALESCE(MAX(rowid), 0) AS maxRowId
+       FROM source_observations
+       WHERE company_id = ? AND ingested_at <= ?`,
+      ).get(input.companyId, asOfAt) as { maxRowId: number | bigint };
+      const observedMaxRowId = Number(maxRow.maxRowId);
+      const snapshotMaxRowId = input.cursor?.snapshotMaxRowId ?? observedMaxRowId;
+      const realFilter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
+      const totalRealRow = this.prepare(
+      `SELECT COUNT(*) AS count
+       FROM mentions m JOIN source_observations o ON o.id = m.id
+       WHERE m.company_id = ? AND ${realFilter}
+         AND o.ingested_at <= ? AND o.rowid <= ?`,
+      ).get(input.companyId, asOfAt, snapshotMaxRowId) as { count: number };
+      const eligibleCountRow = this.prepare(
+      `SELECT COUNT(*) AS count
+       FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS}
+       WHERE ${FOLLOWED_BASELINE_ELIGIBLE_FILTER}
+         AND i.completed_at <= ? AND o.ingested_at <= ? AND o.rowid <= ?`,
+      ).get(input.companyId, asOfAt, asOfAt, asOfAt, snapshotMaxRowId) as { count: number };
+      const eligibleObservationsNow = Number(eligibleCountRow.count);
+      const withheldFromBaseline = Math.max(0, Number(totalRealRow.count) - eligibleObservationsNow);
+      if (!Number.isSafeInteger(observedMaxRowId) || observedMaxRowId < 0 ||
+        !Number.isSafeInteger(snapshotMaxRowId) || snapshotMaxRowId < 0 || snapshotMaxRowId > observedMaxRowId ||
+        !Number.isSafeInteger(eligibleObservationsNow) || eligibleObservationsNow < 0) {
+        throw new Error("invalid_followed_baseline_snapshot_count");
+      }
+
+      if (!baseline) {
+        const result = {
+        companyId: input.companyId, baseline: null, asOfAt, eligibleObservationsNow,
+        withheldFromBaseline, newEvidenceCount: 0, items: [], nextCursor: null,
+        };
+        this.exec("COMMIT");
+        return result;
+      }
+      const newCountRow = this.prepare(
+      `SELECT COUNT(*) AS count
+       FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS}
+       WHERE ${FOLLOWED_BASELINE_ELIGIBLE_FILTER}
+         AND i.completed_at <= ? AND o.ingested_at <= ? AND o.rowid <= ?
+         AND NOT EXISTS (
+         SELECT 1 FROM followed_company_baseline_items bi
+           WHERE bi.baseline_id = ? AND bi.observation_id = m.id
+         )`,
+      ).get(input.companyId, asOfAt, asOfAt, asOfAt, snapshotMaxRowId, baseline.id) as { count: number };
+      const newEvidenceCount = Number(newCountRow.count);
+      if (!Number.isSafeInteger(newEvidenceCount) || newEvidenceCount < 0) throw new Error("invalid_followed_baseline_delta_count");
+
+      const cursorFilter = input.cursor ? "AND (m.ingested_at < ? OR (m.ingested_at = ? AND m.id < ?))" : "";
+      const cursorValues = input.cursor ? [input.cursor.ingestedAt, input.cursor.ingestedAt, input.cursor.id] : [];
+      const rows = this.prepare(
+      `SELECT m.*, i.completed_at AS ingestion_completed_at
+       FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS}
+       WHERE ${FOLLOWED_BASELINE_ELIGIBLE_FILTER}
+         AND i.completed_at <= ? AND o.ingested_at <= ? AND o.rowid <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM followed_company_baseline_items bi
+           WHERE bi.baseline_id = ? AND bi.observation_id = m.id
+         )
+         ${cursorFilter}
+       ORDER BY m.ingested_at DESC, m.id DESC LIMIT ?`,
+      ).all(
+        input.companyId, asOfAt, asOfAt, asOfAt, snapshotMaxRowId, baseline.id, ...cursorValues, input.limit + 1,
+      ) as unknown as Array<MentionRow & { ingestion_completed_at: number }>;
+      const hasMore = rows.length > input.limit;
+      const pageRows = rows.slice(0, input.limit);
+      const last = hasMore ? pageRows[pageRows.length - 1] : undefined;
+      const result = {
+      companyId: input.companyId, baseline, asOfAt, eligibleObservationsNow, withheldFromBaseline, newEvidenceCount,
+      items: pageRows.map((row) => ({
+        ...rowToDTO(row),
+        publishedBeforeBaseline: row.publisher_published_at != null
+          && row.publisher_published_at < baseline.capturedAt
+          && row.retrieved_at > baseline.capturedAt,
+        ingestionCompletedAt: row.ingestion_completed_at,
+        ingestionFinalizedAfterBaseline: row.retrieved_at <= baseline.capturedAt
+          && row.ingestion_completed_at > baseline.capturedAt,
+      })),
+      nextCursor: last ? {
+        companyId: input.companyId, baselineId: baseline.id, snapshotAt: asOfAt,
+        snapshotMaxRowId,
+        ingestedAt: last.ingested_at, id: last.id,
+      } : null,
+      };
+      this.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
+  private latestFollowedCompanyBaseline(companyId: string): FollowedCompanyBaseline | null {
+    const row = this.prepare(
+      `SELECT id, company_id AS companyId, version, captured_at AS capturedAt,
+        eligible_observation_count AS eligibleObservationCount, policy_version AS policyVersion
+       FROM followed_company_baselines WHERE company_id = ? ORDER BY version DESC LIMIT 1`,
+    ).get(companyId) as FollowedCompanyBaseline | undefined;
+    if (!row) return null;
+    return {
+      ...row,
+      version: Number(row.version),
+      capturedAt: Number(row.capturedAt),
+      eligibleObservationCount: Number(row.eligibleObservationCount),
+    };
   }
 
   mentionsForCompanyPage({

@@ -79,6 +79,8 @@ describe("HealthPanel source approval disclosure", () => {
     expect(html).toContain("New external requests are paused; saved evidence remains available.");
     expect(html).toContain("Close long-running database readers and retry.");
     expect(html).toContain("1.00 GB</span>");
+    expect(html).toContain("128.0 MB");
+    expect(html).toContain("2.00 GB hard SQLite page ceiling");
     expect(html).toContain("hard SQLite page ceiling");
     expect(html).toContain("not guaranteed completion reserves");
   });

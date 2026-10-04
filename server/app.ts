@@ -5,15 +5,21 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { CategoricalSnapshotUnavailableError, InvalidCategoricalBucketError, ScoreBucketSnapshotConflictError } from "./db.js";
-import type { AlertDeliveryCursor, Desk, DeliverySourceSchedule, MentionFeedFilter, MentionPageCursor, ScoreBucketCursor } from "./db.js";
+import {
+  CategoricalSnapshotUnavailableError,
+  FollowedBaselineConflictError,
+  FollowedBaselineLimitError,
+  InvalidCategoricalBucketError,
+  ScoreBucketSnapshotConflictError,
+} from "./db.js";
+import type { AlertDeliveryCursor, Desk, DeliverySourceSchedule, FollowedEvidenceCursor, MentionFeedFilter, MentionPageCursor, ScoreBucketCursor } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
-import type { ArchivedRun, CategoricalBucketCursor } from "./types.js";
+import type { CategoricalBucketCursor } from "./types.js";
 
 /**
  * HTTP surface: read APIs, an explicitly confirmed single-item Jev retry, and
@@ -35,28 +41,6 @@ export interface AppDeps {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-// Verified read-only from the isolated real SEC -> Jev smoke DB. Kept outside
-// the operational observation store and never passed to a Desk calculation.
-const ARCHIVED_SEC_JEV_RUN: ArchivedRun = {
-  label: "Archived real-source SEC-to-Jev run",
-  company: "Tesla, Inc.",
-  ticker: "TSLA",
-  sourceTitle: "8-K 1.01 — Material Definitive Agreement (+2 more)",
-  sourceUrl: "https://www.sec.gov/Archives/edgar/data/1318605/000162828026063820/tsla-20260929.htm",
-  filedAt: 1790640000000,
-  sourcePublishedAt: 1790714330000,
-  collectedAt: 1790847689506,
-  scoredAt: 1790847689800,
-  receiptId: "dca6b627-8b86-4288-bc01-6e88bf3bd072",
-  receiptDigest: "695a0b359e553f25b39d47b4d9e96bf35df72f8ae9d373f7d5e938e5c84466ee",
-  sourceAdapter: "sec-primary-document/1",
-  sentiment: "neutral",
-  eventType: "corporate_action",
-  model: "jev-1.13.0",
-  confidence: 0.54,
-  requestDigest: "4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee",
-  rubricDigest: "0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b",
-};
 const PRICE_SERIES_REFRESH_AGE_MS = 5 * 60 * 1000;
 const retryConfirmationSchema = z.object({
   confirmNewCharge: z.literal(true),
@@ -79,6 +63,18 @@ const scoreBucketCursorSchema = z.object({
 const categoricalBucketCursorSchema = z.object({
   classifiedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   id: z.string().min(1).max(200),
+}).strict();
+const followedEvidenceCursorSchema = z.object({
+  companyId: z.string().min(1).max(200),
+  baselineId: z.string().uuid(),
+  snapshotAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  snapshotMaxRowId: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  ingestedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  id: z.string().min(1).max(200),
+}).strict();
+const followedBaselineCaptureSchema = z.object({
+  captureKey: z.string().uuid(),
+  expectedBaselineId: z.string().uuid().nullable(),
 }).strict();
 const alertDeliveryCursorSchema = z.object({
   priority: z.union([z.literal(0), z.literal(1), z.literal(2)]),
@@ -150,7 +146,6 @@ export function createApp(deps: AppDeps): Hono {
       classifierProvider: runtimeHealth.classifier.provider,
       classifierSecClassificationEnabled: runtimeHealth.classifier.enabled && classifierSecAllowed,
       classifierBlockedReason: runtimeHealth.classifier.blockedReason,
-      archivedRun: eligibleObservationCount === 0 ? ARCHIVED_SEC_JEV_RUN : null,
     });
   });
 
@@ -218,6 +213,53 @@ export function createApp(deps: AppDeps): Hono {
     // normal seven-day investor window; ordinary views stay time-bounded.
     const sinceMs = filter === "failed" || filter === "history" ? 0 : Date.now() - hours * 60 * 60 * 1000;
     return c.json(deps.db.mentionsForCompanyPage({ companyId: id, sinceMs, limit, cursor, filter }));
+  });
+
+  app.get("/api/companies/:id/followed-evidence", (c) => {
+    const companyId = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === companyId)) return c.json({ error: "unknown_company" }, 404);
+    const limit = clampNumber(c.req.query("limit"), 1, 100, 25);
+    const rawCursor = c.req.query("cursor");
+    let cursor: FollowedEvidenceCursor | null = null;
+    if (rawCursor != null) {
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(rawCursor);
+      } catch {
+        return c.json({ error: "invalid_cursor" }, 400);
+      }
+      const parsed = followedEvidenceCursorSchema.safeParse(decoded);
+      if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
+      cursor = parsed.data;
+    }
+    try {
+      return c.json(deps.db.followedCompanyEvidence({ companyId, limit, cursor }));
+    } catch (error) {
+      if (error instanceof FollowedBaselineConflictError) {
+        return c.json({ error: "baseline_changed", currentBaseline: error.currentBaseline }, 409);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/companies/:id/followed-evidence/baseline", async (c) => {
+    const companyId = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === companyId)) return c.json({ error: "unknown_company" }, 404);
+    const input = followedBaselineCaptureSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_followed_baseline_request" }, 400);
+    try {
+      return c.json(deps.db.captureFollowedCompanyBaseline({ companyId, ...input.data }));
+    } catch (error) {
+      if (error instanceof FollowedBaselineConflictError) {
+        return c.json({ error: "baseline_changed", currentBaseline: error.currentBaseline }, 409);
+      }
+      if (error instanceof FollowedBaselineLimitError) {
+        return c.json({ error: "followed_baseline_observation_limit_exceeded", maximum: 50_000 }, 422);
+      }
+      if (error instanceof Error && error.message === "unknown_company") return c.json({ error: "unknown_company" }, 404);
+      if (error instanceof Error && error.message === "followed_baseline_capture_key_reused") return c.json({ error: "capture_key_reused" }, 409);
+      throw error;
+    }
   });
 
   app.post("/api/companies/:id/mentions/lookup", async (c) => {

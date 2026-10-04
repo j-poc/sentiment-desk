@@ -15,7 +15,7 @@ function Row({ label, value, wrap = false }: { label: string; value: string; wra
 function bytes(value: number | null): string {
   if (value == null) return "unavailable";
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`;
-  if (value < 1024 ** 3) return `${(value / (1024 * 1024)).toFixed(1)} GB`;
+  if (value < 1024 ** 3) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   return `${(value / 1024 ** 3).toFixed(2)} GB`;
 }
 
