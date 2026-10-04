@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp, type AppDeps } from "../server/app.js";
-import { Desk, type AlertIntent } from "../server/db.js";
+import { type AlertIntent } from "../server/db.js";
+import { TEST_STORAGE_LIMITS, TestDesk as Desk } from "./test-desk.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import type { Company, MentionScore } from "../server/types.js";
@@ -65,8 +66,11 @@ describe("health alert status API", () => {
       const response = await app.request("/api/health");
       expect(response.status).toBe(200);
       const body = await response.json() as {
+        storage: { state: string; mainBytes: number | null; maxDatabaseBytes: number; canStartExternalWork: boolean };
         alertDelivery: { counts: Record<string, number>; recent: Array<{ alertId: string; observationId: string; state: string }>; nextCursor: string | null };
       };
+      expect(body.storage).toMatchObject({ state: "ready", maxDatabaseBytes: TEST_STORAGE_LIMITS.maxDatabaseBytes, canStartExternalWork: true });
+      expect(body.storage.mainBytes).toBeGreaterThan(0);
       expect(body.alertDelivery.counts).toEqual({ pending: 0, sending: 0, retrying: 0, failed: 1, paused: 0 });
       expect(body.alertDelivery.recent[0]).toMatchObject({ observationId: oldFailure, state: "failed" });
       expect(body.alertDelivery.recent).toHaveLength(10);

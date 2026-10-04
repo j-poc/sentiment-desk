@@ -12,12 +12,20 @@ function Row({ label, value, wrap = false }: { label: string; value: string; wra
   );
 }
 
+function bytes(value: number | null): string {
+  if (value == null) return "unavailable";
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`;
+  if (value < 1024 ** 3) return `${(value / (1024 * 1024)).toFixed(1)} GB`;
+  return `${(value / 1024 ** 3).toFixed(2)} GB`;
+}
+
 export function HealthPanel({ health }: { health: HealthDTO | null }) {
   if (!health) return null;
   const { jev, rss, gdelt, x } = health.health;
   const { sourceApproval } = health.health;
   const classifier = health.health.classifier ?? jev;
   const lunaSelected = health.health.classifier?.provider === "openai_luna";
+  const storagePaused = health.storage.state !== "ready";
 
   return (
     <div className="px-4 py-3.5 text-[11px]">
@@ -31,6 +39,21 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
       />
       <Row label={lunaSelected ? "OpenAI account-use flag" : "Jev account-use flag"} value={(lunaSelected ? sourceApproval.openaiAccountUseApproved : sourceApproval.typesafeAccountUseApproved) ? "set · operator attestation" : "missing · dispatch blocked"} wrap />
       <Row label="engine" value={`${classifier.model} · ${health.externalRequestsEnabled ? classifier.enabled ? "enabled" : "blocked" : "paused"}`} />
+      <div className="mt-3 border-t border-white/[0.05] pt-2.5">
+        <Row label="database capacity" value={health.storage.state.replaceAll("_", " ")} />
+        <Row label="SQLite logical / physical" value={`${bytes(health.storage.logicalDatabaseBytes)} logical · ${bytes(health.storage.mainBytes)} main`} wrap />
+        <Row label="SQLite sidecars" value={`${bytes(health.storage.walBytes)} WAL · ${bytes(health.storage.shmBytes)} SHM · ${bytes(health.storage.journalBytes)} journal`} wrap />
+        <Row label="file family / pause threshold" value={`${bytes(health.storage.familyBytes)} measured · ${bytes(health.storage.maxFamilyBytes)} threshold`} wrap />
+        <Row label="volume free / required minimum" value={`${bytes(health.storage.availableBytes)} · ${bytes(health.storage.minimumFreeBytes)}`} wrap />
+        <Row label="write headroom target" value={bytes(health.storage.writeHeadroomBytes)} />
+        <Row label="logical database limit" value={`${bytes(health.storage.maxDatabaseBytes)} hard SQLite page ceiling`} wrap />
+        <Row label="storage measured" value={timeAgo(health.storage.checkedAt)} />
+        {storagePaused && (
+          <div role="status" aria-live="polite" className="mt-1 rounded border border-amber-300/15 bg-amber-200/[0.035] px-2 py-1.5 text-amber-100/80">
+            New external requests are paused; saved evidence remains available. File-family and free-space values are admission thresholds, not guaranteed completion reserves. {health.storage.reason ?? "Restore database capacity, then retry."}
+          </div>
+        )}
+      </div>
       {health.health.classifier?.blockedReason && <Row label="classifier gate" value={health.health.classifier.blockedReason} wrap />}
       <div role="note" className="mt-1 text-[9.5px] text-amber-200/55">
         Approval flags are operator attestations; they do not independently verify source rights or account terms.
@@ -155,7 +178,8 @@ export function DeskHealthDisclosure({ health, loadState = "loading" }: { health
     </p>
   );
   const operationalIssues = operationsAttentionCount(health);
-  const mode = health.externalRequestsEnabled ? "external requests enabled" : "saved data only";
+  const mode = health.storage.state !== "ready" ? "storage paused · saved data only"
+    : health.externalRequestsEnabled ? "external requests enabled" : "saved data only";
   return (
     <>
     {loadState === "failed" && <p role="status" aria-live="polite" className="mb-2 px-1 text-[10.5px] text-amber-200/80">Operations refresh failed. Showing the last received source, classifier, and webhook status.</p>}

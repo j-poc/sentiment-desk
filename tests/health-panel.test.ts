@@ -23,6 +23,14 @@ const blockedHealth: HealthDTO = {
   uptimeSec: 1,
   sseClients: 0,
   dbSizeBytes: null,
+  storage: {
+    state: "ready", canStartExternalWork: true, writesAllowed: true, reason: null,
+    mainBytes: 1024, walBytes: 0, shmBytes: 0, journalBytes: 0, familyBytes: 1024,
+    allocatedBytes: 1024, availableBytes: 8 * 1024 ** 3, pageCount: 1, pageSize: 4096,
+    logicalDatabaseBytes: 4096,
+    maxPageCount: 524288, maxDatabaseBytes: 2 * 1024 ** 3, maxFamilyBytes: 5 * 1024 ** 3,
+    minimumFreeBytes: 1024 ** 3, writeHeadroomBytes: 128 * 1024 ** 2, checkedAt: 10_000,
+  },
   alertDelivery: { configured: false, enabled: false, counts: { pending: 0, sending: 0, retrying: 0, failed: 0, paused: 0 }, recent: [], nextCursor: null },
   health: {
     externalRequestsEnabled: true,
@@ -59,6 +67,20 @@ describe("HealthPanel source approval disclosure", () => {
     expect(operationsAttentionCount(health)).toBe(3);
     const html = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health }));
     expect(html).toContain("3 signals");
+  });
+  it("surfaces storage pressure as an operational signal and keeps saved evidence available", () => {
+    const health: HealthDTO = { ...blockedHealth, storage: {
+      ...blockedHealth.storage, state: "checkpoint_blocked", canStartExternalWork: false,
+      writesAllowed: true, reason: "Close long-running database readers and retry.",
+    } };
+    expect(operationsAttentionCount(health)).toBe(2);
+    const html = renderToStaticMarkup(createElement(HealthPanel, { health }));
+    expect(html).toContain("checkpoint blocked");
+    expect(html).toContain("New external requests are paused; saved evidence remains available.");
+    expect(html).toContain("Close long-running database readers and retry.");
+    expect(html).toContain("1.00 GB</span>");
+    expect(html).toContain("hard SQLite page ceiling");
+    expect(html).toContain("not guaranteed completion reserves");
   });
   it("separates a known Luna cost subtotal from an incomplete daily estimate", () => {
     const html = renderToStaticMarkup(createElement(HealthPanel, { health: {

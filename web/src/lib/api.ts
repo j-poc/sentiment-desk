@@ -126,8 +126,8 @@ export interface CategoricalBucketEvidencePage {
 }
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
 export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
-export interface SecDocumentAttempt { role: "8k_primary" | "earnings_exhibit_99_1"; url: string; startedAt: number; completedAt: number; retrievedAt: number | null; httpStatus: number | null; outcome: "success" | "empty" | "failed" | "invalid" | "rate_limited"; bodyBytes: number | null; bodySha256: string | null; excerpt: string; errorCode: string | null; }
-export interface SecDocumentContext { version: "sec-document-context/1"; cik: string; accessionNo: string; primaryUrl: string; acceptedAt: number; filedAt: number | null; classificationInputStatus: "ready" | "incomplete"; selectionReason: "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link"; item202Link: { kind: "linked"; itemCode: "2.02"; exhibitNumber: "99.1"; supportingText: string } | { kind: "unverified"; reason: string } | null; selectedRole: SecDocumentAttempt["role"] | null; selectedUrl: string | null; documents: SecDocumentAttempt[]; }
+export interface SecDocumentAttempt { role: "8k_primary" | "earnings_exhibit_99_1"; url: string; startedAt: number; completedAt: number; retrievedAt: number | null; httpStatus: number | null; outcome: "success" | "empty" | "failed" | "invalid" | "rate_limited" | "paused"; bodyBytes: number | null; bodySha256: string | null; excerpt: string; errorCode: string | null; }
+export interface SecDocumentContext { version: "sec-document-context/1"; cik: string; accessionNo: string; primaryUrl: string; acceptedAt: number; filedAt: number | null; classificationInputStatus: "ready" | "incomplete"; selectionReason: "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link" | "storage_paused"; item202Link: { kind: "linked"; itemCode: "2.02"; exhibitNumber: "99.1"; supportingText: string } | { kind: "unverified"; reason: string } | null; selectedRole: SecDocumentAttempt["role"] | null; selectedUrl: string | null; documents: SecDocumentAttempt[]; }
 
 export interface ArchivedRun {
   label: string;
@@ -476,6 +476,28 @@ export interface HealthDTO {
   uptimeSec: number;
   sseClients: number;
   dbSizeBytes: number | null;
+  storage: {
+    state: "ready" | "capacity_paused" | "disk_pressure" | "checkpoint_blocked" | "measurement_failed";
+    canStartExternalWork: boolean;
+    writesAllowed: boolean;
+    reason: string | null;
+    mainBytes: number | null;
+    walBytes: number | null;
+    shmBytes: number | null;
+    journalBytes: number | null;
+    familyBytes: number | null;
+    allocatedBytes: number | null;
+    availableBytes: number | null;
+    logicalDatabaseBytes: number | null;
+    pageCount: number | null;
+    pageSize: number | null;
+    maxPageCount: number | null;
+    maxDatabaseBytes: number;
+    maxFamilyBytes: number;
+    minimumFreeBytes: number;
+    writeHeadroomBytes: number;
+    checkedAt: number;
+  };
   classifierUsage?: {
     requests: number;
     reservedRequests: number;

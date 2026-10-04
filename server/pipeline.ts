@@ -8,6 +8,8 @@ import { JevError, prepareJevRequest, type PreparedJevRequest } from "./jev.js";
 import { OpenAIClassifierError, OPENAI_PROMPT_VERSION, OPENAI_SCHEMA_VERSION, prepareOpenAIRequest, type OpenAIClassifierResult, type PreparedOpenAIRequest } from "./openai-classifier.js";
 import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
+import { StorageCapacityError } from "./storage-capacity.js";
+import { ExternalRequestPausedError } from "./external-request-gate.js";
 import {
   applyPostRules,
   bucketMsFor,
@@ -81,7 +83,8 @@ export type OperatorRetryResult =
   | "classifier_not_configured"
   | "classifier_source_not_allowed"
   | "classifier_daily_budget_exhausted"
-  | "budget_exhausted";
+  | "budget_exhausted"
+  | "storage_paused";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CURRENT_WINDOW_MS = 3 * 60 * 60 * 1000;
@@ -132,7 +135,8 @@ export class Pipeline {
 
   /** Re-queue existing pending mentions (used after rubric migrations). */
   drainPending(limit = 1_000): number {
-    if (this.deps.externalRequestsEnabled === false || !this.activeProviderReady || this.deps.allowedCollectors.size === 0) return 0;
+    if (this.deps.externalRequestsEnabled === false || !this.activeProviderReady || this.deps.allowedCollectors.size === 0
+      || !this.deps.db.canStartExternalWork()) return 0;
     const remaining = this.remainingDailyRequests();
     if (remaining <= 0) return 0;
     const ids = this.deps.db.pendingIds(Math.min(limit, remaining), [...this.deps.allowedCollectors]);
@@ -142,13 +146,20 @@ export class Pipeline {
 
   retryFailed(id: string, reviewedProviderUsage: boolean): OperatorRetryResult {
     if (this.deps.externalRequestsEnabled === false || !this.activeProviderReady) return this.activeProvider === "openai_luna" ? "classifier_not_configured" : "jev_unavailable";
+    if (!this.deps.db.prepareExternalWork()) return "storage_paused";
     const current = this.deps.db.mentionRow(id);
     if (!current) return "not_retryable";
     if (![...this.deps.allowedCollectors].some((collector) => collector === current.collector)) {
       return "classifier_source_not_allowed";
     }
     if (!this.hasDailyBudgetCapacity()) return this.activeProvider === "openai_luna" ? "classifier_daily_budget_exhausted" : "budget_exhausted";
-    const result = this.deps.db.requeueFailed(id, reviewedProviderUsage);
+    let result: ReturnType<Desk["requeueFailed"]>;
+    try {
+      result = this.deps.db.requeueFailed(id, reviewedProviderUsage);
+    } catch (error) {
+      if (error instanceof StorageCapacityError) return "storage_paused";
+      throw error;
+    }
     if (result !== "queued") return result;
     const requeued = this.deps.db.mentionRow(id);
     if (requeued) this.deps.hub.broadcast("mention", rowToDTO(requeued));
@@ -193,7 +204,11 @@ export class Pipeline {
       if (!id) break;
       this.queued.delete(id);
       this.inFlight += 1;
-      void this.scoreOne(id).finally(() => {
+      void this.scoreOne(id).catch((error: unknown) => {
+        if (!(error instanceof StorageCapacityError)) {
+          console.error("[desk] classification worker failed without changing persisted state:", error);
+        }
+      }).finally(() => {
         this.inFlight -= 1;
         this.pump();
         this.resolveIdleWaiters();
@@ -228,6 +243,7 @@ export class Pipeline {
     const queuedRow = db.mentionRow(id);
     if (this.deps.externalRequestsEnabled === false || !queuedRow || (queuedRow.status !== "pending" && queuedRow.status !== "retrying")) return;
     if (![...this.deps.allowedCollectors].some((collector) => collector === queuedRow.collector)) return;
+    if (!db.prepareExternalWork()) return;
 
     if (this.activeProvider === "openai_luna") {
       await this.classifyOne(id);
@@ -367,17 +383,22 @@ export class Pipeline {
         try { db.logEvent("warn", "pipeline", `score saved for ${id}; a follow-up notification failed`); } catch { /* keep the committed judgment authoritative */ }
         return;
       }
+      const storagePaused = err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0;
       const message = safeJevFailureMessage(err);
       if (!attemptReceiptPersisted) {
         const status = err instanceof JevError ? err.status ?? null : judgeResponse?.httpStatus ?? null;
-        const outcome: JevAttemptReceipt["outcome"] = judgeResponse
+        const outcome: JevAttemptReceipt["outcome"] = storagePaused
+          ? "not_sent"
+          : judgeResponse
           ? "response"
           : err instanceof JevError && err.status != null && (err.status < 500 || err.status === 529)
             ? "rejected"
             : dispatchIntentRecorded
               ? "unknown"
               : "not_sent";
-        const category = judgeResponse
+        const category = storagePaused
+          ? "storage_paused"
+          : judgeResponse
           ? "response_validation_failed"
           : outcome === "rejected"
             ? status === 429 || status === 529 ? "provider_overloaded" : "http_rejected"
@@ -400,6 +421,13 @@ export class Pipeline {
         } catch {
           // Startup recovery will close an unfinished attempt conservatively from its durable dispatch intent.
         }
+      }
+      if (storagePaused) {
+        const retryAt = Date.now() + RETRY_BASE_MS;
+        db.markRetrying(id, "Storage admission paused the request before dispatch; no provider call was sent. It will retry automatically.", retryAt);
+        const updated = db.mentionRow(id);
+        if (updated) this.deps.hub.broadcast("mention", rowToDTO(updated));
+        return;
       }
       if (err instanceof JevError && err.retryable && row.score_attempts < MAX_JEV_ATTEMPTS) {
         const backoffMs = RETRY_BASE_MS * 2 ** (row.score_attempts - 1);
@@ -428,6 +456,7 @@ export class Pipeline {
     if (!row || (row.status !== "pending" && row.status !== "retrying") || !classifier || !this.hasDailyBudgetCapacity()) return;
     const collector = row.collector as CollectorId;
     if (!this.deps.allowedCollectors.has(collector)) return;
+    if (!db.prepareExternalWork()) return;
     const meta = this.companyMeta(row.company_id);
     const strongIdentity = hasStrongIdentity({
       company: { name: meta.name, ticker: meta.ticker, aliases: meta.aliases, ambiguous: meta.ambiguous },
@@ -494,17 +523,18 @@ export class Pipeline {
         this.deps.hub.broadcast("company", this.snapshot(claimed.company_id));
       }
     } catch (error) {
+      const storagePaused = error instanceof ExternalRequestPausedError && error.dispatchedRequests === 0;
       const e = error instanceof OpenAIClassifierError ? error : null;
       const responseSeen = result != null || (e?.status != null && e.status >= 200 && e.status < 300);
       if (!receiptRecorded) {
-        const outcome: JevAttemptReceipt["outcome"] = e?.outcomeUnknown ? "unknown" : responseSeen ? "response" : e?.status != null ? "rejected" : intentRecorded ? "unknown" : "not_sent";
+        const outcome: JevAttemptReceipt["outcome"] = storagePaused ? "not_sent" : e?.outcomeUnknown ? "unknown" : responseSeen ? "response" : e?.status != null ? "rejected" : intentRecorded ? "unknown" : "not_sent";
         try {
           db.recordJevAttemptReceipt({
             attemptId: claim.attemptId, outcome, occurredAt: Date.now(), httpStatus: e?.status ?? result?.httpStatus ?? null,
             inputTokens: e?.usage?.inputTokens ?? result?.usage.inputTokens ?? null,
             outputTokens: e?.usage?.outputTokens ?? result?.usage.outputTokens ?? null,
             resolvedModel: result?.modelReturned ?? e?.returnedModel ?? null, latencyMs: e?.latencyMs ?? result?.latencyMs ?? null,
-            errorCategory: e ? e.outcomeUnknown ? "provider_outcome_unknown" : e.status === 429 ? "rate_limited_or_quota_exhausted" : "provider_rejected_or_response_invalid" : "internal_or_transport_outcome_unknown",
+            errorCategory: storagePaused ? "storage_paused" : e ? e.outcomeUnknown ? "provider_outcome_unknown" : e.status === 429 ? "rate_limited_or_quota_exhausted" : "provider_rejected_or_response_invalid" : "internal_or_transport_outcome_unknown",
             cachedInputTokens: e?.usage?.cachedInputTokens ?? result?.usage.cachedInputTokens ?? null, reasoningTokens: e?.usage?.reasoningTokens ?? result?.usage.reasoningTokens ?? null,
             cacheWriteInputTokens: e?.usage?.cacheWriteInputTokens ?? result?.usage.cacheWriteInputTokens ?? null,
             totalTokens: e?.usage?.totalTokens ?? result?.usage.totalTokens ?? null, responseId: e?.responseId ?? result?.responseId ?? null,
@@ -513,6 +543,13 @@ export class Pipeline {
           });
           receiptRecorded = true;
         } catch { /* runtime recovery closes the durable attempt conservatively */ }
+      }
+      if (storagePaused) {
+        const retryAt = Date.now() + RETRY_BASE_MS;
+        db.markRetrying(id, "Storage admission paused the request before dispatch; no OpenAI call was sent. It will retry automatically.", retryAt);
+        const updated = db.mentionRow(id);
+        if (updated) this.deps.hub.broadcast("mention", rowToDTO(updated));
+        return;
       }
       const message = e?.message ?? "OpenAI classification failed due to internal processing error";
       if (e?.retryable && claimed.score_attempts < MAX_JEV_ATTEMPTS) {
@@ -583,6 +620,10 @@ export class Pipeline {
     const fingerprint = createHash("sha256").update(webhookUrl).digest("hex");
     try {
       while (!this.alertDispatchStopped) {
+        if (!this.deps.db.prepareExternalWork()) {
+          this.scheduleAlertWake(Date.now() + 30_000);
+          return;
+        }
         const now = Date.now();
         const claim = this.deps.db.claimAlert(now, fingerprint, 10_000, 5);
         if (!claim) {
@@ -599,7 +640,14 @@ export class Pipeline {
           status = response.status;
           outcome = response.ok ? "delivered" : response.status >= 500 || response.status === 429 ? "retry" : "failed";
           if (!response.ok) category = response.status === 429 ? "http_rate_limited" : response.status >= 500 ? "http_server_error" : "http_rejected";
-        } catch { outcome = "ambiguous"; category = "transport_ambiguous"; }
+        } catch (error) {
+          if (error instanceof ExternalRequestPausedError && error.dispatchedRequests === 0) {
+            this.deps.db.deferAlertBeforeDispatch(claim, Date.now(), Date.now() + RETRY_BASE_MS);
+            this.scheduleAlertWake(Date.now() + RETRY_BASE_MS);
+            return;
+          }
+          outcome = "ambiguous"; category = "transport_ambiguous";
+        }
         const backoff = Date.now() + Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, claim.attempt - 1));
         this.deps.db.completeAlert(claim, outcome, Date.now(), status, category, backoff);
         // Keep draining independent alerts after retryable and permanent failures.

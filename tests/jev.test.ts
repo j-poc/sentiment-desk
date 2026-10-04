@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { JevClient, JevError, prepareJevRequest } from "../server/jev.js";
+import { ExternalRequestPausedError } from "../server/external-request-gate.js";
 import { RUBRIC, RUBRIC_SHA } from "../server/rubric.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -189,6 +190,13 @@ describe("JevClient", () => {
     expect(transportFailure).toBeInstanceOf(JevError);
     expect((transportFailure as JevError).outcomeUnknown).toBe(true);
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a final storage pause as known-not-sent instead of provider ambiguity", async () => {
+    const transport = vi.fn(async () => { throw new ExternalRequestPausedError(); }) as unknown as typeof fetch;
+    const error = await clientWith(transport).judge({}, RUBRIC).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(ExternalRequestPausedError);
+    expect(error).not.toBeInstanceOf(JevError);
   });
 
   it("does not retry on non-429 4xx and fails closed on empty answers", async () => {

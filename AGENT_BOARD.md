@@ -1,6 +1,6 @@
 # Sentiment Desk Agent Board
 
-## Active continuation — full-build closeout, 2026-10-02
+## Active continuation — full-build closeout, 2026-10-04
 
 The user requires a complete, real-data-only Sentiment Desk, OpenAI GPT-6 Luna
 for new categorical judgments, regular reviewed GitHub checkpoints, and no
@@ -8,15 +8,25 @@ Opportunity Radar until Desk operation is accepted. Historical Jev results
 remain explicitly Jev; no Jev fallback, demo observation, synthetic product
 record, or fabricated price is allowed. Product fixtures stay isolated to tests.
 
-The protected local preview at `http://127.0.0.1:54863/` uses a database copy,
-with external requests and model credentials disabled. NVIDIA's real saved
-history shows 537 Jev-scored records in 33 seven-day buckets, latest score
-`2026-09-28T17:45:12.776Z`; no Luna classifications or eligible price points
-exist. The historical chart uses discrete bucket means, observed spread and
-record counts; gaps remain empty. Each plotted row opens the matching source
-interval. Its histogram contains all 20 impact bands and preserves full bucket
-statistics while source rows filter and paginate. Repeated-title counts are
-disclosures, not verified independent stories or investor opinions.
+The protected local preview at `http://127.0.0.1:8798/` uses an isolated
+SQLite backup of retained real data. It is running with external requests and
+all classifiers disabled. Its source database remains unchanged. The latest
+saved retrieval in the main database is `2026-09-28T17:47:42Z`; Apple history
+is archival, not current. Verified price history is absent; 2,889
+`legacy_unknown` price rows stay quarantined. The graph uses observed
+historical buckets and labels its model profile; empty spans are not filled.
+Selecting Adobe updates its heading, chart, saved Jev series, evidence feed,
+and detail drawer. The detail drawer identifies historical observations with
+missing delivery lineage. Repeated-title groups are not proof of independent
+reporting.
+
+The whole-build `engineering_bullshit_detector` returned **FAIL at 4/10** for
+full readiness. The independent investor/UI review rated the saved-data
+investor workflow **4/10** and desktop interface **7.5–8/10**. It confirmed
+selection and chart interaction, but found the fixed ticker-led 24-company
+catalog, old data, missing linked delivery trace in the opened Adobe item, and
+no fundamental-driver, counterevidence, missing-information, or next-question
+workflow. The review did not claim live operation or investor value.
 
 ### Exit evidence
 
@@ -39,20 +49,45 @@ disclosures, not verified independent stories or investor opinions.
   and interaction. They found the saved-history workflow useful but not
   operationally ready. Their exact scores and evidence limits are in the
   current completion review.
-- [ ] **Final local gates and checkpoint.** Re-run tests, typecheck, build,
-  source/security and dependency gates, current scoped ETL `verify`/`check`,
-  update private diagnostic artifacts and the decision trace, then push the
-  reviewed source commit to `codex/real-data-rebuild` and read back its SHA.
+- [ ] **Final local gates and checkpoint.** The outcome-evidence checker now
+  derives structural/statistical results from typed task ledgers, supports
+  evidence-backed no-signal rows, and rejects fabricated aggregate summaries.
+  Its default command still exits blocked: self-authored local review files and
+  hashes cannot authenticate independent subagents, source truth or
+  participants. Focused checker tests pass 16/16. Re-run the integrated suite,
+  typecheck, build, dependency/security scans, and final scoped ETL
+  `verify`/`check`; then push the reviewed code checkpoint and record the
+  remote SHA.
+
+### Local verification refresh — 2026-10-04
+
+- `npm run typecheck`: PASS.
+- Full Vitest suite: PASS, 571 tests across 67 files. Test-only databases now
+  use bounded test storage limits; production storage safeguards are unchanged.
+- `npm run build`: PASS. Vite reports a 667.57 kB minified entry chunk, so
+  initial-load code splitting remains a performance opportunity.
+- `npm audit --omit=dev --audit-level=high`: PASS, zero findings.
+- Gitleaks: PASS on scanned workspace files; the 86 MB user database was
+  skipped by the configured 20 MB file limit and is excluded from the
+  checkpoint.
+- The scoped live-data ETL `verify` and `check`: PASS at
+  `2026-10-04T00:19:08Z`. The isolated smoke exercised five user-approved,
+  keyless real sources; paid classifiers remained disabled, and the disposable
+  verification VM was stopped afterward.
+- The app server starts at the preview URL above against a separate consistent
+  SQLite backup. Codex's in-app browser policy rejected navigation to the local
+  URL, so this continuation has no new rendered-browser confirmation.
 
 ### Blocked operational acceptance
 
-Luna is selected in code but has zero requests and zero saved outputs. This
-runtime has no OpenAI API credential or finite account budget readback. Provider
-usage evidence for 4,700 quarantined `legacy_unknown` observations is absent;
-endpoint-specific retention, display and model-processing terms are not
-resolved. The post-hoc agent-reference set is imbalanced and is not ground
-truth, prospective quality proof, or investor-value validation. These gaps
-keep the full product goal open and Opportunity Radar disabled.
+Luna is selected in code but has zero requests and zero saved outputs. No
+direct OpenAI API credential, finite spend limit, or usage readback is
+available. Provider-usage reconciliation for the 4,700 `legacy_unknown`
+observations is absent. The existing post-hoc agent-reference set is
+directionally imbalanced and is neither ground truth nor prospective quality
+proof. The product lacks a current small-cap discovery source/universe, a
+complete fundamental research workflow, and observed intended-user sessions.
+These gaps keep full acceptance open and Opportunity Radar disabled.
 
 ## Historical resumed Luna acceptance run at 52bb6f7
 

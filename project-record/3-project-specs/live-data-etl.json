@@ -9,7 +9,7 @@
   "evidence_path": "project-record/4-log/live-data-etl-evidence.json",
   "max_evidence_age_hours": 24,
   "documentation_review": {
-    "reviewed_at": "2026-10-02",
+    "reviewed_at": "2026-10-03",
     "runtime": "Local Node.js v26.10.0; npm 11.19.1; package engine requires Node >=22.",
     "references": [
       {
@@ -81,11 +81,26 @@
         "source": "Node.js exact current globals documentation",
         "url": "https://nodejs.org/api/globals.html",
         "finding": "Current official documentation identifies Nodev26.10.0, matching local runtime, and documents fetch/AbortSignal. The versioned v26.10.0 globals URL was inaccessible; the current official URL was verified rather than treating the failed URL as proof."
+      },
+      {
+        "source": "Node.js SQLite API",
+        "url": "https://nodejs.org/api/sqlite.html",
+        "finding": "Current official API documents DatabaseSync read-only opening, prepared statement behavior, isTransaction, and SQLite error codes. Implementation runs on Node.js v26.10.0."
+      },
+      {
+        "source": "SQLite PRAGMA and WAL documentation",
+        "url": "https://www.sqlite.org/pragma.html",
+        "finding": "Official SQLite docs establish max_page_count, wal_autocheckpoint, journal_size_limit, and wal_checkpoint results. journal_size_limit trims after checkpoints and is not itself a hard WAL size ceiling; an active reader can prevent a truncating checkpoint."
+      },
+      {
+        "source": "SQLite Write-Ahead Logging",
+        "url": "https://www.sqlite.org/wal.html",
+        "finding": "Official WAL docs describe checkpoint behavior and WAL growth under active readers. Storage admission therefore gates new external work when truncation cannot complete and includes WAL, SHM, and journal sidecars in measurements."
       }
     ]
   },
   "status": "partial",
-  "operational_status": "2026-10-02 selected SEC evidence checkpoint: the sec-filing-evidence/1 adapter selects only a visible same-document Item 2.02 relationship and one same-accession HTML99.1 results attachment. On the final source, all eight retained real document pairs passed scheduler/SQLite replay and restart without new revisions; nine isolated technical safety cases passed. A two-request authorized live fetch of historical AMD primary and Exhibit99.1 produced one receipt-linked pending input, no model output. Legacy migration preserved existing core rows and values. Actual IAB proof verifies NVIDIA at1440x900 with its historical Jev chart and three saved headlines above fold, J/K navigation and keyboard bucket-to-source drilldown; both saved chart and selected SEC drawer at390x844 had documentWidth390. Selected/parent links, body hashes and separate source/retrieval clocks are visible. Both paid classifiers stayed off, no demo or synthetic product rows were inserted and original SQLite remains unchanged. OpenAI GPT-6 Luna remains the selected new-record categorical classifier, with historical genuine Jev outputs kept separate. Its direct API credential/account spending route, actual outputs/usage reconciliation and three-class qualification remain blocked. Independent agent references are diagnostics, not ground truth or probability calibration. In the post-hoc 48-item extension, each reviewer labeled one negative and one positive case; all three literal classes are present, but one example per directional class is too sparse to qualify class-level performance. Short isolated saved-data reads passed but sustained scale and investor value remain unverified. Independent whole-build review is FAIL for those operational gates. The final scoped ETL result is owned by project-record/4-log/live-data-etl-evidence.json after tracked source and records freeze; exact GitHub commit/readback is recorded separately. Radar stays disabled.",
+  "operational_status": "2026-10-02 selected SEC evidence checkpoint: the sec-filing-evidence/1 adapter selects only a visible same-document Item 2.02 relationship and one same-accession HTML99.1 results attachment. On the final source, all eight retained real document pairs passed scheduler/SQLite replay and restart without new revisions; nine isolated technical safety cases passed. A two-request authorized live fetch of historical AMD primary and Exhibit99.1 produced one receipt-linked pending input, no model output. Legacy migration preserved existing core rows and values. Actual IAB proof verifies NVIDIA at1440x900 with its historical Jev chart and three saved headlines above fold, J/K navigation and keyboard bucket-to-source drilldown; both saved chart and selected SEC drawer at390x844 had documentWidth390. Selected/parent links, body hashes and separate source/retrieval clocks are visible. Both paid classifiers stayed off, no demo or synthetic product rows were inserted and original SQLite remains unchanged. OpenAI GPT-6 Luna remains the selected new-record categorical classifier, with historical genuine Jev outputs kept separate. Its direct API credential/account spending route, actual outputs/usage reconciliation and three-class qualification remain blocked. Independent agent references are diagnostics, not ground truth or probability calibration. In the post-hoc 48-item extension, each reviewer labeled one negative and one positive case; all three literal classes are present, but one example per directional class is too sparse to qualify class-level performance. Short isolated saved-data reads passed but sustained scale and investor value remain unverified. Independent whole-build review is FAIL for those operational gates. The final scoped ETL result is owned by project-record/4-log/live-data-etl-evidence.json after tracked source and records freeze; exact GitHub commit/readback is recorded separately. Radar stays disabled. On 2026-10-03, a local-only storage guard was added: default byte ceilings, verified SQLite page cap, measured main/WAL/SHM/journal/free-space admission, per-request collection gates, typed hard-full errors, and read-only serving of a compatible saved database. Isolated SQLite and health regressions are pending in this candidate; the user's data database is not used by the capacity tests. This does not prove multi-process/host-wide quotas, sustained load, or resolve live Luna/account/source-rights and investor-value gates.",
   "observation_lineage": {
     "new_observations": "Must reference an immutable source_deliveries.id recorded before pipeline ingestion; collector, company, and adapter version must match.",
     "historical_unlinked": "Retained rows without a stored delivery_id are not backfilled with invented lineage and are identified as unlinked historical records in the detail UI.",
@@ -345,7 +360,7 @@
       "command": "npm run verify:jev-sanity",
       "covers": "Historical ten-case fictional sanity pilot using isolated test databases; reports only test-fixture agreement and is not real-source quality, classifier calibration, or release evidence.",
       "status": "PASS",
-      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234\u2013370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     },
     "no_synthetic_runtime": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run verify:offline-startup; production browser and API readback at http://127.0.0.1:8795/ against isolated saved data",
@@ -410,7 +425,7 @@
         ],
         "evidence": "All nine real external collector IDs were checked against config, adapter/poller bounds, delivery health, allowlist probes, rights records, and user-visible scope. The Sentiment Desk now exposes one-response RSS uncertainty, GDELT cap behavior, SEC/Finnhub/Reddit/X time windows, price-only endpoints, missing direct source families, optional social collectors, and per-source rights caveat. Trace: project-record/4-log/2026-09-29-source-scope-disclosure.md."
       },
-      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays \u201cConfigured feeds only. This desk does not cover the entire public web or all investor activity.\u201d Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
+      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays “Configured feeds only. This desk does not cover the entire public web or all investor activity.” Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
     },
     "legacy_provider_usage_audit": {
       "command": "Reconcile legacy TypeSafe request payloads and provider usage for the previously stopped loopback process",
@@ -524,7 +539,7 @@
       "command": "Isolated local application process using the supported SEC collector and Jev dispatch path",
       "covers": "One real SEC filing through source delivery receipt, Jev request, persisted judgment, and saved-data UI; integration only, not a quality evaluation or ongoing live-operations claim.",
       "status": "PASS",
-      "evidence": "2026-10-01T09:41:27Z\u201309:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
+      "evidence": "2026-10-01T09:41:27Z–09:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
     }
   },
   "sources": [
@@ -756,7 +771,7 @@
       "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display/retention rights remain unverified.",
       "consumer_paths": [
         "price-series API",
-        "selected-company sentiment \u00d7 price chart"
+        "selected-company sentiment × price chart"
       ],
       "coverage_limit": "Only provider points inside the requested window are drawn; cache/network/local-store provenance stays visible. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
       "acquisition": {
@@ -1118,6 +1133,38 @@
         "gdelt_doc_api",
         "yahoo_quote",
         "yahoo_chart"
+      ]
+    },
+    {
+      "id": "storage_capacity",
+      "kind": "failure",
+      "required": true,
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "--maxWorkers=1",
+        "--testTimeout=20000",
+        "tests/storage-capacity.test.ts",
+        "tests/app-health-alerts.test.ts",
+        "tests/health-panel.test.ts",
+        "tests/rss-poller.test.ts"
+      ],
+      "timeout_seconds": 180,
+      "covers": "Disposable SQLite capacity reserve, main-page ceiling, SQLite-full translation, compatible read-only restart, blocked-reader WAL checkpoint, external poller pause without a failed receipt, health API/UI disclosure, and retained saved-data reads. Test-only rows stay inside temporary databases.",
+      "source_ids": [
+        "google_news_rss",
+        "yahoo_finance_rss",
+        "gdelt_doc_api",
+        "sec_edgar",
+        "yahoo_quote",
+        "yahoo_chart",
+        "finnhub",
+        "reddit",
+        "x",
+        "typesafe_jev",
+        "openai_luna"
       ]
     }
   ],

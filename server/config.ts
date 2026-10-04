@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { CollectorId, Company } from "./types.js";
+import { DEFAULT_STORAGE_LIMITS, type StorageLimits } from "./storage-capacity.js";
 
 // Node's built-in .env loader. A missing .env is fine; the process env still applies.
 try {
@@ -14,6 +15,22 @@ try {
 const int = (v: string | undefined, fallback: number) => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+};
+
+const storageBytes = (value: string | undefined, fallback: number): number => {
+  if (value === undefined || !/^\d+$/.test(value.trim())) return fallback;
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 16 * 1024 * 1024 * 1024 ? parsed : fallback;
+};
+
+const storageMaxDatabaseBytes = storageBytes(process.env.DESK_DB_MAX_BYTES, DEFAULT_STORAGE_LIMITS.maxDatabaseBytes);
+const storageHeadroomBytes = storageBytes(process.env.DESK_STORAGE_WRITE_HEADROOM_BYTES, DEFAULT_STORAGE_LIMITS.writeHeadroomBytes);
+const defaultStorageFamilyBytes = Math.max(DEFAULT_STORAGE_LIMITS.maxFamilyBytes, storageMaxDatabaseBytes * 2 + storageHeadroomBytes);
+const storageConfig: StorageLimits = {
+  maxDatabaseBytes: storageMaxDatabaseBytes,
+  maxFamilyBytes: storageBytes(process.env.DESK_DB_FAMILY_MAX_BYTES, defaultStorageFamilyBytes),
+  minimumFreeBytes: storageBytes(process.env.DESK_DISK_MIN_FREE_BYTES, DEFAULT_STORAGE_LIMITS.minimumFreeBytes),
+  writeHeadroomBytes: storageHeadroomBytes,
 };
 
 export function boundedNonNegativeInt(v: string | undefined, maximum: number): number {
@@ -129,6 +146,7 @@ export const config = {
   host: process.env.HOST?.trim() || "127.0.0.1",
   port: int(process.env.PORT, 8787),
   dbPath: process.env.DB_PATH?.trim() || path.resolve("data/desk.db"),
+  storage: storageConfig,
   companiesPath: process.env.COMPANIES_PATH?.trim() || path.resolve("config/companies.json"),
   jev: {
     apiKey,

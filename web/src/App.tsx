@@ -102,6 +102,7 @@ const FILTERS = [
   { key: "material", label: "Material" },
   { key: "offtarget", label: "Off-target" },
   { key: "failed", label: "Unscored" },
+  { key: "history", label: "History" },
 ] as const;
 const RECONNECT_LOOKUP_BATCH_SIZE = 900;
 type FilterKey = (typeof FILTERS)[number]["key"];
@@ -730,8 +731,9 @@ export default function App() {
     if (view !== chartViewRef.current) chooseChartView(view, false);
   }, [categoricalChartSnapshot, chooseChartView, selectedId, selectedSeriesError, selectedSeriesHasSentiment, selectedSeriesReady, windowHours]);
 
-  // Each Desk filter has its own server-side cursor. Failed and pending work
-  // is unbounded by age so an old provider failure remains recoverable.
+  // Each Desk filter has its own server-side cursor. Unscored recovery and
+  // explicit History browsing are unbounded by age; normal filters stay within
+  // the selected time window.
   useEffect(() => {
     if (!selectedId) {
       setMentionFeedPage(null);
@@ -926,7 +928,7 @@ export default function App() {
   const activeMentionFeed = selectedId
     && mentionFeedPage?.companyId === selectedId
     && mentionFeedPage.filter === feedFilter
-    && mentionFeedPage.hours === (feedFilter === "failed" ? 0 : windowHours)
+    && mentionFeedPage.hours === mentionWindowHours(feedFilter, windowHours)
     ? mentionFeedPage
     : undefined;
   const totalMentions = companies.reduce((acc, c) => acc + c.sourceRecords24h, 0);
@@ -1345,7 +1347,8 @@ export default function App() {
                       ? healthLoadState === "failed" ? "status unavailable" : "checking status"
                       : healthLoadState === "failed"
                         ? `refresh failed · last received status${health.externalRequestsEnabled ? " · external requests enabled" : " · saved data only"}`
-                        : health.externalRequestsEnabled ? "external requests enabled" : "saved data only"}
+                        : health.storage.state !== "ready" ? "storage paused · saved data only"
+                          : health.externalRequestsEnabled ? "external requests enabled" : "saved data only"}
                   </span>
                   {healthAttentionCount > 0 && healthLoadState !== "failed" && <span className="text-amber-200/80">{healthAttentionCount} health or alert signals</span>}
                   {webhookNotConfigured && <span className="text-amber-200/85">webhook not configured</span>}
@@ -1713,7 +1716,7 @@ export default function App() {
                 <div className="panel flex min-w-0 flex-col" id="mention-feed-panel">
                   <div className="panel-head mentions-panel-head shrink-0">
                     <h2 id="mention-feed-heading" ref={mentionFeedHeadingRef} tabIndex={-1} className="micro m-0 p-0">
-                      Source records · {feedFilter === "failed" ? "all saved history" : windowLabel(windowHours)}
+                      Source records · {feedFilter === "history" || feedFilter === "failed" ? "all saved history · newest first" : windowLabel(windowHours)}
                       {mentionsFailed && <span className="ml-2 normal-case tracking-normal text-amber-300/80">refresh failed</span>}
                     </h2>
                     <div className="mentions-filters">
@@ -1769,7 +1772,9 @@ export default function App() {
                       <div className="px-3 py-4 text-[12px] text-white/35" role="status">
                         {mentionsPending
                             ? `Loading ${selected.ticker} mentions…`
-                            : feedFilter === "failed" && activeMentionFeed?.loaded && selectedMentions.length === 0
+                            : feedFilter === "history" && activeMentionFeed?.loaded && selectedMentions.length === 0
+                              ? "No identified real-source records in retained history for this company."
+                              : feedFilter === "failed" && activeMentionFeed?.loaded && selectedMentions.length === 0
                               ? "No unscored items in saved history."
                               : feedFilter !== "all" && activeMentionFeed?.loaded && selectedMentions.length === 0
                                 ? `No ${FILTERS.find((filter) => filter.key === feedFilter)?.label.toLowerCase()} items in this ${windowLabel(windowHours)} window.`
@@ -1803,7 +1808,8 @@ export default function App() {
                       >
                         {activeMentionFeed.loadingMore
                           ? "Loading older items…"
-                          : feedFilter === "failed" ? "Load older unscored items" : "Load older matching items"}
+                          : feedFilter === "history" ? "Load older saved records"
+                            : feedFilter === "failed" ? "Load older unscored items" : "Load older matching items"}
                       </button>
                     )}
                   </div>

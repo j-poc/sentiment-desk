@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ExternalRequestPausedError } from "./external-request-gate.js";
 import { z } from "zod";
 import { EVENT_TYPES, RUBRIC, TAKEAWAY_KEYS, type ChoiceQuestion } from "./rubric.js";
 import type { CategoricalClassification } from "./types.js";
@@ -258,7 +259,8 @@ export class OpenAIClassifier {
         method: "POST", headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
         body: request.body, signal: AbortSignal.timeout(this.options.timeoutMs ?? 30_000),
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ExternalRequestPausedError) throw error;
       throw new OpenAIClassifierError("OpenAI request outcome is unknown", null, false, true, null, null, null, Date.now() - started);
     }
     let rawBytes: Uint8Array;

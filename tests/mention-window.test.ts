@@ -20,8 +20,10 @@ describe("selected mention windows", () => {
     expect(mentionWindowHours("all", 24)).toBe(24);
     expect(mentionWindowHours("bull", 72)).toBe(72);
     expect(mentionWindowHours("failed", 6)).toBe(0);
+    expect(mentionWindowHours("history", 24)).toBe(0);
     expect(mentionPageParams("bull", 24).get("hours")).toBe("24");
     expect(mentionPageParams("failed", 0).has("hours")).toBe(false);
+    expect(mentionPageParams("history", 0).has("hours")).toBe(false);
     expect(mentionPageParams("bull", 72, { orderAt: now - 1, ingestedAt: now, id: "older" }).get("cursor"))
       .toBe(JSON.stringify({ orderAt: now - 1, ingestedAt: now, id: "older" }));
   });

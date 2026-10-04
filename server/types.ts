@@ -16,8 +16,8 @@ export type TimeBasis = "publisher_declared" | "provider_observed" | "unknown" |
 export type DeliveryHealthState = "current" | "processing" | "overdue" | "failed" | "partial" | "never" | "disabled";
 
 export type SecDocumentRole = "8k_primary" | "earnings_exhibit_99_1";
-export type SecDocumentOutcome = "success" | "empty" | "failed" | "invalid" | "rate_limited";
-export type SecSelectionReason = "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link";
+export type SecDocumentOutcome = "success" | "empty" | "failed" | "invalid" | "rate_limited" | "paused";
+export type SecSelectionReason = "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link" | "storage_paused";
 export type SecItem202Link = { kind: "linked"; itemCode: "2.02"; exhibitNumber: "99.1"; supportingText: string } | { kind: "unverified"; reason: "missing_item_body" | "missing_results_attachment_reference" | "different_results_exhibit" | "ambiguous_results_reference" | "conflicting_table_description" };
 export interface SecDocumentAttempt {
   role: SecDocumentRole; url: string; startedAt: number; completedAt: number; retrievedAt: number | null;

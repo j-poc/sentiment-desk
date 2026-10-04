@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp, type AppDeps } from "../server/app.js";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import type { Company } from "../server/types.js";

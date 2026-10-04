@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { Desk, rowToDTO } from "../server/db.js";
+import { rowToDTO } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
+import { ExternalRequestPausedError } from "../server/external-request-gate.js";
 import { OpenAIClassifier, OpenAIClassifierError, OPENAI_MODEL, OPENAI_PROMPT_SHA256, OPENAI_SCHEMA_SHA256, OPENAI_PRICING, prepareOpenAIRequest } from "../server/openai-classifier.js";
 import type { CategoricalClassification, Company } from "../server/types.js";
 
@@ -82,6 +84,12 @@ describe("OpenAI Luna categorical classifier", () => {
     });
     const fetchImpl = (async () => new Response(body, { status: 200 })) as typeof fetch;
     await expect(classifier(fetchImpl).classifyPrepared(prepareOpenAIRequest(input))).rejects.toMatchObject({ outcomeUnknown: true, status: 200 });
+  });
+
+  it("preserves a final storage admission pause as known-not-sent rather than unknown usage", async () => {
+    const fetchImpl = (async () => { throw new ExternalRequestPausedError(); }) as typeof fetch;
+    await expect(classifier(fetchImpl).classifyPrepared(prepareOpenAIRequest(input)))
+      .rejects.toBeInstanceOf(ExternalRequestPausedError);
   });
 
   it("persists a separate categorical record and reopens with a null Jev score and no probabilities", () => {
@@ -178,7 +186,9 @@ describe("OpenAI Luna categorical classifier", () => {
     openDbs.splice(openDbs.indexOf(db), 1);
     db = new Desk(path);
     openDbs.push(db);
-    expect(db.getKv("openai:budget:2026-10-01:cost-micros")).toBe("1060");
+    // The second claim was known not sent when the process closed, so its
+    // request, byte, and cost reservation is returned during recovery.
+    expect(db.getKv("openai:budget:2026-10-01:cost-micros")).toBe("560");
     expect(claim(ids[2]!).kind).toBe("budget_exhausted");
   });
 
@@ -215,6 +225,38 @@ describe("OpenAI Luna categorical classifier", () => {
       rubricSha256: request.profileSha256, maxRequests: 5, maxRequestBytes: 100_000, provider: "openai_luna",
       maxDailyCostMicros: 20_000, reservedCostMicros: 1_000, requestedServiceTier: "default", maxOutputTokens: 700,
       schemaSha256: request.schemaSha256 }).kind).toBe("budget_exhausted");
+  });
+
+  it("releases Luna request and cost reservations for an explicitly not-sent storage pause", () => {
+    const db = new Desk(":memory:");
+    openDbs.push(db);
+    db.seedCompanies([company]);
+    const id = db.insertObservation({ companyId: "acme", kind: "rss", sourceName: "Reuters", sourceUrl: "https://reuters.example/acme",
+      tier: "wire", title: input.source.title, snippet: input.source.excerpt, publishedAt: 10, retrievedAt: 20,
+      collector: "google_news_rss", sourceItemId: "storage-paused-luna" }).observationId;
+    const request = prepareOpenAIRequest(input);
+    const claim = db.claimForScoringWithBudget({ id, now: 30, allowedCollectors: ["google_news_rss"], utcDay: "2026-10-01",
+      requestBytes: request.requestBytes, requestSha256: request.payloadSha256, requestedModel: request.requestedModel,
+      rubricSha256: request.profileSha256, maxRequests: 1, maxRequestBytes: 100_000, provider: "openai_luna",
+      maxDailyCostMicros: 500, reservedCostMicros: 500, requestedServiceTier: "default", maxOutputTokens: 700,
+      schemaSha256: request.schemaSha256 });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") throw new Error("budget reservation was not created");
+    expect(db.getKv("openai:budget:2026-10-01:requests")).toBe("1");
+    expect(db.getKv("openai:budget:2026-10-01:request-bytes")).toBe(String(request.requestBytes));
+    expect(db.getKv("openai:budget:2026-10-01:cost-micros")).toBe("500");
+    expect(db.recordJevDispatchIntent(claim.attemptId, 31)).toBe(true);
+    db.recordJevAttemptReceipt({ attemptId: claim.attemptId, outcome: "not_sent", occurredAt: 32,
+      httpStatus: null, inputTokens: null, outputTokens: null, resolvedModel: null, latencyMs: null, errorCategory: "storage_paused" });
+    db.markRetrying(id, "Storage admission paused before dispatch", 60_000);
+
+    expect(db.getKv("openai:budget:2026-10-01:requests")).toBe("0");
+    expect(db.getKv("openai:budget:2026-10-01:request-bytes")).toBe("0");
+    expect(db.getKv("openai:budget:2026-10-01:cost-micros")).toBe("0");
+    expect(db.getKv("openai:budget:2026-10-01:closed")).toBeUndefined();
+    expect(db.jevAttemptHistory(id)[0]).toMatchObject({ outcome: "not_sent", dispatchAt: null, errorCategory: "storage_paused" });
+    expect(db.classifierUsageSince(0)).toMatchObject({ requests: 0, reservedRequests: 1, estimatedCostUsd: 0,
+      reservedCostUsd: 0, unknownOutcomes: 0, unpricedAttempts: 0, usageIncompleteAttempts: 0, inputTokens: 0 });
   });
 
   it("does not report partial optional-token sums when one dispatched receipt omits cache accounting", () => {

@@ -2,6 +2,7 @@ import type { EventType } from "../rubric.js";
 import { paceProviderRequest, parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
 import { createHash } from "node:crypto";
 import type { SecDocumentAttempt, SecDocumentContext, SecDocumentRole, SecItem202Link } from "../types.js";
+import { ExternalRequestPausedError } from "../external-request-gate.js";
 
 /**
  * SEC EDGAR as a first-class source. No third-party library needed: EDGAR is
@@ -471,6 +472,12 @@ async function requestSecDocument(url: string, role: SecDocumentRole, userAgent:
     return { role, url, startedAt, completedAt: Date.now(), retrievedAt, httpStatus: response.status, outcome: excerpt ? "success" : "empty", bodyBytes: body.length, bodySha256: createHash("sha256").update(body).digest("hex"), excerpt, errorCode: null, documentHtml };
   } catch (error) {
     await cancelResponseBody?.();
+    if (error instanceof ExternalRequestPausedError) {
+      const dispatched = error.dispatchedRequests > 0;
+      return { role, url, startedAt, completedAt: Date.now(), retrievedAt: null,
+        httpStatus: dispatched ? error.lastHttpStatus : null,
+        outcome: dispatched ? "failed" : "paused", bodyBytes: null, bodySha256: null, excerpt: "", errorCode: "storage_paused" };
+    }
     const message = error instanceof Error && error.name === "TimeoutError" ? "timeout" : "request_failed";
     return { role, url, startedAt, completedAt: Date.now(), retrievedAt: null, httpStatus: observedStatus, outcome: "failed", bodyBytes: null, bodySha256: null, excerpt: "", errorCode: message };
   }
@@ -485,6 +492,10 @@ export async function fetchFilingEvidence(filing: SecFiling, userAgent: string):
   const primary = await requestSecDocument(primaryUrl, "8k_primary", userAgent, true, true);
   const { documentHtml: primaryHtml, ...primaryAttempt } = primary;
   context.documents.push(primaryAttempt);
+  if (primary.outcome === "paused") {
+    context.selectionReason = "storage_paused";
+    return { context, selected: null, result: "partial", rateLimit: null };
+  }
   if (primary.outcome === "rate_limited") return { context, selected: null, result: "rate_limited", rateLimit: { retryAfterMs: primary.retryAfterMs, phase: primary.role } };
   if (primary.outcome !== "success") return { context, selected: null, result: primary.outcome === "empty" ? "empty" : primary.outcome, rateLimit: null };
   if (!filing.items.includes("2.02")) {
@@ -507,6 +518,7 @@ export async function fetchFilingEvidence(filing: SecFiling, userAgent: string):
   const exhibit = await requestSecDocument(exhibitUrl, "earnings_exhibit_99_1", userAgent, true, true);
   const { documentHtml: _exhibitHtml, ...exhibitAttempt } = exhibit;
   context.documents.push(exhibitAttempt);
+  if (exhibit.outcome === "paused") { context.selectionReason = "storage_paused"; return { context, selected: null, result: "partial", rateLimit: null }; }
   if (exhibit.outcome === "rate_limited") { context.selectionReason = "exhibit_unavailable"; return { context, selected: null, result: "rate_limited", rateLimit: { retryAfterMs: exhibit.retryAfterMs, phase: exhibit.role } }; }
   if (exhibit.outcome !== "success") { context.selectionReason = "exhibit_unavailable"; return { context, selected: null, result: "partial", rateLimit: null }; }
   context.classificationInputStatus = "ready"; context.selectionReason = "unique_exhibit_selected";

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { createApp } from "../server/app.js";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { Pipeline } from "../server/pipeline.js";

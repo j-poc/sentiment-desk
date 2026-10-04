@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import type { Company } from "../server/types.js";
 
 const directories: string[] = [];
@@ -68,9 +68,15 @@ describe("persistent Jev request budget", () => {
     const limits = { utcDay: "2026-09-28", maxRequests: 2, maxRequestBytes: 200 };
 
     expect(db.remainingJevRequests(limits)).toBe(2);
-    expect(claim(db, first, { ...limits, requestBytes: 60 }).kind).toBe("claimed");
+    const firstClaim = claim(db, first, { ...limits, requestBytes: 60 });
+    expect(firstClaim.kind).toBe("claimed");
+    if (firstClaim.kind !== "claimed") throw new Error("first request must be reserved");
+    expect(db.recordJevDispatchIntent(firstClaim.attemptId, Date.now())).toBe(true);
     expect(db.remainingJevRequests(limits)).toBe(1);
-    expect(claim(db, second, { ...limits, requestBytes: 50 }).kind).toBe("claimed");
+    const secondClaim = claim(db, second, { ...limits, requestBytes: 50 });
+    expect(secondClaim.kind).toBe("claimed");
+    if (secondClaim.kind !== "claimed") throw new Error("second request must be reserved");
+    expect(db.recordJevDispatchIntent(secondClaim.attemptId, Date.now())).toBe(true);
     expect(db.getKv("jev:budget:2026-09-28:requests")).toBe("2");
     expect(db.getKv("jev:budget:2026-09-28:request-bytes")).toBe("110");
 

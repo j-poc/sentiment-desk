@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import { HealthTracker } from "../server/health.js";
 import { providerCoolingDown } from "../server/provider-cooldown.js";
 import { startFinnhubPoller, startRedditPoller, startSecCollector, startSecPoller, startXPoller } from "../server/schedule.js";

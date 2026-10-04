@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import { fetchFilingEvidence, type SecFiling } from "../server/sources/sec.js";
 
 const primaryUrl = "https://www.sec.gov/Archives/edgar/data/2488/000000248826000121/amd.htm";

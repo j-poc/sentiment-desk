@@ -9,7 +9,7 @@ export interface SchedulerControl {
 export function scheduleTask(
   task: () => void | Promise<void>,
   intervalMs: number,
-  options: { immediate?: boolean; onError?: (error: unknown) => void } = {},
+  options: { immediate?: boolean; onError?: (error: unknown) => void; beforeRun?: () => boolean } = {},
 ): SchedulerControl {
   let stopped = false;
   let inFlight: Promise<void> | null = null;
@@ -17,7 +17,7 @@ export function scheduleTask(
   const run = (): void => {
     if (stopped || inFlight) return;
     const pending = Promise.resolve()
-      .then(task)
+      .then(() => options.beforeRun && !options.beforeRun() ? undefined : task())
       .catch((error: unknown) => {
         try {
           if (options.onError) options.onError(error);

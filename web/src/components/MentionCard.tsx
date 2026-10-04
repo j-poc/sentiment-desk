@@ -1,5 +1,5 @@
 import type { Mention } from "../lib/api.js";
-import { NEU, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
+import { NEU, fmtIndex, sentimentColor, sourceDateTime, timeAgo } from "../lib/format.js";
 import { CategoricalJudgment } from "./CategoricalJudgment.js";
 
 const TIER_DOT: Record<string, string> = {
@@ -81,6 +81,7 @@ export function MentionCard({
   const dir = s ? sentimentColor(s.sentiment) : NEU;
   const impactColor = s ? (s.impact > 0 ? "#34d399" : s.impact < 0 ? "#f87171" : NEU) : NEU;
   const offTarget = m.status === "off_target" || m.status === "excluded";
+  const sourceTime = m.publishedAt ?? (m.timeBasis === "provider_observed" ? m.providerObservedAt : null);
 
   const body = (
     <>
@@ -92,13 +93,11 @@ export function MentionCard({
         />
         <span className="truncate">{m.source.name}</span>
         <span className="text-white/20">·</span>
-        <span className="tabnum shrink-0">
-          {m.publishedAt != null
-            ? shortTime(m.publishedAt)
-            : m.timeBasis === "provider_observed" && m.providerObservedAt != null
-              ? `observed ${shortTime(m.providerObservedAt)}`
-              : "source time unknown"}
-        </span>
+        {sourceTime == null
+          ? <span className="tabnum shrink-0">source time unknown</span>
+          : <time className="tabnum shrink-0" dateTime={new Date(sourceTime).toISOString()} title={new Date(sourceTime).toISOString()}>
+              {sourceDateTime(sourceTime)}
+            </time>}
         <span className="truncate text-[10.5px] text-white/55">collected {timeAgo(m.retrievedAt)}</span>
         {s && (
           <span

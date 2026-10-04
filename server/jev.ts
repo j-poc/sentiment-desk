@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
+import { ExternalRequestPausedError } from "./external-request-gate.js";
 
 /**
  * Wire contract with TypeSafe AI's System One, matching the Go adapter in
@@ -182,6 +183,7 @@ export class JevClient {
         signal: AbortSignal.timeout(this.opts.timeoutMs),
       });
     } catch (err) {
+      if (err instanceof ExternalRequestPausedError) throw err;
       throw new JevError(
         "TypeSafe request failed before a response was received",
         undefined,

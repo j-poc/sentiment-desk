@@ -1,5 +1,181 @@
 # Sentiment Desk completion plan
 
+## Highest-level product-success evaluation: Master Eval — BLOCKED
+
+The intended users are serious individual investors and professional analysts,
+including the product owner. Their main focus is long-term fundamental research
+and small-cap companies; special situations, event-driven opportunities,
+sentiment, and social trends also matter. The user reports that existing tools
+feel overwhelming, make it hard to know where to start, and assume the investor
+already knows a ticker or thesis. Sentiment Desk must give them a clear first
+step, show why a company or change deserves attention with inspectable evidence,
+and point to the next research action.
+
+The primary information-advantage hypothesis is narrow and testable: for early
+retail or consumer adoption and dissatisfaction shifts, Sentiment Desk can
+surface a more decision-useful, independently supported signal than AlphaSense
+by joining real public micro-observations, separating independent origins from
+reposts or repeated coverage, preserving point-in-time evidence and uncertainty,
+and linking the change to a company driver, counter-signal, and next check. This
+is a hypothesis, not a current product claim. AlphaSense is the primary
+comparator because its current official materials describe AI research and
+monitoring, sentiment analysis, real-time alerts, early market signals, and a
+10,000+ source library. Those are strengths to test against, not capabilities
+assumed absent from Sentiment Desk or AlphaSense. Public materials checked on
+2026-10-03:
+[AlphaSense Platform](https://www.alpha-sense.com/platform/) and
+[AlphaSense Market Intelligence Platform](https://www.alpha-sense.com/solutions/market-intelligence-platform/).
+The exact AlphaSense product version, account entitlements, and in-product
+access were unavailable during this review; no output comparison has run.
+
+### Frozen comparison task and pass rule
+
+For each of 30 prospectively registered real listed-company event windows,
+across at least 15 issuers and 6 sectors, ask both systems the same question at
+the same UTC cutoff: what materially changed in retail or consumer adoption,
+dissatisfaction, or public discussion during the prior 7 days; what evidence
+connects it to a long-term fundamental driver or risk; what contradicts it; and
+what should the investor inspect next? Require each product to return no more
+than three prioritized signals with original-source links, source and retrieval
+times, independent-origin counts, uncertainty, counterevidence, and the next
+research step. No buy/sell instruction or return prediction is in scope.
+
+Freeze eligible events and cutoffs before either product output is viewed; use
+one event per issuer when possible and never more than two. Both products get
+the same task, 7-day window, and 20-minute analyst interaction allowance. Use
+each product's authorized native sources and record its exact version, access
+tier, settings, time, latency, and cost; native source breadth is part of the
+comparison, so source sets need not be artificially equal. Preserve the output
+and permitted source lineage. Do not retain licensed content that its terms do
+not allow. No synthetic observations, generated examples, or post-hoc case
+selection count toward the evaluation.
+
+Two blinded review agents in separate, freshly initialized contexts score
+anonymized outputs against the original source material. Use distinct
+configured models where available, but do not claim model-family independence
+without evidence of genuinely separate model lineages. Each independently
+checks entity and time alignment, factual support, business-driver relevance,
+source independence, duplicate/repost handling, counterevidence, uncertainty,
+and whether the result could change the investor's next research action. A
+third blinded agent adjudicates disagreements without choosing a new result
+after seeing which product leads. Agent agreement is reviewer reliability
+evidence, not human ground truth; correlated model errors remain a limitation.
+
+A valid no-signal output explicitly says that no supported material signal was
+found in the searched scope and time window, and reports actual source coverage,
+freshness, material gaps, uncertainty, and the next check. Reviewers score it
+against the same task; it is neither an automatic win nor an automatic error.
+Missing, malformed, or unsupported outputs never count as wins and remain in
+the task-level outcome and error denominators. Report missing, invalid,
+no-signal, and supported-signal outcomes per product. Count material factual,
+entity, source, and timestamp errors both per task and per asserted claim.
+
+A task is a Desk win only when reviewers verify at least one additional
+material and decision-relevant signal absent from AlphaSense, supported by
+eligible point-in-time sources from at least two independent origins, not
+duplicated or contradicted by unresolved material evidence, and accompanied by
+a concrete next check. Define comparator wins symmetrically. If each product
+has a unique supported material finding, the task is a tie; all other
+non-wins are also ties unless the symmetric comparator-win rule applies.
+
+Before seeing either system's output, freeze issuer, shared-event, and
+time-window dependence clusters, the paired inference method, and both
+significance thresholds; prefer one task per issuer. Compare paired task
+outcomes with a two-sided exact test over discordant Desk/AlphaSense wins and a
+predeclared dependence-aware paired inference that respects issuer and
+shared-event dependence. Both tests must support a Desk advantage at two-sided
+p<0.05. If defensible cluster-aware inference is unavailable, report
+descriptive outcomes only and leave the statistical gate **UNVERIFIED**; a
+completed non-supportive cluster-aware result is **FAIL**, even when the
+unclustered test is significant. The Master Eval passes only with 30 completed
+paired tasks, at least 10 Desk wins and no more than 2 AlphaSense wins, both
+significance tests below 0.05, at least 80% pre-adjudication agreement on
+task-level outcomes, and no higher material factual, entity, source, or
+timestamp error rate than AlphaSense. Freeze the task and claim error
+denominators before review. Any unsupported or false claim invalidates that
+task's asserted win. This test establishes only the named information
+category; it does not establish investment returns, broad superiority, customer
+retention, or release readiness. Missing authorized access or output is
+**BLOCKED**; inadequate or incomplete results are **UNVERIFIED**; a completed
+comparison below threshold is **FAIL**.
+
+### Practical investor-use acceptance
+
+The information advantage is useful only if an investor can reach and act on
+it without already knowing a ticker or preparing a thesis. Keep these three
+separate end-to-end tasks in the acceptance plan:
+
+1. **Discover without a ticker or thesis.** From a fresh profile with no
+   uploaded or user-built dataset, the product uses its authorized,
+   product-owned real sources to show a short, current set of companies worth
+   investigating. Each item explains why it surfaced, links to inspectable
+   evidence, labels freshness and uncertainty, and offers a next step. The
+   starting set must represent the intended small-cap and fundamental use, not
+   merely relabel the existing large-company watchlist. A source count or
+   unexplained ranking does not pass.
+2. **Decide whether a company merits more research.** Starting from a company
+   selected in the product, the investor can inspect the relevant fundamental
+   driver, new supporting evidence, independent-source status, counterevidence,
+   missing information, and a concrete next research question, then decide
+   whether to investigate further. The product makes no unsupported thesis or
+   trade recommendation.
+3. **Recognize a material change in a followed company.** Starting from a
+   followed company, the investor sees what changed relative to its prior
+   evidence, the event and retrieval times, supporting and contradictory
+   source origins, whether coverage is repeated, what remains uncertain, and
+   the next check. Stale history must not be presented as a live change.
+
+Product-owned public or licensed information must be acquired through an
+authorized programmatic route. A new investor should see useful evidence before
+being asked to add a private watchlist or configure a ticker; personalized
+watchlists remain user-owned. Agent walkthroughs and passing tests do not
+establish practical value. Before claiming these tasks work for investors,
+observe intended users complete the real UI paths without coaching; record
+every attempt, completion, time to a source-checked result, corrections, and
+remaining effort. Freeze these practical thresholds before sessions: at least
+five serious individual investors and five professional analysts each attempt
+all three tasks; at least 80% uncoached completion per task and audience; median
+time to a source-checked result no greater than ten minutes; zero critical
+source, entity, or time errors; and no more than one user-reported factual
+correction per completed task. The product owner may count as one investor but
+cannot be the sole investor evidence. If direct access or suitable current
+evidence is missing, mark the task **BLOCKED** or **UNVERIFIED**, not passed.
+
+Current Master Eval and practical-use status: **BLOCKED**. The saved-data
+preview has 24 configured companies, no current Luna classifications, external
+requests disabled, no verified Apple price points, and incomplete delivery
+lineage on the paged historical Apple rows. Its four-day-old historical chart
+does not prove current discovery or monitoring. No AlphaSense application
+access or comparative output, no prospective task cohort, and no observed
+professional-analyst session are available. Opportunity Radar remains disabled;
+this acceptance does not authorize its expansion. The exact current findings
+and next evidence are recorded in
+`project-record/4-log/2026-10-02-luna-chart-completion-review.md`.
+
+The engineering contract now requires private outcome reports at
+`.engineering-evidence/outcomes/master-eval-report.json` and
+`.engineering-evidence/outcomes/investor-workflows-report.json`. The shared
+`scripts/check_product_outcome_evidence.py` command checks the frozen sample,
+statistical and task thresholds, and binds each report to a private evidence
+bundle digest. It does not authenticate source rights, evidence truth, evaluator
+independence, participant eligibility, or the rendered product path. Those
+claims remain subject to an independent review of the underlying evidence.
+Missing reports return `BLOCKED`; incomplete evidence returns `UNVERIFIED`;
+measured threshold misses return `FAIL`.
+
+For each product and task, the ledger distinguishes `supported_signals`,
+`no_signal`, `missing`, and `invalid`. A valid no-signal row may contain zero
+claims, but it must bind hashed evidence for the searched scope, registered
+window, source coverage and freshness, material gaps, uncertainty, and next
+check. Missing and invalid rows cannot be treated as ties or no-signal results.
+The default checker always exits nonzero after structural calculations because
+local JSON, booleans, and hashes cannot authenticate source truth, evaluator
+identity, subagent execution, or real participants. Its `--structural-only`
+mode is for fixture diagnostics and is not acceptance evidence; matching a
+locally authored review file never clears the authenticity gate. A product
+with no asserted claims across the complete evaluation has an undefined
+per-claim error denominator and cannot pass.
+
 ## Current user-directed rebuild — 2026-10-02
 
 The user rejected the investment UI and explicitly replaced independent human

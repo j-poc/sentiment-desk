@@ -11,6 +11,7 @@ import {
   providerRetryAt,
   recordProviderRateLimit,
 } from "./provider-cooldown.js";
+import { ExternalRequestPausedError } from "./external-request-gate.js";
 
 /**
  * The market store: one poll loop, one in-memory snapshot, broadcast on change.
@@ -68,6 +69,7 @@ export class MarketData {
 
   async refresh(): Promise<void> {
     if (!this.quoteRequestsAllowed()) return;
+    if (!this.deps.db.prepareExternalWork()) return;
     if (providerCoolingDown(this.deps.db, "yahoo")) return;
     const tickers = [...this.deps.companies.map((c) => c.ticker), ...this.deps.indices];
     const quotes: Record<string, ServedQuote> = {};
@@ -76,6 +78,7 @@ export class MarketData {
     let companyFail = 0;
     let companyError: string | null = null;
     for (const ticker of tickers) {
+      if (!this.deps.db.canStartExternalWork()) break;
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
       const startedAt = Date.now();
       const company = this.deps.companies.find((c) => c.ticker === ticker) ?? null;
@@ -112,6 +115,7 @@ export class MarketData {
           });
         }
       } catch (err) {
+        if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) break;
         const prior = this.snapshot.quotes[ticker];
         if (prior) quotes[ticker] = { ...prior, lastAttemptAt: Date.now(), delivery: "cache" };
         if (deliveryId == null) recordDelivery({
@@ -177,6 +181,7 @@ export class MarketData {
   private async backfillSeries(): Promise<void> {
     if (!this.chartRequestsAllowed()) return;
     for (const company of this.deps.companies) {
+      if (!this.deps.db.canStartExternalWork()) break;
       if (this.backfilled.has(company.ticker)) continue;
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
       const startedAt = Date.now();
@@ -203,6 +208,7 @@ export class MarketData {
         this.backfilled.add(company.ticker);
         clearProviderRateLimit(this.deps.db, "yahoo", startedAt);
       } catch (err) {
+        if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) break;
         if (deliveryId == null) recordDelivery({
           db: this.deps.db, collector: "yahoo_chart", companyId: company.id,
           requestKey: `yahoo-chart:series:${company.ticker}:72h`, startedAt,
@@ -250,6 +256,17 @@ export class MarketData {
     }
     const existing = this.seriesRequests.get(key);
     if (existing) return existing;
+    if (!this.deps.db.prepareExternalWork()) {
+      const servedAt = Date.now();
+      const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
+      return {
+        points,
+        delivery: "local_store",
+        servedAt,
+        sourceLatestAt: points.at(-1)?.t ?? null,
+        cacheAgeMs: null,
+      };
+    }
     const request = this.loadPriceSeries(ticker, bucket);
     this.seriesRequests.set(key, request);
     try {
@@ -261,6 +278,11 @@ export class MarketData {
 
   private async loadPriceSeries(ticker: string, bucket: number): Promise<PriceSeriesResult> {
     const key = `${ticker}:${bucket}`;
+    if (!this.deps.db.canStartExternalWork()) {
+      const servedAt = Date.now();
+      const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
+      return { points, delivery: "local_store", servedAt, sourceLatestAt: points.at(-1)?.t ?? null, cacheAgeMs: null };
+    }
     const cooldownUntil = providerRetryAt(this.deps.db, "yahoo");
     if (cooldownUntil > Date.now()) {
       throw new RateLimitedError(cooldownUntil - Date.now(), "Yahoo Finance cooldown active", true);
@@ -301,6 +323,19 @@ export class MarketData {
         cacheAgeMs: null,
       };
     } catch (error) {
+      if (error instanceof ExternalRequestPausedError) {
+        const servedAt = Date.now();
+        const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
+        if (error.dispatchedRequests > 0 && deliveryId == null) {
+          const company = this.deps.companies.find((item) => item.ticker === ticker);
+          recordDelivery({
+            db: this.deps.db, collector: "yahoo_chart", companyId: company?.id ?? null,
+            requestKey: `yahoo-chart:series:${ticker}:${bucket}h`, startedAt,
+            adapterVersion: "yahoo-chart/1", result: "failed", parsedItemCount: 0, error,
+          });
+        }
+        return { points, delivery: "local_store", servedAt, sourceLatestAt: points.at(-1)?.t ?? null, cacheAgeMs: null };
+      }
       if (error instanceof RateLimitedError && !error.deferred) {
         recordProviderRateLimit({
           db: this.deps.db,
@@ -348,5 +383,5 @@ export function startQuotesPoller(deps: {
       running = false;
     }
   };
-  return scheduleTask(tick, deps.intervalSeconds * 1000);
+  return scheduleTask(tick, deps.intervalSeconds * 1000, { beforeRun: () => deps.db.prepareExternalWork() });
 }

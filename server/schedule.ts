@@ -1,4 +1,5 @@
 import type { CollectorId, Company } from "./types.js";
+import { ExternalRequestPausedError } from "./external-request-gate.js";
 import type { Desk } from "./db.js";
 import type { HealthTracker } from "./health.js";
 import type { Pipeline } from "./pipeline.js";
@@ -77,6 +78,7 @@ export function startRssPoller(deps: {
             await pause(100);
             continue;
           }
+          if (!deps.db.canStartExternalWork()) return;
           const startedAt = Date.now();
           let feedResult: FeedFetchResult = { items: [], providerItemCount: 0, malformedItemCount: 0 };
           let deliveryId: string | null = null;
@@ -154,6 +156,7 @@ export function startRssPoller(deps: {
               deps.db.logEvent("info", "relevance", `${company.ticker}: ${dropped} dropped by ingest guard`);
             }
           } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
             const message = err instanceof Error ? err.message : String(err);
             if (deliveryId == null) {
               recordDelivery({
@@ -186,7 +189,7 @@ export function startRssPoller(deps: {
       running = false;
     }
   };
-  return scheduleTask(tick, deps.intervalSeconds * 1000);
+  return scheduleTask(tick, deps.intervalSeconds * 1000, { beforeRun: () => deps.db.prepareExternalWork() });
 }
 
 export function startXPoller(deps: {
@@ -274,6 +277,7 @@ export function startXPoller(deps: {
     try {
       for (const company of deps.companies) {
         if (providerCoolingDown(deps.db, "x")) break;
+        if (!deps.db.canStartExternalWork()) return;
         const startedAt = Date.now();
         let posts: Awaited<ReturnType<typeof searchRecent>>["posts"] = [];
         const query = xQuery(company);
@@ -381,6 +385,7 @@ export function startXPoller(deps: {
           clearProviderRateLimit(deps.db, "x", startedAt);
           if (added > 0) deps.db.logEvent("info", "x", `${company.ticker}: ${added} new posts`);
         } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
           const message = err instanceof Error ? err.message : String(err);
           if ((err instanceof XPaginationTokenRejectedError || err instanceof XNonAdvancingPaginationTokenError) && checkpoint) {
             // Keep x:since unchanged so the next scheduled request can replay
@@ -406,7 +411,7 @@ export function startXPoller(deps: {
       running = false;
     }
   };
-  return scheduleTask(tick, deps.intervalSeconds * 1000);
+  return scheduleTask(tick, deps.intervalSeconds * 1000, { beforeRun: () => deps.db.prepareExternalWork() });
 }
 
 /**
@@ -449,6 +454,7 @@ export function startSecPoller(deps: {
       for (const company of deps.companies) {
         const cik = deps.cikByTicker.get(company.ticker);
         if (!cik) continue;
+        if (!deps.db.canStartExternalWork()) return;
         const startedAt = Date.now();
         let filings: Awaited<ReturnType<typeof fetchRecent8Ks>> = [];
         try {
@@ -456,6 +462,7 @@ export function startSecPoller(deps: {
           let added = 0;
           let unavailableDocuments = 0;
           for (const f of filings) {
+            if (!deps.db.canStartExternalWork()) return;
             let snippet = "";
             const documentStartedAt = Date.now();
             const url = f.primaryDocUrl || `https://www.sec.gov/Archives/edgar/data/${Number(f.cik)}/${f.accessionNo.replace(/-/g, "")}/`;
@@ -517,6 +524,7 @@ export function startSecPoller(deps: {
           if (added > 0) deps.db.logEvent("info", "sec", `${company.ticker}: ${added} new 8-K filings`);
           if (partialError) deps.db.logEvent("warn", "sec", `${company.ticker}: ${partialError}`);
         } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
           const message = err instanceof Error ? err.message : String(err);
           recordDelivery({
             db: deps.db, collector: "sec_edgar", companyId: company.id,
@@ -542,7 +550,7 @@ export function startSecPoller(deps: {
       running = false;
     }
   };
-  return scheduleTask(tick, deps.intervalSeconds * 1000);
+  return scheduleTask(tick, deps.intervalSeconds * 1000, { beforeRun: () => deps.db.prepareExternalWork() });
 }
 
 /** Resolve the SEC ticker directory in the background and retry failed bootstrap attempts. */
@@ -560,6 +568,7 @@ export function startSecCollector(deps: {
   let poller: SchedulerControl | null = null;
   const bootstrap = scheduleTask(async () => {
     if (poller || providerCoolingDown(deps.db, "sec")) return;
+    if (!deps.db.canStartExternalWork()) return;
     const startedAt = Date.now();
     const requestKey = `sec:ticker-directory:${startedAt}`;
     try {
@@ -590,6 +599,7 @@ export function startSecCollector(deps: {
         fetchFilings: deps.fetchFilings,
       });
     } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
       const message = err instanceof Error ? err.message : String(err);
       recordDelivery({
         db: deps.db,
@@ -613,7 +623,7 @@ export function startSecCollector(deps: {
         });
       }
     }
-  }, deps.intervalSeconds * 1_000);
+  }, deps.intervalSeconds * 1_000, { beforeRun: () => deps.db.prepareExternalWork() });
 
   return {
     async stop() {
@@ -660,6 +670,7 @@ export function startGdeltPoller(deps: {
       if (retryAt > now()) return;
 
       for (const company of deps.companies) {
+        if (!deps.db.canStartExternalWork()) return;
         const startedAt = now();
         const query = `"${company.name}" OR "${company.ticker}"`;
         let result: GdeltFetchResult = {
@@ -744,6 +755,7 @@ export function startGdeltPoller(deps: {
           if (added > 0) deps.db.logEvent("info", "gdelt", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `gdelt ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
           const message = err instanceof Error ? err.message : String(err);
           if (deliveryId == null) {
             recordDelivery({
@@ -778,7 +790,7 @@ export function startGdeltPoller(deps: {
       running = false;
     }
   };
-  return scheduleTask(tick, deps.intervalSeconds * 1000);
+  return scheduleTask(tick, deps.intervalSeconds * 1000, { beforeRun: () => deps.db.prepareExternalWork() });
 }
 
 /**
@@ -809,6 +821,7 @@ export function startFinnhubPoller(deps: {
   const runBackfill = async (): Promise<void> => {
     if (deps.backfillDays <= 0 || providerCoolingDown(deps.db, "finnhub")) return;
     for (const company of deps.companies) {
+      if (!deps.db.canStartExternalWork()) return;
       const completionKey = `finnhub:backfill:${deps.backfillDays}:${company.id}`;
       const completionState = deps.db.getKv(completionKey);
       if (completionState === "complete") continue;
@@ -884,6 +897,7 @@ export function startFinnhubPoller(deps: {
         }
         deps.db.logEvent("info", "backfill", `${company.ticker}: ${added} historical mentions`);
       } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
         deps.db.setKv(completionKey, String(Date.now() + backfillRetryDelayMs));
         if (deliveryId == null) {
           recordDelivery({
@@ -911,6 +925,7 @@ export function startFinnhubPoller(deps: {
     if (providerCoolingDown(deps.db, "finnhub")) return;
     const symbols = new Set(deps.companies.map((c) => c.ticker));
     const calendarStartedAt = Date.now();
+    if (!deps.db.canStartExternalWork()) return;
     try {
       const upcoming = await fetchUpcoming(deps.token, symbols);
       deps.db.setKvEntriesAtomically(deps.companies.map((company) => {
@@ -927,6 +942,7 @@ export function startFinnhubPoller(deps: {
       deps.health.recordFinnhub(true);
       clearProviderRateLimit(deps.db, "finnhub", calendarStartedAt);
     } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
       recordDelivery({
         db: deps.db, collector: "finnhub", companyId: null,
         requestKey: `finnhub:earnings-calendar:${[...symbols].sort().join(",")}`,
@@ -946,6 +962,7 @@ export function startFinnhubPoller(deps: {
     }
     for (const company of deps.companies) {
       if (providerCoolingDown(deps.db, "finnhub")) return;
+      if (!deps.db.canStartExternalWork()) return;
       const startedAt = Date.now();
       let entries: Awaited<ReturnType<typeof fetchEarningsHistory>> = [];
       try {
@@ -961,6 +978,7 @@ export function startFinnhubPoller(deps: {
         deps.health.recordFinnhub(true);
         clearProviderRateLimit(deps.db, "finnhub", startedAt);
       } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
         recordDelivery({
           db: deps.db, collector: "finnhub", companyId: company.id,
           requestKey: `finnhub:earnings-history:${company.ticker}`, startedAt,
@@ -993,6 +1011,7 @@ export function startFinnhubPoller(deps: {
       }
       for (const company of deps.companies) {
         if (providerCoolingDown(deps.db, "finnhub")) break;
+        if (!deps.db.canStartExternalWork()) return;
         const startedAt = Date.now();
         let news: FinnhubNewsFetchResult = { items: [], providerItemCount: 0, malformedItemCount: 0 };
         let deliveryId: string | null = null;
@@ -1063,6 +1082,7 @@ export function startFinnhubPoller(deps: {
           if (added > 0) deps.db.logEvent("info", "finnhub", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `finnhub ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
           const message = err instanceof Error ? err.message : String(err);
           if (deliveryId == null) {
             recordDelivery({
@@ -1090,7 +1110,7 @@ export function startFinnhubPoller(deps: {
       running = false;
     }
   };
-  return scheduleTask(tick, deps.intervalSeconds * 1000);
+  return scheduleTask(tick, deps.intervalSeconds * 1000, { beforeRun: () => deps.db.prepareExternalWork() });
 }
 
 /** Reddit poller: social search per company with cached OAuth tokens. */
@@ -1127,12 +1147,14 @@ export function startRedditPoller(deps: {
   let client: RedditClient | null = null;
   const tick = async (): Promise<void> => {
     if (providerCoolingDown(deps.db, "reddit")) return;
+    if (!deps.db.canStartExternalWork()) return;
     if (running) return;
     running = true;
     try {
       try {
         client = await getRedditToken(deps.creds, client ?? undefined);
       } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
         recordDelivery({
           db: deps.db, collector: "reddit", companyId: null, requestKey: "reddit:oauth",
           startedAt: Date.now(), adapterVersion: "reddit-oauth/1",
@@ -1151,6 +1173,7 @@ export function startRedditPoller(deps: {
       }
       for (const company of deps.companies) {
         if (providerCoolingDown(deps.db, "reddit")) break;
+        if (!deps.db.canStartExternalWork()) return;
         const active = client;
         if (!active) break;
         const startedAt = Date.now();
@@ -1246,6 +1269,7 @@ export function startRedditPoller(deps: {
           if (added > 0) deps.db.logEvent("info", "reddit", `${company.ticker}: ${added} new`);
           if (dropped > 0) deps.db.logEvent("info", "relevance", `reddit ${company.ticker}: ${dropped} dropped`);
         } catch (err) {
+          if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) return;
           const message = err instanceof Error ? err.message : String(err);
           if (err instanceof RedditPaginationRestartError) {
             deps.db.setKv(checkpointKey(company.id), "");
@@ -1278,7 +1302,7 @@ export function startRedditPoller(deps: {
       running = false;
     }
   };
-  return scheduleTask(tick, deps.intervalSeconds * 1000);
+  return scheduleTask(tick, deps.intervalSeconds * 1000, { beforeRun: () => deps.db.prepareExternalWork() });
 }
 
 export function startJevRetryPoller(pipeline: Pipeline): SchedulerControl {

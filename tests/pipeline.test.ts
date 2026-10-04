@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import { intersectJevSourceAllowlist } from "../server/collector-policy.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";

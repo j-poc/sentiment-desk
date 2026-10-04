@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { MarketData } from "../server/market.js";
@@ -12,6 +12,12 @@ import type { Company } from "../server/types.js";
 
 const company: Company = {
   id: "acme", name: "Acme", ticker: "ACME", sector: "Technology", aliases: ["Acme"], color: "#123456",
+};
+const migrationTestLimits = {
+  maxDatabaseBytes: 64 * 1024 * 1024,
+  maxFamilyBytes: 128 * 1024 * 1024,
+  minimumFreeBytes: 1,
+  writeHeadroomBytes: 1,
 };
 const originalFetch = globalThis.fetch;
 
@@ -52,7 +58,7 @@ describe("market quote provenance", () => {
       .run("ACME", 1_000, 125);
     oldDb.close();
 
-    const db = new Desk(path);
+    const db = new Desk(path, migrationTestLimits);
     try {
       expect(db.priceWindow("ACME", 0)).toEqual([]);
       const deliveryId = db.recordDelivery({

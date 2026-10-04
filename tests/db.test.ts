@@ -3,10 +3,19 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Desk, type AlertIntent } from "../server/db.js";
+import { type AlertIntent } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import type { Company, MentionScore, RawMention } from "../server/types.js";
 
 const directories: string[] = [];
+// Migration fixtures are tiny and should exercise schema behavior without
+// requiring the host to reserve the production database's full 2 GiB ceiling.
+const migrationTestLimits = {
+  maxDatabaseBytes: 64 * 1024 * 1024,
+  maxFamilyBytes: 128 * 1024 * 1024,
+  minimumFreeBytes: 1,
+  writeHeadroomBytes: 1,
+};
 const company: Company = {
   id: "acme", name: "Acme", ticker: "ACME", sector: "Technology", aliases: ["Acme"], color: "#123456",
 };
@@ -126,6 +135,36 @@ describe("Desk observation and judgment storage", () => {
     } finally { db.close(); }
   });
 
+  it("releases a known-unsent Luna reservation after restart and allows retry without usage review", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-luna-reservation-recovery-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    db.seedCompanies([company]);
+    const id = db.insertObservation(mention({ sourceItemId: "luna-reserved-interrupt", collector: "sec_edgar" })).observationId;
+    const claim = db.claimForScoringWithBudget({
+      id, now: 1_000, allowedCollectors: ["sec_edgar"], utcDay: "2026-09-28",
+      requestBytes: 128, requestSha256: "e".repeat(64), requestedModel: "gpt-6-luna", rubricSha256: "f".repeat(64),
+      maxRequests: 10, maxRequestBytes: 10_000, provider: "openai_luna", maxDailyCostMicros: 1_000_000,
+      reservedCostMicros: 250_000, requestedServiceTier: "default", maxOutputTokens: 128, schemaSha256: "a".repeat(64),
+    });
+    if (claim.kind !== "claimed") throw new Error("expected a bounded Luna claim");
+    expect(db.getKv("openai:budget:2026-09-28:requests")).toBe("1");
+    expect(db.getKv("openai:budget:2026-09-28:request-bytes")).toBe("128");
+    expect(db.getKv("openai:budget:2026-09-28:cost-micros")).toBe("250000");
+    db.close();
+
+    db = new Desk(path);
+    try {
+      expect(db.jevAttemptHistory(id)).toMatchObject([{ outcome: "not_sent", dispatchAt: null, errorCategory: "interrupted_before_dispatch" }]);
+      expect(db.getKv("openai:budget:2026-09-28:requests")).toBe("0");
+      expect(db.getKv("openai:budget:2026-09-28:request-bytes")).toBe("0");
+      expect(db.getKv("openai:budget:2026-09-28:cost-micros")).toBe("0");
+      expect(db.classifierUsageSince(0)).toMatchObject({ requests: 0, unpricedAttempts: 0, reservedCostUsd: 0 });
+      expect(db.requeueFailed(id, false)).toBe("queued");
+    } finally { db.close(); }
+  });
+
   it("commits a qualified alert intent with the score and preserves immutable claims and receipts", () => {
     const db = new Desk(":memory:");
     try {
@@ -149,6 +188,23 @@ describe("Desk observation and judgment storage", () => {
       }]);
       expect(() => db.completeAlert(claim, "failed", 1004, 500, "http_server_error", 2000)).not.toThrow();
       expect(db.claimAlert(1005, intent.destinationFingerprint, 10_000, 5)).toBeNull();
+    } finally { db.close(); }
+  });
+
+  it("records a storage-paused webhook as not sent and returns its attempt budget", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const id = db.insertObservation(mention({ sourceItemId: "alert-storage-pause" })).observationId;
+      const intent: AlertIntent = { observationId: id, ruleVersion: "rule-1", payload: "{}", policy: "{}",
+        destinationFingerprint: "9".repeat(64), createdAt: 1_000, expiresAt: 100_000 };
+      db.markScored(id, score("results"), false, intent);
+      const claim = db.claimAlert(1_001, intent.destinationFingerprint, 10_000, 5)!;
+      expect(db.deferAlertBeforeDispatch(claim, 1_002, 30_000)).toBe(true);
+      expect(db.alertDeliverySummary()).toMatchObject([{ state: "pending", attemptCount: 0,
+        lastOutcome: "not_sent", lastErrorCategory: "storage_paused", lastHttpStatus: null }]);
+      expect(db.claimAlert(1_003, intent.destinationFingerprint, 10_000, 5)).toBeNull();
+      expect(db.claimAlert(30_000, intent.destinationFingerprint, 10_000, 5)).toMatchObject({ attempt: 1 });
     } finally { db.close(); }
   });
 
@@ -795,7 +851,7 @@ describe("Desk observation and judgment storage", () => {
     `);
     old.close();
 
-    let db = new Desk(path);
+    let db = new Desk(path, migrationTestLimits);
     try {
       expect(db.mentionRow("acme:old")).toBeUndefined();
       expect(db.mentionRow("acme:broken")).toBeUndefined();
@@ -819,7 +875,7 @@ describe("Desk observation and judgment storage", () => {
       migratedFile.close();
     }
 
-    db = new Desk(path);
+    db = new Desk(path, migrationTestLimits);
     try {
       expect(db.mentionsForCompany("acme", 0, 10)).toEqual([]);
       expect(db.usageSince(0).judgedItems).toBe(0);
@@ -832,7 +888,7 @@ describe("Desk observation and judgment storage", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-v2-retry-migration-"));
     directories.push(directory);
     const path = join(directory, "desk.db");
-    let db = new Desk(path);
+    let db = new Desk(path, migrationTestLimits);
     db.seedCompanies([company]);
     const { observationId } = db.insertObservation(mention());
     const claimed = db.claimForScoring(observationId, Date.now());
@@ -850,7 +906,7 @@ describe("Desk observation and judgment storage", () => {
     `);
     priorVersion.close();
 
-    db = new Desk(path);
+    db = new Desk(path, migrationTestLimits);
     try {
       const recovered = db.mentionRow(observationId)!;
       expect(recovered.status).toBe("failed");
@@ -867,7 +923,7 @@ describe("Desk observation and judgment storage", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-v5-lineage-migration-"));
     directories.push(directory);
     const path = join(directory, "desk.db");
-    const current = new Desk(path);
+    const current = new Desk(path, migrationTestLimits);
     current.close();
 
     const priorVersion = new DatabaseSync(path);
@@ -881,7 +937,7 @@ describe("Desk observation and judgment storage", () => {
     `);
     priorVersion.close();
 
-    const migrated = new Desk(path);
+    const migrated = new Desk(path, migrationTestLimits);
     try {
       const columns = migrated.mentionRow("missing") ?? null;
       expect(columns).toBeNull();

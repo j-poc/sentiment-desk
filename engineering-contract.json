@@ -5,24 +5,28 @@
   ],
   "job": "Replace new-record classification with OpenAI GPT-6 Luna, preserve genuine historical Jev probabilities, replace misleading Jev trajectories with truthful bucket-level record summaries and gap-preserving watchlist sparklines, rebuild the selected-company workspace, and qualify the new categorical profile against independently blinded real-source agent references; keep all paid calls bounded and checkpoint reviewed source.",
   "acceptance": [
+    "Master Eval compares Sentiment Desk with AlphaSense on 30 prospectively registered real 7-day retail/consumer inflection tasks across at least 15 issuers and 6 sectors, under the same task, UTC cutoff, and 20-minute analyst interaction allowance. Preserve versions, access, outputs, sources, timestamps, cost, and latency. Two blinded subagents use separately initialized contexts and distinct configured models where available; do not claim independent model families without verified lineage. A third blinded subagent adjudicates disagreements without selecting a new outcome after seeing which product leads. A valid no-signal result states searched scope/window, actual coverage and freshness, material gaps, uncertainty, and next check; it is neither an automatic win nor an automatic error. Missing, malformed, and unsupported outputs cannot win and remain in task and error denominators. Report missing, invalid, no-signal, and supported-signal outcomes per product, with material errors per task and per asserted claim. A Desk win requires at least one additional material, source-verified decision-relevant signal absent from AlphaSense, supported by eligible point-in-time evidence from at least two independent origins, not duplicated or unresolvedly contradicted, and accompanied by a concrete next check. Comparator wins are symmetric; if each product has a unique supported material finding, the task is a tie. Freeze issuer, shared-event, and time dependence clusters, the paired inference method, and both decision thresholds before output review; prefer one event per issuer. A pass requires both the two-sided exact paired test and the predeclared dependence-aware paired inference to support a Desk advantage at p<0.05. If defensible dependence-aware inference is unavailable, leave the statistical result UNVERIFIED; a completed non-supportive cluster-aware result is FAIL. Report error rates both per task and per asserted claim, with denominators fixed before review. Pass only with 30 completed paired tasks, at least 10 Desk wins, at most 2 AlphaSense wins, >=80% pre-adjudication task-outcome agreement, both significance gates, and no higher material factual/entity/source/timestamp error rate. Agent agreement is reviewer-reliability evidence, not human ground truth; correlated model errors remain a limitation. This narrow test does not establish broad superiority, investment returns, retention, or release readiness. No access/output means BLOCKED; incomplete results are UNVERIFIED.",
+    "The product must help serious individual investors, including the owner, and professional analysts complete three real-data tasks: (1) discover companies worth investigating with no ticker, thesis, upload, or prepared dataset, including the stated small-cap and long-term fundamental focus; (2) decide whether a selected company merits more research by inspecting relevant drivers, supporting and contradictory evidence, uncertainty, missing information, and a concrete next question; and (3) identify a material change in a followed company against its prior baseline, with event/retrieval times, independent-source and duplicate disclosure, uncertainty, and a next check. Verify these paths in the actual UI with intended users without coaching; record completion, time to a source-checked result, corrections, and remaining effort. Product-owned sources must be acquired programmatically under verified source rights. The no-ticker start cannot rely on the fixed 24-company list, unexplained counts, stale history, or Radar expansion.",
     "New observations and research reads use identified real sources; demo and synthetic records never enter product runtime, and legacy_unknown rows stay quarantined from research and Jev paths. SEC extraction prioritizes actual numbered 8-K sections over the cover page, is deterministic and bounded, and versions newly persisted receipts without modifying historical records. For new Item 2.02 filings, the source adapter selects only a unique same-accession HTML Exhibit 99.1 explicitly identified by the visible results section, preserves bounded primary/exhibit request evidence outside classifier input, and emits no observation for incomplete acquisition. Legacy receipts, stable input revision semantics, prompt/schema/profile and historical judgments remain unchanged.",
     "OpenAI GPT-6 Luna is the selected classifier for new records, using strict categorical outputs with exact prompt/schema/request/response provenance and complete usage. No Luna category is converted into a Jev probability, confidence or impact value, or mixed into legacy numeric charts, reaction memory or threshold alerts. Missing credentials, source/account approval or finite budgets leave items pending without TypeSafe fallback. Unknown outcomes retain their reservation and require operator review. A frozen real SEC cohort of at least30 cases across at least8 configured issuers binds two independent blinded agent reference sets to the exact new prompt and request profile. Predeclared diagnostic targets remain macro-F1>=0.80, represented-class precision/recall>=0.70 and inclusion precision>=0.90 with all3 sentiment classes represented; unresolved and failed cases remain in the denominator. Agent agreement is separate from human ground truth and statistical certification. A missing API credential, live run, usage reconciliation or source/reference evidence blocks live qualification; no quality pass is inferred from fixtures.",
     "The selected-company chart chooses its initial view from successful, identity-matched saved data: show Luna categories when any eligible real Luna classifications exist; when the count is zero, show a real historical Jev chart if the selected company/window has saved Jev scores, with a persistent notice that it is historical Jev and no Luna categories are saved; otherwise keep Luna's truthful empty state. Any explicit tab choice persists across polling and selection changes. Luna counts include only complete, receipt-linked, real GPT-6 Luna source observations by classification-availability time. Positive, neutral, negative, review-required, and excluded are the five reachable outcomes; absent direction maps to review-required. The client may group canonical 15-minute values into UTC-aligned 30-minute, 1-hour, 3-hour, or 6-hour display intervals, but each displayed category and total reconciles exactly to the canonical snapshot and its paginated source records through the matching half-open evidence span. Seven days show at most 29 intervals; earlier values stay inside the chart's keyboard-scrollable region, with no page overflow at 320px or 390px. Date labels show UTC, seconds, milliseconds, and exclusive end semantics. Lightweight Charts receives strictly increasing fractional Unix-second timestamps derived directly from safe integer UTC milliseconds; duplicate or malformed endpoints are rejected rather than shifted. Prompt/schema lineage and mixed-profile caveats remain visible. Empty, refreshing, failed, and stale-snapshot states remain distinct; a refresh failure after an empty read is unknown, not current-empty. Restarted snapshots recover automatically and do not strand selected evidence. Tab changes preserve the selected interval and poll only the active chart. Luna never reuses Jev impact, decay, price, probability, or confidence semantics, and chart reads make no provider request.",
     "The historical Jev impact view uses only saved real scored observations. Each nonempty UTC 15-minute bucket displays the deterministic weighted mean of the actual Jev impacts, scored-record count, and observed minimum and maximum; missing buckets remain gaps, and neither the company chart nor watchlist sparkline connects, carries forward, decays, or extends values between observations. The selected bucket also exposes a full 20-bin unweighted histogram whose counts sum to the full bucket count, with +100 in the final bin; source-list pagination is disclosed separately. Bucket counts reconcile to exact saved source-record drilldown. Historical freshness and profile remain distinct from Luna categories, and price is omitted unless provenance is verified.",
-    "Historical impact-band filtering uses the exact full saved UTC bucket snapshot before source-row pagination: the 20 bands are half-open [\u2212100+10i, \u221290+10i), with +100 included only in the final band. Filtering never changes the full interval count, weighted mean, observed spread, or 20-bin histogram; matchingRecordCount and filtered source rows are reported separately. Every page cursor is bound to company, interval, snapshot, and selected band. Changing bands discards stale responses; zero-match and clear-all states recover accurately, with clear-all restoring the full snapshot. Verify against real saved bucket data, including a selected band whose matching records extend beyond the unfiltered first page. Every accepted historical Jev bucket response also reports full-bucket exact-normalized title count, records in repeated exact-title groups, untitled records, score-completion range, publisher-declared and provider-observed source-time counts/ranges separately, unknown-basis counts, and delivery-receipt links. It is calculated from immutable source-observation fields inside the accepted bucket snapshot, remains unchanged across impact filtering and source-row pagination, preserves missing/unknown clocks as unknown, and the UI says score-completion buckets are not 15-minute measures of publication volume or investor activity. It is withheld with a reload action if malformed or inconsistent. An initial detail-load failure shows only the actual failure and retry, never a stale chart count or an unobserved distribution claim.",
+    "Historical impact-band filtering uses the exact full saved UTC bucket snapshot before source-row pagination: the 20 bands are half-open [−100+10i, −90+10i), with +100 included only in the final band. Filtering never changes the full interval count, weighted mean, observed spread, or 20-bin histogram; matchingRecordCount and filtered source rows are reported separately. Every page cursor is bound to company, interval, snapshot, and selected band. Changing bands discards stale responses; zero-match and clear-all states recover accurately, with clear-all restoring the full snapshot. Verify against real saved bucket data, including a selected band whose matching records extend beyond the unfiltered first page. Every accepted historical Jev bucket response also reports full-bucket exact-normalized title count, records in repeated exact-title groups, untitled records, score-completion range, publisher-declared and provider-observed source-time counts/ranges separately, unknown-basis counts, and delivery-receipt links. It is calculated from immutable source-observation fields inside the accepted bucket snapshot, remains unchanged across impact filtering and source-row pagination, preserves missing/unknown clocks as unknown, and the UI says score-completion buckets are not 15-minute measures of publication volume or investor activity. It is withheld with a reload action if malformed or inconsistent. An initial detail-load failure shows only the actual failure and retry, never a stale chart count or an unobserved distribution claim.",
     "Feed failures, pending judgments, and retries remain persistent, bounded, recoverable, and reachable to the user, including aggregate alert attention counts, prioritized pageable outcomes, responsive source/operations health details, and a visible not-configured webhook state before the first alert.",
+    "The selected-company source feed includes an explicit paginated History filter across all retained dates and eligible identified-real-source statuses, including off-target and unscored rows. Ordinary sentiment/status filters remain inside the selected window; History requests omit the time cutoff, sort newest source/observation/retrieval time first, preserve stable cursors, show the full available source date and timezone plus retrieval age, explicitly label missing source time, and never request provider data. Demo and legacy_unknown rows remain excluded. Empty and load-more states describe the selected company's retained history accurately.",
     "At1440x900, the selected company, selected date/window, actual historical chart and at least three actual supporting source headlines are visible without scrolling when available. Company selection updates heading, chart and evidence; J/K keeps selection visible. Chart bucket inspection reaches real supporting records and the original source. At390px, there is no horizontal overflow. Pending, historical, loading, error and true-empty states remain distinct, with truthful units, freshness and unvalidated-model disclosure. The watchlist identifies 24-hour source counts as retrieval-time counts; an empty selected source-time window explains the distinct time basis and, when recent retrieval exists, offers a separate direct route to the all-history unscored feed while preserving the normal full-feed action. SEC drawer judgment status and source lineage precede a collapsed excerpt, with the full source text still keyboard accessible. Source readiness is labeled separately from classifier judgment, filed/accepted/retrieved SEC times include date and timezone, and pending items link to the classifier readiness details.",
     "The live-data contract and code-bound evidence are current and passing for the scoped live source/persistence path.",
     "Opportunity Radar remains disabled until Sentiment Desk operational acceptance passes.",
     "The verified cohesive checkpoint is pushed to the existing codex/real-data-rebuild GitHub branch.",
     "A fresh installation with zero eligible saved observations can inspect a real, read-only SEC-to-Jev archive with its filing link and recorded run fields. Receipt and digest values are explicitly labeled as references that cannot be resolved from this installation; the archive is excluded from local Desk data and metrics, makes no provider requests, and states that classification quality is unvalidated. The empty state never plots archive data or shows an empty gauge/chart, uses eligible-observation wording when quarantined rows exist, and shows a visible next operator step based on SEC collection and the selected classifier's SEC-specific credential, account/source approvals and finite spending caps. Loading and errors remain distinct from confirmed empty and never fall back to an empty gauge/chart; stale saved history suppresses the archive, and the archive disappears as soon as local observations arrive. When its history count moves from zero to positive while company snapshots have not caught up, the Desk refreshes the company snapshot and selected evidence feeds once. If the company snapshot fails or succeeds without saved source history, a later history poll retries it without repeating the first-arrival feed refresh or requiring a reload; application of a company snapshot containing saved source history ends recovery.",
-    "The selected-company price pane plots only receipt-verified Yahoo chart observations. Its existing /price response carries a ticker-scoped count of legacy_unknown rows as disclosure metadata only; the count covers all local history, contains no legacy price or timestamp values, and cannot affect charts, calculations, refresh, freshness, or error status. A confirmed empty verified window distinguishes legacy rows withheld for incomplete provenance from a true zero count; missing metadata stays unknown, and stale/error/loading states never present an old count as current. Existing provider-failure and mixed-currency 502 behavior remains exact."
+    "The selected-company price pane plots only receipt-verified Yahoo chart observations. Its existing /price response carries a ticker-scoped count of legacy_unknown rows as disclosure metadata only; the count covers all local history, contains no legacy price or timestamp values, and cannot affect charts, calculations, refresh, freshness, or error status. A confirmed empty verified window distinguishes legacy rows withheld for incomplete provenance from a true zero count; missing metadata stays unknown, and stale/error/loading states never present an old count as current. Existing provider-failure and mixed-currency 502 behavior remains exact.",
+    "The SQLite storage boundary declares byte limits for the main database, complete SQLite file family, minimum free space, and reserved completion headroom. It applies and verifies the page ceiling before migration, measures the main/WAL/SHM/journal family and filesystem allocation, and checks capacity before each collector/model/webhook/price request and write. At the reserve boundary new external work stops without a failed provider receipt, while saved evidence remains readable and already admitted work may finish inside the reserve. A blocked reader prevents WAL truncation and therefore new external work; retry succeeds after the reader releases. At the hard page ceiling, writes fail with a typed storage-capacity error and the compatible database reopens read-only. The health API and operations UI show state, reason, measured files, limits, free space, and recovery action. Validate only in disposable SQLite databases; do not write test rows into the user's product database. The resource bound assumes a single application writer; multi-process and host-wide quotas remain outside the claim."
   ],
   "owner": "Jurgis owns the product decision and local deployment; source/account operators own their access attestations.",
   "design": {
     "existing_patterns": "Retain the existing TypeScript server, SQLite receipts and observations, bounded provider adapters, React/Vite research desk, offline startup verifier, and project-record ETL gate. The new SEC document evidence is an optional bounded receipt context, with no separate relationship service or new dependencies.",
-    "data_ownership": "Public provider source data remains under provider-specific access/retention rights; local SQLite is operator controlled. Unknown-provenance historical rows remain quarantined. The read-only first-run archive is one actual historical SEC-to-Jev observation outside research counts/charts. New Luna classifications are product-derived data acquired through the user-selected OpenAI API route; the current verification environment has no direct OpenAI API credential and no finite provider spend readback, so live qualification is blocked. SEC parent and selected exhibit are product-managed public-source data; partial acquisition is operation evidence only and creates no pending model input.",
-    "boundaries": "Network collection and Jev forwarding default off; source and account approvals are distinct; the read-only first-run endpoint serves a separately typed archival record only when all-time eligible observation history is zero, and never inserts it into Desk data or calculations. Live smoke uses a temporary isolated database; Radar stays disabled. The selected-company workspace reuses the existing request owners and recovery controller. Independent agent references use a separate v3 diagnostic mode; they never attest to human qualification or constitute ground truth. New OpenAI dispatch requires its own credential, account/source allowlists and daily request/byte/USD caps, default zero; TypeSafe is never an implicit fallback. New categorical rows have a separate persistence profile and terminal classified/excluded/review_required states. Historical probability records and quarantine remain unchanged.",
+    "data_ownership": "Public provider source data remains under provider-specific access/retention rights; local SQLite is operator controlled. Unknown-provenance historical rows remain quarantined. The read-only first-run archive is one actual historical SEC-to-Jev observation outside research counts/charts. New Luna classifications are product-derived data acquired through the user-selected OpenAI API route; the current verification environment has no direct OpenAI API credential and no finite provider spend readback, so live qualification is blocked. SEC parent and selected exhibit are product-managed public-source data; partial acquisition is operation evidence only and creates no pending model input. No-ticker discovery also needs a product-owned company universe including small caps and authorized public or licensed retail/consumer observations, acquired through maintained programmatic sources only after route-specific access, retention, display and model-processing terms are established. A personal watchlist or thesis is user-owned and optional, never a prerequisite for first value.",
+    "boundaries": "Network collection and Jev forwarding default off; source and account approvals are distinct; the read-only first-run endpoint serves a separately typed archival record only when all-time eligible observation history is zero, and never inserts it into Desk data or calculations. Live smoke uses a temporary isolated database; Radar stays disabled. The selected-company workspace reuses the existing request owners and recovery controller. Independent agent references use a separate v3 diagnostic mode; they never attest to human qualification or constitute ground truth. New OpenAI dispatch requires its own credential, account/source allowlists and daily request/byte/USD caps, default zero; TypeSafe is never an implicit fallback. New categorical rows have a separate persistence profile and terminal classified/excluded/review_required states. Historical probability records and quarantine remain unchanged. The zero-ticker discovery path is part of Sentiment Desk first value; it does not activate the separate Opportunity Radar. Do not rank companies using source counts alone or label stale history as a current opportunity.",
     "simplicity": "Use the existing React controls, formatters, tests, and verifiers; no new runtime dependency or synthetic product fixture is introduced.",
     "first_run": {
       "surface": "user_facing",
@@ -31,17 +35,35 @@
           "name": "SEC EDGAR filing metadata and public filing URL",
           "owner": "product_external",
           "acquisition": "product_managed",
-          "required_for_first_value": true
+          "required_for_first_value": false
         },
         {
           "name": "Archived Jev judgment, receipt, and request provenance",
           "owner": "product_external",
           "acquisition": "user_authorized",
+          "required_for_first_value": false
+        },
+        {
+          "name": "Listed-company universe including small-cap issuers",
+          "owner": "product_external",
+          "acquisition": "product_managed",
           "required_for_first_value": true
+        },
+        {
+          "name": "Retail and consumer adoption, dissatisfaction, and public discussion observations",
+          "owner": "product_external",
+          "acquisition": "product_managed",
+          "required_for_first_value": true
+        },
+        {
+          "name": "Personal watchlist, preferred sectors, and private investor thesis",
+          "owner": "user_private",
+          "acquisition": "user_provided",
+          "required_for_first_value": false
         }
       ],
-      "first_result_or_reason": "At confirmed zero eligible saved observations, show the actual September 29, 2026 SEC filing and October 1, 2026 Jev classification from one isolated historical run. Link the filing, label receipt and digest values as recorded references that cannot be resolved from this installation, keep the archive outside Desk observations, counts, charts, usage, and alerts, and say it is independently unreviewed and unvalidated. The Luna chart states that no eligible classifications have been saved; the separate Historical Jev view may show only genuine saved Jev series when available. Never fill either view with fabricated chart data. Rendering makes no provider request.",
-      "empty_or_blocked_state": "Loading and API failure stay unknown, not empty. Any all-time eligible saved observation suppresses the archive even if stale; a newly arrived local observation suppresses it immediately. Demo/test and legacy_unknown rows never qualify as research observations. If the archive is unavailable, show the actual empty or blocked state and current source/selected-classifier gate without implying live collection or scoring. Missing OpenAI credentials, account-use approval, or finite limits leave classification pending and do not trigger another provider."
+      "first_result_or_reason": "With no ticker, thesis, upload, or user-built dataset, show a short current list of real listed companies worth investigating from the authorized product-owned universe, including small caps. Each candidate must carry a source-checked reason, relevant fundamental driver or risk, evidence links, event and retrieval times, uncertainty, duplicate/independence status, and a concrete next research step; the investor can progressively open company triage and monitoring. The existing SEC/Jev read-only archive is a historical example only, not the primary discovery result. This zero-ticker value is not currently delivered: the saved preview has a fixed 24-company catalog, external requests disabled, no eligible Luna categories, and stale saved history. Never use synthetic data, source counts alone, or an empty chart to imply discovery value; the product remains truthfully blocked until qualifying real data is available.",
+      "empty_or_blocked_state": "Loading and API failure stay unknown, not empty. Any all-time eligible saved observation suppresses the archive even if stale; a newly arrived local observation suppresses it immediately. Demo/test and legacy_unknown rows never qualify as research observations. If the archive is unavailable, show the actual empty or blocked state and current source/selected-classifier gate without implying live collection or scoring. Missing OpenAI credentials, account-use approval, or finite limits leave classification pending and do not trigger another provider. If no eligible current signal exists in the covered company/source/time universe, state that bounded fact with coverage and as-of time, keep freshness and acquisition failures distinct, explain the next operator step, and do not infer there are no opportunities. Do not require a ticker or uploaded dataset merely to reach the product-owned discovery state."
     }
   },
   "change_safety": {
@@ -67,6 +89,25 @@
         "npm",
         "run",
         "typecheck"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "saved-history-feed",
+      "covers": [
+        "workflow_success",
+        "workflow_failure",
+        "change_review"
+      ],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "--maxWorkers=1",
+        "--testTimeout=20000",
+        "tests/app-unscored-mentions.test.ts",
+        "tests/mention-window.test.ts"
       ],
       "timeout_seconds": 120
     },
@@ -362,13 +403,86 @@
         "--accept-pilot-unverified"
       ],
       "timeout_seconds": 120
+    },
+    {
+      "id": "storage-capacity",
+      "covers": [
+        "resource_bounds",
+        "persistence_recovery",
+        "operations",
+        "integration_failure",
+        "change_review"
+      ],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=dot",
+        "--maxWorkers=1",
+        "--testTimeout=20000",
+        "tests/storage-capacity.test.ts",
+        "tests/app-health-alerts.test.ts",
+        "tests/health-panel.test.ts",
+        "tests/rss-poller.test.ts"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "master-eval-outcome",
+      "covers": [
+        "workflow_success",
+        "workflow_failure",
+        "change_review"
+      ],
+      "command": [
+        "python3",
+        "scripts/check_product_outcome_evidence.py",
+        "master-eval",
+        ".engineering-evidence/outcomes/master-eval-report.json"
+      ],
+      "timeout_seconds": 30
+    },
+    {
+      "id": "investor-workflow-outcomes",
+      "covers": [
+        "workflow_success",
+        "workflow_failure",
+        "change_review"
+      ],
+      "command": [
+        "python3",
+        "scripts/check_product_outcome_evidence.py",
+        "investor-workflows",
+        ".engineering-evidence/outcomes/investor-workflows-report.json"
+      ],
+      "timeout_seconds": 30
     }
   ],
   "alignment": {
-    "request": "Complete the real-data-only Sentiment Desk, use OpenAI GPT-6 Luna for new categorical classifications when an authorized credential and finite account budget are available, preserve historical Jev records and their distinct semantics, independently evaluate real-source judgments with blinded subagents, preserve failure/recovery and evidence workflows, fix misleading historical charts and all consumers, record and verify every gate, push reviewed checkpoints to the existing branch, and defer Opportunity Radar. The user selected Luna to replace Jev for new classifications. Local verification currently has no OpenAI API credential; no paid model request or Jev fallback has occurred.",
+    "request": "Complete the real-data-only Sentiment Desk, use OpenAI GPT-6 Luna for new categorical classifications when an authorized credential and finite account budget are available, preserve historical Jev records and their distinct semantics, independently evaluate real-source judgments with blinded subagents, preserve failure/recovery and evidence workflows, fix misleading historical charts and all consumers, record and verify every gate, push reviewed checkpoints to the existing branch, and defer Opportunity Radar. The user selected Luna to replace Jev for new classifications. Local verification currently has no OpenAI API credential; no paid model request or Jev fallback has occurred. Add the highest-level Master Eval against AlphaSense for early retail/consumer inflections and the three practical investor paths: zero-ticker discovery, company research-worthiness, and followed-company change. The user focus is serious individual investors and professional analysts, long-term fundamentals and small caps, with special situations, event-driven, sentiment and social-trend work preserved. Require real product-owned inputs, inspectable evidence, uncertainty and next steps; do not expand Opportunity Radar or weaken existing gates.",
     "acceptance_checks": [
       {
         "acceptance_index": 0,
+        "check_ids": [
+          "master-eval-outcome",
+          "real-source-luna-evaluation",
+          "bounded-luna-classifier",
+          "agent-reference-diagnostic"
+        ]
+      },
+      {
+        "acceptance_index": 1,
+        "check_ids": [
+          "investor-workflow-outcomes",
+          "first-run-evidence",
+          "etl-artifact-check",
+          "production-build",
+          "categorical-chart",
+          "historical-jev-series"
+        ]
+      },
+      {
+        "acceptance_index": 2,
         "check_ids": [
           "etl-artifact-check",
           "offline-source-gates",
@@ -376,7 +490,7 @@
         ]
       },
       {
-        "acceptance_index": 1,
+        "acceptance_index": 3,
         "check_ids": [
           "etl-artifact-check",
           "offline-source-gates",
@@ -386,7 +500,7 @@
         ]
       },
       {
-        "acceptance_index": 2,
+        "acceptance_index": 4,
         "check_ids": [
           "categorical-chart",
           "offline-source-gates",
@@ -394,7 +508,7 @@
         ]
       },
       {
-        "acceptance_index": 3,
+        "acceptance_index": 5,
         "check_ids": [
           "historical-jev-series",
           "offline-source-gates",
@@ -402,7 +516,7 @@
         ]
       },
       {
-        "acceptance_index": 4,
+        "acceptance_index": 6,
         "check_ids": [
           "historical-jev-series",
           "desk-health-recovery",
@@ -411,7 +525,7 @@
         ]
       },
       {
-        "acceptance_index": 5,
+        "acceptance_index": 7,
         "check_ids": [
           "desk-health-recovery",
           "offline-source-gates",
@@ -419,7 +533,7 @@
         ]
       },
       {
-        "acceptance_index": 6,
+        "acceptance_index": 8,
         "check_ids": [
           "etl-artifact-check",
           "offline-source-gates",
@@ -428,28 +542,28 @@
         ]
       },
       {
-        "acceptance_index": 7,
+        "acceptance_index": 9,
         "check_ids": [
           "etl-artifact-check",
           "offline-source-gates"
         ]
       },
       {
-        "acceptance_index": 8,
+        "acceptance_index": 10,
         "check_ids": [
           "radar-disabled",
           "offline-source-gates"
         ]
       },
       {
-        "acceptance_index": 9,
+        "acceptance_index": 11,
         "check_ids": [
           "github-checkpoint",
           "committed-diff-check"
         ]
       },
       {
-        "acceptance_index": 10,
+        "acceptance_index": 12,
         "check_ids": [
           "first-run-evidence",
           "etl-artifact-check",
@@ -457,18 +571,28 @@
         ]
       },
       {
-        "acceptance_index": 11,
+        "acceptance_index": 13,
         "check_ids": [
           "historical-jev-series",
           "production-build"
         ]
+      },
+      {
+        "acceptance_index": 14,
+        "check_ids": [
+          "storage-capacity",
+          "production-build",
+          "typecheck"
+        ]
       }
     ],
     "artifacts": [
+      "project-record/3-project-specs/sentiment-desk-completion.md",
       "project-record/4-log/jev-real-source-evidence-manifest.json",
       "project-record/4-log/live-data-etl-evidence.json",
       ".engineering-evidence/luna-real-source/luna-independent-real-source-report.json",
-      ".engineering-evidence/luna-real-source/diagnostic-reference-20261002/luna-independent-agent-reference-report.json"
+      ".engineering-evidence/luna-real-source/diagnostic-reference-20261002/luna-independent-agent-reference-report.json",
+      "project-record/4-log/2026-10-03-storage-capacity.md"
     ],
     "review": ".engineering-evidence/alignment-review.json"
   }

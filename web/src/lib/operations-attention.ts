@@ -16,6 +16,7 @@ export function operationsAttentionCount(health: HealthDTO): number {
     ? Math.max(health.classifierUsage.unpricedAttempts, health.classifierUsage.unknownOutcomes,
       health.classifierUsage.usageIncompleteAttempts)
     : 0;
-  return degradedDeliveries + sourceErrors + health.health.sourceApproval.blockedRequestedCollectors.length
+  const storageIssue = health.storage.state === "ready" ? 0 : 1;
+  return degradedDeliveries + sourceErrors + storageIssue + health.health.sourceApproval.blockedRequestedCollectors.length
     + alerts + accounting;
 }

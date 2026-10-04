@@ -56,6 +56,12 @@ export function shortTime(ms: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+export function sourceDateTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short",
+  }).format(new Date(ms));
+}
+
 export function dayTime(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");

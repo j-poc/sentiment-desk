@@ -85,7 +85,7 @@ const alertDeliveryCursorSchema = z.object({
   createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   alertId: z.string().uuid(),
 }).strict();
-const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed"]);
+const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed", "history"]);
 const mentionLookupSchema = z.object({
   ids: z.array(z.string().min(1).max(200)).min(1).max(900)
     .refine((ids) => new Set(ids).size === ids.length),
@@ -120,6 +120,7 @@ export function createApp(deps: AppDeps): Hono {
       uptimeSec: Math.floor(process.uptime()),
       sseClients: deps.hub.size,
       dbSizeBytes,
+      storage: deps.db.storageCapacity(),
       health: healthSnapshot,
       deliveries: deps.db.deliverySummary(),
       deliveryHealth: deps.db.deliveryHealth(deps.deliverySources),
@@ -213,9 +214,9 @@ export function createApp(deps: AppDeps): Hono {
       if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
       cursor = parsed.data;
     }
-    // Failed and pending work must remain recoverable after the normal seven-day
-    // investor window; all other filters stay within the disclosed seven days.
-    const sinceMs = filter === "failed" ? 0 : Date.now() - hours * 60 * 60 * 1000;
+    // Recovery work and explicit History browsing remain reachable after the
+    // normal seven-day investor window; ordinary views stay time-bounded.
+    const sinceMs = filter === "failed" || filter === "history" ? 0 : Date.now() - hours * 60 * 60 * 1000;
     return c.json(deps.db.mentionsForCompanyPage({ companyId: id, sinceMs, limit, cursor, filter }));
   });
 
@@ -249,6 +250,8 @@ export function createApp(deps: AppDeps): Hono {
         return c.json({ error: "classifier_daily_budget_exhausted" }, 429);
       case "budget_exhausted":
         return c.json({ error: "jev_daily_budget_exhausted" }, 429);
+      case "storage_paused":
+        return c.json({ error: "storage_capacity_paused", message: "Saved evidence remains available, but new provider work is paused until database capacity is restored." }, 503);
       default: {
         const exhaustive: never = result;
         return c.json({ error: String(exhaustive) }, 500);

@@ -21,6 +21,7 @@ import {
 } from "./schedule.js";
 import type { SchedulerControl } from "./scheduler.js";
 import type { CollectorId } from "./types.js";
+import { installExternalRequestGate } from "./external-request-gate.js";
 
 /**
  * Boot order matters: DB first (schema + seed), then pipeline, then HTTP, then
@@ -31,7 +32,10 @@ import type { CollectorId } from "./types.js";
 
 async function main(): Promise<void> {
   const companies = loadCompanies();
-  const db = new Desk(config.dbPath);
+  const db = new Desk(config.dbPath, config.storage);
+  const uninstallExternalRequestGate = installExternalRequestGate(
+    () => config.externalRequestsEnabled && db.externalRequestAllowed(),
+  );
   db.seedCompanies(companies);
   const activeSourceCollectors = intersectCollectorAllowlists(
     config.externalSourceCollectors,
@@ -319,6 +323,7 @@ async function main(): Promise<void> {
       // Tear down any remaining keep-alive or stalled HTTP sockets after the SSE routes close.
       if ("closeAllConnections" in server) server.closeAllConnections();
       await httpClosed;
+      uninstallExternalRequestGate();
       db.close();
       process.exit(0);
     })().catch((error: unknown) => {

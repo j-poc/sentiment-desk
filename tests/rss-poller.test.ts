@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Desk } from "../server/db.js";
+import { TestDesk as Desk } from "./test-desk.js";
 import { HealthTracker } from "../server/health.js";
 import { ProviderRateLimitError } from "../server/provider-cooldown.js";
 import { startRssPoller } from "../server/schedule.js";

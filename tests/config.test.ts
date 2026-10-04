@@ -4,8 +4,11 @@ import { intersectCollectorAllowlists, intersectJevSourceAllowlist } from "../se
 // Config resolution must not inspect the real shared-machine credential file
 // while these tests exercise explicit or empty environment values.
 vi.stubEnv("TYPESAFE_API_KEY", "");
+vi.stubEnv("OPENAI_MAX_DAILY_COST_USD", "");
 const {
+  boundedUsdMicros,
   boundedNonNegativeInt,
+  config,
   parseExternalSourceCollectors,
   parseExplicitBoolean,
   parseSourceRightsApprovedCollectors,
@@ -106,5 +109,14 @@ describe("Jev daily budget caps", () => {
     expect(boundedNonNegativeInt("-1", 100)).toBe(0);
     expect(boundedNonNegativeInt("1.5", 100)).toBe(0);
     expect(boundedNonNegativeInt("101", 100)).toBe(0);
+  });
+});
+
+describe("OpenAI spending cap", () => {
+  it("defaults an absent daily cost cap to zero and never treats the validation ceiling as a configured budget", () => {
+    expect(boundedUsdMicros(undefined, 100)).toBe(0);
+    expect(config.openai.maxDailyCostMicros).toBe(0);
+    expect(boundedUsdMicros("0.25", 100)).toBe(250_000);
+    expect(boundedUsdMicros("100.01", 100)).toBe(0);
   });
 });

@@ -191,7 +191,7 @@ independently established by this work. The keyless smoke did not call SEC or
 Luna. Sustained hosted scale and investor value remain unmeasured. Opportunity
 Radar stays disabled.
 
-## Checkpoint
+## Earlier source checkpoint — historical
 
 Repository: `https://github.com/j-poc/sentiment-desk.git`
 
@@ -231,18 +231,22 @@ establish investor value or hosted scale. The current acceptance map is:
 
 | Index | Status | Evidence or remaining limit |
 | ---: | --- | --- |
-| 0 | PASS | Identified real-source handling, no demo rows, SEC extraction and quarantine checks. |
-| 1 | BLOCKED | No direct OpenAI credential, real Luna result, provider usage, account reconciliation, or qualified three-class references. |
-| 2 | UNVERIFIED | No receipt-linked real Luna classifications exercise the categorical chart end to end. |
-| 3 | PASS | Historical Jev chart, real buckets, gaps, and distinct profile disclosure. |
-| 4 | PASS | Saved bucket filtering, full-snapshot counts, and source drilldown. |
-| 5 | UNVERIFIED | Live Luna failure, unknown-usage recovery, and delivery behavior have no real-provider run. |
-| 6 | PASS | Reviewed saved-data investor workflow and responsive UI; customer value is not established. |
-| 7 | PASS | Five-check scoped ETL receipt and current code-bound check. This does not claim all feeds are live. |
-| 8 | PASS | Opportunity Radar remains disabled. |
-| 9 | PASS | The prior checkpoint matched `origin/codex/real-data-rebuild` at `a4200df6a3f94d7bf06b0ff1deac044d8631de69`; this documentation continuation is checked separately after push. |
-| 10 | PASS | Zero-data first-run behavior is implemented and covered by the retained browser and recovery evidence. A fresh profile was not re-opened in this continuation. |
-| 11 | PASS | Unverified legacy prices stay out of the chart and appear only in a count-only disclosure. |
+| 0 | BLOCKED | Master Eval against AlphaSense has no authorized in-product access or paired outputs; no 30-task prospective cohort exists. Current vendor pages establish relevance only, not comparative performance. |
+| 1 | BLOCKED | Practical investor tasks are not established. The preview has a fixed 24-company catalog, external requests off, zero Luna classifications, no proved small-cap discovery breadth, and no observed professional-analyst session. Historical saved data is not current zero-ticker discovery. |
+| 2 | PASS | Identified real-source handling, no demo rows, SEC extraction and quarantine checks. |
+| 3 | BLOCKED | No direct OpenAI credential, real Luna result, provider usage, account reconciliation, or qualified three-class references. |
+| 4 | UNVERIFIED | No receipt-linked real Luna classifications exercise the categorical chart end to end. |
+| 5 | PASS | Historical Jev chart, real buckets, gaps, and distinct profile disclosure. |
+| 6 | PASS | Saved bucket filtering, full-snapshot counts, and source drilldown. |
+| 7 | UNVERIFIED | Live Luna failure, unknown-usage recovery, and delivery behavior have no real-provider run. |
+| 8 | PASS | Reviewed saved-data investor workflow and responsive UI; customer value is not established. |
+| 9 | PASS | Five-check scoped ETL receipt and current code-bound check. This does not claim all feeds are live. |
+| 10 | PASS | Opportunity Radar remains disabled. |
+| 11 | PASS | The current checkpoint at review time matched `origin/codex/real-data-rebuild` at `e963ef45bf362eb20f93c8a4d6b425752c23d4d1`. Later documentation-only review corrections are pushed as a subsequent checkpoint. |
+| 12 | PASS | Zero-data first-run behavior is implemented and covered by the retained browser and recovery evidence. A fresh profile was not re-opened in this continuation. |
+| 13 | PASS | Unverified legacy prices stay out of the chart and appear only in a count-only disclosure. |
+
+The Master Eval protocol and three user paths are now recorded at the top of the project specification and in the engineering acceptance contract. Current task disposition is: zero-ticker discovery **BLOCKED**; company research-worthiness **UNVERIFIED** without current Luna evidence and delivery receipts; followed-company material-change detection **BLOCKED** while sources and classification are paused. Official AlphaSense materials confirm its AI research, sentiment, monitoring, real-time alerts, and early-signal positioning; no AlphaSense version, licensed account output, or head-to-head result was available. The user-value hypothesis is **UNVERIFIED**, not inferred from reviewer scores or software tests.
 
 The model gate remains blocked until an OpenAI API credential is configured
 locally, the account's permitted spend and refill behavior are confirmed, and a
@@ -253,3 +257,38 @@ quality targets. Historical `legacy_unknown` usage remains unreconciled, so its
 price values stay quarantined. Endpoint-specific retention, display,
 model-processing, and deletion terms, sustained scale, and investor value
 remain unverified. Opportunity Radar stays disabled.
+
+## Whole-build adversarial re-review — 2026-10-03T09:27Z
+
+A fresh read-only `engineering_bullshit_detector` review returned **FAIL** for
+full readiness at **4/10**. It found no new reproducible code-local core defect
+in the reviewed paths. The preview API was healthy, but external requests were
+disabled, GPT-6 Luna was unconfigured, Luna usage and categorical observations
+were zero, and Opportunity Radar remained disabled. The inspected Apple
+seven-day series contained 245 historical Jev scores in 32 buckets; one
+bucket's 50 chart records reconciled to its 50 evidence records and 20-bin
+histogram. All 262 paged Apple scored/off-target rows lacked delivery IDs, so
+their source-delivery lineage remains incomplete. The Apple price endpoint
+returned zero verified points and disclosed 2,889 quarantined legacy rows.
+The reviewer could not access the in-app browser and made no fresh click-through
+claim; it inspected the running APIs, code paths, project records, gate status,
+and remote SHA.
+
+The private engineering alignment JSON was repaired and parses. Its source,
+contract, and artifact hashes match the saved final-alignment inputs and it
+truthfully records `request_coverage: blocked`. The global
+`engineering_gate.py verify` therefore fails with `alignment review
+request_coverage must be pass`; `engineering_gate.py check` fails with
+`missing evidence receipt`. No passing receipt was fabricated. The scoped
+five-check live-data ETL gate still passes for its keyless Google RSS, Yahoo
+RSS, GDELT, and Yahoo quote/chart scope; it does not prove classifier
+operation, broad live readiness, or source-specific model-use terms.
+
+At the gate review, local HEAD and the GitHub branch matched
+`e963ef45bf362eb20f93c8a4d6b425752c23d4d1`. This is the source checkpoint
+before the current documentation-only review corrections. Full operational
+completion remains blocked by missing direct OpenAI API access and account
+spend evidence, genuine Luna output and usage reconciliation, adequate
+prospective directional references, endpoint-specific terms, unreconciled
+historical delivery lineage, and absent hosted-scale and investor-value
+evidence. No demo or synthetic product data was added.

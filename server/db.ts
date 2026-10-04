@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { z } from "zod";
 import type {
   CollectorId,
@@ -25,11 +25,14 @@ import type {
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
 import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js";
+import { DEFAULT_STORAGE_LIMITS, StorageCapacity, StorageCapacityError, type StorageLimits, type StorageStatus } from "./storage-capacity.js";
+import { canonicalDatabasePath, DeskWriterLock, WriterAlreadyOwnedError } from "./writer-lock.js";
 
 // Historical simulation and unverified legacy rows stay in place for audit,
 // but only observations with an identified collector can enter live research
 // or current operational usage totals.
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
+const SQLITE_FULL = 13;
 const CATEGORICAL_BUCKET_MS = 15 * 60_000;
 const REAL_CATEGORICAL_FILTER = `m.collector NOT IN ('demo_simulation', 'legacy_unknown')
   AND COALESCE(m.engine, '') <> 'demo-sim'
@@ -91,8 +94,8 @@ function categoricalCounts(row?: Partial<CategoricalAggregateRow> | null): Categ
   return counts;
 }
 
-const SEC_OUTCOMES = new Set(["success", "empty", "failed", "invalid", "rate_limited"]);
-const SEC_REASONS = new Set(["primary_selected", "unique_exhibit_selected", "missing_exhibit", "ambiguous_exhibit", "invalid_exhibit_link", "primary_unavailable", "exhibit_unavailable", "unverified_event_link"]);
+const SEC_OUTCOMES = new Set(["success", "empty", "failed", "invalid", "rate_limited", "paused"]);
+const SEC_REASONS = new Set(["primary_selected", "unique_exhibit_selected", "missing_exhibit", "ambiguous_exhibit", "invalid_exhibit_link", "primary_unavailable", "exhibit_unavailable", "unverified_event_link", "storage_paused"]);
 function serializeSecDocumentContext(value: SecDocumentContext): string {
   if (value.version !== "sec-document-context/1" || !/^\d{1,10}$/.test(value.cik) || !/^\d{10}-\d{2}-\d{6}$/.test(value.accessionNo)
     || !Number.isSafeInteger(value.acceptedAt) || (value.filedAt != null && !Number.isSafeInteger(value.filedAt))
@@ -108,7 +111,7 @@ function serializeSecDocumentContext(value: SecDocumentContext): string {
       || (doc.retrievedAt != null && !Number.isSafeInteger(doc.retrievedAt))
       || (doc.bodyBytes != null && (!Number.isSafeInteger(doc.bodyBytes) || doc.bodyBytes < 0))
       || (doc.bodySha256 != null && !/^[a-f0-9]{64}$/.test(doc.bodySha256))
-      || (doc.errorCode != null && !/^(?:http_429|http_error|redirect_rejected|content_type|body_too_large|timeout|request_failed|invalid_primary_url)$/.test(doc.errorCode))) throw new Error("SEC document attempt is invalid");
+      || (doc.errorCode != null && !/^(?:http_429|http_error|redirect_rejected|content_type|body_too_large|timeout|request_failed|invalid_primary_url|storage_paused)$/.test(doc.errorCode))) throw new Error("SEC document attempt is invalid");
   }
   if (value.documents.length < 1 || value.documents[0]?.role !== "8k_primary"
     || value.documents[0]?.url !== value.primaryUrl
@@ -145,6 +148,19 @@ function processIsAlive(pid: number): boolean {
     return true;
   } catch (error) {
     return (error as { code?: string }).code === "EPERM";
+  }
+}
+
+function hasCurrentReadableSchema(db: DatabaseSync): boolean {
+  try {
+    const version = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+    if (version?.user_version !== 9) return false;
+    const objects = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name));
+    return ["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
+      "source_deliveries", "source_ingestions", "price_points", "alert_outbox", "desk_runtime_sessions"]
+      .every((name) => objects.has(name));
+  } catch {
+    return false;
   }
 }
 
@@ -402,7 +418,7 @@ export interface ScoreBucketCursor {
   snapshotKey: string;
 }
 
-export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed";
+export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed" | "history";
 
 export interface MentionRow {
   id: string;
@@ -559,7 +575,7 @@ export interface AlertDeliverySummary {
   createdAt: number;
   expiresAt: number;
   nextAttemptAt: number;
-  lastOutcome: "delivered" | "retry" | "failed" | "ambiguous" | "expired" | null;
+  lastOutcome: "delivered" | "retry" | "failed" | "ambiguous" | "expired" | "not_sent" | null;
   lastHttpStatus: number | null;
   lastAttemptAt: number | null;
   lastErrorCategory: string | null;
@@ -631,45 +647,175 @@ export class ScoreBucketSnapshotConflictError extends Error {
 export class Desk {
   private readonly db: DatabaseSync;
   private readonly runtimeId: string;
+  private readonly storage: StorageCapacity;
+  private readonly storageReadOnly: boolean;
+  private writerLock: DeskWriterLock | null = null;
   private readonly categoricalSnapshotSecret = randomBytes(32);
   private closed = false;
+  private storageEnforcementEnabled = false;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, storageLimits: Readonly<StorageLimits> = DEFAULT_STORAGE_LIMITS) {
     this.runtimeId = randomUUID();
     mkdirSync(dirname(dbPath), { recursive: true });
-    this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.db.exec(SCHEMA);
-    this.migrate();
-    this.db.prepare("INSERT INTO desk_runtime_sessions(id, pid, started_at) VALUES (?, ?, ?)")
-      .run(this.runtimeId, process.pid, Date.now());
-    this.recoverUnfinishedJevAttempts();
-    this.db.exec("PRAGMA user_version = 9");
+    // Locking, SQLite sidecars, and capacity accounting must all use the same
+    // physical database path, even when callers supply a symlink alias.
+    const canonicalPath = canonicalDatabasePath(dbPath);
+    this.storage = new StorageCapacity(canonicalPath, storageLimits);
+    let databaseExists = this.storage.hasDatabaseFile();
+    let currentSchema = false;
+    let startupPreflight: StorageStatus;
+    if (databaseExists) {
+      const probe = new DatabaseSync(canonicalPath, { readOnly: true });
+      try {
+        currentSchema = hasCurrentReadableSchema(probe);
+        startupPreflight = this.storage.preflight(!currentSchema, probe);
+      } finally {
+        probe.close();
+      }
+    } else {
+      // A brand-new empty database has no legacy data to migrate or rebuild.
+      // Keep the minimum-free-space and write-headroom reserve, but do not
+      // require room for the full configured database ceiling before the
+      // first useful run. Existing databases that need schema migration still
+      // use the larger startup reserve above.
+      startupPreflight = this.storage.preflight(false);
+    }
+    let openReadOnly = startupPreflight.state !== "ready";
+    if (!databaseExists && startupPreflight.state !== "ready") throw new StorageCapacityError(startupPreflight);
+    if (databaseExists && !currentSchema && openReadOnly) throw new StorageCapacityError(startupPreflight);
+
+    let writerPauseReason: string | null = null;
+    if (!openReadOnly) {
+      try {
+        this.writerLock = DeskWriterLock.acquire(canonicalPath);
+      } catch (error) {
+        if (!(error instanceof WriterAlreadyOwnedError)) throw error;
+        writerPauseReason = error.message;
+        openReadOnly = true;
+        // Another process may have created a new database after our first path check.
+        databaseExists = this.storage.hasDatabaseFile();
+        if (databaseExists) {
+          const probe = new DatabaseSync(canonicalPath, { readOnly: true });
+          try { currentSchema = hasCurrentReadableSchema(probe); }
+          finally { probe.close(); }
+        }
+        if (!databaseExists || !currentSchema) throw error;
+      }
+    }
+
+    this.storageReadOnly = openReadOnly;
+    let openedDb: DatabaseSync | null = null;
+    try {
+      openedDb = new DatabaseSync(canonicalPath, openReadOnly ? { readOnly: true } : {});
+      this.db = openedDb;
+      this.exec("PRAGMA foreign_keys = ON");
+      if (openReadOnly) {
+        this.storage.setReadOnlyReason(writerPauseReason ?? startupPreflight.reason
+          ?? "Database opened read-only because storage capacity could not be confirmed.",
+        writerPauseReason ? "capacity_paused" : startupPreflight.state);
+        const readableStatus = this.storage.status(this.db, true);
+        if (!hasCurrentReadableSchema(this.db)) throw new StorageCapacityError(readableStatus);
+        this.storageEnforcementEnabled = true;
+        return;
+      }
+      this.storage.configurePageLimit(this.db);
+      this.exec("PRAGMA journal_mode = WAL");
+      if (!currentSchema) {
+        this.exec(SCHEMA);
+        this.migrate();
+      }
+      this.prepare("INSERT INTO desk_runtime_sessions(id, pid, started_at) VALUES (?, ?, ?)")
+        .run(this.runtimeId, process.pid, Date.now());
+      this.recoverUnfinishedJevAttempts();
+      this.exec("PRAGMA user_version = 9");
+      this.storageEnforcementEnabled = true;
+    } catch (error) {
+      try { openedDb?.close(); } catch { /* preserve startup failure */ }
+      try { this.writerLock?.release(); } catch { /* preserve startup failure */ }
+      this.writerLock = null;
+      throw error;
+    }
+  }
+
+  private prepare(sql: string): StatementSync {
+    const statement = this.db.prepare(sql);
+    return new Proxy(statement, {
+      get: (target, property) => {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === "run" && typeof value === "function") {
+          return (...args: SQLInputValue[]) => {
+            if (this.storageEnforcementEnabled) this.storage.assertWriteAllowed(this.db, this.storageReadOnly);
+            try {
+              return Reflect.apply(value, target, args) as ReturnType<StatementSync["run"]>;
+            } catch (error) {
+              throw this.translateStorageError(error);
+            }
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as StatementSync;
+  }
+
+  private exec(sql: string): void {
+    if (this.storageEnforcementEnabled && !/^\s*(?:BEGIN(?:\s+IMMEDIATE)?|COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
+      this.storage.assertWriteAllowed(this.db, this.storageReadOnly);
+    }
+    try {
+      this.db.exec(sql);
+    } catch (error) {
+      throw this.translateStorageError(error);
+    }
+  }
+
+  private rollbackIfActive(): void {
+    if (this.db.isTransaction) this.exec("ROLLBACK");
+  }
+
+  private translateStorageError(error: unknown): unknown {
+    const sqliteError = error as { errcode?: number; code?: string; message?: string };
+    if (((sqliteError.errcode ?? -1) & 0xff) !== SQLITE_FULL && sqliteError.code !== "ERR_SQLITE_FULL") return error;
+    return new StorageCapacityError(this.storage.status(this.db, this.storageReadOnly));
+  }
+
+  storageCapacity(): StorageStatus {
+    return this.storage.status(this.db, this.storageReadOnly);
+  }
+
+  canStartExternalWork(): boolean {
+    return this.storage.status(this.db, this.storageReadOnly).canStartExternalWork;
+  }
+
+  externalRequestAllowed(): boolean {
+    return this.storage.status(this.db, this.storageReadOnly).canStartExternalWork;
+  }
+
+  prepareExternalWork(): boolean {
+    return this.storage.prepareExternalWork(this.db, this.storageReadOnly).canStartExternalWork;
   }
 
   /** Migrate the v1 combined table atomically, retaining it for audit/rollback. */
   private migrate(): void {
     const observationCols = new Set(
-      (this.db.prepare("PRAGMA table_info(source_observations)").all() as Array<{ name: string }>).map((row) => row.name),
+      (this.prepare("PRAGMA table_info(source_observations)").all() as Array<{ name: string }>).map((row) => row.name),
     );
     if (!observationCols.has("delivery_id")) {
-      this.db.exec("ALTER TABLE source_observations ADD COLUMN delivery_id TEXT REFERENCES source_deliveries(id)");
+      this.exec("ALTER TABLE source_observations ADD COLUMN delivery_id TEXT REFERENCES source_deliveries(id)");
     }
-    this.db.exec("CREATE INDEX IF NOT EXISTS observations_delivery ON source_observations(delivery_id)");
+    this.exec("CREATE INDEX IF NOT EXISTS observations_delivery ON source_observations(delivery_id)");
     const deliveryCols = new Set(
-      (this.db.prepare("PRAGMA table_info(source_deliveries)").all() as Array<{ name: string }>).map((row) => row.name),
+      (this.prepare("PRAGMA table_info(source_deliveries)").all() as Array<{ name: string }>).map((row) => row.name),
     );
     if (!deliveryCols.has("processing_required")) {
-      this.db.exec("ALTER TABLE source_deliveries ADD COLUMN processing_required INTEGER NOT NULL DEFAULT 0 CHECK (processing_required IN (0, 1))");
+      this.exec("ALTER TABLE source_deliveries ADD COLUMN processing_required INTEGER NOT NULL DEFAULT 0 CHECK (processing_required IN (0, 1))");
     }
-    if (!deliveryCols.has("sec_document_context_json")) this.db.exec("ALTER TABLE source_deliveries ADD COLUMN sec_document_context_json TEXT");
+    if (!deliveryCols.has("sec_document_context_json")) this.exec("ALTER TABLE source_deliveries ADD COLUMN sec_document_context_json TEXT");
     const jevAttemptCols = new Set(
-      (this.db.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name),
+      (this.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name),
     );
     if (!jevAttemptCols.has("runtime_id")) {
-      this.db.exec("ALTER TABLE jev_request_attempts ADD COLUMN runtime_id TEXT NOT NULL DEFAULT 'legacy-runtime'");
-      this.db.prepare("INSERT OR IGNORE INTO desk_runtime_sessions(id, pid, started_at, closed_at) VALUES ('legacy-runtime', 0, 0, 0)").run();
+      this.exec("ALTER TABLE jev_request_attempts ADD COLUMN runtime_id TEXT NOT NULL DEFAULT 'legacy-runtime'");
+      this.prepare("INSERT OR IGNORE INTO desk_runtime_sessions(id, pid, started_at, closed_at) VALUES ('legacy-runtime', 0, 0, 0)").run();
     }
 
     const attemptAdditions: Array<[string, string]> = [
@@ -679,23 +825,23 @@ export class Desk {
       ["max_output_tokens", "INTEGER NOT NULL DEFAULT 0"], ["budget_day", "TEXT"], ["schema_sha256", "TEXT"],
     ];
     for (const [name, ddl] of attemptAdditions) {
-      if (!jevAttemptCols.has(name)) this.db.exec(`ALTER TABLE jev_request_attempts ADD COLUMN ${name} ${ddl}`);
+      if (!jevAttemptCols.has(name)) this.exec(`ALTER TABLE jev_request_attempts ADD COLUMN ${name} ${ddl}`);
     }
-    const eventCols = new Set((this.db.prepare("PRAGMA table_info(jev_attempt_events)").all() as Array<{ name: string }>).map((r) => r.name));
+    const eventCols = new Set((this.prepare("PRAGMA table_info(jev_attempt_events)").all() as Array<{ name: string }>).map((r) => r.name));
     for (const [name, ddl] of [
       ["cached_input_tokens", "INTEGER"], ["cache_write_tokens", "INTEGER"], ["reasoning_tokens", "INTEGER"], ["total_tokens", "INTEGER"],
       ["response_id", "TEXT"], ["response_sha256", "TEXT"], ["estimated_cost_usd", "REAL"],
       ["response_service_tier", "TEXT"],
     ] as Array<[string, string]>) {
-      if (!eventCols.has(name)) this.db.exec(`ALTER TABLE jev_attempt_events ADD COLUMN ${name} ${ddl}`);
+      if (!eventCols.has(name)) this.exec(`ALTER TABLE jev_attempt_events ADD COLUMN ${name} ${ddl}`);
     }
-    const categoricalCols = new Set((this.db.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((r) => r.name));
+    const categoricalCols = new Set((this.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((r) => r.name));
     for (const [name, ddl] of [["requested_service_tier", "TEXT NOT NULL DEFAULT 'default'"], ["service_tier", "TEXT"]] as Array<[string, string]>) {
-      if (!categoricalCols.has(name)) this.db.exec(`ALTER TABLE categorical_classifications ADD COLUMN ${name} ${ddl}`);
+      if (!categoricalCols.has(name)) this.exec(`ALTER TABLE categorical_classifications ADD COLUMN ${name} ${ddl}`);
     }
 
     const priceCols = new Set(
-      (this.db.prepare("PRAGMA table_info(price_points)").all() as Array<{ name: string }>).map((r) => r.name),
+      (this.prepare("PRAGMA table_info(price_points)").all() as Array<{ name: string }>).map((r) => r.name),
     );
     const priceAdditions: Array<[string, string]> = [
       ["collector", "TEXT NOT NULL DEFAULT 'legacy_unknown'"],
@@ -705,24 +851,24 @@ export class Desk {
       ["delivery_id", "TEXT"],
     ];
     for (const [name, ddl] of priceAdditions) {
-      if (!priceCols.has(name)) this.db.exec(`ALTER TABLE price_points ADD COLUMN ${name} ${ddl}`);
+      if (!priceCols.has(name)) this.exec(`ALTER TABLE price_points ADD COLUMN ${name} ${ddl}`);
     }
 
     const companyCols = new Set(
-      (this.db.prepare("PRAGMA table_info(companies)").all() as Array<{ name: string }>).map(
+      (this.prepare("PRAGMA table_info(companies)").all() as Array<{ name: string }>).map(
         (r) => r.name,
       ),
     );
     if (!companyCols.has("ambiguous")) {
-      this.db.exec("ALTER TABLE companies ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0");
+      this.exec("ALTER TABLE companies ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0");
     }
 
-    const object = this.db.prepare("SELECT type FROM sqlite_master WHERE name = 'mentions'").get() as
+    const object = this.prepare("SELECT type FROM sqlite_master WHERE name = 'mentions'").get() as
       | { type: string }
       | undefined;
     if (object?.type === "table") {
       const mentionCols = new Set(
-        (this.db.prepare("PRAGMA table_info(mentions)").all() as Array<{ name: string }>).map((r) => r.name),
+        (this.prepare("PRAGMA table_info(mentions)").all() as Array<{ name: string }>).map((r) => r.name),
       );
       const additions: Array<[string, string]> = [
         ["event_type", "TEXT"], ["magnitude", "REAL"], ["surprise", "REAL"],
@@ -730,14 +876,14 @@ export class Desk {
         ["scoped", "INTEGER NOT NULL DEFAULT 0"], ["filed_at", "INTEGER"],
       ];
       for (const [name, ddl] of additions) {
-        if (!mentionCols.has(name)) this.db.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
+        if (!mentionCols.has(name)) this.exec(`ALTER TABLE mentions ADD COLUMN ${name} ${ddl}`);
       }
 
-      this.db.exec("BEGIN IMMEDIATE");
+      this.exec("BEGIN IMMEDIATE");
       try {
-        this.db.exec("ALTER TABLE mentions RENAME TO mentions_legacy_v1");
-        const legacy = this.db.prepare("SELECT * FROM mentions_legacy_v1 ORDER BY id").all() as unknown as Array<Record<string, unknown>>;
-        const insertObservation = this.db.prepare(
+        this.exec("ALTER TABLE mentions RENAME TO mentions_legacy_v1");
+        const legacy = this.prepare("SELECT * FROM mentions_legacy_v1 ORDER BY id").all() as unknown as Array<Record<string, unknown>>;
+        const insertObservation = this.prepare(
           `INSERT INTO source_observations
            (id, company_id, identity_key, revision_digest, collector, channel, publisher_name,
             publisher_domain, source_item_id, source_name, source_url, source_kind, source_tier,
@@ -745,7 +891,7 @@ export class Desk {
             time_basis, legacy_published_at, filed_at, scoped, response_digest, adapter_version)
            VALUES (?, ?, ?, 'legacy-v1', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, 'legacy-v1')`,
         );
-        const insertJudgment = this.db.prepare(
+        const insertJudgment = this.prepare(
           `INSERT INTO jev_judgments
            (id, observation_id, status, sentiment, confidence, p_pos, p_neu, p_neg, about, material,
             novel, credible, investor_relevant, event_type, takeaway, magnitude, surprise, event_score,
@@ -787,40 +933,40 @@ export class Desk {
           insertJudgment.run(...judgmentValues);
         }
         this.createMentionsView();
-        this.db.exec("PRAGMA user_version = 9");
-        this.db.exec("COMMIT");
+        this.exec("PRAGMA user_version = 9");
+        this.exec("COMMIT");
       } catch (err) {
-        this.db.exec("ROLLBACK");
+        this.rollbackIfActive();
         throw err;
       }
       return;
     }
     const judgmentCols = new Set(
-      (this.db.prepare("PRAGMA table_info(jev_judgments)").all() as Array<{ name: string }>).map((r) => r.name),
+      (this.prepare("PRAGMA table_info(jev_judgments)").all() as Array<{ name: string }>).map((r) => r.name),
     );
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
       if (!judgmentCols.has("score_attempts")) {
-        this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_attempts INTEGER NOT NULL DEFAULT 0");
+        this.exec("ALTER TABLE jev_judgments ADD COLUMN score_attempts INTEGER NOT NULL DEFAULT 0");
       }
       if (!judgmentCols.has("score_retry_at")) {
-        this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_retry_at INTEGER");
+        this.exec("ALTER TABLE jev_judgments ADD COLUMN score_retry_at INTEGER");
       }
       if (!judgmentCols.has("score_usage_check_required")) {
-        this.db.exec("ALTER TABLE jev_judgments ADD COLUMN score_usage_check_required INTEGER NOT NULL DEFAULT 0");
+        this.exec("ALTER TABLE jev_judgments ADD COLUMN score_usage_check_required INTEGER NOT NULL DEFAULT 0");
       }
-      if (object?.type === "view") this.db.exec("DROP VIEW mentions");
+      if (object?.type === "view") this.exec("DROP VIEW mentions");
       this.createMentionsView();
-      this.db.exec("PRAGMA user_version = 9");
-      this.db.exec("COMMIT");
+      this.exec("PRAGMA user_version = 9");
+      this.exec("COMMIT");
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
 
   private createMentionsView(): void {
-    this.db.exec(`CREATE VIEW mentions AS
+    this.exec(`CREATE VIEW mentions AS
       SELECT o.id, o.company_id, o.source_name, o.source_url, o.source_kind, o.source_tier,
         o.title, o.snippet, o.publisher_published_at AS published_at, o.publisher_published_at,
         o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector, o.delivery_id,
@@ -852,15 +998,15 @@ export class Desk {
   }
 
   private recoverUnfinishedJevAttempts(): void {
-    const unfinished = this.db.prepare(`SELECT a.id, a.observation_id, a.attempt_number, a.provider, a.budget_day, s.pid, s.closed_at,
-        a.reserved_cost_micros, a.max_daily_cost_micros,
+    const unfinished = this.prepare(`SELECT a.id, a.observation_id, a.attempt_number, a.provider, a.budget_day, s.pid, s.closed_at,
+        a.reserved_cost_micros, a.max_daily_cost_micros, a.request_bytes,
         EXISTS(SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') AS dispatch_started
       FROM jev_request_attempts a LEFT JOIN desk_runtime_sessions s ON s.id = a.runtime_id
       WHERE NOT EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response', 'rejected', 'unknown', 'not_sent'))
       ORDER BY a.reserved_at`).all() as Array<{ id: string; observation_id: string; attempt_number: number; provider: ModelProvider;
-        budget_day: string | null; reserved_cost_micros: number; max_daily_cost_micros: number; pid: number | null; closed_at: number | null; dispatch_started: number }>;
+        budget_day: string | null; reserved_cost_micros: number; max_daily_cost_micros: number; request_bytes: number; pid: number | null; closed_at: number | null; dispatch_started: number }>;
     const abandoned = unfinished.filter((attempt) => attempt.closed_at != null || !processIsAlive(attempt.pid ?? 0));
-    const scoring = this.db.prepare(`SELECT j.observation_id, j.score_attempts, a.id AS attempt_id, a.runtime_id, s.pid, s.closed_at,
+    const scoring = this.prepare(`SELECT j.observation_id, j.score_attempts, a.id AS attempt_id, a.runtime_id, s.pid, s.closed_at,
         (SELECT e.event_type FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type IN ('response','rejected','unknown','not_sent') LIMIT 1) AS terminal_outcome,
         (SELECT e.event_type FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type='dispatch_intent' LIMIT 1) AS dispatch_event
       FROM jev_judgments j
@@ -872,27 +1018,28 @@ export class Desk {
       }>;
     const recoverableScoring = scoring.filter((row) => !row.attempt_id || row.closed_at != null || !processIsAlive(row.pid ?? 0));
     if (abandoned.length === 0 && recoverableScoring.length === 0) return;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const insert = this.db.prepare(`INSERT OR IGNORE INTO jev_attempt_events
+      const insert = this.prepare(`INSERT OR IGNORE INTO jev_attempt_events
         (id, attempt_id, event_type, occurred_at, error_category) VALUES (?, ?, ?, ?, ?)`);
       const now = Date.now();
       for (const attempt of abandoned) {
         const wasDispatched = attempt.dispatch_started === 1;
         insert.run(randomUUID(), attempt.id, wasDispatched ? "unknown" : "not_sent", now,
           wasDispatched ? "interrupted_after_dispatch" : "interrupted_before_dispatch");
+        if (!wasDispatched) this.releaseScoringReservation(attempt);
         if (wasDispatched && attempt.provider === "openai_luna" && attempt.budget_day) {
-          this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
+          this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
             .run(`openai:budget:${attempt.budget_day}:closed`);
         }
       }
-      const fail = this.db.prepare(`UPDATE jev_judgments SET status='failed', score_retry_at=NULL,
+      const fail = this.prepare(`UPDATE jev_judgments SET status='failed', score_retry_at=NULL,
         score_usage_check_required=?, score_error=? WHERE observation_id=? AND status='scoring' AND score_attempts=?`);
       for (const row of recoverableScoring) {
         const attempt = unfinished.find((candidate) => candidate.id === row.attempt_id);
         const outcome = row.terminal_outcome ?? (attempt ? attempt.dispatch_started === 1 ? "unknown" : "not_sent" : "unknown");
         if (outcome === "unknown" && attempt?.provider === "openai_luna" && attempt.budget_day) {
-          this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
+          this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
             .run(`openai:budget:${attempt.budget_day}:closed`);
         }
         const needsUsageReview = outcome === "response" || outcome === "unknown" ? 1 : 0;
@@ -905,15 +1052,46 @@ export class Desk {
               : "Scoring was interrupted after dispatch; provider outcome is unknown. Review provider usage before retrying.";
         fail.run(needsUsageReview, errorMessage, row.observation_id, row.score_attempts);
       }
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
 
+  private releaseScoringReservation(attempt: {
+    provider: ModelProvider;
+    budget_day: string | null;
+    request_bytes: number;
+    reserved_cost_micros: number;
+  }): void {
+    if (!attempt.budget_day) return;
+    const prefix = `${attempt.provider === "openai_luna" ? "openai" : "jev"}:budget:${attempt.budget_day}`;
+    const reservations: Array<[string, number]> = [
+      [`${prefix}:requests`, 1],
+      [`${prefix}:request-bytes`, Number(attempt.request_bytes)],
+      ...(attempt.provider === "openai_luna"
+        ? [[`${prefix}:cost-micros`, Number(attempt.reserved_cost_micros)] as [string, number]]
+        : []),
+    ];
+    const currentValues = reservations.map(([key]) => Number(this.getKv(key) ?? "0"));
+    const valid = reservations.every(([, amount], index) => Number.isSafeInteger(amount) && amount >= 0
+      && Number.isSafeInteger(currentValues[index]!) && currentValues[index]! >= amount);
+    if (!valid) {
+      this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
+        .run(`${prefix}:closed`);
+      return;
+    }
+    for (let index = 0; index < reservations.length; index += 1) {
+      const [key, amount] = reservations[index]!;
+      this.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(key, String(currentValues[index]! - amount));
+    }
+  }
+
   seedCompanies(companies: Company[]): void {
-    const upsert = this.db.prepare(
+    if (this.storageReadOnly) return;
+    const upsert = this.prepare(
       `INSERT INTO companies (id, name, ticker, sector, aliases, color, ambiguous)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name=excluded.name, ticker=excluded.ticker,
@@ -925,7 +1103,7 @@ export class Desk {
   }
 
   companies(): Company[] {
-    const rows = this.db.prepare("SELECT * FROM companies ORDER BY ticker").all() as Array<{
+    const rows = this.prepare("SELECT * FROM companies ORDER BY ticker").all() as Array<{
       id: string; name: string; ticker: string; sector: string; aliases: string; color: string; ambiguous: number;
     }>;
     return rows.map((r) => ({
@@ -950,7 +1128,7 @@ export class Desk {
     const adapterVersion = m.adapterVersion ?? `${collector}/1`;
     const deliveryId = m.deliveryId ?? null;
     if (deliveryId != null) {
-      const delivery = this.db.prepare(
+      const delivery = this.prepare(
         `SELECT collector, company_id, adapter_version, result, sec_document_context_json FROM source_deliveries WHERE id = ?`,
       ).get(deliveryId) as { collector: string; company_id: string | null; adapter_version: string; result: string; sec_document_context_json: string | null } | undefined;
       if (!delivery) throw new Error("Source observation references a missing delivery receipt");
@@ -982,9 +1160,9 @@ export class Desk {
     const timeBasis: TimeBasis = publisherPublishedAt != null
       ? "publisher_declared"
       : providerObservedAt != null ? "provider_observed" : "unknown";
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const res = this.db.prepare(
+      const res = this.prepare(
         `INSERT OR IGNORE INTO source_observations
          (id, company_id, identity_key, revision_digest, collector, channel, publisher_name,
           publisher_domain, source_item_id, source_name, source_url, source_kind, source_tier,
@@ -998,13 +1176,13 @@ export class Desk {
         m.scoped ? 1 : 0, m.responseDigest ?? null, adapterVersion, deliveryId,
       );
       if (Number(res.changes) > 0) {
-        this.db.prepare("INSERT INTO jev_judgments (id, observation_id, status) VALUES (?, ?, 'pending')")
+        this.prepare("INSERT INTO jev_judgments (id, observation_id, status) VALUES (?, ?, 'pending')")
           .run(observationId, observationId);
       }
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
       return { inserted: Number(res.changes) > 0, observationId };
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
@@ -1015,20 +1193,19 @@ export class Desk {
   }
 
   mentionRow(id: string): MentionRow | undefined {
-    return this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined;
+    return this.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined;
   }
 
   /** All-time eligible research history, using the same exclusion policy as the Desk APIs. */
   realObservationCount(): number {
-    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM mentions WHERE ${REAL_MENTION_FILTER}`).get() as { count: number };
+    const row = this.prepare(`SELECT COUNT(*) AS count FROM mentions WHERE ${REAL_MENTION_FILTER}`).get() as { count: number };
     return Number(row.count);
   }
 
   markScored(id: string, s: MentionScore, exclude: boolean, alert?: AlertIntent, receipt?: JevAttemptReceipt): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-    this.db
-      .prepare(
+    this.prepare(
         `UPDATE jev_judgments SET
            status = ?, sentiment = ?, confidence = ?, p_pos = ?, p_neu = ?, p_neg = ?,
            about = ?, material = ?, novel = ?, credible = ?, investor_relevant = ?, event_type = ?, takeaway = ?, magnitude = ?,
@@ -1068,51 +1245,51 @@ export class Desk {
         id,
       );
     if (receipt) this.appendJevAttemptReceipt(receipt);
-    if (alert && !exclude) this.db.prepare(`INSERT OR IGNORE INTO alert_outbox
+    if (alert && !exclude) this.prepare(`INSERT OR IGNORE INTO alert_outbox
       (id, observation_id, rule_version, payload, policy, destination_fingerprint, created_at, expires_at, state, next_attempt_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
       .run(randomUUID(), alert.observationId, alert.ruleVersion, alert.payload, alert.policy, alert.destinationFingerprint,
         alert.createdAt, alert.expiresAt, alert.createdAt);
-    this.db.exec("COMMIT");
-    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+    this.exec("COMMIT");
+    } catch (err) { this.rollbackIfActive(); throw err; }
   }
 
   claimAlert(now: number, destinationFingerprint: string, leaseMs: number, maxAttempts: number): AlertClaim | null {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("UPDATE alert_outbox SET state='paused', owner_token=NULL, lease_until=NULL WHERE destination_fingerprint<>? AND state IN ('pending','retrying')").run(destinationFingerprint);
-      this.db.prepare("UPDATE alert_outbox SET state='pending', next_attempt_at=?, owner_token=NULL, lease_until=NULL WHERE destination_fingerprint=? AND state='paused'").run(now, destinationFingerprint);
-      const abandoned = this.db.prepare(`SELECT a.id AS attempt_id, a.alert_id, o.expires_at
+      this.prepare("UPDATE alert_outbox SET state='paused', owner_token=NULL, lease_until=NULL WHERE destination_fingerprint<>? AND state IN ('pending','retrying')").run(destinationFingerprint);
+      this.prepare("UPDATE alert_outbox SET state='pending', next_attempt_at=?, owner_token=NULL, lease_until=NULL WHERE destination_fingerprint=? AND state='paused'").run(now, destinationFingerprint);
+      const abandoned = this.prepare(`SELECT a.id AS attempt_id, a.alert_id, o.expires_at
         FROM alert_attempts a JOIN alert_outbox o ON o.id=a.alert_id
         LEFT JOIN alert_receipts r ON r.attempt_id=a.id
         WHERE o.state='sending' AND a.lease_until<=? AND r.id IS NULL`).all(now) as Array<{
           attempt_id: string; alert_id: string; expires_at: number;
         }>;
-      const recordAbandoned = this.db.prepare(`INSERT OR IGNORE INTO alert_receipts
+      const recordAbandoned = this.prepare(`INSERT OR IGNORE INTO alert_receipts
         (id, alert_id, attempt_id, completed_at, outcome, http_status) VALUES (?, ?, ?, ?, ?, NULL)`);
       for (const attempt of abandoned) {
         recordAbandoned.run(randomUUID(), attempt.alert_id, attempt.attempt_id, now,
           now >= attempt.expires_at ? "expired" : "ambiguous");
       }
-      this.db.prepare("UPDATE alert_outbox SET state='expired', owner_token=NULL, lease_until=NULL WHERE expires_at <= ? AND state IN ('pending','sending','retrying')").run(now);
-      this.db.prepare(`UPDATE alert_outbox SET
+      this.prepare("UPDATE alert_outbox SET state='expired', owner_token=NULL, lease_until=NULL WHERE expires_at <= ? AND state IN ('pending','sending','retrying')").run(now);
+      this.prepare(`UPDATE alert_outbox SET
         state=CASE WHEN attempts>=? THEN 'failed' ELSE 'retrying' END,
         owner_token=NULL, lease_until=NULL,
         next_attempt_at=CASE WHEN attempts>=? THEN next_attempt_at ELSE ? END
         WHERE state='sending' AND lease_until<=? AND expires_at>?`).run(maxAttempts, maxAttempts, now, now, now);
-      const row = this.db.prepare(`SELECT * FROM alert_outbox WHERE destination_fingerprint=? AND state IN ('pending','retrying')
+      const row = this.prepare(`SELECT * FROM alert_outbox WHERE destination_fingerprint=? AND state IN ('pending','retrying')
         AND next_attempt_at<=? AND expires_at>? AND attempts<? ORDER BY created_at LIMIT 1`).get(destinationFingerprint, now, now, maxAttempts) as any;
-      if (!row) { this.db.exec("COMMIT"); return null; }
+      if (!row) { this.exec("COMMIT"); return null; }
       const token = randomUUID(), attemptId = randomUUID(), leaseUntil = Math.min(now + leaseMs, row.expires_at);
-      const upd = this.db.prepare(`UPDATE alert_outbox SET state='sending', attempts=attempts+1, owner_token=?, lease_until=? WHERE id=? AND state IN ('pending','retrying')`).run(token, leaseUntil, row.id);
-      if (!Number(upd.changes)) { this.db.exec("COMMIT"); return null; }
-      this.db.prepare("INSERT INTO alert_attempts(id, alert_id, claimed_at, lease_until) VALUES (?, ?, ?, ?)").run(attemptId, row.id, now, leaseUntil);
-      this.db.exec("COMMIT"); return { id: attemptId, alertId: row.id, payload: row.payload, attempt: row.attempts + 1, expiresAt: row.expires_at, token };
-    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+      const upd = this.prepare(`UPDATE alert_outbox SET state='sending', attempts=attempts+1, owner_token=?, lease_until=? WHERE id=? AND state IN ('pending','retrying')`).run(token, leaseUntil, row.id);
+      if (!Number(upd.changes)) { this.exec("COMMIT"); return null; }
+      this.prepare("INSERT INTO alert_attempts(id, alert_id, claimed_at, lease_until) VALUES (?, ?, ?, ?)").run(attemptId, row.id, now, leaseUntil);
+      this.exec("COMMIT"); return { id: attemptId, alertId: row.id, payload: row.payload, attempt: row.attempts + 1, expiresAt: row.expires_at, token };
+    } catch (err) { this.rollbackIfActive(); throw err; }
   }
 
   nextAlertDispatchAt(now: number, destinationFingerprint: string, maxAttempts: number): number | null {
-    const row = this.db.prepare(`SELECT MIN(
+    const row = this.prepare(`SELECT MIN(
         CASE WHEN state='sending'
           THEN MIN(COALESCE(lease_until, next_attempt_at), expires_at)
           ELSE MIN(next_attempt_at, expires_at)
@@ -1125,21 +1302,37 @@ export class Desk {
     return row.due_at == null ? null : Number(row.due_at);
   }
   alertClaimValid(claim: AlertClaim, now: number): boolean {
-    const row = this.db.prepare("SELECT state, owner_token, expires_at, lease_until FROM alert_outbox WHERE id=?").get(claim.alertId) as any;
+    const row = this.prepare("SELECT state, owner_token, expires_at, lease_until FROM alert_outbox WHERE id=?").get(claim.alertId) as any;
     return !!row && row.state === 'sending' && row.owner_token === claim.token && row.expires_at > now && row.lease_until > now;
   }
 
-  completeAlert(claim: AlertClaim, outcome: 'delivered'|'retry'|'failed'|'ambiguous'|'expired', now: number, httpStatus: number|null, errorCategory: string|null, retryAt: number): boolean {
-    this.db.exec("BEGIN IMMEDIATE");
+  /** Record a known-not-sent webhook pause without spending a delivery attempt. */
+  deferAlertBeforeDispatch(claim: AlertClaim, now: number, retryAt: number): boolean {
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const row = this.db.prepare("SELECT state, owner_token, expires_at, attempts FROM alert_outbox WHERE id=?").get(claim.alertId) as any;
-      if (!row || row.state !== 'sending' || row.owner_token !== claim.token) { this.db.exec("COMMIT"); return false; }
+      const row = this.prepare("SELECT state, owner_token, expires_at FROM alert_outbox WHERE id=?").get(claim.alertId) as any;
+      if (!row || row.state !== "sending" || row.owner_token !== claim.token) { this.exec("COMMIT"); return false; }
+      const outcome = now >= row.expires_at ? "expired" : "not_sent";
+      this.prepare("INSERT INTO alert_receipts(id, alert_id, attempt_id, completed_at, outcome, http_status) VALUES (?, ?, ?, ?, ?, NULL)")
+        .run(randomUUID(), claim.alertId, claim.id, now, outcome);
+      this.prepare(`UPDATE alert_outbox SET state=?, attempts=MAX(0, attempts-1), owner_token=NULL,
+        lease_until=NULL, next_attempt_at=?, last_error_category=? WHERE id=? AND owner_token=?`)
+        .run(outcome === "expired" ? "expired" : "pending", retryAt, "storage_paused", claim.alertId, claim.token);
+      this.exec("COMMIT"); return true;
+    } catch (err) { this.rollbackIfActive(); throw err; }
+  }
+
+  completeAlert(claim: AlertClaim, outcome: 'delivered'|'retry'|'failed'|'ambiguous'|'expired', now: number, httpStatus: number|null, errorCategory: string|null, retryAt: number): boolean {
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.prepare("SELECT state, owner_token, expires_at, attempts FROM alert_outbox WHERE id=?").get(claim.alertId) as any;
+      if (!row || row.state !== 'sending' || row.owner_token !== claim.token) { this.exec("COMMIT"); return false; }
       const final = now >= row.expires_at ? 'expired' : outcome === 'delivered' ? 'delivered' : (outcome === 'retry' || outcome === 'ambiguous') && row.attempts < 5 ? 'retrying' : 'failed';
-      this.db.prepare("INSERT INTO alert_receipts(id, alert_id, attempt_id, completed_at, outcome, http_status) VALUES (?, ?, ?, ?, ?, ?)").run(randomUUID(), claim.alertId, claim.id, now, now >= row.expires_at ? 'expired' : outcome, httpStatus);
-      this.db.prepare("UPDATE alert_outbox SET state=?, owner_token=NULL, lease_until=NULL, next_attempt_at=?, last_error_category=? WHERE id=? AND owner_token=?")
+      this.prepare("INSERT INTO alert_receipts(id, alert_id, attempt_id, completed_at, outcome, http_status) VALUES (?, ?, ?, ?, ?, ?)").run(randomUUID(), claim.alertId, claim.id, now, now >= row.expires_at ? 'expired' : outcome, httpStatus);
+      this.prepare("UPDATE alert_outbox SET state=?, owner_token=NULL, lease_until=NULL, next_attempt_at=?, last_error_category=? WHERE id=? AND owner_token=?")
         .run(final, retryAt, errorCategory, claim.alertId, claim.token);
-      this.db.exec("COMMIT"); return true;
-    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+      this.exec("COMMIT"); return true;
+    } catch (err) { this.rollbackIfActive(); throw err; }
   }
 
   alertDeliverySummary(limit = 10): AlertDeliverySummary[] {
@@ -1152,7 +1345,7 @@ export class Desk {
     const cursorClause = cursor ? `WHERE (${priority}) > ? OR ((${priority}) = ? AND
       (o.created_at < ? OR (o.created_at = ? AND o.id < ?)))` : "";
     const cursorValues = cursor ? [cursor.priority, cursor.priority, cursor.createdAt, cursor.createdAt, cursor.alertId] : [];
-    const rows = this.db.prepare(`SELECT o.id AS alert_id, (${priority}) AS priority, o.created_at AS cursor_created_at,
+    const rows = this.prepare(`SELECT o.id AS alert_id, (${priority}) AS priority, o.created_at AS cursor_created_at,
         o.observation_id, m.company_id, c.ticker, m.title, o.state, o.attempts,
         o.created_at, o.expires_at, o.next_attempt_at, o.last_error_category,
         (SELECT r.outcome FROM alert_receipts r WHERE r.alert_id=o.id ORDER BY r.completed_at DESC, r.id DESC LIMIT 1) AS last_outcome,
@@ -1183,7 +1376,7 @@ export class Desk {
   }
 
   alertDeliveryCounts(): AlertDeliveryCounts {
-    const rows = this.db.prepare(`SELECT state, COUNT(*) AS count FROM alert_outbox
+    const rows = this.prepare(`SELECT state, COUNT(*) AS count FROM alert_outbox
       WHERE state IN ('pending','sending','retrying','failed','paused') GROUP BY state`).all() as Array<{ state: string; count: number }>;
     const counts: AlertDeliveryCounts = { pending: 0, sending: 0, retrying: 0, failed: 0, paused: 0 };
     for (const row of rows) if (Object.hasOwn(counts, row.state)) counts[row.state as keyof AlertDeliveryCounts] = Number(row.count);
@@ -1191,51 +1384,58 @@ export class Desk {
   }
 
   markFailed(id: string, error: string, usageCheckRequired: boolean): void {
-    this.db
-      .prepare("UPDATE jev_judgments SET status = 'failed', score_error = ?, score_retry_at = NULL, score_usage_check_required = ? WHERE observation_id = ? AND status IN ('pending', 'scoring')")
+    this.prepare("UPDATE jev_judgments SET status = 'failed', score_error = ?, score_retry_at = NULL, score_usage_check_required = ? WHERE observation_id = ? AND status IN ('pending', 'scoring')")
       .run(error.slice(0, 500), usageCheckRequired ? 1 : 0, id);
   }
 
   markRetrying(id: string, error: string, retryAt: number): void {
-    this.db.prepare(
+    this.prepare(
       "UPDATE jev_judgments SET status = 'retrying', score_error = ?, score_retry_at = ?, score_usage_check_required = 0 WHERE observation_id = ? AND status = 'scoring'",
     ).run(error.slice(0, 500), retryAt, id);
   }
 
   requeueFailed(id: string, reviewedProviderUsage: boolean): "queued" | "usage_review_required" | "not_retryable" {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const row = retryRowSchema.safeParse(this.db.prepare(
+      const row = retryRowSchema.safeParse(this.prepare(
         `SELECT status, score_usage_check_required, score_attempts FROM mentions
          WHERE id = ? AND ${REAL_MENTION_FILTER}`,
       ).get(id));
       if (!row.success || row.data.status !== "failed") {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return "not_retryable";
       }
-      const usageReviewRequired = row.data.score_usage_check_required === 1 || row.data.score_attempts > 0;
+      const latestOutcome = row.data.score_attempts > 0
+        ? (this.prepare(`SELECT e.event_type AS outcome FROM jev_request_attempts a
+            JOIN jev_attempt_events e ON e.attempt_id=a.id
+            WHERE a.observation_id=? AND a.attempt_number=?
+              AND e.event_type IN ('response','rejected','unknown','not_sent')
+            LIMIT 1`).get(id, row.data.score_attempts) as { outcome: string } | undefined)?.outcome
+        : undefined;
+      const knownUnsent = latestOutcome === "not_sent";
+      const usageReviewRequired = row.data.score_usage_check_required === 1 || row.data.score_attempts > 0 && !knownUnsent;
       if (usageReviewRequired && !reviewedProviderUsage) {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return "usage_review_required";
       }
-      const result = this.db.prepare(
+      const result = this.prepare(
         `UPDATE jev_judgments SET status = 'pending', score_error = NULL,
            score_retry_at = NULL, score_usage_check_required = 0
          WHERE observation_id = ? AND status = 'failed'
            AND observation_id IN (SELECT id FROM mentions WHERE ${REAL_MENTION_FILTER})`,
       ).run(id);
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
       return Number(result.changes) === 1 ? "queued" : "not_retryable";
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
 
   claimForScoring(id: string, now: number): MentionRow | undefined {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const result = this.db.prepare(
+      const result = this.prepare(
         `UPDATE jev_judgments SET status = 'scoring', score_attempts = score_attempts + 1,
            score_retry_at = NULL, score_error = NULL, score_usage_check_required = 0
          WHERE observation_id = ? AND observation_id IN (
@@ -1243,12 +1443,12 @@ export class Desk {
          ) AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`,
       ).run(id, now);
       const row = Number(result.changes) === 1
-        ? this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined
+        ? this.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined
         : undefined;
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
       return row;
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
@@ -1293,27 +1493,27 @@ export class Desk {
     const bytesKey = `${budgetPrefix}:${input.utcDay}:request-bytes`;
     const costKey = `${budgetPrefix}:${input.utcDay}:cost-micros`;
     const closedKey = `${budgetPrefix}:${input.utcDay}:closed`;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const candidate = this.db.prepare(`SELECT id FROM mentions
+      const candidate = this.prepare(`SELECT id FROM mentions
         WHERE id = ? AND ${REAL_MENTION_FILTER}
           AND collector IN (${collectorSlots})
           AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`)
         .get(input.id, ...input.allowedCollectors, input.now);
       if (!candidate) {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return { kind: "not_claimed" };
       }
-      const closed = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(closedKey) as
+      const closed = this.prepare("SELECT value FROM kv WHERE key = ?").get(closedKey) as
         | { value: string }
         | undefined;
       if (closed && closed.value !== "0") {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return { kind: "budget_exhausted" };
       }
 
       const readCounter = (key: string): number | null => {
-        const row = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(key) as
+        const row = this.prepare("SELECT value FROM kv WHERE key = ?").get(key) as
           | { value: string }
           | undefined;
         if (!row) return 0;
@@ -1323,17 +1523,17 @@ export class Desk {
       const requests = readCounter(requestKey);
       const requestBytes = readCounter(bytesKey);
       if (requests == null || requestBytes == null || requests + 1 > input.maxRequests) {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return { kind: "budget_exhausted" };
       }
       if (requestBytes + input.requestBytes > input.maxRequestBytes) {
-        this.db.prepare(
+        this.prepare(
           "INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'",
         ).run(closedKey);
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return { kind: "budget_exhausted" };
       }
-      const writeCounter = this.db.prepare(
+      const writeCounter = this.prepare(
         "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       );
       let costMicros = 0;
@@ -1341,14 +1541,14 @@ export class Desk {
         const usedCost = readCounter(costKey);
         costMicros = input.reservedCostMicros!;
         if (usedCost == null || usedCost + costMicros > input.maxDailyCostMicros!) {
-          this.db.exec("COMMIT");
+          this.exec("COMMIT");
           return { kind: "budget_exhausted" };
         }
         writeCounter.run(costKey, String(usedCost + costMicros));
       }
       writeCounter.run(requestKey, String(requests + 1));
       writeCounter.run(bytesKey, String(requestBytes + input.requestBytes));
-      const result = this.db.prepare(`UPDATE jev_judgments SET status = 'scoring',
+      const result = this.prepare(`UPDATE jev_judgments SET status = 'scoring',
           score_attempts = score_attempts + 1, score_retry_at = NULL, score_error = NULL,
           score_usage_check_required = 0
         WHERE observation_id = ? AND observation_id IN (
@@ -1357,80 +1557,81 @@ export class Desk {
         ) AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))`)
         .run(input.id, ...input.allowedCollectors, input.now);
       if (Number(result.changes) !== 1) {
-        this.db.exec("ROLLBACK");
+        this.rollbackIfActive();
         return { kind: "not_claimed" };
       }
-      const row = this.db.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`)
+      const row = this.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`)
         .get(input.id) as MentionRow | undefined;
       if (!row) {
-        this.db.exec("ROLLBACK");
+        this.rollbackIfActive();
         return { kind: "not_claimed" };
       }
       const attemptId = randomUUID();
-      this.db.prepare(`INSERT INTO jev_request_attempts
+      this.prepare(`INSERT INTO jev_request_attempts
         (id, observation_id, runtime_id, attempt_number, request_sha256, request_bytes, requested_model, rubric_sha, reserved_at, provider, reserved_cost_micros,
          requested_service_tier, max_daily_cost_micros, max_output_tokens, budget_day, schema_sha256)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(attemptId, input.id, this.runtimeId, row.score_attempts, input.requestSha256, input.requestBytes, input.requestedModel.trim(), input.rubricSha256, input.now, provider, costMicros,
           input.requestedServiceTier ?? null, input.maxDailyCostMicros ?? 0, input.maxOutputTokens ?? 0, input.utcDay, input.schemaSha256 ?? null);
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
       return { kind: "claimed", row, attemptId };
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
 
   recordJevDispatchIntent(attemptId: string, occurredAt: number): boolean {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const attempt = this.db.prepare(`SELECT a.observation_id, a.attempt_number, j.status, j.score_attempts
+      const attempt = this.prepare(`SELECT a.observation_id, a.attempt_number, j.status, j.score_attempts
         FROM jev_request_attempts a JOIN jev_judgments j ON j.observation_id = a.observation_id WHERE a.id = ?`).get(attemptId) as
         | { observation_id: string; attempt_number: number; status: string; score_attempts: number }
         | undefined;
       if (!attempt || attempt.status !== "scoring" || attempt.attempt_number !== attempt.score_attempts) {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return false;
       }
-      const alreadyStarted = this.db.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(attemptId);
-      const alreadyFinished = this.db.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type IN ('response','rejected','unknown','not_sent')").get(attemptId);
+      const alreadyStarted = this.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(attemptId);
+      const alreadyFinished = this.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type IN ('response','rejected','unknown','not_sent')").get(attemptId);
       if (alreadyStarted || alreadyFinished) {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return false;
       }
-      this.db.prepare("INSERT INTO jev_attempt_events(id, attempt_id, event_type, occurred_at) VALUES (?, ?, 'dispatch_intent', ?)")
+      this.prepare("INSERT INTO jev_attempt_events(id, attempt_id, event_type, occurred_at) VALUES (?, ?, 'dispatch_intent', ?)")
         .run(randomUUID(), attemptId, occurredAt);
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
       return true;
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
 
   recordJevAttemptReceipt(receipt: JevAttemptReceipt): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
       this.appendJevAttemptReceipt(receipt);
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
 
   private appendJevAttemptReceipt(receipt: JevAttemptReceipt): void {
-    const attempt = this.db.prepare(`SELECT provider, reserved_cost_micros, budget_day, max_daily_cost_micros,
+    const attempt = this.prepare(`SELECT provider, reserved_cost_micros, budget_day, max_daily_cost_micros,
       max_output_tokens, request_bytes, requested_service_tier FROM jev_request_attempts WHERE id=?`).get(receipt.attemptId) as
       | { provider: ModelProvider; reserved_cost_micros: number; budget_day: string | null; max_daily_cost_micros: number;
           max_output_tokens: number; request_bytes: number; requested_service_tier: string | null }
       | undefined;
     if (!attempt) throw new Error("Jev attempt receipt has no matching request attempt");
-    const dispatched = this.db.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(receipt.attemptId);
-    if (receipt.outcome === "not_sent" ? Boolean(dispatched) : !dispatched) {
+    const dispatched = this.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(receipt.attemptId);
+    const storagePausedAfterIntent = receipt.outcome === "not_sent" && receipt.errorCategory === "storage_paused";
+    if (receipt.outcome === "not_sent" ? Boolean(dispatched) && !storagePausedAfterIntent : !dispatched) {
       throw new Error("Jev attempt receipt does not match its dispatch-intent state");
     }
-    this.db.prepare(`INSERT INTO jev_attempt_events
+    this.prepare(`INSERT INTO jev_attempt_events
       (id, attempt_id, event_type, occurred_at, http_status, input_tokens, output_tokens, resolved_model, latency_ms, error_category,
        cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, response_id, response_sha256, estimated_cost_usd, response_service_tier)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -1438,40 +1639,44 @@ export class Desk {
         receipt.inputTokens, receipt.outputTokens, receipt.resolvedModel, receipt.latencyMs, receipt.errorCategory,
         receipt.cachedInputTokens ?? null, receipt.cacheWriteInputTokens ?? null, receipt.reasoningTokens ?? null, receipt.totalTokens ?? null,
         receipt.responseId ?? null, receipt.responseSha256 ?? null, receipt.estimatedCostUsd ?? null, receipt.responseServiceTier ?? null);
-    if (attempt.provider === "openai_luna" && attempt.budget_day) {
+    if (receipt.outcome === "not_sent") this.releaseScoringReservation({
+      provider: attempt.provider, budget_day: attempt.budget_day,
+      request_bytes: attempt.request_bytes, reserved_cost_micros: attempt.reserved_cost_micros,
+    });
+    if (attempt.provider === "openai_luna" && attempt.budget_day && receipt.outcome !== "not_sent") {
       const prefix = `openai:budget:${attempt.budget_day}`;
       const costKey = `${prefix}:cost-micros`;
       const reserved = Number(attempt.reserved_cost_micros);
       const current = Number(this.getKv(costKey) ?? "0");
       const knownCostMicros = receipt.estimatedCostUsd == null ? null : Math.ceil(receipt.estimatedCostUsd * 1_000_000);
       if (!Number.isSafeInteger(current) || current < reserved || !Number.isSafeInteger(reserved) || reserved < 0) {
-        this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
+        this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
       } else if (knownCostMicros != null) {
         const adjusted = receipt.outcome === "unknown"
           ? current + Math.max(0, knownCostMicros - reserved)
           : current - reserved + knownCostMicros;
-        this.db.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(costKey, String(adjusted));
+        this.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(costKey, String(adjusted));
         const outsideReservation = knownCostMicros > reserved || receipt.outcome === "response" &&
           ((receipt.inputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.request_bytes ||
            (receipt.outputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.max_output_tokens ||
            receipt.resolvedModel !== "gpt-6-luna" || receipt.responseServiceTier !== attempt.requested_service_tier);
         if (adjusted > attempt.max_daily_cost_micros || outsideReservation) {
-          this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
+          this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
         }
       } else if (receipt.outcome === "unknown" ||
         (receipt.outcome === "response" && ((receipt.inputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.request_bytes ||
           (receipt.outputTokens ?? Number.MAX_SAFE_INTEGER) > attempt.max_output_tokens ||
           receipt.resolvedModel !== "gpt-6-luna" || receipt.responseServiceTier !== attempt.requested_service_tier))) {
-        this.db.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
+        this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
       }
     }
   }
 
   recordCategoricalClassification(observationId: string, classification: CategoricalClassification, receipt: JevAttemptReceipt): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
       this.appendJevAttemptReceipt(receipt);
-      this.db.prepare(`INSERT INTO categorical_classifications
+      this.prepare(`INSERT INTO categorical_classifications
         (observation_id, provider, model_requested, model_returned, requested_service_tier, service_tier, prompt_version, prompt_sha256,
          schema_version, schema_sha256, sentiment, event_type, takeaway, about, material, investor_relevant,
          evidence_sufficient, summary, supporting_excerpt, disposition, response_id, response_sha256,
@@ -1487,21 +1692,22 @@ export class Desk {
           classification.disposition, classification.responseId, classification.responseSha256, classification.inputTokens,
           classification.cachedInputTokens, classification.cacheWriteInputTokens, classification.outputTokens, classification.reasoningTokens,
           classification.totalTokens, classification.estimatedCostUsd, classification.latencyMs, classification.classifiedAt);
-      const update = this.db.prepare("UPDATE jev_judgments SET status = ?, score_error = NULL, score_retry_at = NULL, score_usage_check_required = 0 WHERE observation_id = ? AND status = 'scoring'")
+      const update = this.prepare("UPDATE jev_judgments SET status = ?, score_error = NULL, score_retry_at = NULL, score_usage_check_required = 0 WHERE observation_id = ? AND status = 'scoring'")
         .run(classification.disposition, observationId);
       if (Number(update.changes) !== 1) throw new Error("Categorical classification did not own the active judgment claim");
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw err;
     }
   }
 
   jevAttemptHistory(observationId: string, limit = 10): JevAttemptSummary[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error("Jev attempt history limit must be between 1 and 20");
-    const rows = this.db.prepare(`SELECT a.id AS attempt_id, a.attempt_number, a.request_sha256, a.request_bytes,
+    const rows = this.prepare(`SELECT a.id AS attempt_id, a.attempt_number, a.request_sha256, a.request_bytes,
         a.requested_model, a.rubric_sha, a.reserved_at,
-        (SELECT occurred_at FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') AS dispatch_at,
+        CASE WHEN EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type='not_sent')
+          THEN NULL ELSE (SELECT occurred_at FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') END AS dispatch_at,
         COALESCE((SELECT event_type FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')),
           CASE WHEN EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') THEN 'dispatch_intent' ELSE 'prepared' END) AS outcome,
         (SELECT occurred_at FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS completed_at,
@@ -1553,7 +1759,7 @@ export class Desk {
     if (delivery.secDocumentContext != null && delivery.collector !== "sec_edgar") throw new Error("SEC document context can only be stored on SEC deliveries");
     const secContextJson = delivery.secDocumentContext == null ? null : serializeSecDocumentContext(delivery.secDocumentContext);
     const id = randomUUID();
-    this.db.prepare(
+    this.prepare(
       `INSERT OR IGNORE INTO source_deliveries
        (id, collector, company_id, request_key_hash, started_at, completed_at, result,
         parsed_item_count, response_digest, adapter_version, error, processing_required, sec_document_context_json)
@@ -1570,7 +1776,7 @@ export class Desk {
 
   /** Read the immutable SEC context attached to one delivery receipt. */
   secDeliveryContext(deliveryId: string): SecDocumentContext | null {
-    const row = this.db.prepare("SELECT sec_document_context_json FROM source_deliveries WHERE id = ? AND collector = 'sec_edgar'")
+    const row = this.prepare("SELECT sec_document_context_json FROM source_deliveries WHERE id = ? AND collector = 'sec_edgar'")
       .get(deliveryId) as { sec_document_context_json: string | null } | undefined;
     return parseSecDocumentContext(row?.sec_document_context_json);
   }
@@ -1579,7 +1785,7 @@ export class Desk {
     if (!Number.isSafeInteger(expectedCount) || expectedCount < 0 || !Number.isSafeInteger(startedAt) || startedAt < 0) {
       throw new Error("Delivery ingestion counts and start time must be non-negative integers");
     }
-    const delivery = this.db.prepare(
+    const delivery = this.prepare(
       `SELECT processing_required AS processingRequired, result FROM source_deliveries WHERE id = ?`,
     ).get(deliveryId) as { processingRequired: number; result: string } | undefined;
     if (!delivery) throw new Error("Cannot process an unknown source delivery");
@@ -1587,7 +1793,7 @@ export class Desk {
     if (!["success", "empty", "partial", "invalid"].includes(delivery.result)) {
       throw new Error("Only parsed source deliveries can enter observation ingestion");
     }
-    this.db.prepare(
+    this.prepare(
       `INSERT INTO source_ingestions (delivery_id, started_at, status, expected_count)
        VALUES (?, ?, 'processing', ?)`,
     ).run(deliveryId, startedAt, expectedCount);
@@ -1600,7 +1806,7 @@ export class Desk {
       !Number.isSafeInteger(completedAt) || completedAt < 0) {
       throw new Error("Delivery ingestion counts and completion time must be non-negative integers");
     }
-    const current = this.db.prepare(
+    const current = this.prepare(
       `SELECT expected_count AS expectedCount, status FROM source_ingestions WHERE delivery_id = ?`,
     ).get(deliveryId) as { expectedCount: number; status: string } | undefined;
     if (!current || current.status !== "processing") throw new Error("Source delivery has no active ingestion to finalize");
@@ -1610,7 +1816,7 @@ export class Desk {
     if (outcome.status === "success" && outcome.processedCount !== current.expectedCount) {
       throw new Error("A successful ingestion must account for every normalized source item");
     }
-    this.db.prepare(
+    this.prepare(
       `UPDATE source_ingestions SET completed_at = ?, status = ?, processed_count = ?,
         inserted_count = ?, error = ? WHERE delivery_id = ? AND status = 'processing'`,
     ).run(
@@ -1626,18 +1832,18 @@ export class Desk {
     const summaryColumns = `collector, company_id AS companyId, result, completed_at AS completedAt,
       parsed_item_count AS parsedItemCount, adapter_version AS adapterVersion, error`;
     const summaryFilter = "collector NOT IN ('demo_simulation', 'legacy_unknown')";
-    const boundary = this.db.prepare(
+    const boundary = this.prepare(
       `SELECT completed_at AS completedAt, started_at AS startedAt
        FROM source_deliveries WHERE ${summaryFilter}
        ORDER BY completed_at DESC, started_at DESC LIMIT 1 OFFSET 59`,
     ).get() as { completedAt: number; startedAt: number } | undefined;
     const rows = boundary
-      ? this.db.prepare(
+      ? this.prepare(
         `SELECT ${summaryColumns} FROM source_deliveries
          WHERE ${summaryFilter} AND (completed_at, started_at) >= (?, ?)
          ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 60`,
       ).all(boundary.completedAt, boundary.startedAt)
-      : this.db.prepare(
+      : this.prepare(
         `SELECT ${summaryColumns} FROM source_deliveries WHERE ${summaryFilter}
          ORDER BY completed_at DESC, started_at DESC, rowid DESC`,
       ).all();
@@ -1684,11 +1890,11 @@ export class Desk {
       ingestionInsertedCount: number | null;
       ingestionError: string | null;
     };
-    const deliveryGroups = this.db.prepare(
+    const deliveryGroups = this.prepare(
       `SELECT DISTINCT collector, company_id AS companyId, adapter_version AS adapterVersion
        FROM source_deliveries WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')`,
     ).all() as unknown as Array<{ collector: CollectorId; companyId: string | null; adapterVersion: string }>;
-    const latestForGroup = this.db.prepare(
+    const latestForGroup = this.prepare(
       `SELECT d.collector, d.company_id AS companyId, d.completed_at AS completedAt, d.result,
         d.parsed_item_count AS parsedItemCount, d.error, d.adapter_version AS adapterVersion,
         d.processing_required AS processingRequired, i.status AS ingestionState,
@@ -1714,7 +1920,7 @@ export class Desk {
       retrievedAt: number;
       timeBasis: TimeBasis;
     };
-    const observations = this.db.prepare(
+    const observations = this.prepare(
       `WITH ranked AS (
         SELECT collector, publisher_published_at AS publisherPublishedAt,
           provider_observed_at AS providerObservedAt, retrieved_at AS retrievedAt, time_basis AS timeBasis,
@@ -1760,7 +1966,7 @@ export class Desk {
           degradedParams.push(...source.healthAdapterVersions);
         }
       }
-      const degradationRow: unknown = this.db.prepare(
+      const degradationRow: unknown = this.prepare(
         `SELECT error FROM source_deliveries WHERE ${degradedFilters.join(" AND ")}
          ORDER BY completed_at DESC, started_at DESC, rowid DESC LIMIT 1`,
       ).get(...degradedParams);
@@ -1830,7 +2036,7 @@ export class Desk {
   mentionsByIds(companyId: string, ids: string[]): MentionDTO[] {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(", ");
-    const rows = this.db.prepare(
+    const rows = this.prepare(
       `SELECT * FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
          AND id IN (${placeholders})`,
     ).all(companyId, ...ids) as unknown as MentionRow[];
@@ -1857,6 +2063,7 @@ export class Desk {
       material: "(status = 'scored' AND COALESCE(material, 0) >= 0.6) OR (status = 'classified' AND classification_material = 1)",
       offtarget: "status IN ('off_target', 'excluded')",
       failed: "status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt', 'review_required')",
+      history: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
     };
     const cursorFilter = cursor
       ? `AND (
@@ -1868,7 +2075,7 @@ export class Desk {
     const cursorParams = cursor
       ? [cursor.orderAt, cursor.orderAt, cursor.ingestedAt, cursor.orderAt, cursor.ingestedAt, cursor.id]
       : [];
-    const rows = this.db.prepare(
+    const rows = this.prepare(
       `SELECT *, COALESCE(published_at, provider_observed_at, retrieved_at) AS order_at
        FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
          AND (${filterSql[filter]})
@@ -1920,9 +2127,9 @@ export class Desk {
     if (impactBin != null && (!Number.isInteger(impactBin) || impactBin < 0 || impactBin >= 20)) {
       throw new Error("invalid_score_bucket_impact_bin");
     }
-    this.db.exec("BEGIN");
+    this.exec("BEGIN");
     try {
-      const eligible = this.db.prepare(
+      const eligible = this.prepare(
         `SELECT id, scored_at AS scoredAt, impact, weight, title, time_basis AS timeBasis,
                 publisher_published_at AS publisherPublishedAt,
                 provider_observed_at AS providerObservedAt, delivery_id AS deliveryId FROM mentions
@@ -1969,7 +2176,7 @@ export class Desk {
         ? ""
         : includeImpactThrough ? "AND impact >= ? AND impact <= ?" : "AND impact >= ? AND impact < ?";
       const impactParams = impactBin == null ? [] : [impactFrom!, impactThrough!];
-      const rows = this.db.prepare(
+      const rows = this.prepare(
         `SELECT * FROM mentions
          WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
            AND scored_at >= ? AND scored_at < ? AND impact BETWEEN -100 AND 100 AND weight >= 0
@@ -1978,7 +2185,7 @@ export class Desk {
       ).all(companyId, fromMs, throughMs, ...impactParams, ...cursorParams, limit + 1) as unknown as MentionRow[];
       const hasMore = rows.length > limit;
       const last = hasMore ? rows[limit - 1] : undefined;
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
       return {
         items: rows.slice(0, limit).map(rowToDTO),
         nextCursor: last?.scored_at == null ? null : {
@@ -2005,7 +2212,7 @@ export class Desk {
         })),
       };
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw error;
     }
   }
@@ -2019,7 +2226,7 @@ export class Desk {
     eventScore: number;
     eventType: string;
   }> {
-    return this.db.prepare(
+    return this.prepare(
       `SELECT id, title, published_at AS publishedAt, scored_at AS availableAt, sentiment, event_score AS eventScore,
          COALESCE(event_type, 'other') AS eventType
        FROM mentions
@@ -2038,7 +2245,7 @@ export class Desk {
   }
 
   radarEvidence(companyId: string, fromMs: number, toMs: number, asOf = Number.MAX_SAFE_INTEGER): RadarItemEvidence[] {
-    const rows = this.db.prepare(
+    const rows = this.prepare(
       `SELECT id, title, source_url AS sourceUrl, publisher_name AS publisherName,
         publisher_domain AS publisherDomain, publisher_published_at AS publishedAt,
         retrieved_at AS retrievedAt, collector, event_type AS eventType,
@@ -2059,7 +2266,7 @@ export class Desk {
     untimedScored: number;
     unjudged: number;
   } {
-    const row = this.db.prepare(
+    const row = this.prepare(
       `SELECT
         SUM(CASE WHEN status IN ('scored', 'off_target') AND scored_at <= ? AND impact IS NOT NULL
           AND (time_basis != 'publisher_declared' OR publisher_published_at IS NULL) THEN 1 ELSE 0 END) AS untimedScored,
@@ -2152,7 +2359,7 @@ export class Desk {
     }
     const fromMs = now - windowHours * 60 * 60_000;
     const throughMs = now;
-    const maxRow = this.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM categorical_classifications").get() as { max_row_id: number };
+    const maxRow = this.prepare("SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM categorical_classifications").get() as { max_row_id: number };
     const maxRowId = Number(maxRow.max_row_id);
     if (!Number.isSafeInteger(maxRowId) || maxRowId < 0) throw new Error("categorical_row_id_out_of_range");
     const snapshot = { companyId, fromMs, throughMs, windowHours, bucketMs: CATEGORICAL_BUCKET_MS, maxRowId };
@@ -2165,13 +2372,13 @@ export class Desk {
       AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
     const validScope = `m.company_id=? AND ${REAL_CATEGORICAL_FILTER}
       AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
-    const candidateRow = this.db.prepare(`SELECT COUNT(*) AS count FROM mentions m
+    const candidateRow = this.prepare(`SELECT COUNT(*) AS count FROM mentions m
       JOIN source_observations o ON o.id=m.id
       JOIN categorical_classifications c ON c.observation_id=m.id
       WHERE ${scope} AND c.provider='openai_luna' AND c.model_requested='gpt-6-luna'`).get(
       companyId, fromMs, throughMs, maxRowId,
     ) as { count: number };
-    const aggregateRows = this.db.prepare(`SELECT (c.classified_at / ${CATEGORICAL_BUCKET_MS}) * ${CATEGORICAL_BUCKET_MS} AS bucket_start_ms,
+    const aggregateRows = this.prepare(`SELECT (c.classified_at / ${CATEGORICAL_BUCKET_MS}) * ${CATEGORICAL_BUCKET_MS} AS bucket_start_ms,
       ${CATEGORICAL_COUNTS_SQL}
       ${baseJoin} WHERE ${validScope}
       GROUP BY bucket_start_ms ORDER BY bucket_start_ms`).all(
@@ -2186,9 +2393,9 @@ export class Desk {
       excluded: total.excluded + row.counts.excluded,
       total: total.total + row.counts.total,
     }), { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 });
-    const latestRow = this.db.prepare(`SELECT MAX(c.classified_at) AS latest ${baseJoin} WHERE ${validScope}`)
+    const latestRow = this.prepare(`SELECT MAX(c.classified_at) AS latest ${baseJoin} WHERE ${validScope}`)
       .get(companyId, throughMs, fromMs, throughMs, maxRowId) as { latest: number | null };
-    const lineageRows = this.db.prepare(`SELECT c.prompt_version, c.prompt_sha256, c.schema_version, c.schema_sha256, COUNT(*) AS count
+    const lineageRows = this.prepare(`SELECT c.prompt_version, c.prompt_sha256, c.schema_version, c.schema_sha256, COUNT(*) AS count
       ${baseJoin} WHERE ${validScope}
       GROUP BY c.prompt_version, c.prompt_sha256, c.schema_version, c.schema_sha256
       ORDER BY count DESC, c.prompt_version, c.schema_version`).all(
@@ -2239,20 +2446,20 @@ export class Desk {
         || typeof input.cursor.id !== "string" || input.cursor.id.length < 1 || input.cursor.id.length > 200) {
         throw new InvalidCategoricalBucketError("invalid_cursor");
       }
-      const cursorExists = this.db.prepare(`SELECT 1 AS ok ${baseJoin}
+      const cursorExists = this.prepare(`SELECT 1 AS ok ${baseJoin}
         WHERE ${scope} AND m.id=? AND c.classified_at=? LIMIT 1`).get(
         input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId,
         input.cursor.id, input.cursor.classifiedAt,
       );
       if (!cursorExists) throw new InvalidCategoricalBucketError("invalid_cursor");
     }
-    const countRow = this.db.prepare(`SELECT ${CATEGORICAL_COUNTS_SQL} ${baseJoin}
+    const countRow = this.prepare(`SELECT ${CATEGORICAL_COUNTS_SQL} ${baseJoin}
       WHERE ${scope}`).get(input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId) as CategoricalAggregateRow;
     const cursorClause = input.cursor
       ? "AND (c.classified_at < ? OR (c.classified_at = ? AND m.id < ?))"
       : "";
     const cursorParams = input.cursor ? [input.cursor.classifiedAt, input.cursor.classifiedAt, input.cursor.id] : [];
-    const rows = this.db.prepare(`SELECT m.* ${baseJoin}
+    const rows = this.prepare(`SELECT m.* ${baseJoin}
       WHERE ${scope} ${cursorClause}
       ORDER BY c.classified_at DESC, m.id DESC LIMIT ?`).all(
       input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId,
@@ -2294,7 +2501,7 @@ export class Desk {
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new CategoricalSnapshotUnavailableError();
     try {
       const parsed = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as CategoricalSnapshotToken;
-      const maxRow = this.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM categorical_classifications").get() as { max_row_id: number };
+      const maxRow = this.prepare("SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM categorical_classifications").get() as { max_row_id: number };
       if (parsed.companyId !== companyId || !Number.isSafeInteger(parsed.fromMs) || !Number.isSafeInteger(parsed.throughMs)
         || parsed.fromMs < 0 || parsed.throughMs <= parsed.fromMs || !Number.isSafeInteger(parsed.windowHours)
         || parsed.windowHours < 1 || parsed.windowHours > 168 || parsed.bucketMs !== CATEGORICAL_BUCKET_MS
@@ -2325,15 +2532,14 @@ export class Desk {
       || !input.adapterVersion.trim() || !input.deliveryId.trim()) {
       throw new Error("Price point requires source time, value, currency, retrieval time, adapter version, and delivery receipt");
     }
-    const receipt = this.db.prepare(`SELECT collector, result, adapter_version FROM source_deliveries WHERE id = ?`)
+    const receipt = this.prepare(`SELECT collector, result, adapter_version FROM source_deliveries WHERE id = ?`)
       .get(input.deliveryId) as { collector: string; result: string; adapter_version: string } | undefined;
     if (!receipt || receipt.collector !== input.collector
       || !["success", "partial"].includes(receipt.result)
       || receipt.adapter_version !== input.adapterVersion) {
       throw new Error("Price point delivery receipt does not match its source collector and adapter");
     }
-    const result = this.db
-      .prepare(`INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id)
+    const result = this.prepare(`INSERT INTO price_points (ticker, t, price, collector, currency, retrieved_at, adapter_version, delivery_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ticker, t) DO UPDATE SET price = excluded.price, collector = excluded.collector,
           currency = excluded.currency, retrieved_at = excluded.retrieved_at,
@@ -2346,7 +2552,7 @@ export class Desk {
   }
 
   legacyUnknownPriceRowCount(ticker: string): number | null {
-    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM price_points
+    const row = this.prepare(`SELECT COUNT(*) AS count FROM price_points
       WHERE ticker = ? AND collector = 'legacy_unknown'`).get(ticker) as { count: number | bigint } | undefined;
     const count = Number(row?.count ?? 0);
     return Number.isSafeInteger(count) && count >= 0 ? count : null;
@@ -2386,7 +2592,7 @@ export class Desk {
     if (allowedCollectors.length === 0) return [];
     const collectorSlots = allowedCollectors.map(() => "?").join(", ");
     return (
-      this.db.prepare(`SELECT id FROM mentions
+      this.prepare(`SELECT id FROM mentions
         WHERE ${REAL_MENTION_FILTER}
           AND collector IN (${collectorSlots})
           AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))
@@ -2449,15 +2655,14 @@ export class Desk {
   }
 
   getKv(key: string): string | undefined {
-    const row = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(key) as
+    const row = this.prepare("SELECT value FROM kv WHERE key = ?").get(key) as
       | { value: string }
       | undefined;
     return row?.value;
   }
 
   setKv(key: string, value: string): void {
-    this.db
-      .prepare(
+    this.prepare(
         "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       )
       .run(key, value);
@@ -2465,12 +2670,12 @@ export class Desk {
 
   /** Atomically replace a group of cached facts so stale values are not mixed with a fresh response. */
   setKvEntriesAtomically(entries: ReadonlyArray<readonly [string, string]>): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
       for (const [key, value] of entries) this.setKv(key, value);
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw error;
     }
   }
@@ -2482,26 +2687,26 @@ export class Desk {
     value: string;
     event: { level: "info" | "warn" | "error"; source: string; message: string };
   }): boolean {
-    this.db.exec("BEGIN IMMEDIATE");
+    this.exec("BEGIN IMMEDIATE");
     try {
-      const current = this.db.prepare("SELECT value FROM kv WHERE key = ?").get(input.key) as
+      const current = this.prepare("SELECT value FROM kv WHERE key = ?").get(input.key) as
         | { value: string }
         | undefined;
       if ("equals" in input.when) {
         if (current?.value !== input.when.equals) {
-          this.db.exec("COMMIT");
+          this.exec("COMMIT");
           return false;
         }
       } else if (current?.value === input.when.notEquals) {
-        this.db.exec("COMMIT");
+        this.exec("COMMIT");
         return false;
       }
       this.setKv(input.key, input.value);
       this.logEvent(input.event.level, input.event.source, input.event.message);
-      this.db.exec("COMMIT");
+      this.exec("COMMIT");
       return true;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      this.rollbackIfActive();
       throw error;
     }
   }
@@ -2532,7 +2737,7 @@ export class Desk {
   }
 
   logEvent(level: "info" | "warn" | "error", source: string, message: string): void {
-    this.db.prepare("INSERT INTO events (at, level, source, message) VALUES (?, ?, ?, ?)").run(
+    this.prepare("INSERT INTO events (at, level, source, message) VALUES (?, ?, ?, ?)").run(
       Date.now(),
       level,
       source,
@@ -2582,20 +2787,26 @@ export class Desk {
     reasoningTokens: number | null; totalTokens: number | null; estimatedCostUsd: number | null; knownCostSubtotalUsd: number;
     reservedCostUsd: number; unknownOutcomes: number; unpricedAttempts: number; usageIncompleteAttempts: number;
   } {
-    const row = this.db.prepare(`SELECT COUNT(*) AS reserved_requests,
-      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type='dispatch_intent') THEN 1 ELSE 0 END) AS requests,
+    const row = this.prepare(`SELECT COUNT(*) AS reserved_requests,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') THEN 1 ELSE 0 END) AS requests,
       SUM(e.input_tokens) AS input_tokens, SUM(e.cached_input_tokens) AS cached_input_tokens,
       SUM(e.cache_write_tokens) AS cache_write_input_tokens, SUM(e.output_tokens) AS output_tokens,
       SUM(e.reasoning_tokens) AS reasoning_tokens, SUM(e.total_tokens) AS total_tokens,
       SUM(e.estimated_cost_usd) AS known_cost_subtotal_usd,
       SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent')
         AND (e.event_type IS NULL OR e.event_type IN ('response','unknown') AND e.estimated_cost_usd IS NULL) THEN 1 ELSE 0 END) AS unpriced_attempts,
       SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent')
         AND (e.event_type IS NULL OR e.input_tokens IS NULL OR e.output_tokens IS NULL OR e.total_tokens IS NULL) THEN 1 ELSE 0 END) AS usage_incomplete_attempts,
-      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent') AND e.cached_input_tokens IS NULL THEN 1 ELSE 0 END) AS cached_incomplete,
-      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent') AND e.cache_write_tokens IS NULL THEN 1 ELSE 0 END) AS cache_write_incomplete,
-      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent') AND e.reasoning_tokens IS NULL THEN 1 ELSE 0 END) AS reasoning_incomplete,
-      COALESCE(SUM(a.reserved_cost_micros),0) AS reserved_cost_micros,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') AND e.cached_input_tokens IS NULL THEN 1 ELSE 0 END) AS cached_incomplete,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') AND e.cache_write_tokens IS NULL THEN 1 ELSE 0 END) AS cache_write_incomplete,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') AND e.reasoning_tokens IS NULL THEN 1 ELSE 0 END) AS reasoning_incomplete,
+      COALESCE(SUM(CASE WHEN NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') THEN a.reserved_cost_micros ELSE 0 END),0) AS reserved_cost_micros,
       SUM(CASE WHEN e.event_type='unknown' THEN 1 ELSE 0 END) AS unknown_outcomes
       FROM jev_request_attempts a LEFT JOIN jev_attempt_events e ON e.attempt_id=a.id AND e.event_type IN ('response','rejected','unknown')
       WHERE a.provider='openai_luna' AND a.reserved_at>=?`).get(sinceMs) as Record<string, number | null>;
@@ -2618,9 +2829,21 @@ export class Desk {
 
   close(): void {
     if (this.closed) return;
-    this.db.prepare("UPDATE desk_runtime_sessions SET closed_at=? WHERE id=? AND closed_at IS NULL").run(Date.now(), this.runtimeId);
-    this.db.close();
     this.closed = true;
+    try {
+      if (!this.storageReadOnly) {
+        this.prepare("UPDATE desk_runtime_sessions SET closed_at=? WHERE id=? AND closed_at IS NULL").run(Date.now(), this.runtimeId);
+      }
+    } catch (error) {
+      if (!(error instanceof StorageCapacityError)) throw error;
+    } finally {
+      try {
+        this.db.close();
+      } finally {
+        this.writerLock?.release();
+        this.writerLock = null;
+      }
+    }
   }
 }
 
