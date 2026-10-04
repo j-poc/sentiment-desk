@@ -71,6 +71,25 @@ export function MentionFeed({
       )}
       {!error && loaded && !loading && entries.map((entry, index) => entry.kind === "mention" ? (
         <MentionCard key={entry.mention.id} m={entry.mention} dense onOpen={onOpen} />
+      ) : entry.kind === "pending-title-repeats" ? (
+        <details className="exact-title-group pending-title-group" key={entry.mentions[0]!.id} open={expandFirstGroup && index === 0}>
+          <summary aria-label={`Unclassified exact title group “${entry.title}”: ${entry.mentions.length} loaded pending rows`}>
+            <span className="exact-title-mark" aria-hidden="true">↳</span>
+            <span className="exact-title-main">
+              <span className="exact-title-text">{entry.title}</span>
+              <span className="exact-title-stats">
+                {entry.mentions.length} loaded pending rows · {entry.publisherLabelCount} publisher labels · {entry.collectorFeedCount} collector feeds
+              </span>
+              <span className="exact-title-caveat">Unclassified · counts cover loaded rows · exact-title match is a duplicate cue only, not proof of independent reports or investors</span>
+            </span>
+            <span className="exact-title-expand">Review {entry.mentions.length} rows</span>
+          </summary>
+          <div className="exact-title-records">
+            {entry.mentions.map((mention) => (
+              <MentionCard key={mention.id} m={mention} dense onOpen={onOpen} />
+            ))}
+          </div>
+        </details>
       ) : (
         <details className="exact-title-group" key={entry.mentions[0]!.id} open={expandFirstGroup && index === 0}>
           <summary aria-label={`Exact title group “${entry.title}”: ${entry.mentions.length} source records, ${entry.publisherLabelCount} publisher labels, ${entry.directions.positive} positive, ${entry.directions.neutral} neutral, ${entry.directions.negative} negative`}>

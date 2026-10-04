@@ -712,6 +712,19 @@ body {
   background: rgba(170, 184, 205, 0.045);
 }
 
+.pending-title-group {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(251, 191, 36, 0.055);
+}
+
+.pending-title-group .exact-title-stats {
+  color: rgba(253, 230, 138, 0.9);
+}
+
+.pending-title-group .exact-title-caveat {
+  color: rgba(253, 230, 138, 0.78);
+}
+
 .exact-title-group > summary {
   display: flex;
   align-items: flex-start;
