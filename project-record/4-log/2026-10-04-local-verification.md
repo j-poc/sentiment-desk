@@ -152,6 +152,8 @@ prospective AlphaSense cohort, or observed investor/analyst outcome evidence.
 Opportunity Radar remains disabled.
 
 The in-app browser's current localhost tab returns connection refused, so this
-continuation has no fresh rendered UI evidence. The current GitHub branch is
-still behind the local branch until the reviewed candidate and this record are
-checkpointed; no release-readiness claim is made.
+continuation has no fresh rendered UI evidence. The reviewed source candidate
+was committed as `6709f3d6e0b5c98862653972a54a6006c2d760c2` and pushed to
+`https://github.com/j-poc/sentiment-desk`, branch
+`codex/real-data-rebuild`. `git ls-remote` readback matched the local commit.
+The source checkpoint does not establish full-product or release readiness.

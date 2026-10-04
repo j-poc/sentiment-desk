@@ -2,7 +2,7 @@
 
 | Owner | Scope | Status | Evidence / next |
 |---|---|---|---|
-| `/root` | Acceptance alignment, integration, verification, records, GitHub checkpoint | In progress | Native goal remains active; current user direction and version-2 contract select GPT-6 Luna for new records. Full product acceptance remains open. |
+| `/root` | Acceptance alignment, integration, verification, records, GitHub checkpoint | In progress | Attempt-bound version-11 checkpoint `6709f3d6e0b5c98862653972a54a6006c2d760c2` is pushed and remote-verified on `codex/real-data-rebuild`. Full product acceptance remains open. |
 | `/root/pending_sse_implementation` | Persisted-observation stream and company count refresh in `server/pipeline.ts` | Complete | Integrated as `93c54d3` plus `e8fbac4`; focused regression covers persisted event, exact replay, insert rejection, multi-company snapshot coalescing, and stop cancellation. |
 | `/root/whole_build_acceptance` | Fresh independent entire-product and investor-journey review | Complete | FAIL 4/10. Confirmed the fixed 24-company roster, missing no-ticker small-cap discovery, incomplete fundamental triage and followed-company baseline, no live Luna result, and no investor outcome evidence. No private database, provider call, or rendered browser proof. |
 | `/root/discovery_feasibility` | Independent real-source feasibility review for discovery and company research | Complete | Existing SEC, RSS, GDELT, Yahoo, Reddit, and X paths do not establish a current product-managed small-cap universe or complete fundamental workflow. A source-backed universe requires verified market-cap semantics and endpoint rights; no providers or canonical DB were used. |
@@ -36,3 +36,5 @@
   legacy provider reconciliation, a real product-managed small-cap discovery
   path, fundamental triage, followed-company material-change baselines, and
   observed investor/analyst outcomes. Opportunity Radar remains disabled.
+- The pushed source checkpoint is a reviewed reliability/provenance milestone,
+  not a full-product or release-ready claim.
