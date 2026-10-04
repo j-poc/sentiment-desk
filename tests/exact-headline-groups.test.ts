@@ -63,6 +63,30 @@ describe("exact-title feed grouping", () => {
     expect(entries.map((entry) => entry.kind)).toEqual(["mention", "mention", "mention"]);
   });
 
+  it("groups pending rows by company and normalized title with deterministic source counts", () => {
+    const entries = groupExactHeadlineRepeats([
+      mention({ id: "p1", title: "Acme files results", status: "pending", score: null, publisherName: "Wire A", publisherDomain: "wire-a.example", collector: "google_news_rss" }),
+      mention({ id: "p2", title: " ACME  FILES results ", status: "pending", score: null, publisherName: "Wire B", publisherDomain: "wire-b.example", collector: "gdelt_doc_api" }),
+      mention({ id: "other-company", companyId: "other", title: "Acme files results", status: "pending", score: null }),
+      mention({ id: "retry", title: "Acme files results", status: "retrying", score: null }),
+      mention({ id: "failed", title: "Acme files results", status: "failed", score: null }),
+      mention({ id: "empty", title: "   ", status: "pending", score: null }),
+    ]);
+
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "pending-title-repeats", "mention", "mention", "mention", "mention",
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: "pending-title-repeats", companyId: "acme", title: "Acme files results",
+      publisherLabelCount: 2, collectorFeedCount: 2,
+    });
+    if (entries[0]?.kind === "pending-title-repeats") {
+      expect(entries[0].mentions.map((item) => item.id)).toEqual(["p1", "p2"]);
+    }
+    expect(entries.slice(1).map((entry) => entry.kind === "mention" ? entry.mention.id : "unexpected-group"))
+      .toEqual(["other-company", "retry", "failed", "empty"]);
+  });
+
   it("drills into repeated titles or only groups whose Jev labels differ", () => {
     const first = mention({ id: "one", title: "Acme announces contract" });
     const mixed = mention({
