@@ -105,8 +105,24 @@ describe("evidence breadth summary", () => {
       onShowRecords: () => undefined, onOpenMention: () => undefined,
     }));
 
-    expect(markup).toContain("2 of 3 scored sample records");
+    expect(markup).toContain("2 of 3 Jev-scored sample records");
     expect(markup).toContain("Exact-title matches are only a duplicate cue");
+  });
+
+  it("labels exact-title counts as Jev-scored-only when pending rows also repeat", () => {
+    const markup = renderToStaticMarkup(createElement(EvidenceBreadth, {
+      mentions: [
+        mention("pending-a", "Acme wins contract", "positive", "wire.example", "pending"),
+        mention("pending-b", "ACME WINS CONTRACT", "neutral", "paper.example", "pending"),
+      ],
+      hours: 24, loaded: true, error: false, hasMore: false, now: 1_000,
+      refreshWarning: false, onRetry: () => undefined, onRetryRefresh: () => undefined,
+      onShowRecords: () => undefined, onOpenMention: () => undefined,
+    }));
+
+    expect(markup).toContain("0 exact-title groups among Jev-scored rows");
+    expect(markup).toContain("Jev-scored publisher labels: 0");
+    expect(markup).toContain("Exact-title and mixed-label counts above use only Jev-scored rows; pending Luna rows and other unscored rows are excluded.");
   });
 
   it("counts repeated exact titles, mixed Jev labels, and publisher labels without equating them to independent sources", () => {

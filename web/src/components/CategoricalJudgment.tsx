@@ -19,6 +19,7 @@ export function CategoricalJudgment({ judgment, detail = false }: { judgment: Ca
           {judgment.supportingExcerpt && <blockquote className="mt-3 border-l-2 border-sky-300/30 pl-3 text-white/65">{judgment.supportingExcerpt}</blockquote>}
           <p className="mt-3 text-[11px] text-white/55">Categorical model judgment · independently unvalidated. No probability, confidence percentage or Jev impact value is assigned.</p>
           <dl className="mt-3 grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11px] text-white/55">
+            <dt>Saved attempt</dt><dd className="break-all">{judgment.attemptId ?? "Legacy classification without attempt binding"}</dd>
             <dt>About company</dt><dd>{judgment.about == null ? "Uncertain" : judgment.about ? "Yes" : "No"}</dd>
             <dt>Investor relevance</dt><dd>{judgment.investorRelevant == null ? "Uncertain" : judgment.investorRelevant ? "Yes" : "No"}</dd>
             <dt>Evidence sufficient</dt><dd>{judgment.evidenceSufficient ? "Model says yes" : "No — needs review"}</dd>
@@ -31,6 +32,7 @@ export function CategoricalJudgment({ judgment, detail = false }: { judgment: Ca
             <dt>Reasoning</dt><dd>{judgment.reasoningTokens ?? "Unknown"} tokens · included in output</dd>
             <dt>Response ID</dt><dd className="break-all">{judgment.responseId ?? "Not recorded"}</dd>
             <dt>Prompt digest</dt><dd className="break-all">{judgment.promptSha256}</dd>
+            <dt>Profile digest</dt><dd className="break-all">{judgment.profileSha256 ?? "Not bound to a saved model attempt"}</dd>
             <dt>Response digest</dt><dd className="break-all">{judgment.responseSha256}</dd>
           </dl>
         </>

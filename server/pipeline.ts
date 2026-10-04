@@ -520,7 +520,7 @@ export class Pipeline {
       maxRequestBytes: this.deps.dailyBudget.maxRequestBytes, provider: "openai_luna",
       maxDailyCostMicros: this.deps.dailyBudget.maxDailyCostMicros ?? 0, reservedCostMicros,
       requestedServiceTier: prepared.requestedServiceTier, maxOutputTokens: prepared.maxOutputTokens,
-      schemaSha256: prepared.schemaSha256,
+      schemaSha256: prepared.schemaSha256, promptSha256: prepared.promptSha256,
     });
     if (claim.kind !== "claimed") return;
     const claimed = claim.row;
@@ -543,6 +543,7 @@ export class Pipeline {
         provider: "openai_luna", modelRequested: prepared.requestedModel, modelReturned: result.modelReturned,
         serviceTierRequested: prepared.requestedServiceTier, serviceTier: result.serviceTier,
         promptVersion: OPENAI_PROMPT_VERSION, promptSha256: prepared.promptSha256,
+        profileSha256: prepared.profileSha256,
         schemaVersion: OPENAI_SCHEMA_VERSION, schemaSha256: prepared.schemaSha256,
         ...raw, disposition, responseId: result.responseId, responseSha256: result.responseSha256,
         inputTokens: usage.inputTokens, cachedInputTokens: usage.cachedInputTokens,

@@ -32,9 +32,9 @@ function publisherKey(mention: Mention): string {
 }
 
 /**
- * Collapse only duplicate scored headlines after Unicode/case/whitespace
- * normalization. This is a presentation aid, not semantic event clustering or
- * evidence that publisher labels represent independent reporting.
+ * Group duplicate scored rows and pending scoreless rows by company and exact
+ * normalized title. This is a presentation aid, not semantic event clustering
+ * or evidence that publisher labels represent independent reporting.
  */
 export function groupExactHeadlineRepeats(mentions: Mention[]): MentionFeedEntry[] {
   const scoredOccurrences = new Map<string, Mention[]>();

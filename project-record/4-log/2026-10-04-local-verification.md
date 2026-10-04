@@ -116,3 +116,42 @@ The code checkpoint was committed and pushed to
 `codex/real-data-rebuild` as
 `daed1f7541ad13c84af1e4cfd4ca45d9b69dc6d0`. Remote readback matched that SHA.
 This record and the bounded-run trace are being checkpointed separately.
+
+## Attempt-bound Luna persistence continuation - 2026-10-04
+
+The next code candidate strengthens categorical chart eligibility at the
+SQLite boundary. Writable migration now advances compatible version-9
+databases to version 11, preserves historical rows, and installs an idempotent
+insert trigger requiring a matching saved attempt ID, exact model and tier,
+prompt/profile/schema digests, successful response identity and digest, full
+token usage, cost, and latency. Rows without the exact attempt binding remain
+visible in history but do not enter categorical trends. A disposable
+version-9 migration regression verifies preservation, mismatched direct-SQL
+rejection, and a matching insert. The canonical product database was not
+opened or changed.
+
+The current candidate passes typecheck, all 581 tests across 67 files, the
+production build, production dependency audit, and source scan. The current
+`live_data_etl_gate.py verify` ran all six declared checks: five passed,
+including the full suite, recovery, replay, offline startup, and storage
+capacity; the keyless real-source Compose smoke failed before contacting any
+provider because its dedicated `colima-sentiment-desk-verify` Docker context is
+missing. The matching Colima profile is stopped, and the host reported 2.7 GiB
+free. I did not start the verification VM or use another project's Docker
+context. Current code-bound ETL status is therefore **FAIL**, not PASS.
+
+The fresh whole-build subagent review is **FAIL 4/10**. It confirms that the
+current product still lacks no-ticker small-cap discovery, complete
+fundamental triage, and a persisted followed-company baseline. A separate
+read-only finance-platform feasibility review found no existing source route
+that can honestly populate those workflows from a maintained, verified
+small-cap universe; a code-only shell would not create real discovery value.
+The 1,118 observations in the earlier collection trace remain pending and
+there is still no real Luna output, verified finite OpenAI spend control,
+prospective AlphaSense cohort, or observed investor/analyst outcome evidence.
+Opportunity Radar remains disabled.
+
+The in-app browser's current localhost tab returns connection refused, so this
+continuation has no fresh rendered UI evidence. The current GitHub branch is
+still behind the local branch until the reviewed candidate and this record are
+checkpointed; no release-readiness claim is made.

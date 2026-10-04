@@ -146,7 +146,8 @@ describe("Desk observation and judgment storage", () => {
       id, now: 1_000, allowedCollectors: ["sec_edgar"], utcDay: "2026-09-28",
       requestBytes: 128, requestSha256: "e".repeat(64), requestedModel: "gpt-6-luna", rubricSha256: "f".repeat(64),
       maxRequests: 10, maxRequestBytes: 10_000, provider: "openai_luna", maxDailyCostMicros: 1_000_000,
-      reservedCostMicros: 250_000, requestedServiceTier: "default", maxOutputTokens: 128, schemaSha256: "a".repeat(64),
+      reservedCostMicros: 250_000, requestedServiceTier: "default", maxOutputTokens: 128,
+      schemaSha256: "a".repeat(64), promptSha256: "b".repeat(64),
     });
     if (claim.kind !== "claimed") throw new Error("expected a bounded Luna claim");
     expect(db.getKv("openai:budget:2026-09-28:requests")).toBe("1");

@@ -142,6 +142,7 @@ export interface CategoricalClassification {
   serviceTier: string | null;
   promptVersion: string;
   promptSha256: string;
+  profileSha256: string | null;
   schemaVersion: string;
   schemaSha256: string;
   sentiment: "negative" | "neutral" | "positive" | null;
@@ -167,6 +168,11 @@ export interface CategoricalClassification {
   classifiedAt: number;
 }
 
+export interface CategoricalClassificationDTO extends CategoricalClassification {
+  /** Null only for legacy rows created before attempts were linked. */
+  attemptId: string | null;
+}
+
 export interface CategoricalTrendCounts {
   positive: number;
   neutral: number;
@@ -186,6 +192,7 @@ export interface CategoricalTrendPoint {
 export interface CategoricalTrendLineage {
   promptVersion: string;
   promptSha256: string;
+  profileSha256: string;
   schemaVersion: string;
   schemaSha256: string;
   count: number;
@@ -283,7 +290,7 @@ export interface MentionDTO {
   scoreRetryAt: number | null;
   usageCheckRequired: boolean;
   score: MentionScore | null;
-  classification?: CategoricalClassification | null;
+  classification?: CategoricalClassificationDTO | null;
   error: string | null;
   secDocumentContext?: SecDocumentContext | null;
 }

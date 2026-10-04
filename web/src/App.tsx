@@ -1752,9 +1752,7 @@ export default function App() {
                     {filteredMentions.length > 0 && (
                       <div className="feed-method-note">
                         {filteredMentions.length} matching source {filteredMentions.length === 1 ? "record" : "records"}
-                        {filteredMentions.some((mention) => mention.status === "scored")
-                          ? " · exact-title repeats grouped"
-                          : " · unscored records remain separate"}
+                        {" · scored and pending repeats group by company and normalized title within these loaded rows. Groups are duplicate cues, not proof of independent reporting; every source row remains reviewable."}
                       </div>
                     )}
                     <MentionFeed

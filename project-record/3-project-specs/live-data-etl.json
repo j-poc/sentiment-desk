@@ -1069,6 +1069,7 @@
         "tests/provider-pollers.test.ts",
         "tests/app-price.test.ts",
         "tests/series-chart-state.test.ts",
+        "tests/categorical-series.test.ts",
         "tests/openai-classifier.test.ts",
         "tests/sec-evidence.test.ts",
         "--maxWorkers=1",

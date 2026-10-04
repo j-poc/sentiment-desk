@@ -128,7 +128,7 @@ export function EvidenceBreadth({
             </button>
           )}
           <details className="evidence-coverage">
-            <summary>Coverage and title analysis <span>{summary.scoredRecordCount} Jev scored{categorical.length > 0 ? ` · ${classified.length} Luna classified` : ""} · {summary.exactHeadlineCount} exact-title groups</span></summary>
+            <summary>Coverage and title analysis <span>{summary.scoredRecordCount} Jev scored{categorical.length > 0 ? ` · ${classified.length} Luna classified` : ""} · {summary.exactHeadlineCount} exact-title groups among Jev-scored rows</span></summary>
             {categorical.length > 0 && <p className="evidence-breadth-metrics">
               <strong>Luna in this loaded sample: {classified.length} classified · {reviewRequired} need evidence review · {excluded} excluded</strong>
               <span>Positive {classified.filter((mention) => mention.classification?.sentiment === "positive").length} · Neutral {classified.filter((mention) => mention.classification?.sentiment === "neutral").length} · Negative {classified.filter((mention) => mention.classification?.sentiment === "negative").length}</span>
@@ -140,7 +140,7 @@ export function EvidenceBreadth({
             )}
           <p className="evidence-breadth-metrics">
             <strong>{summary.scoredRecordCount} scored in this sample</strong>
-            <span>{summary.exactHeadlineCount} distinct exact-title {summary.exactHeadlineCount === 1 ? "group" : "groups"}</span>
+            <span>{summary.exactHeadlineCount} distinct exact-title {summary.exactHeadlineCount === 1 ? "group" : "groups"} among Jev-scored rows</span>
             {summary.repeatedHeadlineGroupCount > 0 ? (
               <button
                 type="button"
@@ -148,10 +148,10 @@ export function EvidenceBreadth({
                 aria-controls="mention-feed-panel"
                 onClick={() => onShowRecords("repeated")}
               >
-                {summary.repeatedHeadlineGroupCount} repeated exact-title {summary.repeatedHeadlineGroupCount === 1 ? "group" : "groups"} · {summary.recordsInRepeatedHeadlineGroups} of {summary.scoredRecordCount} scored sample {summary.recordsInRepeatedHeadlineGroups === 1 ? "record" : "records"} <span aria-hidden="true">↘</span>
+                {summary.repeatedHeadlineGroupCount} repeated exact-title {summary.repeatedHeadlineGroupCount === 1 ? "group" : "groups"} · {summary.recordsInRepeatedHeadlineGroups} of {summary.scoredRecordCount} Jev-scored sample {summary.recordsInRepeatedHeadlineGroups === 1 ? "record" : "records"} <span aria-hidden="true">↘</span>
               </button>
             ) : (
-              <span>0 repeated exact-title groups</span>
+              <span>0 repeated exact-title groups among Jev-scored rows</span>
             )}
             {summary.mixedJevLabelGroupCount > 0 ? (
               <button
@@ -171,10 +171,10 @@ export function EvidenceBreadth({
               <b className="text-slate-200">Neutral {summary.sentiment.neutral} of {summary.scoredRecordCount}</b>
               <b className="text-rose-300/90">Negative {summary.sentiment.negative} of {summary.scoredRecordCount}</b>
             </span>
-            <span>{summary.publisherLabelCount} publisher labels</span>
+            <span>Jev-scored publisher labels: {summary.publisherLabelCount}</span>
           </p>
           <p className="evidence-breadth-caveat">
-            Window uses publisher, provider-observed, then retrieval time. Mixed labels means exact-title rows have different Jev most-likely classes. Exact-title matches are only a duplicate cue; publisher labels do not verify independent reporting.
+            Exact-title and mixed-label counts above use only Jev-scored rows; pending Luna rows and other unscored rows are excluded. Window uses publisher, provider-observed, then retrieval time. Mixed labels means exact-title rows have different Jev most-likely classes. Exact-title matches are only a duplicate cue; publisher labels do not verify independent reporting.
           </p>
           <RelatedHeadlineCandidates
             candidates={relatedHeadlineCandidates}

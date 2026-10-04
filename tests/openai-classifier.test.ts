@@ -7,10 +7,14 @@ import { rowToDTO } from "../server/db.js";
 import { TestDesk as Desk } from "./test-desk.js";
 import { ExternalRequestPausedError } from "../server/external-request-gate.js";
 import { OpenAIClassifier, OpenAIClassifierError, OPENAI_MODEL, OPENAI_PROMPT_SHA256, OPENAI_SCHEMA_SHA256, OPENAI_PRICING, prepareOpenAIRequest } from "../server/openai-classifier.js";
-import type { CategoricalClassification, Company } from "../server/types.js";
+import { Pipeline } from "../server/pipeline.js";
+import { HealthTracker } from "../server/health.js";
+import { Hub } from "../server/hub.js";
+import type { CategoricalClassification, Company, RawMention } from "../server/types.js";
 
 const tempDirs: string[] = [];
 const openDbs: Desk[] = [];
+const pipelines: Pipeline[] = [];
 const company: Company = { id: "acme", name: "Acme Incorporated", ticker: "ACME", sector: "Technology", aliases: ["Acme"], color: "#123456" };
 const input = {
   company: { name: company.name, ticker: company.ticker, sector: company.sector },
@@ -18,6 +22,7 @@ const input = {
 };
 
 afterEach(() => {
+  for (const pipeline of pipelines.splice(0)) pipeline.stop();
   for (const db of openDbs.splice(0)) db.close();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   vi.unstubAllGlobals();
@@ -78,6 +83,58 @@ describe("OpenAI Luna categorical classifier", () => {
     await expect(classifier(fetchImpl).classifyPrepared(prepareOpenAIRequest(input))).rejects.toBeInstanceOf(OpenAIClassifierError);
   });
 
+  it.each([
+    ["a different model ID", { model: "gpt-6-luna-unexpected" }, "gpt-6-luna-unexpected", "default"],
+    ["a different service tier", { service_tier: "flex" }, "gpt-6-luna", "flex"],
+  ])("withholds a completed response with %s while preserving its usage receipt", async (_label, overrides, returnedModel, serviceTier) => {
+    const fetchImpl = (async () => new Response(JSON.stringify(responseBody(overrides as Record<string, unknown>)), { status: 200 })) as typeof fetch;
+
+    await expect(classifier(fetchImpl).classifyPrepared(prepareOpenAIRequest(input))).rejects.toMatchObject({
+      name: "OpenAIClassifierError", status: 200, retryable: false, outcomeUnknown: false,
+      returnedModel, serviceTier, usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+    });
+  });
+
+  it("keeps a model-mismatched completed response failed while retaining its provider usage receipt", async () => {
+    const db = new Desk(":memory:");
+    openDbs.push(db);
+    db.seedCompanies([company]);
+    const now = Date.now();
+    const adapterVersion = "google_news_rss/1";
+    const deliveryId = db.recordDelivery({
+      collector: "google_news_rss", companyId: "acme", requestKey: "request-model-mismatch",
+      startedAt: now - 2_000, completedAt: now - 1_000, result: "success", parsedItemCount: 1, adapterVersion,
+    });
+    const source: RawMention = {
+      companyId: "acme", kind: "rss", sourceName: "Reuters", sourceUrl: "https://reuters.example/model-mismatch",
+      tier: "wire", title: input.source.title, snippet: input.source.excerpt, publishedAt: now - 3_000,
+      retrievedAt: now, collector: "google_news_rss", sourceItemId: "model-mismatch", adapterVersion, deliveryId,
+    };
+    const apiFetch = (async () => new Response(JSON.stringify(responseBody({ model: "gpt-6-luna-unexpected" })), { status: 200 })) as typeof fetch;
+    const model = classifier(apiFetch);
+    const health = new HealthTracker(false, false, OPENAI_MODEL, false, false, false, true, new Set(["google_news_rss"]), undefined, {
+      provider: "openai_luna", model: OPENAI_MODEL, configured: true, enabled: true, blockedReason: null,
+    });
+    const pipeline = new Pipeline({
+      db, judge: null, classifier: (prepared) => model.classifyPrepared(prepared), provider: "openai_luna",
+      hub: new Hub(), health, engineLabel: OPENAI_MODEL, inputPricePerMTok: 0, concurrency: 1,
+      allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-04", maxRequests: 1, maxRequestBytes: 100_000, maxDailyCostMicros: 10_000 },
+    });
+    pipelines.push(pipeline);
+
+    pipeline.ingest(source);
+    await pipeline.waitForIdle();
+
+    const saved = db.mentionsForCompany("acme", 0, 10)[0]!;
+    expect(saved).toMatchObject({ status: "failed", score: null, classification: null, usageCheckRequired: true });
+    expect(db.jevAttemptHistory(saved.id)).toMatchObject([{
+      outcome: "response", provider: "openai_luna", resolvedModel: "gpt-6-luna-unexpected",
+      inputTokens: 100, outputTokens: 30, errorCategory: "provider_rejected_or_response_invalid",
+    }]);
+    expect(db.categoricalTrendSnapshot("acme", 24, now).counts.total).toBe(0);
+  });
+
   it("keeps a completed-status unreadable response outcome unknown", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) { controller.error(new Error("connection ended while reading")); },
@@ -106,13 +163,14 @@ describe("OpenAI Luna categorical classifier", () => {
       requestBytes: request.requestBytes, requestSha256: request.payloadSha256, requestedModel: request.requestedModel,
       rubricSha256: request.profileSha256, maxRequests: 3, maxRequestBytes: 100_000, provider: "openai_luna",
       maxDailyCostMicros: 1_000_000, reservedCostMicros: 500, requestedServiceTier: "default", maxOutputTokens: 700,
-      schemaSha256: request.schemaSha256 });
+      schemaSha256: request.schemaSha256, promptSha256: request.promptSha256 });
     expect(claim.kind).toBe("claimed");
     if (claim.kind !== "claimed") throw new Error("claim was not created");
     expect(db.recordJevDispatchIntent(claim.attemptId, 31)).toBe(true);
     const category: CategoricalClassification = {
       provider: "openai_luna", modelRequested: OPENAI_MODEL, modelReturned: "gpt-6-luna", serviceTierRequested: "default", serviceTier: "default",
       promptVersion: "openai-luna-classification/1", promptSha256: OPENAI_PROMPT_SHA256,
+      profileSha256: request.profileSha256,
       schemaVersion: "openai-luna-classification-json/1", schemaSha256: OPENAI_SCHEMA_SHA256,
       sentiment: "positive", eventType: "corporate_action", takeaway: "product_win", about: true, material: true,
       investorRelevant: true, evidenceSufficient: true, summary: "Acme won a contract.",
@@ -147,7 +205,7 @@ describe("OpenAI Luna categorical classifier", () => {
     const args = { id, now: 30, allowedCollectors: ["google_news_rss"] as const, utcDay: "2026-10-01", requestBytes: request.requestBytes,
       requestSha256: request.payloadSha256, requestedModel: request.requestedModel, rubricSha256: request.profileSha256,
       maxRequests: 3, maxRequestBytes: 100_000, provider: "openai_luna" as const, reservedCostMicros: 500,
-      requestedServiceTier: "default" as const, maxOutputTokens: 700, schemaSha256: request.schemaSha256 };
+      requestedServiceTier: "default" as const, maxOutputTokens: 700, schemaSha256: request.schemaSha256, promptSha256: request.promptSha256 };
     expect(db.claimForScoringWithBudget({ ...args, maxDailyCostMicros: 0 }).kind).toBe("budget_exhausted");
     expect(db.claimForScoringWithBudget({ ...args, maxDailyCostMicros: 499 }).kind).toBe("budget_exhausted");
     expect(db.claimForScoringWithBudget({ ...args, maxDailyCostMicros: 500 }).kind).toBe("claimed");
@@ -169,7 +227,8 @@ describe("OpenAI Luna categorical classifier", () => {
     const claim = (id: string) => db.claimForScoringWithBudget({ id, now: 30, allowedCollectors: ["google_news_rss"], utcDay: "2026-10-01",
       requestBytes: request.requestBytes, requestSha256: request.payloadSha256, requestedModel: request.requestedModel,
       rubricSha256: request.profileSha256, maxRequests: 5, maxRequestBytes: 100_000, provider: "openai_luna",
-      maxDailyCostMicros: 1_000, reservedCostMicros: 500, requestedServiceTier: "default", maxOutputTokens: 700, schemaSha256: request.schemaSha256 });
+      maxDailyCostMicros: 1_000, reservedCostMicros: 500, requestedServiceTier: "default", maxOutputTokens: 700,
+      schemaSha256: request.schemaSha256, promptSha256: request.promptSha256 });
     const first = claim(ids[0]!);
     const concurrent = claim(ids[1]!);
     expect(first.kind).toBe("claimed");
@@ -208,7 +267,7 @@ describe("OpenAI Luna categorical classifier", () => {
       requestBytes: request.requestBytes, requestSha256: request.payloadSha256, requestedModel: request.requestedModel,
       rubricSha256: request.profileSha256, maxRequests: 5, maxRequestBytes: 100_000, provider: "openai_luna",
       maxDailyCostMicros: 20_000, reservedCostMicros: 1_000, requestedServiceTier: "default", maxOutputTokens: 700,
-      schemaSha256: request.schemaSha256 });
+      schemaSha256: request.schemaSha256, promptSha256: request.promptSha256 });
     expect(claim.kind).toBe("claimed");
     if (claim.kind !== "claimed") throw new Error("budget reservation was not created");
     db.recordJevDispatchIntent(claim.attemptId, 31);
@@ -224,7 +283,7 @@ describe("OpenAI Luna categorical classifier", () => {
       requestBytes: request.requestBytes, requestSha256: request.payloadSha256, requestedModel: request.requestedModel,
       rubricSha256: request.profileSha256, maxRequests: 5, maxRequestBytes: 100_000, provider: "openai_luna",
       maxDailyCostMicros: 20_000, reservedCostMicros: 1_000, requestedServiceTier: "default", maxOutputTokens: 700,
-      schemaSha256: request.schemaSha256 }).kind).toBe("budget_exhausted");
+      schemaSha256: request.schemaSha256, promptSha256: request.promptSha256 }).kind).toBe("budget_exhausted");
   });
 
   it("releases Luna request and cost reservations for an explicitly not-sent storage pause", () => {
@@ -239,7 +298,7 @@ describe("OpenAI Luna categorical classifier", () => {
       requestBytes: request.requestBytes, requestSha256: request.payloadSha256, requestedModel: request.requestedModel,
       rubricSha256: request.profileSha256, maxRequests: 1, maxRequestBytes: 100_000, provider: "openai_luna",
       maxDailyCostMicros: 500, reservedCostMicros: 500, requestedServiceTier: "default", maxOutputTokens: 700,
-      schemaSha256: request.schemaSha256 });
+      schemaSha256: request.schemaSha256, promptSha256: request.promptSha256 });
     expect(claim.kind).toBe("claimed");
     if (claim.kind !== "claimed") throw new Error("budget reservation was not created");
     expect(db.getKv("openai:budget:2026-10-01:requests")).toBe("1");
@@ -272,7 +331,7 @@ describe("OpenAI Luna categorical classifier", () => {
         requestBytes: request.requestBytes, requestSha256: request.payloadSha256, requestedModel: request.requestedModel,
         rubricSha256: request.profileSha256, maxRequests: 5, maxRequestBytes: 100_000, provider: "openai_luna",
         maxDailyCostMicros: 20_000, reservedCostMicros: 1_000, requestedServiceTier: "default", maxOutputTokens: 700,
-        schemaSha256: request.schemaSha256 });
+        schemaSha256: request.schemaSha256, promptSha256: request.promptSha256 });
       expect(claim.kind).toBe("claimed");
       if (claim.kind !== "claimed") throw new Error("budget reservation was not created");
       db.recordJevDispatchIntent(claim.attemptId, 40 + index);

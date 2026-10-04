@@ -6,6 +6,7 @@ import { z } from "zod";
 import type {
   CollectorId,
   CategoricalClassification,
+  CategoricalClassificationDTO,
   CategoricalBucketCursor,
   CategoricalBucketEvidencePage,
   CategoricalTrendCounts,
@@ -34,9 +35,49 @@ import { canonicalDatabasePath, DeskWriterLock, WriterAlreadyOwnedError } from "
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
 const SQLITE_FULL = 13;
 const CATEGORICAL_BUCKET_MS = 15 * 60_000;
+const CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER = `
+  CREATE TRIGGER IF NOT EXISTS categorical_classifications_profile_guard
+  BEFORE INSERT ON categorical_classifications
+  WHEN NEW.provider IS NOT 'openai_luna'
+    OR NEW.model_requested IS NOT 'gpt-6-luna'
+    OR NEW.model_returned IS NOT NEW.model_requested
+    OR NEW.requested_service_tier IS NOT 'default'
+    OR NEW.service_tier IS NOT NEW.requested_service_tier
+    OR NOT EXISTS (
+      SELECT 1
+      FROM jev_request_attempts a
+      JOIN jev_attempt_events e ON e.attempt_id = a.id
+      WHERE a.id = NEW.attempt_id
+        AND a.observation_id = NEW.observation_id
+        AND a.provider = 'openai_luna'
+        AND a.requested_model = NEW.model_requested
+        AND a.rubric_sha = NEW.profile_sha256
+        AND a.prompt_sha256 = NEW.prompt_sha256
+        AND a.schema_sha256 = NEW.schema_sha256
+        AND a.requested_service_tier = NEW.requested_service_tier
+        AND e.event_type = 'response'
+        AND e.http_status BETWEEN 200 AND 299
+        AND e.resolved_model = NEW.model_returned
+        AND e.response_service_tier = NEW.service_tier
+        AND e.response_id = NEW.response_id
+        AND e.response_sha256 = NEW.response_sha256
+        AND e.input_tokens IS NEW.input_tokens
+        AND e.output_tokens IS NEW.output_tokens
+        AND e.cached_input_tokens IS NEW.cached_input_tokens
+        AND e.cache_write_tokens IS NEW.cache_write_tokens
+        AND e.reasoning_tokens IS NEW.reasoning_tokens
+        AND e.total_tokens IS NEW.total_tokens
+        AND e.estimated_cost_usd IS NEW.estimated_cost_usd
+        AND e.latency_ms IS NEW.latency_ms
+    )
+  BEGIN
+    SELECT RAISE(ABORT, 'Categorical classification profile or receipt mismatch');
+  END;
+`;
 const REAL_CATEGORICAL_FILTER = `m.collector NOT IN ('demo_simulation', 'legacy_unknown')
   AND COALESCE(m.engine, '') <> 'demo-sim'
   AND c.provider = 'openai_luna' AND c.model_requested = 'gpt-6-luna' AND c.model_returned = 'gpt-6-luna'
+  AND c.requested_service_tier = 'default' AND c.service_tier = 'default'
   AND c.prompt_version <> '' AND length(c.prompt_sha256) = 64 AND c.prompt_sha256 NOT GLOB '*[^0-9a-f]*'
   AND c.schema_version <> '' AND length(c.schema_sha256) = 64 AND c.schema_sha256 NOT GLOB '*[^0-9a-f]*'
   AND c.response_id <> '' AND length(c.response_sha256) = 64 AND c.response_sha256 NOT GLOB '*[^0-9a-f]*'
@@ -50,7 +91,22 @@ const REAL_CATEGORICAL_FILTER = `m.collector NOT IN ('demo_simulation', 'legacy_
   AND m.delivery_id IS NOT NULL AND m.source_url GLOB 'https://*'
   AND m.retrieved_at <= c.classified_at AND o.adapter_version = d.adapter_version
   AND d.id = m.delivery_id AND d.collector = m.collector AND d.company_id = m.company_id
-  AND d.result IN ('success', 'partial')`;
+  AND d.result IN ('success', 'partial')
+  AND EXISTS (
+    SELECT 1 FROM jev_request_attempts a
+    JOIN jev_attempt_events e ON e.attempt_id = a.id
+    WHERE a.id = c.attempt_id AND a.observation_id = c.observation_id AND a.provider = c.provider
+      AND a.requested_model = c.model_requested AND a.rubric_sha = c.profile_sha256
+      AND a.prompt_sha256 = c.prompt_sha256 AND a.schema_sha256 = c.schema_sha256
+      AND a.requested_service_tier = c.requested_service_tier
+      AND e.event_type = 'response' AND e.http_status BETWEEN 200 AND 299
+      AND e.resolved_model = c.model_returned AND e.response_service_tier = c.service_tier
+      AND e.response_id = c.response_id AND e.response_sha256 = c.response_sha256
+      AND e.input_tokens IS c.input_tokens AND e.output_tokens IS c.output_tokens
+      AND e.cached_input_tokens IS c.cached_input_tokens AND e.cache_write_tokens IS c.cache_write_tokens
+      AND e.reasoning_tokens IS c.reasoning_tokens AND e.total_tokens IS c.total_tokens
+      AND e.estimated_cost_usd IS c.estimated_cost_usd AND e.latency_ms IS c.latency_ms
+  )`;
 const CATEGORICAL_COUNTS_SQL = `
   COUNT(*) AS total,
   SUM(CASE WHEN c.disposition='classified' AND c.sentiment='positive' THEN 1 ELSE 0 END) AS positive,
@@ -154,11 +210,14 @@ function processIsAlive(pid: number): boolean {
 function hasCurrentReadableSchema(db: DatabaseSync): boolean {
   try {
     const version = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-    if (version?.user_version !== 9) return false;
+    if (version?.user_version !== 11) return false;
     const objects = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name));
-    return ["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
-      "source_deliveries", "source_ingestions", "price_points", "alert_outbox", "desk_runtime_sessions"]
-      .every((name) => objects.has(name));
+    if (!["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
+      "source_deliveries", "source_ingestions", "price_points", "alert_outbox", "desk_runtime_sessions", "jev_request_attempts"]
+      .every((name) => objects.has(name))) return false;
+    const attempts = new Set((db.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name));
+    const classifications = new Set((db.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((row) => row.name));
+    return attempts.has("prompt_sha256") && classifications.has("profile_sha256") && classifications.has("attempt_id");
   } catch {
     return false;
   }
@@ -331,7 +390,7 @@ CREATE TABLE IF NOT EXISTS jev_request_attempts (
  request_sha256 TEXT NOT NULL CHECK (length(request_sha256) = 64), request_bytes INTEGER NOT NULL CHECK (request_bytes > 0),
  requested_model TEXT NOT NULL, rubric_sha TEXT NOT NULL CHECK (length(rubric_sha) = 64), reserved_at INTEGER NOT NULL,
  provider TEXT NOT NULL DEFAULT 'typesafe', reserved_cost_micros INTEGER NOT NULL DEFAULT 0,
- requested_service_tier TEXT, max_daily_cost_micros INTEGER NOT NULL DEFAULT 0, max_output_tokens INTEGER NOT NULL DEFAULT 0, budget_day TEXT, schema_sha256 TEXT,
+ requested_service_tier TEXT, max_daily_cost_micros INTEGER NOT NULL DEFAULT 0, max_output_tokens INTEGER NOT NULL DEFAULT 0, budget_day TEXT, schema_sha256 TEXT, prompt_sha256 TEXT,
  UNIQUE(observation_id, attempt_number)
 );
 CREATE INDEX IF NOT EXISTS jev_attempts_observation ON jev_request_attempts(observation_id, attempt_number DESC);
@@ -356,10 +415,11 @@ CREATE TRIGGER IF NOT EXISTS jev_request_attempts_no_delete BEFORE DELETE ON jev
 CREATE TRIGGER IF NOT EXISTS jev_attempt_events_no_update BEFORE UPDATE ON jev_attempt_events BEGIN SELECT RAISE(ABORT, 'Jev request attempt events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS jev_attempt_events_no_delete BEFORE DELETE ON jev_attempt_events BEGIN SELECT RAISE(ABORT, 'Jev request attempt events are immutable'); END;
 CREATE TABLE IF NOT EXISTS categorical_classifications (
- observation_id TEXT PRIMARY KEY REFERENCES source_observations(id), provider TEXT NOT NULL CHECK(provider='openai_luna'),
+ observation_id TEXT PRIMARY KEY REFERENCES source_observations(id), attempt_id TEXT NOT NULL REFERENCES jev_request_attempts(id),
+ provider TEXT NOT NULL CHECK(provider='openai_luna'),
  model_requested TEXT NOT NULL, model_returned TEXT NOT NULL, requested_service_tier TEXT NOT NULL, service_tier TEXT,
  prompt_version TEXT NOT NULL, prompt_sha256 TEXT NOT NULL CHECK(length(prompt_sha256)=64),
- schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL CHECK(length(schema_sha256)=64), sentiment TEXT,
+ schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL CHECK(length(schema_sha256)=64), profile_sha256 TEXT NOT NULL CHECK(length(profile_sha256)=64), sentiment TEXT,
  event_type TEXT, takeaway TEXT, about INTEGER, material INTEGER, investor_relevant INTEGER,
  evidence_sufficient INTEGER NOT NULL CHECK(evidence_sufficient IN (0,1)), summary TEXT, supporting_excerpt TEXT,
  disposition TEXT NOT NULL CHECK(disposition IN ('classified','excluded','review_required')),
@@ -479,6 +539,8 @@ export interface MentionRow {
   classification_service_tier?: string | null;
   classification_prompt_version?: string | null;
   classification_prompt_sha256?: string | null;
+  classification_profile_sha256?: string | null;
+  classification_attempt_id?: string | null;
   classification_schema_version?: string | null;
   classification_schema_sha256?: string | null;
   classification_sentiment?: string | null;
@@ -537,6 +599,7 @@ export interface JevAttemptSummary {
   requestBytes: number;
   requestedModel: string;
   rubricSha256: string;
+  promptSha256: string | null;
   reservedAt: number;
   dispatchAt: number | null;
   outcome: "prepared" | "dispatch_intent" | JevAttemptOutcome;
@@ -724,10 +787,13 @@ export class Desk {
         this.exec(SCHEMA);
         this.migrate();
       }
+      // Additive and idempotent: existing v9 databases receive the guard on
+      // writable startup without a table rebuild or historical row rewrite.
+      this.exec(CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER);
       this.prepare("INSERT INTO desk_runtime_sessions(id, pid, started_at) VALUES (?, ?, ?)")
         .run(this.runtimeId, process.pid, Date.now());
       this.recoverUnfinishedJevAttempts();
-      this.exec("PRAGMA user_version = 9");
+      this.exec("PRAGMA user_version = 11");
       this.storageEnforcementEnabled = true;
     } catch (error) {
       try { openedDb?.close(); } catch { /* preserve startup failure */ }
@@ -823,6 +889,7 @@ export class Desk {
       ["reserved_cost_micros", "INTEGER NOT NULL DEFAULT 0"],
       ["requested_service_tier", "TEXT"], ["max_daily_cost_micros", "INTEGER NOT NULL DEFAULT 0"],
       ["max_output_tokens", "INTEGER NOT NULL DEFAULT 0"], ["budget_day", "TEXT"], ["schema_sha256", "TEXT"],
+      ["prompt_sha256", "TEXT"],
     ];
     for (const [name, ddl] of attemptAdditions) {
       if (!jevAttemptCols.has(name)) this.exec(`ALTER TABLE jev_request_attempts ADD COLUMN ${name} ${ddl}`);
@@ -836,7 +903,7 @@ export class Desk {
       if (!eventCols.has(name)) this.exec(`ALTER TABLE jev_attempt_events ADD COLUMN ${name} ${ddl}`);
     }
     const categoricalCols = new Set((this.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((r) => r.name));
-    for (const [name, ddl] of [["requested_service_tier", "TEXT NOT NULL DEFAULT 'default'"], ["service_tier", "TEXT"]] as Array<[string, string]>) {
+    for (const [name, ddl] of [["requested_service_tier", "TEXT NOT NULL DEFAULT 'default'"], ["service_tier", "TEXT"], ["profile_sha256", "TEXT"], ["attempt_id", "TEXT REFERENCES jev_request_attempts(id)"]] as Array<[string, string]>) {
       if (!categoricalCols.has(name)) this.exec(`ALTER TABLE categorical_classifications ADD COLUMN ${name} ${ddl}`);
     }
 
@@ -933,7 +1000,7 @@ export class Desk {
           insertJudgment.run(...judgmentValues);
         }
         this.createMentionsView();
-        this.exec("PRAGMA user_version = 9");
+        this.exec("PRAGMA user_version = 11");
         this.exec("COMMIT");
       } catch (err) {
         this.rollbackIfActive();
@@ -957,7 +1024,7 @@ export class Desk {
       }
       if (object?.type === "view") this.exec("DROP VIEW mentions");
       this.createMentionsView();
-      this.exec("PRAGMA user_version = 9");
+      this.exec("PRAGMA user_version = 11");
       this.exec("COMMIT");
     } catch (err) {
       this.rollbackIfActive();
@@ -979,7 +1046,9 @@ export class Desk {
         c.provider AS classification_provider, c.model_requested AS classification_model_requested,
         c.model_returned AS classification_model_returned, c.requested_service_tier AS classification_service_tier_requested,
         c.service_tier AS classification_service_tier, c.prompt_version AS classification_prompt_version,
-        c.prompt_sha256 AS classification_prompt_sha256, c.schema_version AS classification_schema_version,
+        c.prompt_sha256 AS classification_prompt_sha256, c.profile_sha256 AS classification_profile_sha256,
+        c.attempt_id AS classification_attempt_id,
+        c.schema_version AS classification_schema_version,
         c.schema_sha256 AS classification_schema_sha256, c.sentiment AS classification_sentiment,
         c.event_type AS classification_event_type, c.takeaway AS classification_takeaway,
         c.about AS classification_about, c.material AS classification_material,
@@ -1470,6 +1539,7 @@ export class Desk {
     requestedServiceTier?: "default";
     maxOutputTokens?: number;
     schemaSha256?: string;
+    promptSha256?: string;
   }): BudgetedScoreClaim {
     const provider = input.provider ?? "typesafe";
     if (input.allowedCollectors.length === 0) return { kind: "not_claimed" };
@@ -1484,7 +1554,7 @@ export class Desk {
       (provider === "openai_luna" && (!Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros! <= 0 ||
         !Number.isSafeInteger(input.reservedCostMicros) || input.reservedCostMicros! <= 0 ||
         input.requestedServiceTier !== "default" || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens! <= 0 ||
-        !/^[a-f0-9]{64}$/.test(input.schemaSha256 ?? "")))
+        !/^[a-f0-9]{64}$/.test(input.schemaSha256 ?? "") || !/^[a-f0-9]{64}$/.test(input.promptSha256 ?? "")))
     ) return { kind: "budget_exhausted" };
 
     const collectorSlots = input.allowedCollectors.map(() => "?").join(", ");
@@ -1569,10 +1639,10 @@ export class Desk {
       const attemptId = randomUUID();
       this.prepare(`INSERT INTO jev_request_attempts
         (id, observation_id, runtime_id, attempt_number, request_sha256, request_bytes, requested_model, rubric_sha, reserved_at, provider, reserved_cost_micros,
-         requested_service_tier, max_daily_cost_micros, max_output_tokens, budget_day, schema_sha256)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+         requested_service_tier, max_daily_cost_micros, max_output_tokens, budget_day, schema_sha256, prompt_sha256)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(attemptId, input.id, this.runtimeId, row.score_attempts, input.requestSha256, input.requestBytes, input.requestedModel.trim(), input.rubricSha256, input.now, provider, costMicros,
-          input.requestedServiceTier ?? null, input.maxDailyCostMicros ?? 0, input.maxOutputTokens ?? 0, input.utcDay, input.schemaSha256 ?? null);
+          input.requestedServiceTier ?? null, input.maxDailyCostMicros ?? 0, input.maxOutputTokens ?? 0, input.utcDay, input.schemaSha256 ?? null, input.promptSha256 ?? null);
       this.exec("COMMIT");
       return { kind: "claimed", row, attemptId };
     } catch (err) {
@@ -1673,17 +1743,32 @@ export class Desk {
   }
 
   recordCategoricalClassification(observationId: string, classification: CategoricalClassification, receipt: JevAttemptReceipt): void {
+    if (classification.provider !== "openai_luna" || classification.modelRequested !== "gpt-6-luna" ||
+      classification.modelReturned !== "gpt-6-luna" || classification.serviceTierRequested !== "default" ||
+      classification.serviceTier !== "default" || receipt.outcome !== "response" ||
+      receipt.httpStatus == null || receipt.httpStatus < 200 || receipt.httpStatus >= 300 ||
+      receipt.resolvedModel !== classification.modelReturned || receipt.responseServiceTier !== classification.serviceTier ||
+      receipt.responseId !== classification.responseId || receipt.responseSha256 !== classification.responseSha256 ||
+      receipt.inputTokens !== classification.inputTokens || receipt.outputTokens !== classification.outputTokens ||
+      (receipt.cachedInputTokens ?? null) !== classification.cachedInputTokens ||
+      (receipt.cacheWriteInputTokens ?? null) !== classification.cacheWriteInputTokens ||
+      (receipt.reasoningTokens ?? null) !== classification.reasoningTokens ||
+      (receipt.totalTokens ?? null) !== classification.totalTokens ||
+      (receipt.estimatedCostUsd ?? null) !== classification.estimatedCostUsd || receipt.latencyMs !== classification.latencyMs) {
+      throw new Error("Categorical classification does not match the required GPT-6 Luna profile and complete response receipt");
+    }
     this.exec("BEGIN IMMEDIATE");
     try {
       this.appendJevAttemptReceipt(receipt);
       this.prepare(`INSERT INTO categorical_classifications
-        (observation_id, provider, model_requested, model_returned, requested_service_tier, service_tier, prompt_version, prompt_sha256,
-         schema_version, schema_sha256, sentiment, event_type, takeaway, about, material, investor_relevant,
+        (observation_id, attempt_id, provider, model_requested, model_returned, requested_service_tier, service_tier, prompt_version, prompt_sha256,
+         schema_version, schema_sha256, profile_sha256, sentiment, event_type, takeaway, about, material, investor_relevant,
          evidence_sufficient, summary, supporting_excerpt, disposition, response_id, response_sha256,
          input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, reasoning_tokens, total_tokens, estimated_cost_usd, latency_ms, classified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(observationId, classification.provider, classification.modelRequested, classification.modelReturned,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(observationId, receipt.attemptId, classification.provider, classification.modelRequested, classification.modelReturned,
           classification.serviceTierRequested, classification.serviceTier, classification.promptVersion, classification.promptSha256, classification.schemaVersion, classification.schemaSha256,
+          classification.profileSha256,
           classification.sentiment, classification.eventType, classification.takeaway,
           classification.about == null ? null : classification.about ? 1 : 0,
           classification.material == null ? null : classification.material ? 1 : 0,
@@ -1705,7 +1790,7 @@ export class Desk {
   jevAttemptHistory(observationId: string, limit = 10): JevAttemptSummary[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error("Jev attempt history limit must be between 1 and 20");
     const rows = this.prepare(`SELECT a.id AS attempt_id, a.attempt_number, a.request_sha256, a.request_bytes,
-        a.requested_model, a.rubric_sha, a.reserved_at,
+        a.requested_model, a.rubric_sha, a.prompt_sha256, a.reserved_at,
         CASE WHEN EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id=a.id AND e.event_type='not_sent')
           THEN NULL ELSE (SELECT occurred_at FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') END AS dispatch_at,
         COALESCE((SELECT event_type FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')),
@@ -1732,6 +1817,7 @@ export class Desk {
     return rows.map((row) => ({
       attemptId: String(row.attempt_id), attemptNumber: Number(row.attempt_number), requestSha256: String(row.request_sha256),
       requestBytes: Number(row.request_bytes), requestedModel: String(row.requested_model), rubricSha256: String(row.rubric_sha),
+      promptSha256: row.prompt_sha256 == null ? null : String(row.prompt_sha256),
       reservedAt: Number(row.reserved_at), dispatchAt: row.dispatch_at == null ? null : Number(row.dispatch_at),
       outcome: String(row.outcome) as JevAttemptSummary["outcome"], completedAt: row.completed_at == null ? null : Number(row.completed_at),
       httpStatus: row.http_status == null ? null : Number(row.http_status), inputTokens: row.input_tokens == null ? null : Number(row.input_tokens),
@@ -2395,12 +2481,12 @@ export class Desk {
     }), { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 });
     const latestRow = this.prepare(`SELECT MAX(c.classified_at) AS latest ${baseJoin} WHERE ${validScope}`)
       .get(companyId, throughMs, fromMs, throughMs, maxRowId) as { latest: number | null };
-    const lineageRows = this.prepare(`SELECT c.prompt_version, c.prompt_sha256, c.schema_version, c.schema_sha256, COUNT(*) AS count
+    const lineageRows = this.prepare(`SELECT c.prompt_version, c.prompt_sha256, c.profile_sha256, c.schema_version, c.schema_sha256, COUNT(*) AS count
       ${baseJoin} WHERE ${validScope}
-      GROUP BY c.prompt_version, c.prompt_sha256, c.schema_version, c.schema_sha256
+      GROUP BY c.prompt_version, c.prompt_sha256, c.profile_sha256, c.schema_version, c.schema_sha256
       ORDER BY count DESC, c.prompt_version, c.schema_version`).all(
       companyId, throughMs, fromMs, throughMs, maxRowId,
-    ) as Array<{ prompt_version: string; prompt_sha256: string; schema_version: string; schema_sha256: string; count: number }>;
+    ) as Array<{ prompt_version: string; prompt_sha256: string; profile_sha256: string; schema_version: string; schema_sha256: string; count: number }>;
     const candidateClassificationCount = Number(candidateRow.count);
     const eligibleObservationCount = counts.total;
     return {
@@ -2410,7 +2496,7 @@ export class Desk {
       withheldInvalidCount: Math.max(0, candidateClassificationCount - eligibleObservationCount),
       latestClassifiedAt: latestRow.latest == null ? null : Number(latestRow.latest),
       lineages: lineageRows.map((row) => ({
-        promptVersion: row.prompt_version, promptSha256: row.prompt_sha256,
+        promptVersion: row.prompt_version, promptSha256: row.prompt_sha256, profileSha256: row.profile_sha256,
         schemaVersion: row.schema_version, schemaSha256: row.schema_sha256, count: Number(row.count),
       })),
     };
@@ -2863,6 +2949,8 @@ export function rowToDTO(r: MentionRow): MentionDTO {
   const classificationComplete = wantsClassification && r.classification_provider === "openai_luna" &&
     typeof r.classification_model_requested === "string" && typeof r.classification_model_returned === "string" &&
     typeof r.classification_prompt_version === "string" && typeof r.classification_prompt_sha256 === "string" &&
+    (r.classification_profile_sha256 == null || typeof r.classification_profile_sha256 === "string") &&
+    (r.classification_attempt_id == null || typeof r.classification_attempt_id === "string") &&
     typeof r.classification_schema_version === "string" && typeof r.classification_schema_sha256 === "string" &&
     (r.classification_sentiment == null || typeof r.classification_sentiment === "string") &&
     (r.classification_event_type == null || typeof r.classification_event_type === "string") &&
@@ -2885,11 +2973,13 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     estimatedInputCostUsd: r.cost_usd!,
     latencyMs: r.latency_ms!, rubricSha: r.rubric_sha!, scoredAt: r.scored_at!,
   } : null;
-  const classification: CategoricalClassification | null = classificationComplete ? {
+  const classification: CategoricalClassificationDTO | null = classificationComplete ? {
     provider: "openai_luna",
-        modelRequested: r.classification_model_requested!, modelReturned: r.classification_model_returned!,
-        serviceTierRequested: "default", serviceTier: r.classification_service_tier ?? null,
+    attemptId: r.classification_attempt_id ?? null,
+    modelRequested: r.classification_model_requested!, modelReturned: r.classification_model_returned!,
+    serviceTierRequested: "default", serviceTier: r.classification_service_tier ?? null,
     promptVersion: r.classification_prompt_version!, promptSha256: r.classification_prompt_sha256!,
+    profileSha256: r.classification_profile_sha256 ?? null,
     schemaVersion: r.classification_schema_version!, schemaSha256: r.classification_schema_sha256!,
     sentiment: r.classification_sentiment as CategoricalClassification["sentiment"],
     eventType: r.classification_event_type ?? null, takeaway: r.classification_takeaway ?? null,

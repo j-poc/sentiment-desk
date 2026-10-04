@@ -61,8 +61,9 @@ function setup(
   const db = new Desk(join(directory, "desk.db"));
   db.seedCompanies([company]);
   const health = new HealthTracker(true, judge !== null, "jev-latest");
+  const hub = new Hub();
   const pipeline = new Pipeline({
-    db, judge: judge ? async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }) : null, hub: new Hub(), health,
+    db, judge: judge ? async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }) : null, hub, health,
     engineLabel: "jev-latest", inputPricePerMTok: 0.042, concurrency: options.concurrency ?? 1,
     allowedCollectors: options.allowedCollectors ?? new Set(["google_news_rss"]),
     externalRequestsEnabled: options.externalRequestsEnabled,
@@ -84,10 +85,87 @@ function setup(
     startedAt: source.retrievedAt - 1_000, completedAt: source.retrievedAt + 1_000,
     result: "success", parsedItemCount: 1, responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
   });
-  return { db, pipeline, source, health, dbPath: join(directory, "desk.db") };
+  return { db, pipeline, source, health, hub, dbPath: join(directory, "desk.db") };
 }
 
 describe("Jev pipeline recovery", () => {
+  it("streams newly persisted pending evidence and coalesces company count updates", async () => {
+    vi.useFakeTimers();
+    const { db, pipeline, source, hub } = setup(null, { externalRequestsEnabled: false });
+    const otherCompany: Company = {
+      id: "other", name: "Other Incorporated", ticker: "OTHR", sector: "Technology", aliases: ["Other"], color: "#654321",
+    };
+    db.seedCompanies([otherCompany]);
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    hub.add((event, data) => { events.push({ event, data: JSON.parse(data) as Record<string, unknown> }); });
+    const sharedSnapshotRead = vi.spyOn(pipeline, "snapshots");
+    try {
+      const secondReceipt = db.recordDelivery({
+        collector: "google_news_rss", companyId: company.id, requestKey: "test:second-receipt",
+        startedAt: source.retrievedAt + 1, completedAt: source.retrievedAt + 2,
+        result: "success", parsedItemCount: 1, responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
+      });
+      const otherReceipt = db.recordDelivery({
+        collector: "google_news_rss", companyId: otherCompany.id, requestKey: "test:other-receipt",
+        startedAt: source.retrievedAt + 3, completedAt: source.retrievedAt + 4,
+        result: "success", parsedItemCount: 1, responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
+      });
+      expect(pipeline.ingest(source)).toBe(true);
+      expect(pipeline.ingest({
+        ...source, deliveryId: secondReceipt, sourceItemId: "second-acme-product",
+        title: "Acme expands the product launch",
+      })).toBe(true);
+      expect(pipeline.ingest({
+        ...source, companyId: otherCompany.id, deliveryId: otherReceipt,
+        sourceItemId: "other-company-news", title: "Other reports a product launch",
+      })).toBe(true);
+      expect(pipeline.ingest(source)).toBe(false);
+
+      const mentionEvents = events.filter((item) => item.event === "mention");
+      expect(mentionEvents).toHaveLength(3);
+      expect(mentionEvents.map((item) => item.data.status)).toEqual(["pending", "pending", "pending"]);
+      const firstPersisted = db.mentionRow(String(mentionEvents[0]?.data.id));
+      expect(mentionEvents[0]?.data).toMatchObject({
+        id: firstPersisted?.id,
+        companyId: company.id,
+        title: source.title,
+        publishedAt: source.publishedAt,
+        retrievedAt: source.retrievedAt,
+        status: "pending",
+      });
+      expect(events.filter((item) => item.event === "company")).toHaveLength(0);
+
+      vi.spyOn(db, "insertObservation").mockImplementation(() => { throw new Error("simulated rejected insert"); });
+      expect(() => pipeline.ingest({ ...source, sourceItemId: "rejected-observation" })).toThrow("simulated rejected insert");
+      expect(events.filter((item) => item.event === "mention")).toHaveLength(3);
+
+      await vi.advanceTimersByTimeAsync(50);
+      const companyEvents = events.filter((item) => item.event === "company");
+      expect(companyEvents).toHaveLength(2);
+      expect(companyEvents.map((item) => item.data)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: company.id, sourceRecords24h: 2 }),
+        expect.objectContaining({ id: otherCompany.id, sourceRecords24h: 1 }),
+      ]));
+      expect(sharedSnapshotRead).toHaveBeenCalledTimes(1);
+      expect(db.mentionsForCompany(company.id, 0, 10)).toHaveLength(2);
+      expect(db.mentionsForCompany(otherCompany.id, 0, 10)).toHaveLength(1);
+    } finally { db.close(); }
+  });
+
+  it("cancels a deferred company update on stop while retaining the saved count", async () => {
+    vi.useFakeTimers();
+    const { db, pipeline, source, hub } = setup(null, { externalRequestsEnabled: false });
+    const events: string[] = [];
+    hub.add((event) => { events.push(event); });
+    try {
+      expect(pipeline.ingest(source)).toBe(true);
+      pipeline.stop();
+      await vi.runAllTimersAsync();
+      expect(events).toEqual(["mention"]);
+      expect(pipeline.snapshot(company.id).sourceRecords24h).toBe(1);
+    } finally { db.close(); }
+  });
+
   it("keeps both Jev and webhook requests paused when external requests are disabled", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);

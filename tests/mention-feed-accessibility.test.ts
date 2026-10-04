@@ -38,6 +38,15 @@ function savedScore(id: string, sentiment: "positive" | "negative"): Mention {
   };
 }
 
+function pendingMention(id: string): Mention {
+  return {
+    ...savedScore(id, "positive"),
+    title: "Acme expands manufacturing capacity",
+    status: "pending",
+    score: null,
+  };
+}
+
 describe("mention feed disclosure states", () => {
   it("does not describe an unfinished or failed group lookup as an empty result", () => {
     const mention = savedScore("one", "positive");
@@ -58,6 +67,19 @@ describe("mention feed disclosure states", () => {
     }));
 
     expect(markup).toContain("aria-label=\"Exact title group “Acme expands manufacturing capacity”");
+  });
+
+  it("groups pending exact-title rows while keeping their unclassified status and caveat visible", () => {
+    const markup = renderToStaticMarkup(createElement(MentionFeed, {
+      mentions: [pendingMention("one"), pendingMention("two")],
+      onOpen: () => undefined,
+    }));
+
+    expect(markup).toContain("Unclassified exact title group");
+    expect(markup).toContain("2 loaded pending rows");
+    expect(markup).toContain("counts cover loaded rows");
+    expect(markup).toContain("duplicate cue only, not proof of independent reports or investors");
+    expect(markup).toContain("Review 2 rows");
   });
 
   it("offers a direct retry when the normal feed request fails", () => {

@@ -11,9 +11,10 @@ afterEach(() => vi.unstubAllGlobals());
 
 // Isolated UI contract fixture; never inserted into a product database or preview.
 const judgment: CategoricalClassification = {
+  attemptId: "test-attempt",
   provider: "openai_luna", modelRequested: "gpt-6-luna", modelReturned: "gpt-6-luna",
   serviceTierRequested: "default", serviceTier: "default", cacheWriteInputTokens: 0,
-  promptVersion: "test", promptSha256: "a".repeat(64), schemaVersion: "test", schemaSha256: "b".repeat(64),
+  promptVersion: "test", promptSha256: "a".repeat(64), profileSha256: "d".repeat(64), schemaVersion: "test", schemaSha256: "b".repeat(64),
   sentiment: "positive", eventType: "product", takeaway: "product_win", about: true,
   investorRelevant: true, material: true, evidenceSufficient: true,
   summary: "The supplied excerpt describes a product launch.", supportingExcerpt: "Product launch",
@@ -37,6 +38,8 @@ describe("Luna category presentation", () => {
     const html = renderToStaticMarkup(createElement(CategoricalJudgment, { judgment, detail: true }));
     expect(html).toContain("positive");
     expect(html).toContain("test-response");
+    expect(html).toContain("Saved attempt");
+    expect(html).toContain("test-attempt");
     expect(html).toContain("No probability, confidence percentage or Jev impact value is assigned");
     expect(html).not.toContain("directional impact");
     expect(html).not.toContain("100%");

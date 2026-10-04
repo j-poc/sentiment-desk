@@ -93,7 +93,7 @@ export interface OpenAIUsage {
 
 export interface OpenAIClassifierResult {
   classification: Omit<CategoricalClassification,
-    "provider" | "disposition" | "classifiedAt" | "latencyMs" | "estimatedCostUsd" | "responseId" | "responseSha256" | "inputTokens" | "cachedInputTokens" | "cacheWriteInputTokens" | "outputTokens" | "reasoningTokens" | "totalTokens" | "modelRequested" | "modelReturned" | "serviceTierRequested" | "serviceTier" | "promptVersion" | "promptSha256" | "schemaVersion" | "schemaSha256">;
+    "provider" | "disposition" | "classifiedAt" | "latencyMs" | "estimatedCostUsd" | "responseId" | "responseSha256" | "inputTokens" | "cachedInputTokens" | "cacheWriteInputTokens" | "outputTokens" | "reasoningTokens" | "totalTokens" | "modelRequested" | "modelReturned" | "serviceTierRequested" | "serviceTier" | "promptVersion" | "promptSha256" | "profileSha256" | "schemaVersion" | "schemaSha256">;
   modelReturned: string;
   serviceTier: string | null;
   responseId: string;
@@ -290,6 +290,10 @@ export class OpenAIClassifier {
       throw new OpenAIClassifierError("OpenAI usage exceeded the prepared input or output bound", response.status, false, false,
         id, digest, usage, Date.now() - started, null, typeof node.model === "string" ? node.model : null,
         typeof node.service_tier === "string" ? node.service_tier : null);
+    }
+    if (returnedModel !== this.options.model || serviceTier !== OPENAI_SERVICE_TIER) {
+      throw new OpenAIClassifierError("OpenAI response model or service tier did not match the prepared Luna profile", response.status, false, false,
+        id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
     }
     const extracted = extractOutputText(node);
     if (extracted.refusal) throw new OpenAIClassifierError("OpenAI refused the classification", response.status, false, false, id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);

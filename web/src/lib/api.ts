@@ -33,6 +33,7 @@ export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off
 
 /** Luna categories remain separate from historical Jev probabilities and index values. */
 export interface CategoricalClassification {
+  attemptId: string | null;
   provider: "openai_luna";
   modelRequested: string;
   modelReturned: string | null;
@@ -40,6 +41,7 @@ export interface CategoricalClassification {
   serviceTier: string | null;
   promptVersion: string;
   promptSha256: string;
+  profileSha256: string | null;
   schemaVersion: string;
   schemaSha256: string;
   sentiment: Sentiment | null;
@@ -84,6 +86,7 @@ export interface CategoricalTrendPoint {
 export interface CategoricalTrendLineage {
   promptVersion: string;
   promptSha256: string;
+  profileSha256: string;
   schemaVersion: string;
   schemaSha256: string;
   count: number;
@@ -223,6 +226,7 @@ export interface JevAttemptSummary {
   requestBytes: number;
   requestedModel: string;
   rubricSha256: string;
+  promptSha256: string | null;
   reservedAt: number;
   dispatchAt: number | null;
   outcome: "prepared" | "dispatch_intent" | "response" | "rejected" | "unknown" | "not_sent";
@@ -640,7 +644,7 @@ const categoricalTrendSchema = z.object({
   counts: categoricalCountsSchema,
   eligibleObservationCount: z.number().int().nonnegative(), candidateClassificationCount: z.number().int().nonnegative(),
   withheldInvalidCount: z.number().int().nonnegative(), latestClassifiedAt: z.number().int().nonnegative().nullable(),
-  lineages: z.array(z.object({ promptVersion: z.string().min(1), promptSha256: z.string().regex(/^[a-f0-9]{64}$/), schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/), count: z.number().int().positive() }).strict()),
+  lineages: z.array(z.object({ promptVersion: z.string().min(1), promptSha256: z.string().regex(/^[a-f0-9]{64}$/), profileSha256: z.string().regex(/^[a-f0-9]{64}$/), schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/), count: z.number().int().positive() }).strict()),
 }).strict().superRefine((result, context) => {
   if (result.counts.total !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Trend totals do not match eligible observations" });
   if (result.counts.positive + result.counts.neutral + result.counts.negative + result.counts.reviewRequired + result.counts.excluded !== result.counts.total) {
@@ -668,8 +672,10 @@ const categoricalMentionSchema = z.object({
   id: z.string().min(1), companyId: z.string().min(1), title: z.string(),
   source: z.object({ url: z.string().url(), collector: z.string().min(1), deliveryId: z.string().min(1) }).passthrough(),
   classification: z.object({
+    attemptId: z.string().min(1).nullable(),
     provider: z.literal("openai_luna"), modelRequested: z.literal("gpt-6-luna"), modelReturned: z.literal("gpt-6-luna"),
     promptVersion: z.string().min(1), promptSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    profileSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
     schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/),
     disposition: z.enum(["classified", "review_required", "excluded"]),
     sentiment: z.enum(["positive", "neutral", "negative"]).nullable(), classifiedAt: z.number().int().nonnegative(),
