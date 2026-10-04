@@ -66,3 +66,53 @@ The candidate is being checkpointed after review. The commit and remote
 readback are recorded in the continuation trace after push. No application
 database, `.engineering-evidence` artifact, dependency directory, or secret is
 included in the checkpoint.
+
+## Later bounded real-source run — 2026-10-04
+
+Trace: `TRACE-20261004-sentiment-desk`
+
+After this note's original verification, a single collection-only process used
+the user's public-source/API rights attestation to call exactly Google News RSS,
+Yahoo Finance RSS, Yahoo quote, Yahoo chart, and GDELT. The process ran from
+`2026-10-04T00:40:30Z`; its last source receipt completed at
+`2026-10-04T00:41:43Z`. It was stopped before another scheduled cycle. Its
+startup used `env -i`; both classifier keys were empty, both account approvals
+were false, all model budgets were zero, and alert delivery had no webhook.
+
+The canonical database now has 1,118 new source observations, all linked to
+delivery receipts. Google News and Yahoo Finance RSS supplied all 1,118. Yahoo
+returned 1,584 chart points and 21 new company quote points. The five feeds
+created 101 receipts, including 24 successful deliveries each for Google News
+RSS, Yahoo Finance RSS, and Yahoo chart, plus 27 successful Yahoo quote
+deliveries. GDELT recorded one failure and one rate-limited response. Every new
+observation remains pending. There were no new scored rows, model attempts, or
+alert deliveries.
+
+The source-time readback found publisher timestamps from
+`2026-09-29T18:25:45Z` through `2026-10-04T00:14:56Z`; retrieval completed by
+`2026-10-04T00:41:43Z`. The median publication-to-retrieval age was 30.58 hours,
+and 10 observations were older than 72 hours. The newest Yahoo price point is
+source-timestamped `2026-10-02T20:03:10Z`; retrieval on October 4 did not make
+the closed-market price current.
+
+The canonical database passed `quick_check` with zero foreign-key violations.
+After stopping collection, an exact replay of one real Google News observation
+against a disposable copy inserted no duplicate and changed no observation or
+judgment counts. The production app then restarted in saved-data-only mode on
+`http://127.0.0.1:8798/`. Its AAPL API path returned 100 saved records with 20
+pending items on the page, 27 local price points, and zero Luna sentiment
+observations. Opportunity Radar stayed disabled.
+
+The replay database and full aggregate run artifact remain in the ignored local
+directory `.engineering-evidence/collection-only-2026-10-04/`; neither the
+canonical database nor the private evidence directory was pushed. The in-app
+browser policy still prevented a fresh rendered screenshot. The saved-data UI
+is available locally at the URL above, but this run does not prove continuous
+monitoring, Luna operation, GDELT availability, or investor value.
+
+## Checkpoint correction
+
+The code checkpoint was committed and pushed to
+`codex/real-data-rebuild` as
+`daed1f7541ad13c84af1e4cfd4ca45d9b69dc6d0`. Remote readback matched that SHA.
+This record and the bounded-run trace are being checkpointed separately.

@@ -1707,3 +1707,32 @@ observations or model-generated labels.
    real-source issuer coverage, and provider records for legacy usage remain
    absent. No Jev request, additional provider call, or framework migration is
    authorized by the handoff.
+
+## Current continuation update — 2026-10-04
+
+The user's later direction selects OpenAI GPT-6 Luna for new classifications
+and preserves historical Jev records. Their direction replaces independent
+human labels with blinded independent subagent labels for the active evaluation;
+agent agreement remains diagnostic evidence, not human ground truth or proof of
+population quality. Opportunity Radar remains disabled until the Sentiment Desk
+passes its operational gates.
+
+The user attests to rights for public sources and APIs. The attestation is
+recorded in `project-record/3-project-specs/live-data-etl.json`; it is not
+independent verification of each endpoint's terms. One bounded local run on
+October 4 collected real data through Google News RSS, Yahoo Finance RSS,
+Yahoo quote and chart, and GDELT. It added 1,118 receipt-linked observations,
+all pending, and 1,584 price points plus 21 new quote points. GDELT returned a
+failure and a rate limit. No classifier or alert request was made. The exact
+receipt, source-time, restart, and replay evidence is in
+`project-record/4-log/2026-10-04-local-verification.md` and the private local
+artifact named by `TRACE-20261004-sentiment-desk`.
+
+This collection milestone does not satisfy the completion predicate. Luna has
+no direct API key or verified finite account budget, the real-source Luna run
+artifact is absent, the 4,700 legacy-unknown price rows remain quarantined, and
+the small-cap discovery, fundamental research, linked historical lineage, and
+observed investor/analyst outcome gates remain open. The selected-company UI
+now serves recent real pending evidence and saved Yahoo price history in
+offline mode, but no fresh rendered-browser proof was available because the
+in-app browser rejected the local URL.

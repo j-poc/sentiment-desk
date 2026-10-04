@@ -207,11 +207,11 @@
       }
     ],
     "user_attestation": {
-      "reviewed_at": "2026-09-29",
+      "reviewed_at": "2026-10-04",
       "statement": "User reports holding rights for all public sources and APIs.",
       "evidence_type": "user-provided operator attestation",
       "verification_status": "not independently verified against endpoint-specific agreements",
-      "applied_to": "The isolated keyless public-source Compose smoke only."
+      "applied_to": "The user authorized public-source and API use for this project. This attestation covered one bounded local run of Google News RSS, Yahoo Finance RSS, Yahoo quote and chart, and GDELT on 2026-10-04. The other configured source families were not called."
     }
   },
   "intended_use": "Private, single-user research interface for investigating sourced observations and Jev judgments; not an authoritative point-in-time archive or investment signal service.",
