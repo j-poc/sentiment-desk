@@ -109,6 +109,8 @@ export class Pipeline {
   private alertDispatchTimer: ReturnType<typeof setTimeout> | null = null;
   private alertDispatchDueAt: number | null = null;
   private alertDispatchStopped = false;
+  private readonly pendingCompanySnapshots = new Map<string, ReturnType<typeof setImmediate>>();
+  private companySnapshotsStopped = false;
 
   private companyCache: Map<
     string,
@@ -122,10 +124,17 @@ export class Pipeline {
   get alertDeliveryConfigured(): boolean { return Boolean(this.deps.alert?.webhookUrl); }
   get alertDeliveryEnabled(): boolean { return this.alertDeliveryConfigured && this.deps.externalRequestsEnabled !== false; }
 
-  /** Insert a normalized source observation; exact replays do not reach Jev. */
+  /** Insert a normalized source observation; exact replays do not reach classification. */
   ingest(m: RawMentionInput): boolean {
     if (!m.deliveryId) throw new Error("A persisted source delivery receipt is required before an observation can be ingested");
     const stored = this.deps.db.insertObservation(m);
+    if (stored.inserted) {
+      const persisted = this.deps.db.mentionRow(stored.observationId);
+      if (persisted) {
+        this.deps.hub.broadcast("mention", rowToDTO(persisted));
+        this.scheduleCompanySnapshot(persisted.company_id);
+      }
+    }
     const collector = m.collector ?? "legacy_unknown";
     if (stored.inserted && this.deps.externalRequestsEnabled !== false && this.activeProviderReady && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
       this.enqueue(stored.observationId);
@@ -230,6 +239,32 @@ export class Pipeline {
     if (this.alertDispatchTimer != null) clearTimeout(this.alertDispatchTimer);
     this.alertDispatchTimer = null;
     this.alertDispatchDueAt = null;
+    this.companySnapshotsStopped = true;
+    for (const timer of this.pendingCompanySnapshots.values()) clearImmediate(timer);
+    this.pendingCompanySnapshots.clear();
+  }
+
+  private scheduleCompanySnapshot(companyId: string): void {
+    if (this.companySnapshotsStopped || this.pendingCompanySnapshots.has(companyId)) return;
+    const timer = setImmediate(() => {
+      this.pendingCompanySnapshots.delete(companyId);
+      if (this.companySnapshotsStopped) return;
+      try {
+        this.deps.hub.broadcast("company", this.snapshot(companyId));
+      } catch (error) {
+        console.error("[desk] deferred company snapshot broadcast failed:", error);
+      }
+    });
+    this.pendingCompanySnapshots.set(companyId, timer);
+  }
+
+  private broadcastCompanySnapshot(companyId: string): void {
+    const timer = this.pendingCompanySnapshots.get(companyId);
+    if (timer) {
+      clearImmediate(timer);
+      this.pendingCompanySnapshots.delete(companyId);
+    }
+    this.deps.hub.broadcast("company", this.snapshot(companyId));
   }
 
   private resolveIdleWaiters(): void {
@@ -375,7 +410,7 @@ export class Pipeline {
       const updated = db.mentionRow(id);
       if (updated) {
         this.deps.hub.broadcast("mention", rowToDTO(updated));
-        this.deps.hub.broadcast("company", this.snapshot(row.company_id));
+        this.broadcastCompanySnapshot(row.company_id);
         await this.dispatchAlerts();
       }
     } catch (err) {
@@ -520,7 +555,7 @@ export class Pipeline {
       const updated = db.mentionRow(id);
       if (updated) {
         this.deps.hub.broadcast("mention", rowToDTO(updated));
-        this.deps.hub.broadcast("company", this.snapshot(claimed.company_id));
+        this.broadcastCompanySnapshot(claimed.company_id);
       }
     } catch (error) {
       const storagePaused = error instanceof ExternalRequestPausedError && error.dispatchedRequests === 0;
