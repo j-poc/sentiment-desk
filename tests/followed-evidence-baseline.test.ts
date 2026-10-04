@@ -257,7 +257,7 @@ describe("followed-company evidence baseline", () => {
     }
   });
 
-  it("migrates a saved v11 database additively and refuses to downgrade a future schema", () => {
+  it("migrates a saved v13 database additively and refuses to downgrade a future schema", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-followed-baseline-migration-"));
     directories.push(directory);
     const path = join(directory, "desk.db");
@@ -270,15 +270,9 @@ describe("followed-company evidence baseline", () => {
 
     const priorVersion = new DatabaseSync(path);
     priorVersion.exec(`
-      DROP TRIGGER IF EXISTS followed_company_baselines_no_update;
-      DROP TRIGGER IF EXISTS followed_company_baselines_no_delete;
-      DROP TRIGGER IF EXISTS followed_company_baseline_items_no_update;
-      DROP TRIGGER IF EXISTS followed_company_baseline_items_no_delete;
-      DROP INDEX IF EXISTS followed_baselines_company_version;
-      DROP INDEX IF EXISTS followed_baseline_items_observation;
-      DROP TABLE followed_company_baseline_items;
-      DROP TABLE followed_company_baselines;
-      PRAGMA user_version = 11;
+      ALTER TABLE sec_fundamental_facts DROP COLUMN reported_precision_status;
+      ALTER TABLE sec_fundamental_facts DROP COLUMN reported_decimals;
+      PRAGMA user_version = 13;
     `);
     priorVersion.close();
 
@@ -286,19 +280,23 @@ describe("followed-company evidence baseline", () => {
     try {
       expect(db.mentionRow(existingId)).toBeTruthy();
       const upgraded = (db as unknown as { db: DatabaseSync }).db;
-      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 12 });
+      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
       expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='followed_company_baseline_items'").get())
         .toEqual({ name: "followed_company_baseline_items" });
+      const factColumns = new Map((upgraded.prepare("PRAGMA table_info(sec_fundamental_facts)").all() as Array<{ name: string; dflt_value: string | null }>)
+        .map((column) => [column.name, column.dflt_value]));
+      expect(factColumns.has("reported_decimals")).toBe(true);
+      expect(factColumns.get("reported_precision_status")).toBe("'missing'");
     } finally {
       db.close();
     }
 
     const future = new DatabaseSync(path);
-    future.exec("PRAGMA user_version = 13");
+    future.exec("PRAGMA user_version = 16");
     future.close();
-    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_13");
+    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_16");
     const preserved = new DatabaseSync(path);
-    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 13 });
+    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
     preserved.close();
   });
 });

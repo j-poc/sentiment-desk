@@ -48,6 +48,43 @@ function readableCount(counts: CategoricalTrendCounts): string {
   return CATEGORIES.map(({ key, label }) => `${label.toLowerCase()} ${counts[key]}`).join(", ");
 }
 
+export function CategoricalEmptyState({
+  withheldInvalidCount,
+  classifierEnabled,
+  blockedReason,
+  onReviewSourceRecords,
+  onViewHistoricalJev,
+  onOpenOperations,
+  onRefresh,
+}: {
+  withheldInvalidCount: number;
+  classifierEnabled: boolean;
+  blockedReason: string | null;
+  onReviewSourceRecords: () => void;
+  onViewHistoricalJev: () => void;
+  onOpenOperations: () => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="categorical-trend-empty" role="status">
+      <span className="categorical-empty-mark" aria-hidden="true">∅</span>
+      <div>
+        <strong>{withheldInvalidCount > 0 ? "No eligible Luna classifications in this window" : "No saved GPT-6 Luna classifications in this window"}</strong>
+        <p>{withheldInvalidCount > 0
+          ? `${withheldInvalidCount} candidate ${withheldInvalidCount === 1 ? "classification is" : "classifications are"} withheld because source or model lineage is incomplete.`
+          : "This is an empty result, not a neutral sentiment reading. The chart fills when real, source-linked Luna classifications are saved."}</p>
+        {!classifierEnabled && blockedReason && <p className="categorical-blocked-reason">New classifications are blocked: {blockedReason}</p>}
+        <div className="categorical-empty-actions">
+          <button type="button" onClick={onReviewSourceRecords}>Review saved source records</button>
+          <button type="button" onClick={onViewHistoricalJev}>View historical Jev chart</button>
+          {(!classifierEnabled || withheldInvalidCount > 0) && <button type="button" onClick={onOpenOperations}>Review classification requirements</button>}
+          <button type="button" onClick={onRefresh}>Refresh saved history</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function mentionCounts(items: Mention[]): CategoricalTrendCounts {
   const counts: CategoricalTrendCounts = { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 };
   for (const item of items) {
@@ -81,6 +118,7 @@ export function CategoricalTrendChart({
   onOpenMention,
   onOpenOperations,
   onViewHistoricalJev,
+  onReviewSourceRecords,
   onSnapshot,
 }: {
   companyId: string;
@@ -91,6 +129,7 @@ export function CategoricalTrendChart({
   onOpenMention: (mention: Mention) => void;
   onOpenOperations: () => void;
   onViewHistoricalJev: () => void;
+  onReviewSourceRecords: () => void;
   onSnapshot: (snapshot: Pick<CategoricalTrendResult, "companyId" | "windowHours" | "eligibleObservationCount">) => void;
 }) {
   const [result, setResult] = useState<CategoricalTrendResult | null>(null);
@@ -341,21 +380,15 @@ export function CategoricalTrendChart({
           <button type="button" onClick={() => void refresh(true)}>Retry trend</button>
         </div>
       ) : result && result.eligibleObservationCount === 0 ? (
-        <div className="categorical-trend-empty" role="status">
-          <span className="categorical-empty-mark" aria-hidden="true">∅</span>
-          <div>
-            <strong>{result.withheldInvalidCount > 0 ? "No eligible Luna classifications in this window" : "No saved GPT-6 Luna classifications in this window"}</strong>
-            <p>{result.withheldInvalidCount > 0
-              ? `${result.withheldInvalidCount} candidate ${result.withheldInvalidCount === 1 ? "classification is" : "classifications are"} withheld because source or model lineage is incomplete.`
-              : "This is an empty result, not a neutral sentiment reading. The chart fills when real, source-linked Luna classifications are saved."}</p>
-            {!classifierEnabled && blockedReason && <p className="categorical-blocked-reason">New classifications are blocked: {blockedReason}</p>}
-            <div className="categorical-empty-actions">
-              <button type="button" onClick={onViewHistoricalJev}>View historical Jev chart</button>
-              {(!classifierEnabled || result.withheldInvalidCount > 0) && <button type="button" onClick={onOpenOperations}>Review classification requirements</button>}
-              <button type="button" onClick={() => void refresh(true)}>Refresh saved history</button>
-            </div>
-          </div>
-        </div>
+        <CategoricalEmptyState
+          withheldInvalidCount={result.withheldInvalidCount}
+          classifierEnabled={classifierEnabled}
+          blockedReason={blockedReason}
+          onReviewSourceRecords={onReviewSourceRecords}
+          onViewHistoricalJev={onViewHistoricalJev}
+          onOpenOperations={onOpenOperations}
+          onRefresh={() => void refresh(true)}
+        />
       ) : result && (
         <>
           <div className="categorical-trend-meta">

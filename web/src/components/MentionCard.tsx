@@ -43,14 +43,17 @@ export function Pill({
   children,
   color,
   dim,
+  title,
 }: {
   children: React.ReactNode;
   color?: string;
   dim?: boolean;
+  title?: string;
 }) {
   return (
     <span
       className="rounded-md border px-1.5 py-[1px] text-[10px] font-medium"
+      title={title}
       style={
         dim
           ? { borderColor: "rgba(255,255,255,0.12)", color: "rgba(232,235,242,0.45)", background: "rgba(255,255,255,0.03)" }
@@ -129,6 +132,12 @@ export function MentionCard({
         {m.title}
       </div>
 
+      {m.analystResearchDisposition === "dismissed" && (
+        <div className="mt-1 text-[10px] text-amber-100/70">Set aside by you · source remains saved</div>
+      )}
+      {m.issuerIdentityStrong === false && (
+        <div className="mt-1 text-[10px] text-amber-100/70">Issuer match uncertain · may still concern this company</div>
+      )}
       {m.status === "pending" && <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>}
       {m.classification && <CategoricalJudgment judgment={m.classification} />}
       {m.status === "scoring" && <div className="mt-2 text-[11px] text-sky-200/70">Classifying this item…</div>}
@@ -155,7 +164,11 @@ export function MentionCard({
           <Pill color="#a5b4fc">{TYPE_LABEL[s.eventType] ?? "NEWS"}</Pill>
           {s.eventScore >= 60 && <Pill color="#fbbf24">EVENT {Math.round(s.eventScore)}</Pill>}
           {s.surprise >= 0.7 && s.novel >= 0.6 && <Pill color="#5eead4">FRESH</Pill>}
-          {s.material >= 0.6 && <Pill color="#a5b4fc">MATERIAL</Pill>}
+          {s.material >= 0.6 && (
+            <Pill color="#a5b4fc" title="Historical Jev model material score meets its 0.60 display threshold. This is not an independently validated materiality finding.">
+              JEV MATERIAL
+            </Pill>
+          )}
           {s.novel >= 0.6 && s.surprise < 0.7 && <Pill color="#5eead4">NEW INFO</Pill>}
           {s.confidence < 0.55 && <Pill color="#fbbf24">LOW CONF</Pill>}
           {offTarget && <Pill dim>OFF TARGET</Pill>}

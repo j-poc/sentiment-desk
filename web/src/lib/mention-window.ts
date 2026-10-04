@@ -1,7 +1,7 @@
 import type { Mention, MentionPage } from "./api.js";
 
 export function mentionWindowHours(filter: string, selectedHours: number): number {
-  return filter === "failed" || filter === "history" ? 0 : selectedHours;
+  return filter === "failed" || filter === "history" || filter === "identity_review" ? 0 : selectedHours;
 }
 
 export function mentionPageParams(
@@ -9,10 +9,12 @@ export function mentionPageParams(
   hours: number,
   cursor: MentionPage["nextCursor"] = null,
   limit = 100,
+  includeDismissed = false,
 ): URLSearchParams {
   const params = new URLSearchParams({ filter, limit: String(limit) });
   if (hours > 0) params.set("hours", String(hours));
   if (cursor != null) params.set("cursor", JSON.stringify(cursor));
+  if (includeDismissed) params.set("includeDismissed", "true");
   return params;
 }
 

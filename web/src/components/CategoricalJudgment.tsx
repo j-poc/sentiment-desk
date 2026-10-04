@@ -11,7 +11,7 @@ export function CategoricalJudgment({ judgment, detail = false }: { judgment: Ca
         <span className="rounded border border-sky-300/20 px-1.5 text-[10px] text-sky-200">LUNA</span>
         <span className="font-medium" style={{ color: judgment.disposition === "classified" && judgment.sentiment ? sentimentColor(judgment.sentiment) : "#fbbf24" }}>{state}</span>
         {judgment.eventType && <span className="text-white/55">{judgment.eventType.replaceAll("_", " ")}</span>}
-        {judgment.material === true && <span className="text-white/55">Material</span>}
+        {judgment.material === true && <span className="text-white/55" title="Luna model label; not independently validated.">Model-marked material</span>}
       </div>
       {judgment.summary && <p className="mt-1 text-white/80">{judgment.summary}</p>}
       {detail && (

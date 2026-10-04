@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CategoricalTrendCounts, CategoricalTrendResult } from "../web/src/lib/api.js";
-import { aggregateCategoricalTrend, displayBucketMsForWindow, displayIntervalLabel, formatUtcRange, initialChartViewForEvidence } from "../web/src/lib/categorical-chart.js";
+import { aggregateCategoricalTrend, displayBucketMsForWindow, displayIntervalLabel, formatUtcRange } from "../web/src/lib/categorical-chart.js";
 
 const sourceBucketMs = 15 * 60_000;
 
@@ -65,24 +65,6 @@ describe("Luna categorical chart projection", () => {
     expect(formatUtcRange(result.fromMs, result.throughMs)).toContain("end exclusive");
     expect(formatUtcRange(result.fromMs, result.throughMs)).toContain("UTC");
     expect(formatUtcRange(result.fromMs, result.throughMs).match(/31[.,]456/g)).toHaveLength(2);
-  });
-
-  it("chooses an initial chart only from successful, identity-matched real data", () => {
-    expect(initialChartViewForEvidence({
-      manualSelection: false, categoricalCount: 0, historicalStatus: "ready", hasHistoricalData: true,
-    })).toBe("jev");
-    expect(initialChartViewForEvidence({
-      manualSelection: false, categoricalCount: 0, historicalStatus: "ready", hasHistoricalData: false,
-    })).toBe("luna");
-    expect(initialChartViewForEvidence({
-      manualSelection: false, categoricalCount: 4, historicalStatus: "error", hasHistoricalData: true,
-    })).toBe("luna");
-    expect(initialChartViewForEvidence({
-      manualSelection: false, categoricalCount: 0, historicalStatus: "error", hasHistoricalData: true,
-    })).toBeNull();
-    expect(initialChartViewForEvidence({
-      manualSelection: true, categoricalCount: 0, historicalStatus: "ready", hasHistoricalData: true,
-    })).toBeNull();
   });
 
   it("rejects a malformed canonical source interval instead of drawing a plausible chart", () => {

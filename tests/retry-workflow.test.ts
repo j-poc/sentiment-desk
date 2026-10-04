@@ -180,6 +180,7 @@ describe("operator classification retry API", () => {
       expect(recovered.score).toMatchObject({ sentiment: "positive", eventType: "product", engine: "jev-1.13.0" });
       expect(recovered.error).toBeNull();
     } finally {
+      pipeline.stop();
       db.close();
     }
   });
@@ -208,6 +209,7 @@ describe("operator classification retry API", () => {
       expect(db.mentionsForCompany(company.id, 0, 5)[0]?.status).toBe("scored");
     } finally {
       releaseRetry?.();
+      pipeline.stop();
       db.close();
     }
   });
@@ -224,6 +226,7 @@ describe("operator classification retry API", () => {
       expect(response.status).toBe(409);
       expect(db.mentionsForCompany(company.id, 0, 5)[0]?.status).toBe("scored");
     } finally {
+      pipeline.stop();
       db.close();
     }
   });
@@ -252,6 +255,7 @@ describe("operator classification retry API", () => {
       expect(calls).toBe(2);
       expect(db.mentionsForCompany(company.id, 0, 5)[0]?.status).toBe("scored");
     } finally {
+      pipeline.stop();
       db.close();
     }
   });
@@ -290,6 +294,7 @@ describe("operator classification retry API", () => {
       expect(db.mentionsForCompany(company.id, 0, 5)[0]?.status).toBe("pending");
       expect(mentionEvents).toContainEqual(expect.objectContaining({ id: failed.id, status: "pending" }));
     } finally {
+      pipeline.stop();
       db.close();
     }
   });

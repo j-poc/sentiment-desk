@@ -1736,3 +1736,59 @@ observed investor/analyst outcome gates remain open. The selected-company UI
 now serves recent real pending evidence and saved Yahoo price history in
 offline mode, but no fresh rendered-browser proof was available because the
 in-app browser rejected the local URL.
+
+## Current usability follow-up — 2026-10-04
+
+The user asked that remaining work prioritize changes that improve real
+investor use. The view displays the SEC filing date as a calendar date while
+acceptance and retrieval retain their actual times. The annual revenue chart
+labels its unit-aware linear range and offers a keyboard-accessible table of
+source-returned values, units, and reported precision. It withholds the plot
+when metric or unit consistency fails. Empty states do not gain fabricated
+points.
+
+Precision metadata is optional and never inferred. When missing, comparisons
+remain arithmetic on returned values and percentage change is withheld. Invalid
+metadata withholds the comparison; declared precision uses a conservative
+two-value bound before describing a change as directional. The table no longer
+labels returned values “exact.” Fictional source-shaped rows exist only in
+isolated technical tests and temporary databases; they never seed or render in
+the product and do not count as real-source evidence.
+
+The whole-suite/build validation and fresh independent review are still being
+completed. A real populated SEC response has not been rendered in the active
+Desk because this process lacks its own SEC contact identity; local tests do not
+satisfy live-source or full-product acceptance. Higher-priority usability gaps
+remain tickerless discovery, evidence tied to business drivers and
+counter-evidence, live Luna operation, price-lineage reconciliation, broader
+source coverage, and observed investor task outcomes. Opportunity Radar stays
+off.
+
+The analyst queue's set-aside action now removes a source from the default
+selected-company scan while retaining it in local evidence summaries, the
+historical tape, charts, and source counts. A visible company-feed control
+reveals set-aside records, and the source drawer restores them. Disposition
+updates travel to connected clients without analyst notes, so live/reconnect
+paths cannot put the row back into the working scan. This is a focused scan
+efficiency improvement, not a resolution of the broader usability or
+operational acceptance gaps.
+
+## Current usability evidence — 2026-10-05
+
+Trace: `TRACE-20261005-usability-path`. The rendered saved-data path was
+verified against the actual isolated app, not just component tests. “Model
+material” discloses that its Jev threshold and Luna flag are model criteria,
+not independently validated findings. The held-match review button opens the
+retained history with a specific identity-screen explanation and real-source
+attribution. The historical Jev chart is switchable, explicitly six days old,
+and distinct from the empty Luna chart. No demo or synthetic observations were
+introduced. Exact browser evidence and local preview identity are in
+`project-record/4-log/2026-10-04-issuer-review-usability.md`.
+
+This improves source review and signal interpretation; it does not make the
+Desk complete. Current small-cap discovery, fresh market prices, live Luna
+operation, provider and legacy-usage reconciliation, and uncoached investor and
+analyst outcomes remain open. `engineering_gate.py check` has no bound evidence
+receipt, and the code-bound live-data ETL check remains FAIL. The current
+independent whole-build review remains about 4/10. Opportunity Radar remains
+disabled.

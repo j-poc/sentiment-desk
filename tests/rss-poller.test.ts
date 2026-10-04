@@ -135,6 +135,7 @@ describe("RSS rate-limit recovery", () => {
     expect(health.snapshot().rss).toMatchObject({ ok: 1, fail: 0 });
     const stored = db.mentionsForCompany("alpha", 0, 10)[0];
     expect(stored?.source.deliveryId).toEqual(expect.any(String));
+    pipeline.stop();
     db.close();
   });
 

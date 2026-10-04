@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { JevAttemptSummary, Mention, MentionStatus } from "../lib/api.js";
-import { getJSON, retryMention } from "../lib/api.js";
+import { getAnalystSourceReview, getJSON, retryMention, updateAnalystSourceReview } from "../lib/api.js";
+import { MAX_ANALYST_RESEARCH_QUESTION_CHARS, type AnalystSourceReview } from "../../../shared/analyst-research.js";
 import type { RetryAvailability } from "../lib/retryAvailability.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { CategoricalJudgment } from "./CategoricalJudgment.js";
@@ -91,6 +92,8 @@ export function MentionDrawer({
   refreshWarning = false,
   onRetryRefresh,
   onOpenOperations,
+  onReviewChanged,
+  onOpenResearchQueue,
 }: {
   mention: Mention | null;
   onClose: () => void;
@@ -98,6 +101,8 @@ export function MentionDrawer({
   refreshWarning?: boolean;
   onRetryRefresh?: () => void;
   onOpenOperations?: () => void;
+  onReviewChanged?: (review: AnalystSourceReview) => void;
+  onOpenResearchQueue?: () => void;
 }) {
   const providerLabel = retryAvailability.kind === "available" ? retryAvailability.providerLabel ?? "Jev" : "classifier";
   const providerName = retryAvailability.kind === "available" ? retryAvailability.providerName ?? "TypeSafe" : "provider";
@@ -107,6 +112,14 @@ export function MentionDrawer({
   const [retryState, setRetryState] = useState<RetryState>({ type: "idle" });
   const [jevAttempts, setJevAttempts] = useState<JevAttemptSummary[] | null>(null);
   const [jevAttemptsFailed, setJevAttemptsFailed] = useState(false);
+  const [analystReview, setAnalystReview] = useState<AnalystSourceReview | null>(null);
+  const [analystQuestion, setAnalystQuestion] = useState("");
+  const [analystReviewState, setAnalystReviewState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [analystReviewSaving, setAnalystReviewSaving] = useState(false);
+  const [analystReviewError, setAnalystReviewError] = useState<string | null>(null);
+  const [analystReviewReload, setAnalystReviewReload] = useState(0);
+  const currentMentionIdRef = useRef<string | null>(mention?.id ?? null);
+  currentMentionIdRef.current = mention?.id ?? null;
 
   useEffect(() => {
     if (!mention) return;
@@ -150,6 +163,59 @@ export function MentionDrawer({
   useEffect(() => {
     setRetryState({ type: "idle" });
   }, [mention?.id, mention?.status, retryAvailability.kind]);
+
+  useEffect(() => {
+    if (!mention) {
+      setAnalystReview(null);
+      setAnalystQuestion("");
+      setAnalystReviewState("idle");
+      setAnalystReviewError(null);
+      return;
+    }
+    const observationId = mention.id;
+    const controller = new AbortController();
+    let active = true;
+    setAnalystReview(null);
+    setAnalystQuestion("");
+    setAnalystReviewSaving(false);
+    setAnalystReviewState("loading");
+    setAnalystReviewError(null);
+    void getAnalystSourceReview(observationId, controller.signal).then(
+      (review) => {
+        if (!active || currentMentionIdRef.current !== observationId) return;
+        setAnalystReview(review);
+        setAnalystQuestion(review?.nextQuestion ?? "");
+        setAnalystReviewState("ready");
+      },
+      () => {
+        if (!active || controller.signal.aborted || currentMentionIdRef.current !== observationId) return;
+        setAnalystReviewError("Your research note could not be loaded. It has not been changed.");
+        setAnalystReviewState("failed");
+      },
+    );
+    return () => { active = false; controller.abort(); };
+  }, [mention?.id, mention?.analystResearchDispositionUpdatedAt, analystReviewReload]);
+
+  const saveAnalystReview = async (disposition: "investigate" | "dismissed") => {
+    if (!mention || analystReviewSaving) return;
+    const observationId = mention.id;
+    setAnalystReviewSaving(true);
+    setAnalystReviewError(null);
+    try {
+      const review = await updateAnalystSourceReview(observationId, { disposition, nextQuestion: analystQuestion });
+      if (currentMentionIdRef.current !== observationId) return;
+      setAnalystReview(review);
+      setAnalystQuestion(review.nextQuestion);
+      setAnalystReviewState("ready");
+      onReviewChanged?.(review);
+    } catch {
+      if (currentMentionIdRef.current === observationId) {
+        setAnalystReviewError("Your changes did not save. Your question is still here; retry when the desk is available.");
+      }
+    } finally {
+      if (currentMentionIdRef.current === observationId) setAnalystReviewSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!mention) return;
@@ -219,6 +285,11 @@ export function MentionDrawer({
           <div className="mt-1 text-[10px] text-white/35">
             {mention.secDocumentContext ? "filing-evidence operation" : "source request receipt"} · {mention.source.deliveryId == null ? "unlinked · historical record" : mention.source.deliveryId.slice(0, 12)}
           </div>
+          {mention.issuerIdentityStrong === false && (
+            <div className="mt-2 rounded border border-amber-300/20 bg-amber-200/[0.04] px-2.5 py-2 text-[10.5px] leading-relaxed text-amber-100/80" role="note">
+              Issuer identity is uncertain under the current text rule. This item matched a company name without enough distinctive issuer context; that does not prove it is unrelated. The original source remains saved and is available in Held matches and History.
+            </div>
+          )}
           <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-md border border-white/[0.07] bg-white/[0.02] px-2.5 py-2" role="group" aria-label="Source attribution">
             <div className="min-w-0">
               <div className="micro">reported publisher</div>
@@ -310,6 +381,74 @@ export function MentionDrawer({
           {!mention.secDocumentContext && mention.snippet && mention.snippet !== mention.title && (
             <p className="mt-2 text-[12px] leading-relaxed text-white/55">{mention.snippet}</p>
           )}
+
+          <section className="mt-4 rounded-md border border-emerald-200/10 bg-emerald-100/[0.025] p-3" aria-label="Your research note">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="micro">Your research note</div>
+              {analystReview?.disposition === "investigate" && <span className="text-[9.5px] text-emerald-200/70">In your queue</span>}
+              {analystReview?.disposition === "dismissed" && <span className="text-[9.5px] text-white/40">Set aside from My Research and the default scan</span>}
+            </div>
+            <p className="mt-1 text-[10.5px] leading-relaxed text-white/45">
+              Save this exact source record and your next check. This stays local and is never sent to a model or source.
+            </p>
+            {analystReviewState === "loading" && <p className="mt-2 text-[10.5px] text-white/40" role="status">Loading your saved note…</p>}
+            {analystReviewState === "failed" && (
+              <div className="mt-2" role="status">
+                <p className="text-[10.5px] text-amber-100/75">{analystReviewError ?? "Your saved note could not be loaded."}</p>
+                <button type="button" onClick={() => setAnalystReviewReload((current) => current + 1)} className="mt-1 rounded border border-white/15 px-2 py-1 text-[10px] text-white/65 hover:bg-white/[0.05]">Retry</button>
+              </div>
+            )}
+            {analystReviewState === "ready" && (
+              <>
+                <label htmlFor="analyst-next-question" className="mt-2 block text-[10px] text-white/60">Next verification question <span className="text-white/35">(your words)</span></label>
+                <textarea
+                  id="analyst-next-question"
+                  value={analystQuestion}
+                  onChange={(event) => setAnalystQuestion(event.currentTarget.value)}
+                  maxLength={MAX_ANALYST_RESEARCH_QUESTION_CHARS}
+                  disabled={analystReviewSaving}
+                  rows={3}
+                  placeholder="What should you verify in the original source or another independent source?"
+                  className="mt-1 min-h-20 w-full resize-y rounded border border-white/10 bg-black/20 px-2.5 py-2 text-[11px] leading-relaxed text-white/80 placeholder:text-white/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:opacity-60"
+                />
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[9.5px] text-white/35">
+                  <span>{analystQuestion.length}/{MAX_ANALYST_RESEARCH_QUESTION_CHARS} characters</span>
+                  <span>Not a verified finding or materiality judgment.</span>
+                </div>
+                {analystReviewError && <p className="mt-2 text-[10.5px] text-amber-100/80" role="alert">{analystReviewError}</p>}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={analystReviewSaving}
+                    onClick={() => void saveAnalystReview(analystReview?.disposition ?? "investigate")}
+                    className="rounded border border-emerald-200/20 bg-emerald-100/[0.06] px-2.5 py-1.5 text-[10.5px] text-emerald-100/85 hover:bg-emerald-100/[0.1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-50"
+                  >
+                    {analystReviewSaving ? "Saving…" : analystReview ? "Save note" : "Save to my research queue"}
+                  </button>
+                  {!analystReview && (
+                    <button
+                      type="button"
+                      disabled={analystReviewSaving}
+                      onClick={() => void saveAnalystReview("dismissed")}
+                      className="rounded px-2 py-1.5 text-[10px] text-white/45 underline underline-offset-2 hover:text-white/70 disabled:opacity-50"
+                      title="Sets this record aside from My Research and the default source scan; it does not change or delete the saved source."
+                    >
+                      {analystReviewSaving ? "Saving…" : "Set aside from my research and scan"}
+                    </button>
+                  )}
+                  {analystReview?.disposition === "investigate" && (
+                    <button type="button" disabled={analystReviewSaving} onClick={() => void saveAnalystReview("dismissed")} className="rounded px-2 py-1.5 text-[10px] text-white/45 underline underline-offset-2 hover:text-white/70 disabled:opacity-50">Set aside from My Research and scan</button>
+                  )}
+                  {analystReview?.disposition === "dismissed" && (
+                    <button type="button" disabled={analystReviewSaving} onClick={() => void saveAnalystReview("investigate")} className="rounded px-2 py-1.5 text-[10px] text-white/60 underline underline-offset-2 hover:text-white/85 disabled:opacity-50">Restore to My Research and scan</button>
+                  )}
+                  {analystReview && onOpenResearchQueue && (
+                    <button type="button" onClick={onOpenResearchQueue} className="ml-auto rounded px-2 py-1.5 text-[10px] text-white/50 underline underline-offset-2 hover:text-white/75">Open My Research</button>
+                  )}
+                </div>
+              </>
+            )}
+          </section>
 
           {s ? (
             <>

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Mention } from "../web/src/lib/api.js";
 import { MentionFeed } from "../web/src/components/MentionFeed.js";
+import { MentionCard } from "../web/src/components/MentionCard.js";
 
 function savedScore(id: string, sentiment: "positive" | "negative"): Mention {
   return {
@@ -48,6 +49,16 @@ function pendingMention(id: string): Mention {
 }
 
 describe("mention feed disclosure states", () => {
+  it("identifies historical Jev material as a model output on the scan card", () => {
+    const markup = renderToStaticMarkup(createElement(MentionCard, {
+      m: savedScore("jev-material", "positive"),
+    }));
+
+    expect(markup).toContain("JEV MATERIAL");
+    expect(markup).toContain("Historical Jev model material score meets its 0.60 display threshold");
+    expect(markup).toContain("not an independently validated materiality finding");
+  });
+
   it("does not describe an unfinished or failed group lookup as an empty result", () => {
     const mention = savedScore("one", "positive");
     const render = (props: { loaded: boolean; loading: boolean; error: boolean }) => renderToStaticMarkup(createElement(MentionFeed, {
@@ -94,5 +105,15 @@ describe("mention feed disclosure states", () => {
 
     expect(markup).toContain('role="alert"');
     expect(markup).toContain('aria-label="Retry loading saved feed"');
+  });
+
+  it("labels set-aside records when an analyst explicitly reveals them", () => {
+    const markup = renderToStaticMarkup(createElement(MentionFeed, {
+      mentions: [{ ...pendingMention("set-aside"), analystResearchDisposition: "dismissed" }],
+      onOpen: () => undefined,
+    }));
+
+    expect(markup).toContain("Set aside by you");
+    expect(markup).toContain("source remains saved");
   });
 });

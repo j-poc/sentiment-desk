@@ -18,6 +18,7 @@ function mention(
     source: { name: publisherDomain, url: `https://${publisherDomain}/${id}`, kind: "rss", tier: "major", collector: "google_news_rss", publisher: publisherDomain, publisherDomain },
     title,
     snippet: "Saved provider observation",
+    issuerIdentityStrong: true,
     publishedAt: 1_000,
     providerObservedAt: null,
     retrievedAt: 1_000,
@@ -91,6 +92,46 @@ describe("evidence breadth summary", () => {
 
     expect(markup).toContain("Open full mention feed");
     expect(markup).not.toContain("Open unscored history");
+  });
+
+  it("keeps set-aside rows in evidence counts while keeping set-aside-only titles out of the latest preview", () => {
+    const setAside = mention("set-aside", "Acme wins contract", "positive", "wire.example");
+    setAside.analystResearchDisposition = "dismissed";
+    const active = mention("active", "Acme wins contract", "neutral", "paper.example");
+    const hiddenGroup = mention("hidden-group", "Acme product issue resolved", "negative", "local.example");
+    hiddenGroup.analystResearchDisposition = "dismissed";
+    const markup = renderToStaticMarkup(createElement(EvidenceBreadth, {
+      mentions: [setAside, active, hiddenGroup],
+      hours: 24, loaded: true, error: false, hasMore: false, now: 1_000,
+      refreshWarning: false, onRetry: () => undefined, onRetryRefresh: () => undefined,
+      onShowRecords: () => undefined, onOpenMention: () => undefined,
+    }));
+
+    expect(markup).toContain("3 of up to 100 loaded source rows");
+    expect(markup).toContain("Positive 1 of 3");
+    expect(markup).toContain("Saved-evidence counts include held matches and records you set aside");
+    expect(markup).toContain("Acme wins contract");
+    expect(markup).not.toContain("Acme product issue resolved");
+  });
+
+  it("keeps uncertain or unknown identity rows in evidence totals but out of headline previews", () => {
+    const weak = mention("weak", "Apple tree story draws crowds", "positive", "wire.example");
+    weak.issuerIdentityStrong = false;
+    const unknown = mention("unknown", "Apple device story updates", "negative", "paper.example");
+    delete unknown.issuerIdentityStrong;
+    const strong = mention("strong", "AAPL supplier outlook rises", "neutral", "market.example");
+    const markup = renderToStaticMarkup(createElement(EvidenceBreadth, {
+      mentions: [weak, unknown, strong],
+      hours: 24, loaded: true, error: false, hasMore: false, now: 1_000,
+      refreshWarning: false, onRetry: () => undefined, onRetryRefresh: () => undefined,
+      onShowRecords: () => undefined, onOpenMention: () => undefined,
+    }));
+
+    expect(markup).toContain("3 of up to 100 loaded source rows");
+    expect(markup).toContain("AAPL supplier outlook rises");
+    expect(markup).not.toContain("Apple tree story draws crowds");
+    expect(markup).not.toContain("Apple device story updates");
+    expect(markup).toContain("held matches and records you set aside");
   });
 
   it("shows repeated titles as a share of the scored first-page sample", () => {

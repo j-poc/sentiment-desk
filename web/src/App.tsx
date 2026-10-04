@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   getJSON,
+  getCompanyFundamentals,
+  refreshCompanyFundamentals,
+  isCurrentCompanySelection,
   readBackendSnapshot,
   lookupMentionsByIds,
   openStream,
@@ -15,7 +18,10 @@ import {
   type SeriesPoint,
   type SeriesResult,
   type FirstRunEvidenceDTO,
+  type AnalystResearchQueueItem,
 } from "./lib/api.js";
+import type { CompanyFundamentalsView } from "../../shared/company-fundamentals.js";
+import type { AnalystResearchDispositionChange, AnalystSourceReview } from "../../shared/analyst-research.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
 import { MobileCompanyPicker } from "./components/MobileCompanyPicker.js";
@@ -28,6 +34,7 @@ import { OutcomeCheck } from "./components/OutcomeCheck.js";
 import { DeskConnectionState } from "./components/DeskConnectionState.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
 import { MentionDrawer } from "./components/MentionDrawer.js";
+import { MATERIAL_FILTER_DESCRIPTION, MaterialFilterDisclosure } from "./components/MaterialFilterDisclosure.js";
 import { Tape } from "./components/Tape.js";
 import { AlertDeliveryStatus, HealthPanel } from "./components/HealthPanel.js";
 import { SourceCoverageDisclosure } from "./components/SourceCoverageDisclosure.js";
@@ -35,14 +42,16 @@ import { TopMovers } from "./components/TopMovers.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { FirstRunEvidenceBrief } from "./components/FirstRunEvidenceBrief.js";
 import { FollowedEvidenceBaseline } from "./components/FollowedEvidenceBaseline.js";
+import { CompanyFundamentals } from "./components/CompanyFundamentals.js";
 import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
-import { initialChartViewForEvidence } from "./lib/categorical-chart.js";
+import { AnalystResearchQueue } from "./components/AnalystResearchQueue.js";
 import { refreshedScoreBucketState, scoreBucketEvidenceBaseline, scoreBucketSnapshotMatches } from "./lib/series-chart-state.js";
 import { scoreBucketRetryMode } from "./lib/score-bucket-retry.js";
 import { isScoreBucketCoverage, sameScoreBucketCoverage } from "../../shared/score-bucket-coverage.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { filterMentionFeed, matchesMentionFeedFilter } from "./lib/mention-filters.js";
+import { applyDispositionChange, includesWeakIssuerMatches, visibleInWorkingScan } from "./lib/analyst-feed.js";
 import { operationsAttentionCount } from "./lib/operations-attention.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
@@ -100,23 +109,29 @@ const FILTERS = [
   { key: "all", label: "All" },
   { key: "bull", label: "Bullish" },
   { key: "bear", label: "Bearish" },
-  { key: "material", label: "Material" },
+  { key: "material", label: "Model material" },
   { key: "offtarget", label: "Off-target" },
   { key: "failed", label: "Unscored" },
   { key: "history", label: "History" },
+  { key: "identity_review", label: "Held matches" },
 ] as const;
 const RECONNECT_LOOKUP_BATCH_SIZE = 900;
 type FilterKey = (typeof FILTERS)[number]["key"];
-type ResearchView = "desk" | "radar";
+type ResearchView = "desk" | "radar" | "queue";
 type MentionFeedState = {
   companyId: string;
   filter: FilterKey;
   hours: number;
+  includeDismissed: boolean;
+  setAsideCount: number;
+  issuerIdentityReviewCount: number;
+  loadedAt: number | null;
   items: Mention[];
   nextCursor: MentionPage["nextCursor"];
   loaded: boolean;
   loadingMore: boolean;
   error: boolean;
+  refreshError: boolean;
   loadMoreError: boolean;
 };
 type EvidenceBreadthState = {
@@ -126,6 +141,7 @@ type EvidenceBreadthState = {
   hasMore: boolean;
   loaded: boolean;
   error: boolean;
+  refreshError: boolean;
 };
 type ScoreBucketEvidenceState = {
   companyId: string;
@@ -167,7 +183,17 @@ export default function App() {
   const [companies, setCompanies] = useState<CompanySnapshot[]>([]);
   const [companiesLoadState, setCompaniesLoadState] = useState<"loading" | "ready" | "failed">("loading");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [companyFundamentals, setCompanyFundamentals] = useState<{
+    companyId: string;
+    view: CompanyFundamentalsView | null;
+    loading: boolean;
+    refreshing: boolean;
+    transportError: string | null;
+  } | null>(null);
+  const fundamentalsRequestKeyRef = useRef<{ companyId: string; requestKey: string } | null>(null);
   const [researchView, setResearchView] = useState<ResearchView>("desk");
+  const [researchQueueRevision, setResearchQueueRevision] = useState(0);
+  const [sourceReviewRevision, setSourceReviewRevision] = useState(0);
   const [tape, setTape] = useState<Mention[]>([]);
   const [mentionFeedPage, setMentionFeedPage] = useState<MentionFeedState | null>(null);
   const [evidenceBreadthPage, setEvidenceBreadthPage] = useState<EvidenceBreadthState | null>(null);
@@ -195,13 +221,12 @@ export default function App() {
   const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("sentiment");
   const [chartView, setChartView] = useState<"luna" | "jev">("luna");
   const chartViewRef = useRef(chartView);
-  const chartViewChoiceRef = useRef<"automatic" | "manual">("automatic");
-  const autoChartViewIdentityRef = useRef<string | null>(null);
   const [categoricalChartSnapshot, setCategoricalChartSnapshot] = useState<{
     key: string;
     eligibleObservationCount: number;
   } | null>(null);
   const [feedFilter, setFeedFilter] = useState<FilterKey>("all");
+  const [includeSetAside, setIncludeSetAside] = useState(false);
   const [feedGroupFilter, setFeedGroupFilter] = useState<ExactTitleGroupFilter>(null);
   const [sortMode, setSortMode] = useState<"delta" | "alpha">("delta");
   const [clock, setClock] = useState(Date.now());
@@ -220,9 +245,47 @@ export default function App() {
     setDrawerMention(mention);
   }, []);
   const closeDrawer = useCallback(() => openDrawerMention(null), [openDrawerMention]);
-  const chooseChartView = useCallback((next: "luna" | "jev", manual = true) => {
+  const openResearchQueue = useCallback(() => {
+    closeDrawer();
+    setResearchView("queue");
+  }, [closeDrawer]);
+  const openQueuedEvidence = useCallback((item: AnalystResearchQueueItem) => {
+    setSelectedId(item.companyId);
+    setResearchView("desk");
+    openDrawerMention(item.mention);
+  }, [openDrawerMention]);
+  const applyResearchDispositionChange = useCallback((change: AnalystResearchDispositionChange) => {
+    if (!applyDispositionChange(researchDispositionOverrides.current, change)) return;
+    setMentionFeedPage((current) => {
+      if (!current || current.companyId !== change.companyId) return current;
+      const existing = current.items.find((mention) => mention.id === change.observationId);
+      if (!existing) return current;
+      const updated = {
+        ...existing,
+        analystResearchDisposition: change.disposition,
+        analystResearchDispositionUpdatedAt: change.updatedAt,
+      };
+      const items = visibleInWorkingScan(updated, current.includeDismissed, researchDispositionOverrides.current, includesWeakIssuerMatches(current.filter))
+        ? mergeMentionPages(current.items, [updated])
+        : current.items.filter((mention) => mention.id !== change.observationId);
+      return { ...current, items };
+    });
+    setDrawerMention((current) => current?.id === change.observationId
+      ? { ...current, analystResearchDisposition: change.disposition, analystResearchDispositionUpdatedAt: change.updatedAt }
+      : current);
+    setResearchQueueRevision((revision) => revision + 1);
+    setSourceReviewRevision((revision) => revision + 1);
+  }, []);
+  const reportResearchReviewChanged = useCallback((review: AnalystSourceReview) => {
+    applyResearchDispositionChange({
+      observationId: review.observationId,
+      companyId: review.companyId,
+      disposition: review.disposition,
+      updatedAt: review.updatedAt,
+    });
+  }, [applyResearchDispositionChange]);
+  const chooseChartView = useCallback((next: "luna" | "jev") => {
     chartViewRef.current = next;
-    if (manual) chartViewChoiceRef.current = "manual";
     setChartView(next);
   }, []);
   const reportCategoricalChartSnapshot = useCallback((snapshot: {
@@ -277,6 +340,7 @@ export default function App() {
   const priceRequestSeq = useRef(0);
   const mentionStreamSequence = useRef(0);
   const latestStreamedMention = useRef(new Map<string, { sequence: number; mention: Mention }>());
+  const researchDispositionOverrides = useRef(new Map<string, AnalystResearchDispositionChange>());
   const runtimeIdRef = useRef<string | null>(null);
   const healthRef = useRef<HealthDTO | null>(null);
   const snapshotRequestSeq = useRef(0);
@@ -309,6 +373,58 @@ export default function App() {
     () => companies.find((c) => c.id === selectedId) ?? null,
     [companies, selectedId],
   );
+  const selectedFundamentals = companyFundamentals?.companyId === selectedId ? companyFundamentals : null;
+
+  // Saved-only read on selection. Aborting plus the company identity check
+  // prevents a slow response from a prior selection replacing the active view.
+  useEffect(() => {
+    if (!selectedId) {
+      setCompanyFundamentals(null);
+      fundamentalsRequestKeyRef.current = null;
+      return;
+    }
+    const companyId = selectedId;
+    const controller = new AbortController();
+    let alive = true;
+    setCompanyFundamentals({ companyId, view: null, loading: true, refreshing: false, transportError: null });
+    void getCompanyFundamentals(companyId, controller.signal)
+      .then((view) => {
+        if (!alive || !isCurrentCompanySelection(companyId, selectedIdRef.current) || view.companyId !== companyId) return;
+        setCompanyFundamentals({ companyId, view, loading: false, refreshing: false, transportError: null });
+      })
+      .catch(() => {
+        if (!alive || controller.signal.aborted || !isCurrentCompanySelection(companyId, selectedIdRef.current)) return;
+        setCompanyFundamentals({ companyId, view: null, loading: false, refreshing: false, transportError: "Saved SEC facts could not be loaded." });
+      });
+    return () => { alive = false; controller.abort(); };
+  }, [selectedId]);
+
+  const refreshSelectedFundamentals = useCallback(async () => {
+    const company = selected;
+    const current = selectedFundamentals;
+    if (!company || !current?.view?.refreshAllowed || current.refreshing) return;
+    const companyId = company.id;
+    const request = fundamentalsRequestKeyRef.current?.companyId === companyId
+      ? fundamentalsRequestKeyRef.current
+      : { companyId, requestKey: crypto.randomUUID() };
+    fundamentalsRequestKeyRef.current = request;
+    setCompanyFundamentals((state) => state?.companyId === companyId
+      ? { ...state, refreshing: true, transportError: null }
+      : state);
+    try {
+      const result = await refreshCompanyFundamentals(companyId, request.requestKey);
+      if (!isCurrentCompanySelection(companyId, selectedIdRef.current) || result.companyId !== companyId) return;
+      setCompanyFundamentals({ companyId, view: result, loading: false, refreshing: false, transportError: null });
+      fundamentalsRequestKeyRef.current = null;
+    } catch {
+      if (!isCurrentCompanySelection(companyId, selectedIdRef.current)) return;
+      setCompanyFundamentals((state) => state?.companyId === companyId
+        ? { ...state, refreshing: false, transportError: "SEC refresh failed. Saved facts, if any, remain available." }
+        : state);
+      // Preserve the key after an unknown transport outcome so a deliberate
+      // retry cannot create a second provider attempt.
+    }
+  }, [selected, selectedFundamentals]);
   const selectedQuote = selected && market ? market.quotes[selected.ticker] ?? null : null;
   const selectedSeriesKey = selectedId == null ? null : `${selectedId}:${windowHours}`;
   const selectedSeriesReady = selectedSeriesKey != null && seriesKey === selectedSeriesKey;
@@ -519,6 +635,19 @@ export default function App() {
       return { items, refreshedIds, failedIds };
     }));
     if (requestSeq !== snapshotRequestSeq.current) return;
+    for (const mention of lookupResults.flatMap((result) => result.items)) {
+      const updatedAt = mention.analystResearchDispositionUpdatedAt;
+      if (mention.analystResearchDisposition && updatedAt != null) {
+        applyDispositionChange(researchDispositionOverrides.current, {
+          observationId: mention.id,
+          companyId: mention.companyId,
+          disposition: mention.analystResearchDisposition,
+          updatedAt,
+        });
+      }
+      const streamed = latestStreamedMention.current.get(mention.id);
+      if (streamed) latestStreamedMention.current.set(mention.id, { ...streamed, mention });
+    }
     const refreshedIds = new Set(lookupResults.flatMap((result) => [...result.refreshedIds]));
     const realTape = (tapeSnapshot ?? []).filter(isApplicationMention);
     const refreshedRows = mergeMentionPages(realTape, lookupResults.flatMap((result) => result.items));
@@ -555,7 +684,8 @@ export default function App() {
             latestStreamedMention.current,
             streamSequenceAtStart,
             (mention) => mentionIsInWindow(mention, current.hours)
-              && matchesMentionFeedFilter(mention, current.filter),
+              && matchesMentionFeedFilter(mention, current.filter)
+              && visibleInWorkingScan(mention, current.includeDismissed, researchDispositionOverrides.current, includesWeakIssuerMatches(current.filter)),
             refreshedIds,
           )
         : current);
@@ -648,40 +778,126 @@ export default function App() {
           setPriceLoadErrorKey(null);
         }
         void refreshBackendSnapshot(runtimeChanged, d.runtimeId);
+        if (!runtimeChanged) {
+          const feed = mentionFeedPageRef.current;
+          if (feed?.loaded) {
+            const { companyId, filter, hours, includeDismissed } = feed;
+            const streamSequenceAtStart = mentionStreamSequence.current;
+            const params = mentionPageParams(filter, hours, null, 100, includeDismissed);
+            void getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`).then((page) => {
+              setMentionFeedPage((current) => {
+                if (!current?.loaded || current.companyId !== companyId || current.filter !== filter
+                  || current.hours !== hours || current.includeDismissed !== includeDismissed) return current;
+                const pageIds = new Set(page.items.map((mention) => mention.id));
+                const refreshed = page.items.map((mention) => {
+                  const streamed = latestStreamedMention.current.get(mention.id);
+                  return streamed && streamed.sequence > streamSequenceAtStart ? streamed.mention : mention;
+                }).filter(isApplicationMention)
+                  .filter((mention) => matchesMentionFeedFilter(mention, filter)
+                    && visibleInWorkingScan(mention, includeDismissed, researchDispositionOverrides.current, includesWeakIssuerMatches(filter)));
+                return {
+                  ...current,
+                  items: mergeMentionPages(current.items.filter((mention) => !pageIds.has(mention.id)), refreshed),
+                  nextCursor: current.nextCursor ?? page.nextCursor,
+                  setAsideCount: page.setAsideCount,
+                  issuerIdentityReviewCount: page.issuerIdentityReviewCount,
+                  loadedAt: Date.now(),
+                  error: false,
+                  refreshError: false,
+                  loadMoreError: false,
+                };
+              });
+            }).catch(() => {
+              setMentionFeedPage((current) => !current?.loaded || current.companyId !== companyId
+                || current.filter !== filter || current.hours !== hours || current.includeDismissed !== includeDismissed
+                ? current : { ...current, refreshError: true });
+            });
+          }
+          const breadth = evidenceBreadthPageRef.current;
+          if (breadth?.loaded) {
+            const { companyId, hours } = breadth;
+            const streamSequenceAtStart = mentionStreamSequence.current;
+            const params = mentionPageParams("all", hours, null, 100, true);
+            void getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`).then((page) => {
+              const refreshed = page.items.map((mention) => {
+                const streamed = latestStreamedMention.current.get(mention.id);
+                return streamed && streamed.sequence > streamSequenceAtStart ? streamed.mention : mention;
+              });
+              const streamedRows = [...latestStreamedMention.current.values()]
+                .filter((entry) => entry.sequence > streamSequenceAtStart && entry.mention.companyId === companyId)
+                .map((entry) => entry.mention);
+              const items = mergeMentionPages(refreshed, streamedRows)
+                .filter(isApplicationMention)
+                .filter((mention) => mentionIsInWindow(mention, hours))
+                .slice(0, 100);
+              setEvidenceBreadthPage((current) => !current?.loaded || current.companyId !== companyId || current.hours !== hours
+                ? current
+                : { ...current, items, hasMore: page.nextCursor != null, error: false, refreshError: false });
+            }).catch(() => {
+              setEvidenceBreadthPage((current) => !current?.loaded || current.companyId !== companyId || current.hours !== hours
+                ? current : { ...current, refreshError: true });
+            });
+          }
+        }
         setConnected(true);
       },
       onState: setConnected,
       onMention: (m) => {
         if (!isApplicationMention(m)) return;
+        if (m.analystResearchDisposition && m.analystResearchDispositionUpdatedAt != null) {
+          applyDispositionChange(researchDispositionOverrides.current, {
+            observationId: m.id,
+            companyId: m.companyId,
+            disposition: m.analystResearchDisposition,
+            updatedAt: m.analystResearchDispositionUpdatedAt,
+          });
+        }
+        const liveMention = {
+          ...m,
+          analystResearchDisposition: researchDispositionOverrides.current.get(m.id)?.disposition
+            ?? m.analystResearchDisposition ?? null,
+        };
         if (m.companyId === selectedIdRef.current) {
           setOutcomeRefreshRevision((revision) => revision + 1);
         }
+        const wasStreamed = latestStreamedMention.current.has(m.id);
         const sequence = ++mentionStreamSequence.current;
         latestStreamedMention.current.delete(m.id);
-        latestStreamedMention.current.set(m.id, { sequence, mention: m });
+        latestStreamedMention.current.set(m.id, { sequence, mention: liveMention });
         if (latestStreamedMention.current.size > 500) {
           const oldestId = [...latestStreamedMention.current.keys()]
             .find((id) => id !== drawerMentionIdRef.current);
           if (oldestId !== undefined) latestStreamedMention.current.delete(oldestId);
         }
-        setTape((prev) => upsertMention(prev, m, 60));
+        setTape((prev) => upsertMention(prev, liveMention, 60));
         setMentionFeedPage((current) => {
           if (!current || current.companyId !== m.companyId || !current.loaded) return current;
-          const items = mentionIsInWindow(m, current.hours)
-            && matchesMentionFeedFilter(m, current.filter)
-            ? mergeMentionPages(current.items, [m])
+          const items = mentionIsInWindow(liveMention, current.hours)
+            && matchesMentionFeedFilter(liveMention, current.filter)
+            && visibleInWorkingScan(liveMention, current.includeDismissed, researchDispositionOverrides.current, includesWeakIssuerMatches(current.filter))
+            ? mergeMentionPages(current.items, [liveMention])
             : current.items.filter((item) => item.id !== m.id);
-          return { ...current, items };
+          const newWeakIssuerMatch = (current.filter === "all" || current.filter === "identity_review")
+            && liveMention.issuerIdentityStrong === false
+            && !wasStreamed
+            && current.loadedAt != null
+            && liveMention.ingestedAt > current.loadedAt
+            && mentionIsInWindow(liveMention, current.hours);
+          return {
+            ...current,
+            items,
+            issuerIdentityReviewCount: current.issuerIdentityReviewCount + Number(newWeakIssuerMatch),
+          };
         });
         setEvidenceBreadthPage((current) => {
           if (!current || current.companyId !== m.companyId || !current.loaded) return current;
-          const items = mentionIsInWindow(m, current.hours)
-            ? mergeMentionPages(current.items, [m]).slice(0, 100)
+          const items = mentionIsInWindow(liveMention, current.hours)
+            ? mergeMentionPages(current.items, [liveMention]).slice(0, 100)
             : current.items.filter((item) => item.id !== m.id);
           return { ...current, items };
         });
-        setScoreBucketEvidence((current) => reconcileScoreBucketOnMention(current, m));
-        setDrawerMention((current) => current?.id === m.id ? m : current);
+        setScoreBucketEvidence((current) => reconcileScoreBucketOnMention(current, liveMention));
+        setDrawerMention((current) => current?.id === m.id ? liveMention : current);
         const now = Date.now();
         if (scoreBucketEvidenceRef.current?.companyId === m.companyId && bucketRefreshTimer == null) {
           bucketRefreshTimer = window.setTimeout(() => {
@@ -695,6 +911,7 @@ export default function App() {
           if (chartViewRef.current === "jev" && chartModeRef.current === "comparison") void refreshPrice();
         }
       },
+      onResearchDisposition: applyResearchDispositionChange,
       onCompany: (s) => setCompanies((prev) => prev.map((c) => (c.id === s.id ? s : c))),
       onQuotes: (s) =>
         setMarket((prev) => ({ quotes: { ...prev?.quotes, ...s.quotes }, updatedAt: s.updatedAt })),
@@ -703,7 +920,7 @@ export default function App() {
       close();
       if (bucketRefreshTimer != null) window.clearTimeout(bucketRefreshTimer);
     };
-  }, [refreshBackendSnapshot, refreshSeries, refreshPrice]);
+  }, [applyResearchDispositionChange, refreshBackendSnapshot, refreshSeries, refreshPrice]);
 
   // Read saved history when selection changes; only poll while that chart is active.
   useEffect(() => {
@@ -718,23 +935,8 @@ export default function App() {
     return () => clearInterval(t);
   }, [selectedId, windowHours, chartView, chartMode, refreshSeries, refreshPrice]);
 
-  useEffect(() => {
-    if (!selectedId) return;
-    const identity = `${selectedId}:${windowHours}`;
-    if (autoChartViewIdentityRef.current === identity) return;
-    const view = initialChartViewForEvidence({
-      manualSelection: chartViewChoiceRef.current === "manual",
-      categoricalCount: categoricalChartSnapshot?.key === identity ? categoricalChartSnapshot.eligibleObservationCount : null,
-      historicalStatus: selectedSeriesReady ? "ready" : selectedSeriesError ? "error" : "loading",
-      hasHistoricalData: selectedSeriesHasSentiment,
-    });
-    if (view == null) return;
-    autoChartViewIdentityRef.current = identity;
-    if (view !== chartViewRef.current) chooseChartView(view, false);
-  }, [categoricalChartSnapshot, chooseChartView, selectedId, selectedSeriesError, selectedSeriesHasSentiment, selectedSeriesReady, windowHours]);
-
-  // Each Desk filter has its own server-side cursor. Unscored recovery and
-  // explicit History browsing are unbounded by age; normal filters stay within
+  // Each Desk filter has its own server-side cursor. Unscored, History, and
+  // held-identity recovery are unbounded by age; normal filters stay within
   // the selected time window.
   useEffect(() => {
     if (!selectedId) {
@@ -745,17 +947,19 @@ export default function App() {
     const companyId = selectedId;
     const filter = feedFilter;
     const hours = mentionWindowHours(filter, windowHours);
+    const includeDismissed = includeSetAside;
     const streamSequenceAtStart = mentionStreamSequence.current;
     setMentionFeedPage({
-      companyId, filter, hours, items: [], nextCursor: null, loaded: false,
-      loadingMore: false, error: false, loadMoreError: false,
+      companyId, filter, hours, includeDismissed, setAsideCount: 0, issuerIdentityReviewCount: 0, loadedAt: null, items: [], nextCursor: null, loaded: false,
+      loadingMore: false, error: false, refreshError: false, loadMoreError: false,
     });
-    const params = mentionPageParams(filter, hours);
+    const params = mentionPageParams(filter, hours, null, 100, includeDismissed);
     getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`)
       .then((page) => {
         if (!alive) return;
         setMentionFeedPage((current) => {
-          if (!current || current.companyId !== companyId || current.filter !== filter || current.hours !== hours) return current;
+          if (!current || current.companyId !== companyId || current.filter !== filter || current.hours !== hours
+            || current.includeDismissed !== includeDismissed) return current;
           const reconciled = mergeSnapshotWithLive(
             page.items,
             [],
@@ -763,14 +967,20 @@ export default function App() {
             streamSequenceAtStart,
             page.items.length + latestStreamedMention.current.size,
             false,
-          ).filter(isApplicationMention).filter((mention) => matchesMentionFeedFilter(mention, filter));
+          ).filter(isApplicationMention)
+            .filter((mention) => matchesMentionFeedFilter(mention, filter)
+              && visibleInWorkingScan(mention, includeDismissed, researchDispositionOverrides.current, includesWeakIssuerMatches(filter)));
           return {
             ...current,
             items: reconciled,
             nextCursor: page.nextCursor,
+            setAsideCount: page.setAsideCount,
+            issuerIdentityReviewCount: page.issuerIdentityReviewCount,
+            loadedAt: Date.now(),
             loaded: true,
             loadingMore: false,
             error: false,
+            refreshError: false,
             loadMoreError: false,
           };
         });
@@ -778,12 +988,13 @@ export default function App() {
       .catch(() => {
         if (!alive) return;
         setMentionFeedPage((current) => {
-          if (!current || current.companyId !== companyId || current.filter !== filter || current.hours !== hours) return current;
+          if (!current || current.companyId !== companyId || current.filter !== filter || current.hours !== hours
+            || current.includeDismissed !== includeDismissed) return current;
           return { ...current, error: true };
         });
       });
     return () => { alive = false; };
-  }, [selectedId, snapshotRevision, feedFilter, windowHours]);
+  }, [selectedId, snapshotRevision, sourceReviewRevision, feedFilter, windowHours, includeSetAside]);
 
   // Keep the index's evidence context independent from the selected feed
   // filter. This reads a bounded page of real saved source observations.
@@ -796,8 +1007,8 @@ export default function App() {
     const companyId = selectedId;
     const hours = windowHours;
     const streamSequenceAtStart = mentionStreamSequence.current;
-    setEvidenceBreadthPage({ companyId, hours, items: [], hasMore: false, loaded: false, error: false });
-    const params = mentionPageParams("all", hours, null, 100);
+    setEvidenceBreadthPage({ companyId, hours, items: [], hasMore: false, loaded: false, error: false, refreshError: false });
+    const params = mentionPageParams("all", hours, null, 100, true);
     getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`)
       .then((page) => {
         if (!alive) return;
@@ -816,7 +1027,7 @@ export default function App() {
           .slice(0, 100);
         setEvidenceBreadthPage((current) => !current || current.companyId !== companyId || current.hours !== hours
           ? current
-          : { companyId, hours, items, hasMore: page.nextCursor != null, loaded: true, error: false });
+          : { companyId, hours, items, hasMore: page.nextCursor != null, loaded: true, error: false, refreshError: false });
       })
       .catch(() => {
         if (!alive) return;
@@ -825,7 +1036,7 @@ export default function App() {
           : { ...current, error: true });
       });
     return () => { alive = false; };
-  }, [selectedId, snapshotRevision, windowHours]);
+  }, [selectedId, snapshotRevision, sourceReviewRevision, windowHours]);
 
   // Health poll.
   useEffect(() => {
@@ -918,7 +1129,7 @@ export default function App() {
   const breaking = useMemo(
     () =>
       tape.filter(
-        (m) => m.score && m.publishedAt != null && m.score.eventScore >= 60 && Date.now() - m.publishedAt < 45 * 60_000,
+        (m) => m.issuerIdentityStrong === true && m.score && m.publishedAt != null && m.score.eventScore >= 60 && Date.now() - m.publishedAt < 45 * 60_000,
       ).slice(0, 6),
     [tape],
   );
@@ -931,6 +1142,7 @@ export default function App() {
     && mentionFeedPage?.companyId === selectedId
     && mentionFeedPage.filter === feedFilter
     && mentionFeedPage.hours === mentionWindowHours(feedFilter, windowHours)
+    && mentionFeedPage.includeDismissed === includeSetAside
     ? mentionFeedPage
     : undefined;
   const totalMentions = companies.reduce((acc, c) => acc + c.sourceRecords24h, 0);
@@ -961,8 +1173,10 @@ export default function App() {
   const activeScoreBucketEvidence = scoreBucketEvidence?.companyId === selectedId && scoreBucketEvidence.hours === windowHours
     ? scoreBucketEvidence
     : null;
-  const activeFeedRefreshWarning = hasUnrefreshedRecord(activeMentionFeed?.items ?? [], reconnectLookupFailedIds);
-  const evidenceBreadthRefreshWarning = hasUnrefreshedRecord(activeEvidenceBreadthPage?.items ?? [], reconnectLookupFailedIds);
+  const activeFeedRefreshWarning = hasUnrefreshedRecord(activeMentionFeed?.items ?? [], reconnectLookupFailedIds)
+    || activeMentionFeed?.refreshError === true;
+  const evidenceBreadthRefreshWarning = hasUnrefreshedRecord(activeEvidenceBreadthPage?.items ?? [], reconnectLookupFailedIds)
+    || activeEvidenceBreadthPage?.refreshError === true;
   const scoreBucketRefreshWarning = hasUnrefreshedRecord(activeScoreBucketEvidence?.items ?? [], reconnectLookupFailedIds);
   const drawerRefreshWarning = drawerMention != null && hasUnrefreshedRecord([drawerMention], reconnectLookupFailedIds);
   const retryAvailability = retryAvailabilityFor(health);
@@ -970,31 +1184,37 @@ export default function App() {
   const loadOlderMentions = async () => {
     const current = activeMentionFeed;
     if (!current || current.nextCursor == null || current.loadingMore) return;
-    const { companyId, filter, hours } = current;
+    const { companyId, filter, hours, includeDismissed } = current;
     const cursor = current.nextCursor;
     const cursorKey = JSON.stringify(cursor);
     setMentionFeedPage((latest) => latest
       && latest.companyId === companyId
       && latest.filter === filter
       && latest.hours === hours
+      && latest.includeDismissed === includeDismissed
       && JSON.stringify(latest.nextCursor) === cursorKey
       ? { ...latest, loadingMore: true, loadMoreError: false }
       : latest);
     try {
-      const params = mentionPageParams(filter, hours, cursor);
+      const params = mentionPageParams(filter, hours, cursor, 100, includeDismissed);
       const page = await getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`);
       setMentionFeedPage((latest) => {
-        if (!latest || latest.companyId !== companyId || latest.filter !== filter || latest.hours !== hours || JSON.stringify(latest.nextCursor) !== cursorKey) return latest;
+        if (!latest || latest.companyId !== companyId || latest.filter !== filter || latest.hours !== hours
+          || latest.includeDismissed !== includeDismissed || JSON.stringify(latest.nextCursor) !== cursorKey) return latest;
         return {
           ...latest,
-          items: mergeMentionPages(latest.items, page.items.filter(isApplicationMention)),
+          items: mergeMentionPages(latest.items, page.items.filter(isApplicationMention)
+            .filter((mention) => visibleInWorkingScan(mention, includeDismissed, researchDispositionOverrides.current, includesWeakIssuerMatches(filter)))),
           nextCursor: page.nextCursor,
+          setAsideCount: page.setAsideCount,
+          issuerIdentityReviewCount: page.issuerIdentityReviewCount,
           loadingMore: false,
           loadMoreError: false,
         };
       });
     } catch {
-      setMentionFeedPage((latest) => !latest || latest.companyId !== companyId || latest.filter !== filter || latest.hours !== hours || JSON.stringify(latest.nextCursor) !== cursorKey
+      setMentionFeedPage((latest) => !latest || latest.companyId !== companyId || latest.filter !== filter || latest.hours !== hours
+        || latest.includeDismissed !== includeDismissed || JSON.stringify(latest.nextCursor) !== cursorKey
         ? latest
         : { ...latest, loadingMore: false, loadMoreError: true });
     }
@@ -1006,7 +1226,7 @@ export default function App() {
       if (!heading) return;
       heading.scrollIntoView({
         behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-        block: "nearest",
+        block: "start",
       });
       heading.focus({ preventScroll: true });
     });
@@ -1323,6 +1543,7 @@ export default function App() {
           <div className="mb-2 flex shrink-0 items-center gap-1" role="group" aria-label="Research view">
             {([
               ["desk", "Desk"],
+              ["queue", "My Research"],
               ...(health?.opportunityRadarEnabled === true ? [["radar", "Opportunity Radar"] as const] : []),
             ] as const).map(([view, label]) => (
               <button
@@ -1384,7 +1605,13 @@ export default function App() {
               </div>
             </details>
           )}
-          {selected ? (
+          {researchView === "queue" ? (
+            <AnalystResearchQueue
+              refreshRevision={researchQueueRevision}
+              onReviewChanged={reportResearchReviewChanged}
+              onOpenEvidence={openQueuedEvidence}
+            />
+          ) : selected ? (
             researchView === "radar" ? (
               <OpportunityRadar
                 key={selected.id}
@@ -1550,6 +1777,7 @@ export default function App() {
                     chooseChartView("jev");
                     requestAnimationFrame(() => document.getElementById("chart-tab-jev")?.focus());
                   }}
+                  onReviewSourceRecords={() => showMentionFeed()}
                   onSnapshot={reportCategoricalChartSnapshot}
                 />
               </div>
@@ -1679,14 +1907,6 @@ export default function App() {
                 </>}
               </div>
 
-              <FollowedEvidenceBaseline
-                key={selected.id}
-                companyId={selected.id}
-                companyName={`${selected.name} (${selected.ticker})`}
-                refreshKey={snapshotRevision}
-                onOpenEvidence={openDrawerMention}
-              />
-
               <EvidenceBreadth
                 mentions={evidenceBreadthMentions}
                 hours={windowHours}
@@ -1696,11 +1916,40 @@ export default function App() {
                 now={clock}
                 refreshWarning={evidenceBreadthRefreshWarning}
                 onRetry={() => setSnapshotRevision((revision) => revision + 1)}
-                onRetryRefresh={() => void refreshBackendSnapshot()}
+                onRetryRefresh={() => {
+                  void refreshBackendSnapshot();
+                  setSnapshotRevision((revision) => revision + 1);
+                }}
                 onShowRecords={showMentionFeed}
                 onShowUnscoredHistory={showUnscoredHistory}
                 recentlyRetrievedCount={selected?.sourceRecords24h ?? 0}
                 onOpenMention={openDrawerMention}
+              />
+
+              <CompanyFundamentals
+                companyName={selected.name}
+                ticker={selected.ticker}
+                state={selectedFundamentals?.refreshing ? "refreshing"
+                  : selectedFundamentals?.loading ? "loading"
+                    : selectedFundamentals?.transportError && !(selectedFundamentals.view?.facts.length) ? "failed"
+                      : selectedFundamentals?.view?.state ?? "loading"}
+                facts={selectedFundamentals?.view?.facts ?? []}
+                comparisons={selectedFundamentals?.view?.comparisons ?? []}
+                points={selectedFundamentals?.view?.points ?? []}
+                coverage={selectedFundamentals?.view?.coverage ?? []}
+                refreshAllowed={selectedFundamentals?.view?.refreshAllowed === true && !selectedFundamentals.refreshing}
+                refreshBlockedReason={selectedFundamentals?.view?.refreshBlockedReason}
+                lastRefreshError={selectedFundamentals?.transportError ?? selectedFundamentals?.view?.lastRefreshError}
+                staleReason={selectedFundamentals?.view?.staleReason}
+                onRefresh={() => void refreshSelectedFundamentals()}
+              />
+
+              <FollowedEvidenceBaseline
+                key={selected.id}
+                companyId={selected.id}
+                companyName={`${selected.name} (${selected.ticker})`}
+                refreshKey={snapshotRevision}
+                onOpenEvidence={openDrawerMention}
               />
 
               {breaking.length > 0 && (
@@ -1729,8 +1978,8 @@ export default function App() {
               <div className="mt-2 grid grid-cols-1 gap-3">
                 <div className="panel flex min-w-0 flex-col" id="mention-feed-panel">
                   <div className="panel-head mentions-panel-head shrink-0">
-                    <h2 id="mention-feed-heading" ref={mentionFeedHeadingRef} tabIndex={-1} className="micro m-0 p-0">
-                      Source records · {feedFilter === "history" || feedFilter === "failed" ? "all saved history · newest first" : windowLabel(windowHours)}
+                    <h2 id="mention-feed-heading" ref={mentionFeedHeadingRef} tabIndex={-1} className="micro m-0 scroll-mt-3 p-0">
+                      Source records · {feedFilter === "history" || feedFilter === "failed" || feedFilter === "identity_review" ? "all saved history · newest first" : windowLabel(windowHours)}
                       {mentionsFailed && <span className="ml-2 normal-case tracking-normal text-amber-300/80">refresh failed</span>}
                     </h2>
                     <div className="mentions-filters">
@@ -1742,6 +1991,8 @@ export default function App() {
                             setFeedFilter(f.key);
                           }}
                           aria-pressed={feedFilter === f.key}
+                          title={f.key === "material" ? MATERIAL_FILTER_DESCRIPTION : undefined}
+                          aria-describedby={f.key === "material" && feedFilter === "material" ? "material-filter-disclosure" : undefined}
                           className={`rounded-md px-2 py-[3px] text-[10.5px] transition-colors ${
                             feedFilter === f.key
                               ? "bg-white/[0.09] text-white"
@@ -1752,13 +2003,53 @@ export default function App() {
                           <kbd className="ml-1">f</kbd>
                         </button>
                       ))}
+                      {(includeSetAside || (activeMentionFeed?.setAsideCount ?? 0) > 0) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFeedGroupFilter(null);
+                            setIncludeSetAside((value) => !value);
+                          }}
+                          aria-pressed={includeSetAside}
+                          aria-label={includeSetAside
+                            ? "Hide analyst-set-aside source records"
+                            : `Show ${activeMentionFeed?.setAsideCount ?? 0} analyst-set-aside source records`}
+                          className={`rounded-md px-2 py-[3px] text-[10.5px] transition-colors ${includeSetAside
+                            ? "bg-amber-200/[0.12] text-amber-100/90"
+                            : "text-amber-100/55 hover:bg-white/[0.04] hover:text-amber-100/85"}`}
+                        >
+                          {includeSetAside ? "Hide set-aside" : `Show set-aside · ${activeMentionFeed?.setAsideCount ?? 0}`}
+                        </button>
+                      )}
                     </div>
                   </div>
+                  {feedFilter === "material" && <MaterialFilterDisclosure />}
                   {activeFeedRefreshWarning && (
                     <div className="mx-2 mt-2 rounded border border-amber-300/20 bg-amber-200/[0.04] px-3 py-2 text-[11px] text-amber-100/80" role="alert">
                       Some loaded saved records could not be refreshed after reconnect and may be out of date.{" "}
-                      <button type="button" className="underline underline-offset-2" onClick={() => void refreshBackendSnapshot()}>
+                      <button type="button" className="underline underline-offset-2" onClick={() => {
+                        void refreshBackendSnapshot();
+                        setSnapshotRevision((revision) => revision + 1);
+                      }}>
                         Retry refresh
+                      </button>
+                    </div>
+                  )}
+                  {feedFilter === "all" && (activeMentionFeed?.issuerIdentityReviewCount ?? 0) > 0 && (
+                    <div className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-amber-300/20 bg-amber-200/[0.04] px-3 py-2 text-[11px] text-amber-100/80" role="status">
+                      <span>
+                        {activeMentionFeed?.issuerIdentityReviewCount} company-name {activeMentionFeed?.issuerIdentityReviewCount === 1 ? "match is" : "matches are"} held by the current text rule. Some may still concern this company; saved records are unchanged.
+                      </span>
+                      <button
+                        type="button"
+                        className="shrink-0 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                        onClick={() => {
+                          setFeedGroupFilter(null);
+                          setFeedFilter("identity_review");
+                          focusMentionFeed();
+                        }}
+                      >
+                        Review held matches
                       </button>
                     </div>
                   )}
@@ -1784,10 +2075,16 @@ export default function App() {
                       <div className="px-3 py-4 text-[12px] text-white/35" role="status">
                         {mentionsPending
                             ? `Loading ${selected.ticker} mentions…`
+                            : !includeSetAside && activeMentionFeed?.loaded && activeMentionFeed.setAsideCount > 0
+                              ? `${activeMentionFeed.setAsideCount} source ${activeMentionFeed.setAsideCount === 1 ? "record is" : "records are"} set aside from this scan. Show set-aside to review them.`
+                            : feedFilter === "identity_review" && activeMentionFeed?.loaded && selectedMentions.length === 0
+                              ? "No company-name matches are held by the current identity rule in saved history."
                             : feedFilter === "history" && activeMentionFeed?.loaded && selectedMentions.length === 0
                               ? "No identified real-source records in retained history for this company."
-                              : feedFilter === "failed" && activeMentionFeed?.loaded && selectedMentions.length === 0
+                            : feedFilter === "failed" && activeMentionFeed?.loaded && selectedMentions.length === 0
                               ? "No unscored items in saved history."
+                              : feedFilter === "all" && (activeMentionFeed?.issuerIdentityReviewCount ?? 0) > 0 && selectedMentions.length === 0
+                              ? "No records pass the current issuer text rule in this window. Review held matches; some may still concern this company."
                               : feedFilter !== "all" && activeMentionFeed?.loaded && selectedMentions.length === 0
                                 ? `No ${FILTERS.find((filter) => filter.key === feedFilter)?.label.toLowerCase()} items in this ${windowLabel(windowHours)} window.`
                               : selectedMentions.length === 0
@@ -1820,7 +2117,8 @@ export default function App() {
                       >
                         {activeMentionFeed.loadingMore
                           ? "Loading older items…"
-                          : feedFilter === "history" ? "Load older saved records"
+                          : feedFilter === "identity_review" ? "Load older held matches"
+                            : feedFilter === "history" ? "Load older saved records"
                             : feedFilter === "failed" ? "Load older unscored items" : "Load older matching items"}
                       </button>
                     )}
@@ -1862,6 +2160,8 @@ export default function App() {
       refreshWarning={drawerRefreshWarning}
       onRetryRefresh={() => void refreshBackendSnapshot()}
       onOpenOperations={openOperationsFromDrawer}
+      onReviewChanged={reportResearchReviewChanged}
+      onOpenResearchQueue={openResearchQueue}
     />
     </>
   );

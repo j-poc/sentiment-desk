@@ -9,6 +9,7 @@ import {
   CategoricalSnapshotUnavailableError,
   FollowedBaselineConflictError,
   FollowedBaselineLimitError,
+  AnalystResearchQueueLimitError,
   InvalidCategoricalBucketError,
   ScoreBucketSnapshotConflictError,
 } from "./db.js";
@@ -17,6 +18,8 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
+import type { CompanyFundamentals } from "./company-fundamentals.js";
+import { MAX_ANALYST_RESEARCH_QUESTION_CHARS } from "../shared/analyst-research.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 import type { CategoricalBucketCursor } from "./types.js";
@@ -36,6 +39,7 @@ export interface AppDeps {
   health: HealthTracker;
   version: string;
   opportunityRadarEnabled?: boolean;
+  companyFundamentals?: CompanyFundamentals;
   webRoot?: string;
   deliverySources: DeliverySourceSchedule[];
 }
@@ -81,11 +85,16 @@ const alertDeliveryCursorSchema = z.object({
   createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   alertId: z.string().uuid(),
 }).strict();
-const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed", "history"]);
+const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed", "history", "identity_review"]);
 const mentionLookupSchema = z.object({
   ids: z.array(z.string().min(1).max(200)).min(1).max(900)
     .refine((ids) => new Set(ids).size === ids.length),
 });
+const fundamentalRefreshSchema = z.object({ requestKey: z.string().uuid() }).strict();
+const analystResearchReviewSchema = z.object({
+  disposition: z.enum(["investigate", "dismissed"]),
+  nextQuestion: z.string().max(MAX_ANALYST_RESEARCH_QUESTION_CHARS),
+}).strict();
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
@@ -196,6 +205,11 @@ export function createApp(deps: AppDeps): Hono {
     const parsedFilter = mentionFeedFilterSchema.safeParse(c.req.query("filter") ?? "all");
     if (!parsedFilter.success) return c.json({ error: "invalid_filter" }, 400);
     const filter: MentionFeedFilter = parsedFilter.data;
+    const rawIncludeDismissed = c.req.query("includeDismissed");
+    if (rawIncludeDismissed != null && rawIncludeDismissed !== "true" && rawIncludeDismissed !== "false") {
+      return c.json({ error: "invalid_include_dismissed" }, 400);
+    }
+    const includeDismissed = rawIncludeDismissed === "true";
     const rawCursor = c.req.query("cursor");
     let cursor: MentionPageCursor | null = null;
     if (rawCursor != null) {
@@ -211,8 +225,9 @@ export function createApp(deps: AppDeps): Hono {
     }
     // Recovery work and explicit History browsing remain reachable after the
     // normal seven-day investor window; ordinary views stay time-bounded.
-    const sinceMs = filter === "failed" || filter === "history" ? 0 : Date.now() - hours * 60 * 60 * 1000;
-    return c.json(deps.db.mentionsForCompanyPage({ companyId: id, sinceMs, limit, cursor, filter }));
+    const sinceMs = filter === "failed" || filter === "history" || filter === "identity_review"
+      ? 0 : Date.now() - hours * 60 * 60 * 1000;
+    return c.json(deps.db.mentionsForCompanyPage({ companyId: id, sinceMs, limit, cursor, filter, includeDismissed }));
   });
 
   app.get("/api/companies/:id/followed-evidence", (c) => {
@@ -242,6 +257,27 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  app.get("/api/companies/:id/fundamentals", (c) => {
+    const companyId = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === companyId)) return c.json({ error: "unknown_company" }, 404);
+    if (!deps.companyFundamentals) return c.json({ error: "company_fundamentals_unavailable" }, 503);
+    return c.json(deps.companyFundamentals.read(companyId));
+  });
+
+  app.post("/api/companies/:id/fundamentals/refresh", async (c) => {
+    const companyId = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === companyId)) return c.json({ error: "unknown_company" }, 404);
+    if (!deps.companyFundamentals) return c.json({ error: "company_fundamentals_unavailable" }, 503);
+    const input = fundamentalRefreshSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_company_fundamentals_refresh" }, 400);
+    try {
+      return c.json(await deps.companyFundamentals.refresh(companyId, input.data.requestKey));
+    } catch (error) {
+      if (error instanceof Error && error.message === "unknown_company") return c.json({ error: "unknown_company" }, 404);
+      throw error;
+    }
+  });
+
   app.post("/api/companies/:id/followed-evidence/baseline", async (c) => {
     const companyId = c.req.param("id");
     if (!deps.db.companies().some((company) => company.id === companyId)) return c.json({ error: "unknown_company" }, 404);
@@ -258,6 +294,48 @@ export function createApp(deps: AppDeps): Hono {
       }
       if (error instanceof Error && error.message === "unknown_company") return c.json({ error: "unknown_company" }, 404);
       if (error instanceof Error && error.message === "followed_baseline_capture_key_reused") return c.json({ error: "capture_key_reused" }, 409);
+      throw error;
+    }
+  });
+
+  app.get("/api/research-queue", (c) => c.json({ items: deps.db.analystResearchQueue() }));
+
+  app.get("/api/mentions/:id/research-review", (c) => {
+    const mention = deps.db.mentionRow(c.req.param("id"));
+    if (!mention) return c.json({ error: "unknown_real_source_observation" }, 404);
+    return c.json({ review: deps.db.analystSourceReview(mention.id) });
+  });
+
+  app.put("/api/mentions/:id/research-review", async (c) => {
+    const mention = deps.db.mentionRow(c.req.param("id"));
+    if (!mention) return c.json({ error: "unknown_real_source_observation" }, 404);
+    const input = analystResearchReviewSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_analyst_research_review" }, 400);
+    try {
+      const previous = deps.db.analystSourceReview(mention.id);
+      const review = deps.db.saveAnalystSourceReview({
+        observationId: mention.id,
+        companyId: mention.company_id,
+        disposition: input.data.disposition,
+        nextQuestion: input.data.nextQuestion,
+      });
+      if (!review) return c.json({ error: "unknown_real_source_observation" }, 404);
+      if (previous?.updatedAt !== review.updatedAt) {
+        deps.hub.broadcast("research_review", {
+          observationId: review.observationId,
+          companyId: review.companyId,
+          disposition: review.disposition,
+          updatedAt: review.updatedAt,
+        });
+      }
+      return c.json({ review });
+    } catch (error) {
+      if (error instanceof AnalystResearchQueueLimitError) {
+        return c.json({ error: "analyst_research_queue_limit_exceeded", scope: error.scope, maximum: error.limit }, 409);
+      }
+      if (error instanceof Error && error.message === "invalid_analyst_research_question") {
+        return c.json({ error: "invalid_analyst_research_review" }, 400);
+      }
       throw error;
     }
   });
@@ -685,6 +763,24 @@ export function createApp(deps: AppDeps): Hono {
       // The hub serializes payloads; send() receives pre-encoded strings.
       const send = (event: string, data: string): Promise<void> => {
         if (!open) return Promise.resolve();
+        if (event === "mention") {
+          try {
+            const mention = JSON.parse(data) as { id?: unknown } & Record<string, unknown>;
+            if (typeof mention.id === "string") {
+              const companyId = typeof mention.companyId === "string" ? mention.companyId : null;
+              const saved = companyId == null ? undefined : deps.db.mentionsByIds(companyId, [mention.id])[0];
+              const review = deps.db.analystSourceReview(mention.id);
+              data = JSON.stringify({
+                ...mention,
+                issuerIdentityStrong: saved?.issuerIdentityStrong ?? false,
+                analystResearchDisposition: review?.disposition ?? null,
+                analystResearchDispositionUpdatedAt: review?.updatedAt ?? null,
+              });
+            }
+          } catch {
+            // Preserve the original event if a future mention payload is not JSON.
+          }
+        }
         return stream.writeSSE({ event, data }).catch(() => {
           cleanup();
         }) as Promise<void>;

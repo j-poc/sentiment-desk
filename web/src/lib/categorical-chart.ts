@@ -22,18 +22,6 @@ export function displayIntervalLabel(bucketMs: number): string {
   return minutes < 60 ? `${minutes}-minute intervals` : `${minutes / 60}-hour intervals`;
 }
 
-export function initialChartViewForEvidence(options: {
-  manualSelection: boolean;
-  categoricalCount: number | null;
-  historicalStatus: "loading" | "error" | "ready";
-  hasHistoricalData: boolean;
-}): "luna" | "jev" | null {
-  if (options.manualSelection || options.categoricalCount == null) return null;
-  if (options.categoricalCount > 0) return "luna";
-  if (options.historicalStatus !== "ready") return null;
-  return options.hasHistoricalData ? "jev" : "luna";
-}
-
 const utcRangeFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
   second: "2-digit", fractionalSecondDigits: 3,

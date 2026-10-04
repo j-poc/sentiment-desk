@@ -7,7 +7,9 @@ import { Hub } from "./hub.js";
 import { OpenAIClassifier } from "./openai-classifier.js";
 import { Pipeline } from "./pipeline.js";
 import { createApp } from "./app.js";
+import { CompanyFundamentals } from "./company-fundamentals.js";
 import { MarketData, startQuotesPoller } from "./market.js";
+import { SEC_EVIDENCE_ADAPTER_VERSION } from "./sources/sec.js";
 import {
   startFinnhubPoller,
   startGdeltPoller,
@@ -130,6 +132,12 @@ async function main(): Promise<void> {
     quoteRequestsEnabled: collectorEnabled("yahoo_quote"),
     chartRequestsEnabled: collectorEnabled("yahoo_chart"),
   });
+  const companyFundamentals = new CompanyFundamentals({
+    db,
+    externalRequestsEnabled: config.externalRequestsEnabled,
+    secSourceEnabled: activeSourceCollectors.has("sec_edgar"),
+    userAgent: config.secUserAgent,
+  });
   // Pending work drains on boot only when Jev is configured. Without a key,
   // real observations remain pending and create no scoring failure attempts.
   // Existing completed scores remain untouched when the current rubric changes.
@@ -145,11 +153,13 @@ async function main(): Promise<void> {
     health,
     version: VERSION,
     opportunityRadarEnabled: false,
+    companyFundamentals,
     deliverySources: [
       { collector: "google_news_rss", enabled: collectorEnabled("google_news_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "yahoo_finance_rss", enabled: collectorEnabled("yahoo_finance_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "gdelt_doc_api", enabled: collectorEnabled("gdelt_doc_api"), intervalSeconds: config.pollGdeltSeconds, targetCount: companies.length },
-      { collector: "sec_edgar", enabled: collectorEnabled("sec_edgar") && config.secUserAgent !== "", intervalSeconds: config.pollSecSeconds, targetCount: companies.length },
+      { collector: "sec_edgar", enabled: collectorEnabled("sec_edgar") && config.secUserAgent !== "", intervalSeconds: config.pollSecSeconds, targetCount: companies.length,
+        healthAdapterVersions: ["sec-ticker-mapping/1", "sec-submissions/1", SEC_EVIDENCE_ADAPTER_VERSION] },
       { collector: "finnhub", enabled: collectorEnabled("finnhub") && config.finnhubKey !== "", intervalSeconds: config.pollFinnhubSeconds, targetCount: companies.length, healthAdapterVersions: ["finnhub-news/1"] },
       { collector: "reddit", enabled: collectorEnabled("reddit") && config.redditClientId !== "" && config.redditClientSecret !== "", intervalSeconds: config.pollRedditSeconds, targetCount: companies.length },
       { collector: "x", enabled: collectorEnabled("x") && config.xBearer !== "", intervalSeconds: config.pollXSeconds, targetCount: companies.length },

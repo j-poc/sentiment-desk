@@ -253,6 +253,8 @@ export interface MentionDTO {
   };
   title: string;
   snippet: string;
+  /** Present on selected-company saved-history/feed rows; false marks a retained weak text match. */
+  issuerIdentityStrong?: boolean;
   /** Source-declared event time, null when the source did not provide one. */
   publishedAt: number | null;
   providerObservedAt: number | null;
@@ -269,6 +271,8 @@ export interface MentionDTO {
   usageCheckRequired: boolean;
   score: MentionScore | null;
   classification?: CategoricalClassificationDTO | null;
+  analystResearchDisposition?: "investigate" | "dismissed" | null;
+  analystResearchDispositionUpdatedAt?: number | null;
   error: string | null;
   secDocumentContext?: SecDocumentContext | null;
 }

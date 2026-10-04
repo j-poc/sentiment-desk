@@ -26,8 +26,17 @@ import type {
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
 import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js";
+import type { CompanyFundamentalsView, PersistedFundamentalFact } from "../shared/company-fundamentals.js";
+import {
+  MAX_ACTIVE_ANALYST_RESEARCH_ITEMS,
+  MAX_ANALYST_RESEARCH_QUESTION_CHARS,
+  MAX_STORED_ANALYST_RESEARCH_ITEMS,
+  type AnalystResearchDisposition,
+  type AnalystSourceReview,
+} from "../shared/analyst-research.js";
 import { DEFAULT_STORAGE_LIMITS, StorageCapacity, StorageCapacityError, type StorageLimits, type StorageStatus } from "./storage-capacity.js";
 import { canonicalDatabasePath, DeskWriterLock, WriterAlreadyOwnedError } from "./writer-lock.js";
+import { hasStrongIdentity } from "../shared/company-identity.js";
 
 // Historical simulation and unverified legacy rows stay in place for audit,
 // but only observations with an identified collector can enter live research
@@ -227,17 +236,21 @@ function processIsAlive(pid: number): boolean {
 function hasCurrentReadableSchema(db: DatabaseSync): boolean {
   try {
     const version = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-    if (version?.user_version !== 12) return false;
+    if (version?.user_version !== 15) return false;
     const objects = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name));
     if (!["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
       "source_deliveries", "source_ingestions", "followed_company_baselines", "followed_company_baseline_items",
-      "price_points", "alert_outbox", "desk_runtime_sessions", "jev_request_attempts"]
+      "price_points", "alert_outbox", "desk_runtime_sessions", "jev_request_attempts",
+      "sec_fundamental_attempts", "sec_fundamental_payload_blobs", "sec_fundamental_payloads",
+      "sec_fundamental_snapshots", "sec_fundamental_facts", "analyst_source_reviews"]
       .every((name) => objects.has(name))) return false;
     const attempts = new Set((db.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name));
     const classifications = new Set((db.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((row) => row.name));
     const baselineColumns = new Set((db.prepare("PRAGMA table_info(followed_company_baselines)").all() as Array<{ name: string }>).map((row) => row.name));
+    const fundamentalColumns = new Set((db.prepare("PRAGMA table_info(sec_fundamental_facts)").all() as Array<{ name: string }>).map((row) => row.name));
     return attempts.has("prompt_sha256") && classifications.has("profile_sha256") && classifications.has("attempt_id")
-      && baselineColumns.has("expected_baseline_id");
+      && baselineColumns.has("expected_baseline_id") && fundamentalColumns.has("reported_decimals")
+      && fundamentalColumns.has("reported_precision_status");
   } catch {
     return false;
   }
@@ -362,6 +375,105 @@ CREATE TRIGGER IF NOT EXISTS source_deliveries_no_update BEFORE UPDATE ON source
 BEGIN SELECT RAISE(ABORT, 'source deliveries are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS source_deliveries_no_delete BEFORE DELETE ON source_deliveries
 BEGIN SELECT RAISE(ABORT, 'source deliveries are immutable'); END;
+CREATE TABLE IF NOT EXISTS sec_fundamental_attempts (
+  id TEXT PRIMARY KEY,
+  company_id TEXT NOT NULL REFERENCES companies(id),
+  request_key TEXT NOT NULL,
+  requested_at INTEGER NOT NULL CHECK (requested_at >= 0),
+  started_at INTEGER NOT NULL CHECK (started_at >= 0),
+  completed_at INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('running', 'ready', 'partial', 'empty', 'failed', 'blocked', 'interrupted')),
+  cik TEXT,
+  snapshot_id TEXT,
+  error TEXT,
+  UNIQUE (company_id, request_key),
+  CHECK ((status = 'running' AND completed_at IS NULL) OR (status <> 'running' AND completed_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS sec_fundamental_one_active_attempt
+  ON sec_fundamental_attempts(company_id) WHERE status = 'running';
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_attempt_terminal_immutable
+BEFORE UPDATE ON sec_fundamental_attempts
+WHEN OLD.status <> 'running' OR NEW.status = 'running'
+  OR NEW.id <> OLD.id OR NEW.company_id <> OLD.company_id OR NEW.request_key <> OLD.request_key
+  OR NEW.requested_at <> OLD.requested_at OR NEW.started_at <> OLD.started_at
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals attempt is immutable after its terminal outcome'); END;
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_attempt_no_delete BEFORE DELETE ON sec_fundamental_attempts
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals attempts are immutable'); END;
+CREATE TABLE IF NOT EXISTS sec_fundamental_payload_blobs (
+  sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
+  body_bytes INTEGER NOT NULL CHECK (body_bytes > 0 AND body_bytes <= 33554432),
+  body TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_payload_blobs_no_update BEFORE UPDATE ON sec_fundamental_payload_blobs
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals payload blobs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_payload_blobs_no_delete BEFORE DELETE ON sec_fundamental_payload_blobs
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals payload blobs are immutable'); END;
+CREATE TABLE IF NOT EXISTS sec_fundamental_payloads (
+  delivery_id TEXT PRIMARY KEY REFERENCES source_deliveries(id),
+  endpoint TEXT NOT NULL CHECK (endpoint IN ('ticker_directory', 'submissions', 'companyfacts')),
+  url TEXT NOT NULL,
+  retrieved_at INTEGER NOT NULL CHECK (retrieved_at >= 0),
+  body_bytes INTEGER NOT NULL CHECK (body_bytes > 0 AND body_bytes <= 33554432),
+  sha256 TEXT NOT NULL REFERENCES sec_fundamental_payload_blobs(sha256)
+);
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_payloads_no_update BEFORE UPDATE ON sec_fundamental_payloads
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals payload receipts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_payloads_no_delete BEFORE DELETE ON sec_fundamental_payloads
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals payload receipts are immutable'); END;
+CREATE TABLE IF NOT EXISTS sec_fundamental_snapshots (
+  id TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL UNIQUE REFERENCES sec_fundamental_attempts(id),
+  company_id TEXT NOT NULL REFERENCES companies(id),
+  cik TEXT NOT NULL CHECK (length(cik) = 10),
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  state TEXT NOT NULL CHECK (state IN ('ready', 'partial', 'empty')),
+  policy_version TEXT NOT NULL,
+  directory_delivery_id TEXT NOT NULL REFERENCES sec_fundamental_payloads(delivery_id),
+  submissions_delivery_id TEXT NOT NULL REFERENCES sec_fundamental_payloads(delivery_id),
+  companyfacts_delivery_id TEXT NOT NULL REFERENCES sec_fundamental_payloads(delivery_id),
+  coverage_json TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_snapshots_no_update BEFORE UPDATE ON sec_fundamental_snapshots
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals snapshots are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_snapshots_no_delete BEFORE DELETE ON sec_fundamental_snapshots
+BEGIN SELECT RAISE(ABORT, 'SEC fundamentals snapshots are immutable'); END;
+CREATE TABLE IF NOT EXISTS sec_fundamental_facts (
+  id TEXT PRIMARY KEY,
+  snapshot_id TEXT NOT NULL REFERENCES sec_fundamental_snapshots(id),
+  company_id TEXT NOT NULL REFERENCES companies(id),
+  cik TEXT NOT NULL CHECK (length(cik) = 10),
+  metric TEXT NOT NULL CHECK (metric IN ('revenue', 'operating_income', 'net_income', 'operating_cash_flow')),
+  taxonomy TEXT NOT NULL,
+  concept TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  value TEXT NOT NULL,
+  reported_decimals TEXT,
+  reported_precision_status TEXT NOT NULL DEFAULT 'missing' CHECK (reported_precision_status IN ('declared', 'missing', 'invalid')),
+  start_date TEXT,
+  end_date TEXT NOT NULL,
+  fiscal_year INTEGER,
+  fiscal_period TEXT,
+  duration_class TEXT NOT NULL CHECK (duration_class IN ('annual', 'quarter', 'ytd_q2', 'ytd_q3', 'unknown')),
+  form TEXT NOT NULL,
+  accession TEXT NOT NULL,
+  filed_at INTEGER NOT NULL,
+  accepted_at INTEGER NOT NULL,
+  retrieved_at INTEGER NOT NULL,
+  source_url TEXT NOT NULL,
+  response_sha256 TEXT NOT NULL CHECK (length(response_sha256) = 64),
+  directory_delivery_id TEXT NOT NULL REFERENCES sec_fundamental_payloads(delivery_id),
+  submissions_delivery_id TEXT NOT NULL REFERENCES sec_fundamental_payloads(delivery_id),
+  companyfacts_delivery_id TEXT NOT NULL REFERENCES sec_fundamental_payloads(delivery_id),
+  amended INTEGER NOT NULL CHECK (amended IN (0, 1)),
+  revision_digest TEXT NOT NULL CHECK (length(revision_digest) = 64),
+  UNIQUE (snapshot_id, revision_digest)
+);
+CREATE INDEX IF NOT EXISTS sec_fundamental_facts_latest
+  ON sec_fundamental_facts(company_id, end_date DESC, metric);
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_facts_no_update BEFORE UPDATE ON sec_fundamental_facts
+BEGIN SELECT RAISE(ABORT, 'SEC fundamental facts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS sec_fundamental_facts_no_delete BEFORE DELETE ON sec_fundamental_facts
+BEGIN SELECT RAISE(ABORT, 'SEC fundamental facts are immutable'); END;
 CREATE TABLE IF NOT EXISTS source_ingestions (
   delivery_id TEXT PRIMARY KEY REFERENCES source_deliveries(id),
   started_at INTEGER NOT NULL,
@@ -411,6 +523,16 @@ CREATE TRIGGER IF NOT EXISTS followed_company_baseline_items_no_update BEFORE UP
 BEGIN SELECT RAISE(ABORT, 'followed company baseline items are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS followed_company_baseline_items_no_delete BEFORE DELETE ON followed_company_baseline_items
 BEGIN SELECT RAISE(ABORT, 'followed company baseline items are immutable'); END;
+CREATE TABLE IF NOT EXISTS analyst_source_reviews (
+  observation_id TEXT PRIMARY KEY REFERENCES source_observations(id),
+  company_id TEXT NOT NULL REFERENCES companies(id),
+  disposition TEXT NOT NULL CHECK(disposition IN ('investigate', 'dismissed')),
+  next_question TEXT NOT NULL DEFAULT '' CHECK(length(next_question) <= 1000),
+  created_at INTEGER NOT NULL CHECK(created_at >= 0),
+  updated_at INTEGER NOT NULL CHECK(updated_at >= created_at)
+);
+CREATE INDEX IF NOT EXISTS analyst_source_reviews_queue
+  ON analyst_source_reviews(disposition, updated_at DESC, observation_id DESC);
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -504,6 +626,32 @@ CREATE TRIGGER IF NOT EXISTS alert_receipts_no_delete BEFORE DELETE ON alert_rec
 CREATE UNIQUE INDEX IF NOT EXISTS alert_receipts_attempt_once ON alert_receipts(attempt_id);
 `;
 
+const ANALYST_SOURCE_REVIEW_GUARDS = `
+CREATE TRIGGER IF NOT EXISTS analyst_source_reviews_real_source_insert
+BEFORE INSERT ON analyst_source_reviews
+WHEN NOT EXISTS (
+  SELECT 1 FROM source_observations o
+  LEFT JOIN jev_judgments j ON j.observation_id = o.id
+  WHERE o.id = NEW.observation_id AND o.company_id = NEW.company_id
+    AND o.collector NOT IN ('demo_simulation', 'legacy_unknown')
+    AND COALESCE(j.engine, '') <> 'demo-sim'
+)
+BEGIN SELECT RAISE(ABORT, 'analyst review requires an identified real-source observation'); END;
+CREATE TRIGGER IF NOT EXISTS analyst_source_reviews_real_source_update
+BEFORE UPDATE OF observation_id, company_id ON analyst_source_reviews
+WHEN NOT EXISTS (
+  SELECT 1 FROM source_observations o
+  LEFT JOIN jev_judgments j ON j.observation_id = o.id
+  WHERE o.id = NEW.observation_id AND o.company_id = NEW.company_id
+    AND o.collector NOT IN ('demo_simulation', 'legacy_unknown')
+    AND COALESCE(j.engine, '') <> 'demo-sim'
+)
+BEGIN SELECT RAISE(ABORT, 'analyst review requires an identified real-source observation'); END;
+CREATE TRIGGER IF NOT EXISTS analyst_source_reviews_identity_immutable
+BEFORE UPDATE OF observation_id, company_id ON analyst_source_reviews
+BEGIN SELECT RAISE(ABORT, 'analyst review source identity is immutable'); END;
+`;
+
 const retryRowSchema = z.object({
   status: z.string(),
   score_usage_check_required: z.number(),
@@ -514,6 +662,17 @@ export interface MentionPageCursor {
   orderAt: number;
   ingestedAt: number;
   id: string;
+}
+
+export interface CompanyMentionPageItem extends MentionDTO {
+  analystResearchDisposition: AnalystResearchDisposition | null;
+}
+
+export interface CompanyMentionPage {
+  items: CompanyMentionPageItem[];
+  nextCursor: MentionPageCursor | null;
+  setAsideCount: number;
+  issuerIdentityReviewCount: number;
 }
 
 export interface FollowedCompanyBaseline {
@@ -538,6 +697,18 @@ export interface FollowedEvidenceItem extends MentionDTO {
   publishedBeforeBaseline: boolean;
   ingestionCompletedAt: number;
   ingestionFinalizedAfterBaseline: boolean;
+}
+
+export interface AnalystResearchQueueItem extends AnalystSourceReview {
+  companyName: string;
+  ticker: string;
+  mention: MentionDTO;
+}
+
+export class AnalystResearchQueueLimitError extends Error {
+  constructor(readonly limit: number, readonly scope: "active" | "stored") {
+    super("analyst_research_queue_limit_exceeded");
+  }
 }
 
 export interface FollowedCompanyEvidencePage {
@@ -571,7 +742,7 @@ export interface ScoreBucketCursor {
   snapshotKey: string;
 }
 
-export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed" | "history";
+export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed" | "history" | "identity_review";
 
 export interface MentionRow {
   id: string;
@@ -769,6 +940,42 @@ export interface SourceDeliveryInput {
   secDocumentContext?: SecDocumentContext | null;
 }
 
+export type SecFundamentalAttemptStatus = "running" | "ready" | "partial" | "empty" | "failed" | "blocked" | "interrupted";
+export interface SecFundamentalAttempt {
+  id: string;
+  companyId: string;
+  requestKey: string;
+  requestedAt: number;
+  startedAt: number;
+  completedAt: number | null;
+  status: SecFundamentalAttemptStatus;
+  cik: string | null;
+  snapshotId: string | null;
+  error: string | null;
+}
+export interface SecFundamentalPayloadInput {
+  endpoint: "ticker_directory" | "submissions" | "companyfacts";
+  url: string;
+  startedAt: number;
+  retrievedAt: number;
+  bodyBytes: number;
+  sha256: string;
+  body: string;
+  itemCount: number;
+}
+export type SecFundamentalFactInput = Omit<PersistedFundamentalFact,
+  "id" | "companyId" | "cik" | "responseSha256" | "companyFactsDeliveryId" | "submissionsDeliveryId">;
+export interface SaveSecFundamentalsInput {
+  attemptId: string;
+  companyId: string;
+  cik: string;
+  completedAt: number;
+  state: "ready" | "partial" | "empty";
+  coverage: string[];
+  payloads: readonly SecFundamentalPayloadInput[];
+  facts: readonly SecFundamentalFactInput[];
+}
+
 export interface SourceIngestionOutcomeInput {
   status: "success" | "partial" | "failed";
   processedCount: number;
@@ -825,11 +1032,10 @@ export class Desk {
       const probe = new DatabaseSync(canonicalPath, { readOnly: true });
       try {
         schemaVersion = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (schemaVersion > 12) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
+        if (schemaVersion > 15) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
         currentSchema = hasCurrentReadableSchema(probe);
-        // v11->v12 only creates two bounded indexes/tables and installs
-        // triggers. Older upgrades may rebuild legacy rows, so they retain the
-        // full-database startup reserve.
+        // v11+ upgrades are additive; older upgrades may rebuild legacy rows,
+        // so they retain the full-database startup reserve.
         const needsFullMigrationReserve = !currentSchema && schemaVersion < 11;
         startupPreflight = this.storage.preflight(!currentSchema, probe, needsFullMigrationReserve);
       } finally {
@@ -861,7 +1067,7 @@ export class Desk {
           const probe = new DatabaseSync(canonicalPath, { readOnly: true });
           try {
             const version = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-            if (version > 12) throw new Error(`unsupported_database_schema_version_${version}`);
+            if (version > 15) throw new Error(`unsupported_database_schema_version_${version}`);
             currentSchema = hasCurrentReadableSchema(probe);
           }
           finally { probe.close(); }
@@ -875,6 +1081,20 @@ export class Desk {
     try {
       openedDb = new DatabaseSync(canonicalPath, openReadOnly ? { readOnly: true } : {});
       this.db = openedDb;
+      this.db.function("desk_issuer_identity_strong", { deterministic: true, varargs: true }, (...args) => {
+        const [name, ticker, aliasesJson, ambiguous, title, snippet, scoped] = args;
+        if (typeof name !== "string" || typeof ticker !== "string" || typeof aliasesJson !== "string"
+          || typeof title !== "string" || typeof snippet !== "string") return 0;
+        let aliases: unknown;
+        try { aliases = JSON.parse(aliasesJson); } catch { return 0; }
+        if (!Array.isArray(aliases) || !aliases.every((alias) => typeof alias === "string")) return 0;
+        return Number(hasStrongIdentity({
+          company: { name, ticker, aliases, ambiguous: Number(ambiguous) === 1 },
+          title,
+          snippet,
+          scoped: Number(scoped) === 1,
+        }));
+      });
       this.exec("PRAGMA foreign_keys = ON");
       if (openReadOnly) {
         this.storage.setReadOnlyReason(writerPauseReason ?? startupPreflight.reason
@@ -889,17 +1109,19 @@ export class Desk {
       this.exec("PRAGMA journal_mode = WAL");
       if (!currentSchema) {
         const version = Number((this.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (version > 12) throw new Error(`unsupported_database_schema_version_${version}`);
+        if (version > 15) throw new Error(`unsupported_database_schema_version_${version}`);
         this.exec(SCHEMA);
         this.migrate();
       }
+      this.exec(ANALYST_SOURCE_REVIEW_GUARDS);
       // Additive and idempotent: existing v9 databases receive the guard on
       // writable startup without a table rebuild or historical row rewrite.
       this.exec(CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER);
       this.prepare("INSERT INTO desk_runtime_sessions(id, pid, started_at) VALUES (?, ?, ?)")
         .run(this.runtimeId, process.pid, Date.now());
       this.recoverUnfinishedJevAttempts();
-      this.exec("PRAGMA user_version = 12");
+      this.recoverUnfinishedFundamentalAttempts();
+      this.exec("PRAGMA user_version = 15");
       this.storageEnforcementEnabled = true;
     } catch (error) {
       try { openedDb?.close(); } catch { /* preserve startup failure */ }
@@ -968,6 +1190,15 @@ export class Desk {
 
   /** Migrate the v1 combined table atomically, retaining it for audit/rollback. */
   private migrate(): void {
+    const fundamentalCols = new Set(
+      (this.prepare("PRAGMA table_info(sec_fundamental_facts)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (fundamentalCols.size > 0 && !fundamentalCols.has("reported_decimals")) {
+      this.exec("ALTER TABLE sec_fundamental_facts ADD COLUMN reported_decimals TEXT");
+    }
+    if (fundamentalCols.size > 0 && !fundamentalCols.has("reported_precision_status")) {
+      this.exec("ALTER TABLE sec_fundamental_facts ADD COLUMN reported_precision_status TEXT NOT NULL DEFAULT 'missing' CHECK (reported_precision_status IN ('declared', 'missing', 'invalid'))");
+    }
     const baselineCols = new Set(
       (this.prepare("PRAGMA table_info(followed_company_baselines)").all() as Array<{ name: string }>).map((row) => row.name),
     );
@@ -1240,6 +1471,23 @@ export class Desk {
     }
   }
 
+  private recoverUnfinishedFundamentalAttempts(): void {
+    const count = this.prepare("SELECT COUNT(*) AS count FROM sec_fundamental_attempts WHERE status = 'running'")
+      .get() as { count: number };
+    if (Number(count.count) === 0) return;
+    const now = Date.now();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      this.prepare(`UPDATE sec_fundamental_attempts SET status='interrupted', completed_at=?,
+        error='The application stopped before this SEC fundamentals refresh completed.'
+        WHERE status='running'`).run(now);
+      this.exec("COMMIT");
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
   private releaseScoringReservation(attempt: {
     provider: ModelProvider;
     budget_day: string | null;
@@ -1268,6 +1516,237 @@ export class Desk {
       this.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         .run(key, String(currentValues[index]! - amount));
     }
+  }
+
+  fundamentalAttemptByKey(companyId: string, requestKey: string): SecFundamentalAttempt | null {
+    const row = this.prepare(`SELECT id, company_id, request_key, requested_at, started_at, completed_at,
+      status, cik, snapshot_id, error FROM sec_fundamental_attempts WHERE company_id=? AND request_key=?`)
+      .get(companyId, requestKey) as Record<string, unknown> | undefined;
+    return row ? this.toFundamentalAttempt(row) : null;
+  }
+
+  latestFundamentalAttempt(companyId: string): SecFundamentalAttempt | null {
+    const row = this.prepare(`SELECT id, company_id, request_key, requested_at, started_at, completed_at,
+      status, cik, snapshot_id, error FROM sec_fundamental_attempts WHERE company_id=?
+      ORDER BY requested_at DESC, rowid DESC LIMIT 1`).get(companyId) as Record<string, unknown> | undefined;
+    return row ? this.toFundamentalAttempt(row) : null;
+  }
+
+  private toFundamentalAttempt(row: Record<string, unknown>): SecFundamentalAttempt {
+    return {
+      id: String(row.id), companyId: String(row.company_id), requestKey: String(row.request_key),
+      requestedAt: Number(row.requested_at), startedAt: Number(row.started_at),
+      completedAt: row.completed_at == null ? null : Number(row.completed_at),
+      status: String(row.status) as SecFundamentalAttemptStatus,
+      cik: row.cik == null ? null : String(row.cik), snapshotId: row.snapshot_id == null ? null : String(row.snapshot_id),
+      error: row.error == null ? null : String(row.error),
+    };
+  }
+
+  claimFundamentalAttempt(input: { companyId: string; requestKey: string; now?: number }):
+    | { kind: "claimed"; attempt: SecFundamentalAttempt }
+    | { kind: "existing"; attempt: SecFundamentalAttempt }
+    | { kind: "active"; attempt: SecFundamentalAttempt } {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.requestKey)) {
+      throw new Error("SEC fundamentals refresh request key must be a UUID");
+    }
+    const now = input.now ?? Date.now();
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error("SEC fundamentals refresh time is invalid");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.fundamentalAttemptByKey(input.companyId, input.requestKey);
+      if (existing) {
+        this.exec("COMMIT");
+        return { kind: "existing", attempt: existing };
+      }
+      const active = this.prepare(`SELECT id, company_id, request_key, requested_at, started_at, completed_at,
+        status, cik, snapshot_id, error FROM sec_fundamental_attempts WHERE company_id=? AND status='running'`)
+        .get(input.companyId) as Record<string, unknown> | undefined;
+      if (active) {
+        this.exec("COMMIT");
+        return { kind: "active", attempt: this.toFundamentalAttempt(active) };
+      }
+      const id = randomUUID();
+      this.prepare(`INSERT INTO sec_fundamental_attempts
+        (id, company_id, request_key, requested_at, started_at, status)
+        VALUES (?, ?, ?, ?, ?, 'running')`).run(id, input.companyId, input.requestKey, now, now);
+      const created = this.fundamentalAttemptByKey(input.companyId, input.requestKey);
+      if (!created) throw new Error("SEC fundamentals refresh claim was not persisted");
+      this.exec("COMMIT");
+      return { kind: "claimed", attempt: created };
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
+  failFundamentalAttempt(input: { attemptId: string; status?: "failed" | "blocked"; error: string; completedAt?: number }): void {
+    const status = input.status ?? "failed";
+    const completedAt = input.completedAt ?? Date.now();
+    if (!Number.isSafeInteger(completedAt) || completedAt < 0) throw new Error("SEC fundamentals completion time is invalid");
+    const result = this.prepare(`UPDATE sec_fundamental_attempts SET status=?, completed_at=?, error=?
+      WHERE id=? AND status='running'`).run(status, completedAt, input.error.slice(0, 500), input.attemptId);
+    if (Number(result.changes) !== 1) throw new Error("SEC fundamentals refresh attempt is not running");
+  }
+
+  saveCompanyFundamentals(input: SaveSecFundamentalsInput): { snapshotId: string; deliveryIds: Record<SecFundamentalPayloadInput["endpoint"], string> } {
+    if (!/^\d{10}$/.test(input.cik)) throw new Error("SEC fundamentals issuer CIK must be 10 digits");
+    if (!Number.isSafeInteger(input.completedAt) || input.completedAt < 0) throw new Error("SEC fundamentals completion time is invalid");
+    if (input.coverage.length > 200 || Buffer.byteLength(JSON.stringify(input.coverage), "utf8") > 64 * 1024) {
+      throw new Error("SEC fundamentals coverage diagnostics exceed the persistence limit");
+    }
+    if (input.facts.length > 2_000) throw new Error("SEC fundamentals fact limit exceeded");
+    const endpoints = new Set(input.payloads.map((payload) => payload.endpoint));
+    if (input.payloads.length !== 3 || endpoints.size !== 3
+      || !["ticker_directory", "submissions", "companyfacts"].every((endpoint) => endpoints.has(endpoint as SecFundamentalPayloadInput["endpoint"]))) {
+      throw new Error("SEC fundamentals snapshot requires one receipt for each bounded SEC response");
+    }
+    const attempt = this.prepare(`SELECT company_id, request_key, status, started_at FROM sec_fundamental_attempts WHERE id=?`)
+      .get(input.attemptId) as { company_id: string; request_key: string; status: string; started_at: number } | undefined;
+    if (!attempt || attempt.company_id !== input.companyId || attempt.status !== "running") {
+      throw new Error("SEC fundamentals attempt is not available for snapshot persistence");
+    }
+    const payloadByEndpoint = new Map(input.payloads.map((payload) => [payload.endpoint, payload]));
+    for (const payload of input.payloads) {
+      const target = new URL(payload.url);
+      const allowedHost = payload.endpoint === "ticker_directory" ? target.hostname === "www.sec.gov" : target.hostname === "data.sec.gov";
+      if (target.protocol !== "https:" || !allowedHost || target.username || target.password) throw new Error("SEC receipt URL is outside the official SEC API hosts");
+      if (!Number.isSafeInteger(payload.startedAt) || !Number.isSafeInteger(payload.retrievedAt)
+        || payload.startedAt < attempt.started_at || payload.retrievedAt < payload.startedAt
+        || !Number.isSafeInteger(payload.bodyBytes) || payload.bodyBytes < 1 || payload.bodyBytes > 32 * 1024 * 1024
+        || Buffer.byteLength(payload.body, "utf8") !== payload.bodyBytes
+        || !/^[a-f0-9]{64}$/.test(payload.sha256)
+        || createHash("sha256").update(payload.body, "utf8").digest("hex") !== payload.sha256
+        || !Number.isSafeInteger(payload.itemCount) || payload.itemCount < 0 || payload.itemCount > 1_000_000) {
+        throw new Error("SEC payload receipt failed its size, digest, or timestamp checks");
+      }
+      JSON.parse(payload.body);
+    }
+    if ((input.state === "empty" && input.facts.length !== 0)
+      || (input.state === "ready" && input.facts.length === 0)) {
+      throw new Error("SEC fundamentals state does not match the saved fact count");
+    }
+
+    const snapshotId = randomUUID();
+    const deliveryIds = {} as Record<SecFundamentalPayloadInput["endpoint"], string>;
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      for (const payload of input.payloads) {
+        this.prepare(`INSERT OR IGNORE INTO sec_fundamental_payload_blobs (sha256, body_bytes, body)
+          VALUES (?, ?, ?)`).run(payload.sha256, payload.bodyBytes, payload.body);
+        const storedBlob = this.prepare(`SELECT body_bytes, body FROM sec_fundamental_payload_blobs WHERE sha256=?`)
+          .get(payload.sha256) as { body_bytes: number; body: string } | undefined;
+        if (!storedBlob || Number(storedBlob.body_bytes) !== payload.bodyBytes || storedBlob.body !== payload.body) {
+          throw new Error("SEC content-addressed payload blob does not match its digest and size");
+        }
+        const deliveryId = this.recordDelivery({
+          collector: "sec_edgar", companyId: input.companyId,
+          requestKey: `fundamentals:${attempt.request_key}:${payload.endpoint}`,
+          startedAt: payload.startedAt, completedAt: payload.retrievedAt, result: "success",
+          parsedItemCount: payload.itemCount, responseDigest: payload.sha256,
+          adapterVersion: `sec-fundamentals-${payload.endpoint}/3`,
+        });
+        this.prepare(`INSERT INTO sec_fundamental_payloads
+          (delivery_id, endpoint, url, retrieved_at, body_bytes, sha256)
+          VALUES (?, ?, ?, ?, ?, ?)`).run(deliveryId, payload.endpoint, payload.url, payload.retrievedAt,
+          payload.bodyBytes, payload.sha256);
+        deliveryIds[payload.endpoint] = deliveryId;
+      }
+      this.prepare(`INSERT INTO sec_fundamental_snapshots
+        (id, attempt_id, company_id, cik, created_at, state, policy_version,
+         directory_delivery_id, submissions_delivery_id, companyfacts_delivery_id, coverage_json)
+        VALUES (?, ?, ?, ?, ?, ?, 'sec-fundamentals/3', ?, ?, ?, ?)`)
+        .run(snapshotId, input.attemptId, input.companyId, input.cik, input.completedAt, input.state,
+          deliveryIds.ticker_directory, deliveryIds.submissions, deliveryIds.companyfacts,
+          JSON.stringify(input.coverage));
+
+      const companyFactsPayload = payloadByEndpoint.get("companyfacts")!;
+      const insertFact = this.prepare(`INSERT INTO sec_fundamental_facts
+        (id, snapshot_id, company_id, cik, metric, taxonomy, concept, unit, value, reported_decimals, reported_precision_status, start_date, end_date,
+         fiscal_year, fiscal_period, duration_class, form, accession, filed_at, accepted_at, retrieved_at,
+         source_url, response_sha256, directory_delivery_id, submissions_delivery_id, companyfacts_delivery_id,
+         amended, revision_digest)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const fact of input.facts) {
+        const validDecimals = fact.reportedDecimals === "INF"
+          || (fact.reportedDecimals !== null && /^-?(?:0|[1-9]\d?)$/.test(fact.reportedDecimals)
+            && Number(fact.reportedDecimals) >= -18 && Number(fact.reportedDecimals) <= 18);
+        const precisionContractValid = fact.reportedPrecisionStatus === "declared"
+          ? validDecimals
+          : (fact.reportedPrecisionStatus === "missing" || fact.reportedPrecisionStatus === "invalid") && fact.reportedDecimals === null;
+        if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(fact.value) || fact.value.length > 80
+          || fact.unit !== "USD" || !fact.taxonomy || !fact.concept || !precisionContractValid
+          || !/^\d{4}-\d{2}-\d{2}$/.test(fact.endDate)
+          || (fact.startDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(fact.startDate))
+          || !/^\d{10}-\d{2}-\d{6}$/.test(fact.accession)
+          || !fact.form || fact.filedAt == null || !Number.isSafeInteger(fact.filedAt)
+          || fact.acceptedAt == null || !Number.isSafeInteger(fact.acceptedAt)
+          || !Number.isSafeInteger(fact.retrievedAt) || fact.retrievedAt < attempt.started_at
+          || fact.retrievedAt > input.completedAt
+          || !["annual", "quarter", "ytd_q2", "ytd_q3", "unknown"].includes(fact.durationClass)) {
+          throw new Error("SEC fact failed decimal, period, filing, or accession validation");
+        }
+        const filing = new URL(fact.sourceUrl);
+        if (filing.protocol !== "https:" || filing.hostname !== "www.sec.gov" || filing.username || filing.password) {
+          throw new Error("SEC fact filing link is outside the official SEC host");
+        }
+        const revisionDigest = createHash("sha256").update(JSON.stringify([
+          input.companyId, input.cik, fact.metric, fact.taxonomy, fact.concept, fact.unit, fact.value,
+          fact.reportedDecimals, fact.reportedPrecisionStatus,
+          fact.startDate, fact.endDate, fact.accession, fact.form, fact.filedAt, fact.acceptedAt,
+        ])).digest("hex");
+        insertFact.run(randomUUID(), snapshotId, input.companyId, input.cik, fact.metric, fact.taxonomy,
+          fact.concept, fact.unit, fact.value, fact.reportedDecimals, fact.reportedPrecisionStatus,
+          fact.startDate, fact.endDate, fact.filingFocusYear, fact.filingFocusPeriod,
+          fact.durationClass, fact.form, fact.accession, fact.filedAt, fact.acceptedAt, fact.retrievedAt,
+          fact.sourceUrl, companyFactsPayload.sha256, deliveryIds.ticker_directory, deliveryIds.submissions,
+          deliveryIds.companyfacts, fact.amended ? 1 : 0, revisionDigest);
+      }
+      this.prepare(`UPDATE sec_fundamental_attempts SET status=?, completed_at=?, cik=?, snapshot_id=?
+        WHERE id=? AND status='running'`).run(input.state, input.completedAt, input.cik, snapshotId, input.attemptId);
+      this.exec("COMMIT");
+      return { snapshotId, deliveryIds };
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
+  latestCompanyFundamentals(companyId: string): {
+    snapshotId: string; cik: string; state: "ready" | "partial" | "empty"; createdAt: number;
+    coverage: string[]; facts: PersistedFundamentalFact[];
+  } | null {
+    const snapshot = this.prepare(`SELECT id, cik, state, created_at, coverage_json FROM sec_fundamental_snapshots
+      WHERE company_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(companyId) as
+      { id: string; cik: string; state: "ready" | "partial" | "empty"; created_at: number; coverage_json: string } | undefined;
+    if (!snapshot) return null;
+    let coverage: string[];
+    try {
+      const parsed = JSON.parse(snapshot.coverage_json) as unknown;
+      coverage = Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : ["Saved coverage diagnostics are invalid."];
+    } catch { coverage = ["Saved coverage diagnostics could not be parsed."]; }
+    const facts = this.prepare(`SELECT id, company_id, cik, metric, taxonomy, concept, unit, value,
+      reported_decimals, reported_precision_status,
+      start_date, end_date, fiscal_year, fiscal_period, form, accession, filed_at, accepted_at,
+      retrieved_at, source_url, response_sha256, directory_delivery_id, submissions_delivery_id,
+      duration_class, amended FROM sec_fundamental_facts WHERE snapshot_id=?
+      ORDER BY end_date DESC, metric, concept, accession`).all(snapshot.id) as Array<Record<string, unknown>>;
+    return {
+      snapshotId: snapshot.id, cik: snapshot.cik, state: snapshot.state, createdAt: Number(snapshot.created_at), coverage,
+      facts: facts.map((row) => ({
+        id: String(row.id), companyId: String(row.company_id), cik: String(row.cik), metric: String(row.metric) as PersistedFundamentalFact["metric"],
+        taxonomy: String(row.taxonomy), concept: String(row.concept), unit: String(row.unit), value: String(row.value),
+        reportedDecimals: row.reported_decimals == null ? null : String(row.reported_decimals),
+        reportedPrecisionStatus: String(row.reported_precision_status) as PersistedFundamentalFact["reportedPrecisionStatus"],
+        startDate: row.start_date == null ? null : String(row.start_date), endDate: String(row.end_date),
+        filingFocusYear: row.fiscal_year == null ? null : Number(row.fiscal_year), filingFocusPeriod: row.fiscal_period == null ? null : String(row.fiscal_period),
+        durationClass: String(row.duration_class) as PersistedFundamentalFact["durationClass"], form: String(row.form),
+        accession: String(row.accession), filedAt: Number(row.filed_at), acceptedAt: Number(row.accepted_at),
+        retrievedAt: Number(row.retrieved_at), sourceUrl: String(row.source_url), responseSha256: String(row.response_sha256),
+        companyFactsDeliveryId: String(row.companyfacts_delivery_id), submissionsDeliveryId: String(row.submissions_delivery_id),
+        amended: Number(row.amended) === 1,
+      })),
+    };
   }
 
   seedCompanies(companies: Company[]): void {
@@ -1375,6 +1854,119 @@ export class Desk {
 
   mentionRow(id: string): MentionRow | undefined {
     return this.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined;
+  }
+
+  analystSourceReview(observationId: string): AnalystSourceReview | null {
+    const row = this.prepare(
+      `SELECT observation_id, company_id, disposition, next_question, created_at, updated_at
+       FROM analyst_source_reviews WHERE observation_id = ?`,
+    ).get(observationId) as {
+      observation_id: string; company_id: string; disposition: AnalystResearchDisposition;
+      next_question: string; created_at: number; updated_at: number;
+    } | undefined;
+    return row ? {
+      observationId: row.observation_id,
+      companyId: row.company_id,
+      disposition: row.disposition,
+      nextQuestion: row.next_question,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    } : null;
+  }
+
+  saveAnalystSourceReview(input: {
+    observationId: string;
+    companyId: string;
+    disposition: AnalystResearchDisposition;
+    nextQuestion: string;
+  }): AnalystSourceReview | null {
+    const question = input.nextQuestion.trim();
+    if ([...question].length > MAX_ANALYST_RESEARCH_QUESTION_CHARS
+      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(question)) {
+      throw new Error("invalid_analyst_research_question");
+    }
+    const mention = this.mentionRow(input.observationId);
+    if (!mention || mention.company_id !== input.companyId) return null;
+
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.prepare(
+        "SELECT disposition, next_question, created_at, updated_at FROM analyst_source_reviews WHERE observation_id = ?",
+      ).get(input.observationId) as {
+        disposition: AnalystResearchDisposition; next_question: string; created_at: number; updated_at: number;
+      } | undefined;
+      if (existing?.disposition === input.disposition && existing.next_question === question) {
+        this.exec("COMMIT");
+        return {
+          observationId: input.observationId,
+          companyId: input.companyId,
+          disposition: existing.disposition,
+          nextQuestion: existing.next_question,
+          createdAt: Number(existing.created_at),
+          updatedAt: Number(existing.updated_at),
+        };
+      }
+      if (!existing) {
+        const stored = this.prepare("SELECT COUNT(*) AS count FROM analyst_source_reviews").get() as { count: number };
+        if (Number(stored.count) >= MAX_STORED_ANALYST_RESEARCH_ITEMS) {
+          throw new AnalystResearchQueueLimitError(MAX_STORED_ANALYST_RESEARCH_ITEMS, "stored");
+        }
+      }
+      if (input.disposition === "investigate" && existing?.disposition !== "investigate") {
+        const active = this.prepare(
+          "SELECT COUNT(*) AS count FROM analyst_source_reviews WHERE disposition = 'investigate'",
+        ).get() as { count: number };
+        if (Number(active.count) >= MAX_ACTIVE_ANALYST_RESEARCH_ITEMS) {
+          throw new AnalystResearchQueueLimitError(MAX_ACTIVE_ANALYST_RESEARCH_ITEMS, "active");
+        }
+      }
+      const now = Date.now();
+      const updatedAt = Math.max(now, Number(existing?.updated_at ?? 0) + 1);
+      this.prepare(`
+        INSERT INTO analyst_source_reviews(observation_id, company_id, disposition, next_question, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(observation_id) DO UPDATE SET
+          disposition=excluded.disposition,
+          next_question=excluded.next_question,
+          updated_at=excluded.updated_at
+      `).run(input.observationId, input.companyId, input.disposition, question, now, updatedAt);
+      this.exec("COMMIT");
+      return this.analystSourceReview(input.observationId);
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
+  analystResearchQueue(): AnalystResearchQueueItem[] {
+    const filter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
+    const rows = this.prepare(`
+      SELECT m.*, c.name AS company_name, c.ticker AS company_ticker,
+        desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) AS issuer_identity_strong,
+        r.disposition AS review_disposition, r.next_question AS review_next_question,
+        r.created_at AS review_created_at, r.updated_at AS review_updated_at
+      FROM analyst_source_reviews r
+      JOIN mentions m ON m.id = r.observation_id AND m.company_id = r.company_id
+      JOIN companies c ON c.id = r.company_id
+      WHERE r.disposition = 'investigate' AND ${filter}
+      ORDER BY r.updated_at DESC, r.observation_id DESC
+      LIMIT ${MAX_ACTIVE_ANALYST_RESEARCH_ITEMS}
+    `).all() as unknown as Array<MentionRow & {
+      company_name: string; company_ticker: string;
+      review_disposition: AnalystResearchDisposition; review_next_question: string;
+      review_created_at: number; review_updated_at: number; issuer_identity_strong: number;
+    }>;
+    return rows.map((row) => ({
+      observationId: row.id,
+      companyId: row.company_id,
+      disposition: row.review_disposition,
+      nextQuestion: row.review_next_question,
+      createdAt: Number(row.review_created_at),
+      updatedAt: Number(row.review_updated_at),
+      companyName: row.company_name,
+      ticker: row.company_ticker,
+      mention: { ...rowToDTO(row), issuerIdentityStrong: Number(row.issuer_identity_strong) === 1 },
+    }));
   }
 
   /** All-time eligible research history, using the same exclusion policy as the Desk APIs. */
@@ -2221,24 +2813,43 @@ export class Desk {
   }
 
   mentionsForCompany(companyId: string, sinceMs: number, limit: number): MentionDTO[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
-           AND COALESCE(published_at, provider_observed_at, retrieved_at) >= ?
-         ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
-      )
-      .all(companyId, sinceMs, limit) as unknown as MentionRow[];
-    return rows.map(rowToDTO);
+    const rows = this.prepare(
+      `SELECT m.*,
+         desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) AS issuer_identity_strong
+       FROM mentions m LEFT JOIN companies c ON c.id = m.company_id
+       WHERE m.company_id = ? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
+         AND COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) >= ?
+       ORDER BY COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) DESC, m.ingested_at DESC LIMIT ?`,
+    ).all(companyId, sinceMs, limit) as unknown as Array<MentionRow & { issuer_identity_strong: number }>;
+    return rows.map((row) => ({
+      ...rowToDTO(row),
+      issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
+    }));
   }
 
   mentionsByIds(companyId: string, ids: string[]): MentionDTO[] {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(", ");
     const rows = this.prepare(
-      `SELECT * FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
-         AND id IN (${placeholders})`,
-    ).all(companyId, ...ids) as unknown as MentionRow[];
-    return rows.map(rowToDTO);
+      `SELECT m.*, r.disposition AS analyst_research_disposition,
+         desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) AS issuer_identity_strong,
+         r.updated_at AS analyst_research_disposition_updated_at
+       FROM mentions m LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id
+       LEFT JOIN companies c ON c.id = m.company_id
+       WHERE m.company_id = ? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
+         AND m.id IN (${placeholders})`,
+    ).all(companyId, ...ids) as unknown as Array<MentionRow & {
+      analyst_research_disposition?: AnalystResearchDisposition | null;
+      analyst_research_disposition_updated_at?: number | null;
+      issuer_identity_strong: number;
+    }>;
+    return rows.map((row) => ({
+      ...rowToDTO(row),
+      issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
+      analystResearchDisposition: row.analyst_research_disposition ?? null,
+      analystResearchDispositionUpdatedAt: row.analyst_research_disposition_updated_at == null
+        ? null : Number(row.analyst_research_disposition_updated_at),
+    }));
   }
 
   captureFollowedCompanyBaseline(input: {
@@ -2453,13 +3064,15 @@ export class Desk {
     limit,
     cursor,
     filter,
+    includeDismissed = false,
   }: {
     companyId: string;
     sinceMs: number;
     limit: number;
     cursor: MentionPageCursor | null;
     filter: MentionFeedFilter;
-  }): { items: MentionDTO[]; nextCursor: MentionPageCursor | null } {
+    includeDismissed?: boolean;
+  }): CompanyMentionPage {
     const filterSql: Record<MentionFeedFilter, string> = {
       all: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
       bull: "(status = 'scored' AND sentiment = 'positive') OR (status = 'classified' AND classification_sentiment = 'positive')",
@@ -2468,33 +3081,81 @@ export class Desk {
       offtarget: "status IN ('off_target', 'excluded')",
       failed: "status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt', 'review_required')",
       history: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
+      identity_review: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
     };
+    const identitySql = "desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)";
+    const identityFiltered = filter === "all" || filter === "bull" || filter === "bear" || filter === "material";
+    const identityReviewOnly = filter === "identity_review";
+    const identityFilterSql = identityFiltered ? `AND ${identitySql} = 1`
+      : identityReviewOnly ? `AND ${identitySql} = 0` : "";
     const cursorFilter = cursor
       ? `AND (
            COALESCE(published_at, provider_observed_at, retrieved_at) < ?
            OR (COALESCE(published_at, provider_observed_at, retrieved_at) = ? AND ingested_at < ?)
-           OR (COALESCE(published_at, provider_observed_at, retrieved_at) = ? AND ingested_at = ? AND id < ?)
+           OR (COALESCE(published_at, provider_observed_at, retrieved_at) = ? AND ingested_at = ? AND m.id < ?)
          )`
       : "";
     const cursorParams = cursor
       ? [cursor.orderAt, cursor.orderAt, cursor.ingestedAt, cursor.orderAt, cursor.ingestedAt, cursor.id]
       : [];
-    const rows = this.prepare(
-      `SELECT *, COALESCE(published_at, provider_observed_at, retrieved_at) AS order_at
-       FROM mentions WHERE company_id = ? AND ${REAL_MENTION_FILTER}
+    const setAsideCount = this.prepare(
+      `SELECT COUNT(*) AS count
+       FROM mentions m LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id
+       LEFT JOIN companies c ON c.id = m.company_id
+       WHERE m.company_id = ? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
          AND (${filterSql[filter]})
-         AND COALESCE(published_at, provider_observed_at, retrieved_at) >= ?
+         AND COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) >= ?
+         ${identityFilterSql}
+         AND r.disposition = 'dismissed'`,
+    ).get(companyId, sinceMs) as { count: number };
+    const issuerIdentityReviewCount = identityFiltered || identityReviewOnly
+      ? this.prepare(
+        `SELECT COUNT(*) AS count
+         FROM mentions m LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id
+         LEFT JOIN companies c ON c.id = m.company_id
+         WHERE m.company_id = ? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
+           AND (${filterSql[filter]})
+           AND COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) >= ?
+           AND ${identitySql} = 0
+           AND (? = 1 OR r.disposition IS NULL OR r.disposition <> 'dismissed')`,
+      ).get(companyId, sinceMs, includeDismissed ? 1 : 0) as { count: number }
+      : { count: 0 };
+    const rows = this.prepare(
+      `SELECT m.*, r.disposition AS analyst_research_disposition,
+         ${identitySql} AS issuer_identity_strong,
+         r.updated_at AS analyst_research_disposition_updated_at,
+         COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) AS order_at
+       FROM mentions m LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id
+       LEFT JOIN companies c ON c.id = m.company_id
+       WHERE m.company_id = ? AND ${REAL_MENTION_FILTER}
+         AND (${filterSql[filter]})
+         AND COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) >= ?
+         AND (? = 1 OR r.disposition IS NULL OR r.disposition <> 'dismissed')
+         ${identityFilterSql}
          ${cursorFilter}
-       ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC,
-         ingested_at DESC, id DESC LIMIT ?`,
-    ).all(companyId, sinceMs, ...cursorParams, limit + 1) as unknown as Array<MentionRow & { order_at: number }>;
+       ORDER BY COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) DESC,
+         m.ingested_at DESC, m.id DESC LIMIT ?`,
+    ).all(companyId, sinceMs, includeDismissed ? 1 : 0, ...cursorParams, limit + 1) as unknown as Array<MentionRow & {
+      analyst_research_disposition: AnalystResearchDisposition | null;
+      analyst_research_disposition_updated_at: number | null;
+      issuer_identity_strong: number;
+      order_at: number;
+    }>;
     const hasMore = rows.length > limit;
     const last = hasMore ? rows[limit - 1] : undefined;
     return {
-      items: rows.slice(0, limit).map(rowToDTO),
+      items: rows.slice(0, limit).map((row) => ({
+        ...rowToDTO(row),
+        issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
+        analystResearchDisposition: row.analyst_research_disposition,
+        analystResearchDispositionUpdatedAt: row.analyst_research_disposition_updated_at == null
+          ? null : Number(row.analyst_research_disposition_updated_at),
+      })),
       nextCursor: last
         ? { orderAt: last.order_at, ingestedAt: last.ingested_at, id: last.id }
         : null,
+      setAsideCount: Number(setAsideCount.count),
+      issuerIdentityReviewCount: Number(issuerIdentityReviewCount.count),
     };
   }
 
@@ -2691,13 +3352,18 @@ export class Desk {
    * recovery state after a page reload.
    */
   recentVisible(limit: number): MentionDTO[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM mentions WHERE ${REAL_MENTION_FILTER} AND status IN ('scored', 'off_target', 'classified', 'excluded', 'review_required', 'pending', 'retrying', 'scoring', 'failed', 'corrupt')
-         ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC, ingested_at DESC LIMIT ?`,
-      )
-      .all(limit) as unknown as MentionRow[];
-    return rows.map(rowToDTO);
+    const rows = this.prepare(
+      `SELECT m.*,
+         desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) AS issuer_identity_strong
+       FROM mentions m LEFT JOIN companies c ON c.id = m.company_id
+       WHERE ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
+         AND m.status IN ('scored', 'off_target', 'classified', 'excluded', 'review_required', 'pending', 'retrying', 'scoring', 'failed', 'corrupt')
+       ORDER BY COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) DESC, m.ingested_at DESC LIMIT ?`,
+    ).all(limit) as unknown as Array<MentionRow & { issuer_identity_strong: number }>;
+    return rows.map((row) => ({
+      ...rowToDTO(row),
+      issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
+    }));
   }
 
   /** Identified scored mentions keyed to the time the Jev result became available. */

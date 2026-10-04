@@ -502,7 +502,7 @@ describe("Desk observation and judgment storage", () => {
 
       expect(second).toMatchObject({ items: [{ id: failedId, status: "failed", usageCheckRequired: true }] });
       expect(second.nextCursor).toMatchObject({ id: failedId });
-      expect(third).toEqual({ items: [expect.objectContaining({ id: lastId, status: "pending" })], nextCursor: null });
+      expect(third).toEqual({ items: [expect.objectContaining({ id: lastId, status: "pending" })], nextCursor: null, setAsideCount: 0, issuerIdentityReviewCount: 0 });
     } finally {
       db.close();
     }
@@ -712,6 +712,11 @@ describe("Desk observation and judgment storage", () => {
         error: "global bootstrap failure",
       });
       add({
+        collector: "sec_edgar", companyId: company.id, requestKey: "sec-fundamentals-companyfacts", startedAt,
+        completedAt: startedAt + 6, result: "success", parsedItemCount: 4,
+        adapterVersion: "sec-fundamentals-companyfacts/2",
+      });
+      add({
         collector: "finnhub", companyId: company.id, requestKey: "finnhub-news", startedAt,
         completedAt: startedAt + 2, result: "success", parsedItemCount: 1, adapterVersion: "finnhub-news/1",
       });
@@ -738,7 +743,8 @@ describe("Desk observation and judgment storage", () => {
 
       const health = db.deliveryHealth([
         { collector: "google_news_rss", enabled: true, intervalSeconds: 60, targetCount: 1 },
-        { collector: "sec_edgar", enabled: true, intervalSeconds: 60, targetCount: 2, healthCompanyOnly: true },
+        { collector: "sec_edgar", enabled: true, intervalSeconds: 60, targetCount: 2, healthCompanyOnly: true,
+          healthAdapterVersions: ["sec-ticker-mapping/1", "sec-company-tickers/1", "sec-submissions/1", "sec-filing-evidence/1"] },
         {
           collector: "finnhub", enabled: true, intervalSeconds: 60, targetCount: 1,
           healthAdapterVersions: ["finnhub-news/1"],

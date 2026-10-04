@@ -8,7 +8,7 @@ Opportunity Radar until Desk operation is accepted. Historical Jev results
 remain explicitly Jev; no Jev fallback, demo observation, synthetic product
 record, or fabricated price is allowed. Product fixtures stay isolated to tests.
 
-The protected local preview at `http://127.0.0.1:8798/` uses an isolated
+The protected local preview at `http://127.0.0.1:8879/` uses an isolated
 SQLite backup of retained real data. It is running with external requests and
 all classifiers disabled. Its source database remains unchanged. The latest
 saved retrieval in the main database is `2026-09-28T17:47:42Z`; Apple history
@@ -75,8 +75,10 @@ workflow. The review did not claim live operation or investor value.
   keyless real sources; paid classifiers remained disabled, and the disposable
   verification VM was stopped afterward.
 - The app server starts at the preview URL above against a separate consistent
-  SQLite backup. Codex's in-app browser policy rejected navigation to the local
-  URL, so this continuation has no new rendered-browser confirmation.
+  SQLite backup. In-app browser inspection confirms this isolated install has
+  zero eligible source observations, disabled external requests, and no SEC
+  facts or chart marks. This verifies the empty path only, not a populated or
+  live investor workflow.
 
 ### Blocked operational acceptance
 
@@ -88,6 +90,55 @@ directionally imbalanced and is neither ground truth nor prospective quality
 proof. The product lacks a current small-cap discovery source/universe, a
 complete fundamental research workflow, and observed intended-user sessions.
 These gaps keep full acceptance open and Opportunity Radar disabled.
+
+### Investor-usability correction — selected-company fundamentals
+
+The independent finance review found two specific reading failures: SEC's
+date-only filing field was presented like an exact clock time, and the annual
+revenue chart had no readable value scale. The selected-company view now
+renders Filed as a calendar date, leaves acceptance/retrieval as timestamps,
+labels the chart's USD range, and offers source-returned values, units, and
+reported precision in a keyboard-accessible table. It no longer calls returned
+values “exact.” Supplied precision is preserved but never inferred; missing
+precision suppresses percentage changes, malformed precision withholds
+comparison, and differences within the two-value accuracy bound have no
+directional label. Point units must match for the chart to render.
+
+At that earlier check, the in-app browser showed a true empty Desk with no real saved facts. New
+offline service fixtures use fictional source-shaped rows only in temporary
+test databases; no product record is seeded, and these tests do not count as
+source proof. Focused tests and typecheck pass, but this is not a populated-data
+or complete investor workflow. The higher-value gaps remain tickerless
+discovery, driver/counterevidence synthesis, live Luna operation, source
+breadth, historical reconciliation, and observed investor task outcomes. The
+fresh whole-suite, typecheck, and production build now pass as recorded below;
+final security/dependency gates and a reviewed GitHub checkpoint remain pending.
+
+### Actual saved-data UI review — 2026-10-05
+
+The running preview at `http://127.0.0.1:8879/` serves the production build
+against a private local SQLite backup outside the repository. Requests are
+disabled and the main database was
+not changed. The top bar reports 1,118 saved source records retrieved across the
+watchlist in 24 hours; the selected Apple history has 245 saved historical Jev
+scores, last scored six days ago. No Luna output, SEC facts, or point-in-time
+price series is available in this copy, and the UI says so.
+
+The rendered user path confirms “Model material” exposes its Jev threshold and
+Luna rule and says neither is independently validated. “Review held matches”
+opens the 160 held Apple matches in the full-history feed. Opening the retained
+“Dear Apple Stock Fans, Mark Your Calendars for October 13” row shows why the
+text rule held it, says that this does not prove the item is unrelated, and
+identifies Barchart.com as reported publisher, Google News RSS as collector, and
+news.google.com as the saved link host. Its source receipt is present; no
+classification request was sent. The real history chart is directly selectable
+and labels itself Historical Jev, repeats included, fixed impact-point scale,
+and stale by six days. Luna categories remain an explicit empty state, not a
+synthetic chart.
+
+This verifies the saved-data usability path only. It does not clear live Luna
+qualification, current small-cap discovery, fresh market-price history, complete
+delivery reconciliation, source breadth, or observed investor task outcomes.
 
 ## Historical resumed Luna acceptance run at 52bb6f7
 

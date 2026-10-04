@@ -360,7 +360,7 @@
       "command": "npm run verify:jev-sanity",
       "covers": "Historical ten-case fictional sanity pilot using isolated test databases; reports only test-fixture agreement and is not real-source quality, classifier calibration, or release evidence.",
       "status": "PASS",
-      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234\u2013370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     },
     "no_synthetic_runtime": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run verify:offline-startup; production browser and API readback at http://127.0.0.1:8795/ against isolated saved data",
@@ -425,7 +425,7 @@
         ],
         "evidence": "All nine real external collector IDs were checked against config, adapter/poller bounds, delivery health, allowlist probes, rights records, and user-visible scope. The Sentiment Desk now exposes one-response RSS uncertainty, GDELT cap behavior, SEC/Finnhub/Reddit/X time windows, price-only endpoints, missing direct source families, optional social collectors, and per-source rights caveat. Trace: project-record/4-log/2026-09-29-source-scope-disclosure.md."
       },
-      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays “Configured feeds only. This desk does not cover the entire public web or all investor activity.” Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
+      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays \u201cConfigured feeds only. This desk does not cover the entire public web or all investor activity.\u201d Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
     },
     "legacy_provider_usage_audit": {
       "command": "Reconcile legacy TypeSafe request payloads and provider usage for the previously stopped loopback process",
@@ -539,7 +539,7 @@
       "command": "Isolated local application process using the supported SEC collector and Jev dispatch path",
       "covers": "One real SEC filing through source delivery receipt, Jev request, persisted judgment, and saved-data UI; integration only, not a quality evaluation or ongoing live-operations claim.",
       "status": "PASS",
-      "evidence": "2026-10-01T09:41:27Z–09:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
+      "evidence": "2026-10-01T09:41:27Z\u201309:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
     }
   },
   "sources": [
@@ -669,7 +669,7 @@
     {
       "id": "sec_edgar",
       "provider": "SEC EDGAR submissions and filing documents",
-      "endpoint": "SEC submissions metadata plus bounded https://www.sec.gov/Archives/edgar/data/{CIK}/{accession}/{HTML} document requests",
+      "endpoint": "SEC ticker directory, submissions metadata, XBRL CompanyFacts, and bounded https://www.sec.gov/Archives/edgar/data/{CIK}/{accession}/{HTML} document requests",
       "freshness_budget_seconds": 604800,
       "delivery_states": [
         "network",
@@ -687,13 +687,16 @@
         "acceptance_time",
         "ingested_at"
       ],
-      "revision_policy": "Existing accession identity and stable normalized title/snippet/canonicalURL/publisher/filedAt input revision semantics are unchanged. Genuine new selected-exhibit inputs are new immutable revisions; changed retrieval clocks or raw-tail digests alone do not create model work. Each acquisition attempt retains a separate receipt.",
+      "revision_policy": "Existing accession identity and stable normalized title/snippet/canonicalURL/publisher/filedAt input revision semantics are unchanged. Genuine new selected-exhibit inputs are new immutable revisions; changed retrieval clocks or raw-tail digests alone do not create model work. Each acquisition attempt retains a separate receipt. Selected-company CompanyFacts facts retain every bounded accession-linked vintage, keyed by exact metric/taxonomy/concept/unit/start/end/duration; conflicting values or same-period rows lacking a matched acceptance record are withheld. Period comparisons require both facts in one accession and exact one-calendar-year date alignment. Filing fiscal-focus fields are not used as fact-period identity, and 52/53-week or shifted windows abstain. Payload blobs are content-addressed while retrieval receipts remain separate.",
       "rights": "retained",
       "rights_evidence": "User source-use attestation and SEC public-filing reuse guidance support narrow public EDGAR acquisition subject to exceptions. Existing configured contact-bearing User-Agent is not requested again. Classification needs its separate selected-provider account/credential/budget route; no model dispatch is enabled by source acquisition.",
       "consumer_paths": [
         "/api/companies/:id/mentions",
         "/api/tape",
-        "Desk mention cards and drawer"
+        "Desk mention cards and drawer",
+        "GET /api/companies/:id/fundamentals",
+        "POST /api/companies/:id/fundamentals/refresh",
+        "Selected-company SEC fundamentals panel"
       ],
       "coverage_limit": "CIK-mapped filings with valid declared metadata only. Item2.02 supports a unique same-accession HTML99.1 explicitly linked to results in the visible primary body. Missing, unsafe, ambiguous, failed, empty, 99.2-only, inline-only or unrecognized attachment language remains incomplete with no new observation. Recent delivery never resets filing/acceptance age. Requests remain globally opt-in.",
       "acquisition": {
@@ -701,7 +704,11 @@
         "adapter_paths": [
           "server/sources/sec.ts",
           "server/schedule.ts",
-          "server/pipeline.ts"
+          "server/pipeline.ts",
+          "server/company-fundamentals.ts",
+          "server/db.ts",
+          "server/app.ts",
+          "server/index.ts"
         ]
       },
       "source_mode": "live_observation"
@@ -771,7 +778,7 @@
       "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display/retention rights remain unverified.",
       "consumer_paths": [
         "price-series API",
-        "selected-company sentiment × price chart"
+        "selected-company sentiment \u00d7 price chart"
       ],
       "coverage_limit": "Only provider points inside the requested window are drawn; cache/network/local-store provenance stays visible. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
       "acquisition": {
@@ -987,13 +994,18 @@
       "command": [
         "npm",
         "test",
+        "tests/company-fundamentals-period.test.ts",
+        "tests/company-fundamentals-service.test.ts",
+        "tests/company-fundamentals-api.test.ts",
+        "tests/app-company-fundamentals.test.ts",
+        "tests/company-fundamentals.test.tsx",
         "--",
         "--reporter=dot",
         "--maxWorkers=1",
         "--testTimeout=20000"
       ],
       "timeout_seconds": 600,
-      "covers": "Offline parser, database, API, and scoring-contract fixtures. Any fictional inputs exist only inside isolated test fixtures, never the application database.",
+      "covers": "Offline parser, database, API, and scoring-contract fixtures. Any fictional inputs exist only inside isolated test fixtures, never the application database. Includes the selected-company CompanyFacts period, blocked/partial persistence, bounded route and UI empty-state checks; fictional source-shaped financial fixtures remain in bounded tests and temporary SQLite only; they never seed the product database, render in the app, or count as real-source evidence.",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -1015,6 +1027,11 @@
       "command": [
         "npm",
         "test",
+        "tests/company-fundamentals-period.test.ts",
+        "tests/company-fundamentals-service.test.ts",
+        "tests/company-fundamentals-api.test.ts",
+        "tests/app-company-fundamentals.test.ts",
+        "tests/company-fundamentals.test.tsx",
         "--",
         "--reporter=dot",
         "tests/rss.test.ts",
@@ -1040,7 +1057,7 @@
         "--testTimeout=20000"
       ],
       "timeout_seconds": 600,
-      "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks. New SEC selected-document failure/context/replay tests remain offline technical fixtures, not product data or classifier quality evidence.",
+      "covers": "Failed Jev outcomes, legacy provider-usage review, cursor-stable unscored paging, source failure, rate-limit recovery, and persistent state. Fixtures are isolated and do not call providers. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks. New SEC selected-document failure/context/replay tests remain offline technical fixtures, not product data or classifier quality evidence. Includes the selected-company CompanyFacts period, blocked/partial persistence, bounded route and UI empty-state checks; fictional source-shaped financial fixtures remain in bounded tests and temporary SQLite only; they never seed the product database, render in the app, or count as real-source evidence.",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -1062,6 +1079,11 @@
       "command": [
         "npm",
         "test",
+        "tests/company-fundamentals-period.test.ts",
+        "tests/company-fundamentals-service.test.ts",
+        "tests/company-fundamentals-api.test.ts",
+        "tests/app-company-fundamentals.test.ts",
+        "tests/company-fundamentals.test.tsx",
         "--",
         "--reporter=dot",
         "tests/pipeline.test.ts",
@@ -1076,7 +1098,7 @@
         "--testTimeout=20000"
       ],
       "timeout_seconds": 600,
-      "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks. New SEC selected-document failure/context/replay tests remain offline technical fixtures, not product data or classifier quality evidence.",
+      "covers": "Idempotent source replay, stable observation revisions, judgment persistence, and state recovery through isolated SQLite fixtures. Includes categorical Luna receipt, rejection/unknown handling, reservation, restart and separate persistence checks. New SEC selected-document failure/context/replay tests remain offline technical fixtures, not product data or classifier quality evidence. Includes the selected-company CompanyFacts period, blocked/partial persistence, bounded route and UI empty-state checks; fictional source-shaped financial fixtures remain in bounded tests and temporary SQLite only; they never seed the product database, render in the app, or count as real-source evidence.",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",

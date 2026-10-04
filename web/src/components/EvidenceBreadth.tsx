@@ -39,15 +39,19 @@ export function EvidenceBreadth({
   const classified = categorical.filter((mention) => mention.status === "classified");
   const reviewRequired = categorical.filter((mention) => mention.status === "review_required").length;
   const excluded = categorical.filter((mention) => mention.status === "excluded").length;
-  const relatedHeadlineCandidates = findRelatedHeadlineCandidates(mentions);
   const headlineRows = new Map<string, Mention[]>();
-  for (const mention of mentions) {
+  const headlineEligibleMentions = mentions.filter((mention) => mention.issuerIdentityStrong === true
+    && mention.analystResearchDisposition !== "dismissed");
+  const relatedHeadlineCandidates = findRelatedHeadlineCandidates(headlineEligibleMentions);
+  for (const mention of headlineEligibleMentions) {
     const key = normalizeExactHeadline(mention.title);
     const group = headlineRows.get(key) ?? [];
     group.push(mention);
     headlineRows.set(key, group);
   }
-  const visibleHeadlines = [...headlineRows.values()].slice(0, 3);
+  const visibleHeadlines = [...headlineRows.values()]
+    .map((rows) => ({ rows, mention: rows[0]! }))
+    .slice(0, 3);
   const period = hours === 6 ? "6H" : hours === 24 ? "24H" : hours === 72 ? "3D" : "7D";
   const absoluteTime = (value: number) => new Date(value).toLocaleString(undefined, {
     month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
@@ -90,9 +94,8 @@ export function EvidenceBreadth({
         <p className="evidence-breadth-status" role="status">Loading saved source records for the selected window…</p>
       ) : (
         <>
-          <div className="evidence-record-list" aria-label={`Latest saved source records in the ${period} window`}>
-            {visibleHeadlines.map((rows) => {
-              const mention = rows[0]!;
+          <div className="evidence-record-list" aria-label={`Latest active saved source records in the ${period} window`}>
+            {visibleHeadlines.map(({ rows, mention }) => {
               const recordAt = mention.publishedAt ?? mention.providerObservedAt ?? mention.retrievedAt;
               const publisher = mention.publisherName || mention.source.name;
               const timeBasis = mention.publishedAt != null ? "publisher time"
@@ -112,6 +115,17 @@ export function EvidenceBreadth({
               );
             })}
           </div>
+          {mentions.length > 0 && visibleHeadlines.length === 0 && (
+            <p className="evidence-breadth-caveat" role="status">
+              No saved headline in this sample passes the current issuer text rule. Held matches remain reviewable below.
+            </p>
+          )}
+          {mentions.some((mention) => mention.analystResearchDisposition === "dismissed"
+            || mention.issuerIdentityStrong !== true) && (
+            <p className="evidence-breadth-caveat" role="note">
+              Saved-evidence counts include held matches and records you set aside. The latest headline preview excludes both; held identity matches may still concern this company.
+            </p>
+          )}
           {loaded && mentions.length === 0 && <p className="evidence-breadth-status" role="status">No saved source records by source time in this {period} window.</p>}
           {loaded && mentions.length === 0 && recentlyRetrievedCount > 0 && (
             <p className="evidence-breadth-caveat" role="note">

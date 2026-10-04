@@ -6,6 +6,55 @@
 import { z } from "zod";
 import { withReadDeadline } from "./bounded-read.js";
 import type { ScoreBucketCoverage } from "../../../shared/score-bucket-coverage.js";
+import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../../../shared/company-fundamentals.js";
+import type { AnalystResearchDisposition, AnalystResearchDispositionChange, AnalystSourceReview } from "../../../shared/analyst-research.js";
+
+/** Shared identity guard used before applying any selected-company response. */
+export function isCurrentCompanySelection(requestCompanyId: string, selectedCompanyId: string | null): boolean {
+  return selectedCompanyId !== null && requestCompanyId === selectedCompanyId;
+}
+
+export async function getCompanyFundamentals(companyId: string, signal?: AbortSignal): Promise<CompanyFundamentalsView> {
+  return getJSON<CompanyFundamentalsView>(`/api/companies/${encodeURIComponent(companyId)}/fundamentals`, signal);
+}
+
+export async function refreshCompanyFundamentals(
+  companyId: string,
+  requestKey: string,
+): Promise<FundamentalRefreshResult> {
+  return requestJSON<FundamentalRefreshResult>(
+    `/api/companies/${encodeURIComponent(companyId)}/fundamentals/refresh`,
+    { method: "POST", body: JSON.stringify({ requestKey }) },
+  );
+}
+
+export interface AnalystResearchQueueItem extends AnalystSourceReview {
+  companyName: string;
+  ticker: string;
+  mention: Mention;
+}
+
+export async function getAnalystResearchQueue(signal?: AbortSignal): Promise<{ items: AnalystResearchQueueItem[] }> {
+  return getJSON<{ items: AnalystResearchQueueItem[] }>("/api/research-queue", signal);
+}
+
+export async function getAnalystSourceReview(observationId: string, signal?: AbortSignal): Promise<AnalystSourceReview | null> {
+  const result = await getJSON<{ review: AnalystSourceReview | null }>(
+    `/api/mentions/${encodeURIComponent(observationId)}/research-review`, signal,
+  );
+  return result.review;
+}
+
+export async function updateAnalystSourceReview(
+  observationId: string,
+  input: { disposition: AnalystResearchDisposition; nextQuestion: string },
+): Promise<AnalystSourceReview> {
+  const result = await requestJSON<{ review: AnalystSourceReview }>(
+    `/api/mentions/${encodeURIComponent(observationId)}/research-review`,
+    { method: "PUT", body: JSON.stringify(input) },
+  );
+  return result.review;
+}
 
 export interface EarningsSurprise {
   percent: number;
@@ -173,6 +222,7 @@ export interface Mention {
   source: { name: string; url: string; kind: "rss" | "x" | "sec" | "finnhub" | "reddit"; tier: SourceTier; collector: CollectorId; publisher: string; publisherDomain: string | null; deliveryId?: string | null };
   title: string;
   snippet: string;
+  issuerIdentityStrong?: boolean;
   publishedAt: number | null;
   providerObservedAt: number | null;
   retrievedAt: number;
@@ -187,6 +237,8 @@ export interface Mention {
   usageCheckRequired: boolean;
   score: MentionScore | null;
   classification?: CategoricalClassification | null;
+  analystResearchDisposition?: "investigate" | "dismissed" | null;
+  analystResearchDispositionUpdatedAt?: number | null;
   error: string | null;
   secDocumentContext?: SecDocumentContext | null;
 }
@@ -194,6 +246,8 @@ export interface Mention {
 export interface MentionPage {
   items: Mention[];
   nextCursor: { orderAt: number; ingestedAt: number; id: string } | null;
+  setAsideCount: number;
+  issuerIdentityReviewCount: number;
 }
 
 export interface FollowedCompanyBaseline {
@@ -811,6 +865,7 @@ export async function retryMention(
 export interface StreamHandlers {
   onHello?: (data: { now: number; runtimeId: string }) => void;
   onMention?: (m: Mention) => void;
+  onResearchDisposition?: (change: AnalystResearchDispositionChange) => void;
   onCompany?: (s: CompanySnapshot) => void;
   onQuotes?: (s: MarketSnapshot) => void;
   onState?: (connected: boolean) => void;
@@ -821,6 +876,7 @@ export function openStream(handlers: StreamHandlers): () => void {
   const es = new EventSource("/api/stream");
   es.addEventListener("hello", (e) => handlers.onHello?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("mention", (e) => handlers.onMention?.(JSON.parse((e as MessageEvent).data)));
+  es.addEventListener("research_review", (e) => handlers.onResearchDisposition?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("company", (e) => handlers.onCompany?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("quotes", (e) => handlers.onQuotes?.(JSON.parse((e as MessageEvent).data)));
   es.onopen = () => handlers.onState?.(true);

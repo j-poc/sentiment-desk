@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   applyPostRules,
   bucketMsFor,
@@ -392,6 +393,24 @@ describe("hasStrongIdentity (namesake guard)", () => {
         scoped: false,
       }),
     ).toBe(true);
+  });
+  it("ignores the production Apple self-alias but preserves actual issuer evidence", () => {
+    const config = JSON.parse(readFileSync(new URL("../config/companies.json", import.meta.url), "utf8")) as {
+      companies: Array<{ name: string; ticker: string; aliases: string[]; ambiguous?: boolean }>;
+    };
+    const productionApple = config.companies.find((company) => company.ticker === "AAPL");
+    expect(productionApple).toBeDefined();
+    const company = productionApple!;
+
+    expect(company.aliases).toContain(company.name);
+    expect(hasStrongIdentity({
+      company,
+      title: "Rare 150-Lb. McDonald’s Apple Pie Tree Statue Discovered at Auction",
+      snippet: "Collectors discuss the unusual apple-themed statue.",
+      scoped: false,
+    })).toBe(false);
+    expect(hasStrongIdentity({ company, title: "AAPL shares rise after earnings", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company, title: "iPhone demand signals mixed", snippet: "", scoped: false })).toBe(true);
   });
 });
 
