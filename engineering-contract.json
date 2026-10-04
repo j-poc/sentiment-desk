@@ -112,7 +112,9 @@
         "tests/app-unscored-mentions.test.ts",
         "tests/mention-window.test.ts",
         "tests/mention-feed-accessibility.test.ts",
-        "tests/evidence-breadth.test.ts"
+        "tests/evidence-breadth.test.ts",
+        "tests/exact-headline-groups.test.ts",
+        "tests/pipeline.test.ts"
       ],
       "timeout_seconds": 120
     },
@@ -509,14 +511,15 @@
         "acceptance_index": 4,
         "check_ids": [
           "categorical-chart",
+          "bounded-luna-classifier",
           "offline-source-gates",
-          "production-build"
+          "typecheck"
         ]
       },
       {
         "acceptance_index": 5,
         "check_ids": [
-          "historical-jev-series",
+          "categorical-chart",
           "offline-source-gates",
           "production-build"
         ]
@@ -525,7 +528,6 @@
         "acceptance_index": 6,
         "check_ids": [
           "historical-jev-series",
-          "desk-health-recovery",
           "offline-source-gates",
           "production-build"
         ]
@@ -533,13 +535,22 @@
       {
         "acceptance_index": 7,
         "check_ids": [
+          "historical-jev-series",
+          "desk-health-recovery",
+          "offline-source-gates",
+          "production-build"
+        ]
+      },
+      {
+        "acceptance_index": 8,
+        "check_ids": [
           "desk-health-recovery",
           "offline-source-gates",
           "bounded-luna-classifier"
         ]
       },
       {
-        "acceptance_index": 8,
+        "acceptance_index": 9,
         "check_ids": [
           "etl-artifact-check",
           "offline-source-gates",
@@ -548,28 +559,55 @@
         ]
       },
       {
-        "acceptance_index": 9,
+        "acceptance_index": 10,
+        "check_ids": [
+          "saved-history-feed",
+          "etl-artifact-check",
+          "production-build",
+          "typecheck"
+        ]
+      },
+      {
+        "acceptance_index": 11,
+        "check_ids": [
+          "saved-history-feed",
+          "bounded-luna-classifier",
+          "first-run-evidence",
+          "production-build"
+        ]
+      },
+      {
+        "acceptance_index": 12,
+        "check_ids": [
+          "saved-history-feed",
+          "etl-artifact-check",
+          "production-build",
+          "typecheck"
+        ]
+      },
+      {
+        "acceptance_index": 13,
         "check_ids": [
           "etl-artifact-check",
           "offline-source-gates"
         ]
       },
       {
-        "acceptance_index": 10,
+        "acceptance_index": 14,
         "check_ids": [
           "radar-disabled",
           "offline-source-gates"
         ]
       },
       {
-        "acceptance_index": 11,
+        "acceptance_index": 15,
         "check_ids": [
           "github-checkpoint",
           "committed-diff-check"
         ]
       },
       {
-        "acceptance_index": 12,
+        "acceptance_index": 16,
         "check_ids": [
           "first-run-evidence",
           "etl-artifact-check",
@@ -577,14 +615,14 @@
         ]
       },
       {
-        "acceptance_index": 13,
+        "acceptance_index": 17,
         "check_ids": [
           "historical-jev-series",
           "production-build"
         ]
       },
       {
-        "acceptance_index": 14,
+        "acceptance_index": 18,
         "check_ids": [
           "storage-capacity",
           "production-build",
