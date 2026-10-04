@@ -139,5 +139,11 @@ discovery, small-cap labeling, real Luna qualification, user outcomes, and full
 Desk completion remain separate acceptance gates. Opportunity Radar remains
 disabled.
 
-The checkpoint commit and GitHub remote SHA readback are pending at the time
-this trace was written.
+The code checkpoint was committed as
+`646579ba4e0c7e00906adc6b61c7a0e2f9edf266` with message
+`feat(sentiment): add followed evidence baseline and Luna-only routing` and
+pushed to `https://github.com/j-poc/sentiment-desk`, branch
+`codex/real-data-rebuild`. `git ls-remote` read back the same SHA. The existing
+GitHub repository is public; this task did not change visibility or add a
+license. The branch was clean immediately after the push. This checkpoint is a
+reviewed progress milestone, not a full-product pass.
