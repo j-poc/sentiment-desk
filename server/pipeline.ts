@@ -109,7 +109,8 @@ export class Pipeline {
   private alertDispatchTimer: ReturnType<typeof setTimeout> | null = null;
   private alertDispatchDueAt: number | null = null;
   private alertDispatchStopped = false;
-  private readonly pendingCompanySnapshots = new Map<string, ReturnType<typeof setImmediate>>();
+  private readonly pendingCompanySnapshotIds = new Set<string>();
+  private pendingCompanySnapshotTimer: ReturnType<typeof setImmediate> | null = null;
   private companySnapshotsStopped = false;
 
   private companyCache: Map<
@@ -240,29 +241,37 @@ export class Pipeline {
     this.alertDispatchTimer = null;
     this.alertDispatchDueAt = null;
     this.companySnapshotsStopped = true;
-    for (const timer of this.pendingCompanySnapshots.values()) clearImmediate(timer);
-    this.pendingCompanySnapshots.clear();
+    if (this.pendingCompanySnapshotTimer != null) clearImmediate(this.pendingCompanySnapshotTimer);
+    this.pendingCompanySnapshotTimer = null;
+    this.pendingCompanySnapshotIds.clear();
   }
 
   private scheduleCompanySnapshot(companyId: string): void {
-    if (this.companySnapshotsStopped || this.pendingCompanySnapshots.has(companyId)) return;
-    const timer = setImmediate(() => {
-      this.pendingCompanySnapshots.delete(companyId);
+    if (this.companySnapshotsStopped) return;
+    this.pendingCompanySnapshotIds.add(companyId);
+    if (this.pendingCompanySnapshotTimer != null) return;
+    this.pendingCompanySnapshotTimer = setImmediate(() => {
+      this.pendingCompanySnapshotTimer = null;
+      const companyIds = [...this.pendingCompanySnapshotIds];
+      this.pendingCompanySnapshotIds.clear();
       if (this.companySnapshotsStopped) return;
       try {
-        this.deps.hub.broadcast("company", this.snapshot(companyId));
+        const snapshotsByCompany = new Map(this.snapshots().map((snapshot) => [snapshot.id, snapshot]));
+        for (const id of companyIds) {
+          const snapshot = snapshotsByCompany.get(id);
+          if (snapshot) this.deps.hub.broadcast("company", snapshot);
+        }
       } catch (error) {
         console.error("[desk] deferred company snapshot broadcast failed:", error);
       }
     });
-    this.pendingCompanySnapshots.set(companyId, timer);
   }
 
   private broadcastCompanySnapshot(companyId: string): void {
-    const timer = this.pendingCompanySnapshots.get(companyId);
-    if (timer) {
-      clearImmediate(timer);
-      this.pendingCompanySnapshots.delete(companyId);
+    this.pendingCompanySnapshotIds.delete(companyId);
+    if (this.pendingCompanySnapshotIds.size === 0 && this.pendingCompanySnapshotTimer != null) {
+      clearImmediate(this.pendingCompanySnapshotTimer);
+      this.pendingCompanySnapshotTimer = null;
     }
     this.deps.hub.broadcast("company", this.snapshot(companyId));
   }
