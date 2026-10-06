@@ -275,3 +275,32 @@ candidate. Fresh code-bound live-data evidence passes all declared checks
 except `sec_filings_current_hub_receipt`. The independent whole-build verdict
 remains FAIL; this rendered check does not establish intended-user outcomes or
 overall readiness.
+
+## Checkpoint and verification record — 2026-10-06
+
+The reviewed source candidate is checkpointed at commit
+`350f79c92e453a2d1f0454aa3863140825f50b32` on the existing public repository
+`https://github.com/j-poc/sentiment-desk`, branch `codex/real-data-rebuild`.
+After push, `git ls-remote origin refs/heads/codex/real-data-rebuild` returned
+the same commit as local `HEAD`; the worktree was clean. The commit contains
+reviewed source, tests, and project trace only; the local database, credentials,
+and private `.engineering-evidence` receipts were excluded.
+
+The full suite passed 733 tests across 94 files. The retained investor UI
+recovery replay passed 9 tests, and all 13 affected focused quality-loop checks
+passed with current input fingerprints. Gitleaks scanned 12.15 MB of source
+and found no leaks; the ignored 97 MB local database was skipped and remains
+excluded from Git. `npm audit --omit=dev --audit-level=high` found zero
+vulnerabilities. Final `engineering_gate.py verify` is still pending and its
+GitHub checkpoint check must run against the clean pushed tree. The live-data
+ETL receipt remains FAIL solely because the shared Hub does not expose the
+required current all-filers route; no provider or model calls were made for
+this usability review.
+
+A fresh independent usability reviewer found no further UI edit justified by
+current evidence: the visible gaps are missing fresh source/model inputs and
+the unsupported discovery route. A separate `personal-acceptance` judge
+invocation exited before producing a verdict; its packet is saved locally but
+is not counted as acceptance evidence. The independent subagent review and
+rendered app observation remain the usability evidence. Overall product
+readiness remains FAIL, not complete or 10/10.

@@ -32,11 +32,12 @@ retrieved in the last 24 hours. No model or source request was made.
   visible source rows are pending Luna. Do not make stale history look current
   through visual changes; the highest-value next step is qualifying the shared
   Hub's all-filers route and then the real Luna path.
-- A fresh Gitleaks scan, final engineering-gate run, exact-branch readback, and
-  reviewed checkpoint are pending. The requested destination is the existing
-  `https://github.com/j-poc/sentiment-desk` repository and
-  `codex/real-data-rebuild` branch. Keep databases, credentials, and private
-  evaluation receipts out of the commit.
+- The fresh Gitleaks scan found no leaks and `npm audit --omit=dev` found zero
+  vulnerabilities. The reviewed source checkpoint `350f79c` was pushed to
+  `https://github.com/j-poc/sentiment-desk`, branch `codex/real-data-rebuild`,
+  and `git ls-remote` matched that commit. Final engineering-gate verification
+  is still pending. Databases, credentials, and private evaluation receipts
+  stay outside Git.
 - See `project-record/4-log/2026-10-06-investor-navigation-usability.md` for
   current acceptance criteria, rendered proof, and limits.
 
