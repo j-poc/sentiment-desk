@@ -65,3 +65,7 @@ The focused archive and filing UI run passed **42 tests across five files**. The
 The fresh live-data ETL `verify` completed. All required fixture, recovery, replay, offline-gate, bounded keyless public-source smoke, storage, and SEC protocol checks passed. The only failing required check is `sec_filings_current_hub_receipt`: the connected Hub still supplies no SEC 8-K receipt. The follow-up `check` confirms the new evidence is current and fails only for that missing receipt.
 
 The fresh engineering-bullshit-detector review passed the 21-file incremental archive/recovery candidate and found the adjacent-only grouping preserves source-time order. Its whole-product verdict remains fail. The selected usability repair removes a navigation dead end; stale evidence and absent current ticker-free discovery still prevent the desk from delivering the core investment job.
+
+## GitHub checkpoint
+
+The reviewed source and evidence checkpoint is pushed to [sentiment-desk](https://github.com/j-poc/sentiment-desk) on `codex/real-data-rebuild` at commit `38a15c6ccde741e59557e271982a56f7eb171b7d`. `git ls-remote` matched that exact branch head, the working tree was clean after the push, and GitHub reports the existing repository visibility as `PUBLIC`. Visibility was not changed. No license file was added, following the user's earlier choice to keep the project unlicensed for now.
