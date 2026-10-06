@@ -28,7 +28,7 @@ const stateLabel: Record<SecFilingsInboxView["state"], string> = {
   rate_limited: "Refresh is rate-limited",
   failed: "Refresh failed",
   not_configured: "Feed not enabled",
-  unsupported: "Hub capability unavailable",
+  unsupported: "Feed not supported by this Hub",
   unavailable: "Hub unavailable",
 };
 
@@ -39,6 +39,26 @@ export function shouldShowDeskFallback(
 ): boolean {
   return loadFailed || (rowCount === 0
     && (state === "not_configured" || state === "unsupported" || state === "unavailable" || state === "failed"));
+}
+
+export function deskFallbackMessage(
+  state: SecFilingsInboxView["state"] | null,
+  loadFailed: boolean,
+  detail?: string | null,
+): string {
+  if (loadFailed || state === "unavailable") {
+    return "The Desk cannot reach its local Public Data Hub. Check the Hub connection again, or search saved headlines and excerpts. The saved archive is historical evidence, not current market coverage.";
+  }
+  if (state === "unsupported") {
+    return `${detail || "The filing feed is not supported by the current Hub configuration."} Configure the SEC 8-K feed in the Hub, then check again. Meanwhile, search saved headlines and excerpts; archive matches are historical leads, not current coverage.`;
+  }
+  if (state === "not_configured") {
+    return "The SEC 8-K feed is not enabled for this Desk. Search saved headlines and excerpts while the feed is unavailable; archive matches are historical leads, not current coverage.";
+  }
+  if (state === "failed") {
+    return "The last SEC filing collection failed. Search saved headlines and excerpts while the feed recovers; archive matches are historical leads, not current coverage.";
+  }
+  return "The no-ticker filing feed is unavailable. Search saved headlines and excerpts; archive matches are historical leads, not current coverage.";
 }
 
 export function retainLastAcceptedFilings(
@@ -125,9 +145,9 @@ export function SecFilingsInbox({ onBrowseSavedSources }: { onBrowseSavedSources
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
-          {(loadFailed || view?.state === "unavailable") && (
-            <button type="button" onClick={() => void reload()} className="rounded border border-white/15 px-2.5 py-1.5 text-xs text-white/65 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">
-              Check Hub again
+          {(loadFailed || view?.state === "unavailable" || view?.state === "unsupported") && (
+            <button type="button" disabled={loading || working} onClick={() => { setLoading(true); void reload(); }} className="rounded border border-white/15 px-2.5 py-1.5 text-xs text-white/65 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-50">
+              {view?.state === "unsupported" ? "Check Hub configuration again" : "Check Hub again"}
             </button>
           )}
           {showActivate && (
@@ -146,10 +166,10 @@ export function SecFilingsInbox({ onBrowseSavedSources }: { onBrowseSavedSources
       {onBrowseSavedSources && showDeskFallback && (
         <div className="flex flex-col gap-3 rounded-md border border-white/10 bg-white/[0.025] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-white/60">{view?.state === "not_configured"
-            ? "The no-ticker SEC feed is not enabled on this Hub. You can still browse source records already saved for this desk."
-            : "The no-ticker filing feed cannot load right now. You can still browse source records already saved for this desk."}</p>
+            ? deskFallbackMessage(view.state, false)
+            : deskFallbackMessage(view?.state ?? null, loadFailed, view?.message)}</p>
           <button type="button" onClick={onBrowseSavedSources} className="w-fit shrink-0 rounded-md border border-white/15 px-3 py-2 text-sm font-medium text-white/75 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">
-            Browse saved sources
+            Search saved archive
           </button>
         </div>
       )}

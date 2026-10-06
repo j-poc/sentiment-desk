@@ -1,5 +1,14 @@
 # Sentiment Desk continuation board — 2026-10-06
 
+## Archive-search and no-ticker recovery — 2026-10-06
+
+| Owner | Scope | Status | Evidence / next |
+|---|---|---|---|
+| `/root` | Search semantics, direct recovery route, rendered proof, integration, and checkpoint | Focused slice verified | `AI` substring false positives fixed; cursors restart safely on policy changes; repeated headlines stay in source order and disclose per-row match/freshness. Unsupported SEC inbox now opens all-company saved headline/excerpt search and clears stale filters. `CPU Business` produced four real retained records in two same-title groups. See `project-record/4-log/2026-10-06-saved-source-archive-search.md`. |
+| `/root/final_usability_review_oct06` | Independent route and whole-product review | Complete | PASS for the scoped direct search recovery. Whole product remains FAIL: no current no-ticker candidate, no supported SEC Hub all-filers receipt, stale saved evidence, and no qualified Luna outcome. Reviewer recommends resolving data capability rather than adding another archive panel. |
+| `/root` | Verification and delivery gates | In progress | Full Vitest **752/752 across 97 files**, typecheck, build, focused route tests and quality-loop replay pass. Live-data evidence is current; only `sec_filings_current_hub_receipt` fails. The SEC route remains unsupported by the connected Hub. Current alignment and engineering receipt are pending. |
+| `/root` | Whole-product acceptance | Open | Still lacks current tickerless small-cap discovery, qualified Luna classifications, selected-company SEC facts in the actual runtime, followed-company materiality evidence, intended-user outcomes, and the 4,700-row legacy usage reconciliation. 390/320 px acceptance remains unverified. Opportunity Radar stays disabled. |
+
 ## Current usability and checkpoint status
 
 | Owner | Scope | Status | Evidence / next |

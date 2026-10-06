@@ -27,6 +27,8 @@ import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
 import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js";
 import type { CompanyFundamentalsView, PersistedFundamentalFact } from "../shared/company-fundamentals.js";
+import type { SavedSourceCoverageSnapshot } from "../shared/saved-source-coverage.js";
+import { savedSourceTextMatches, type SavedSourceSearchCursor, type SavedSourceSearchPage } from "../shared/saved-source-search.js";
 import {
   MAX_ACTIVE_ANALYST_RESEARCH_ITEMS,
   MAX_ANALYST_RESEARCH_QUESTION_CHARS,
@@ -42,6 +44,14 @@ import { hasStrongIdentity } from "../shared/company-identity.js";
 // but only observations with an identified collector can enter live research
 // or current operational usage totals.
 const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(engine, '') <> 'demo-sim'";
+// Keep saved-source ordering aligned with sourceClockForMention(): RSS pubDate is
+// an aggregator clock, not publisher time, while retrieval remains a separate clock.
+const DISPLAYED_SOURCE_CLOCK_SQL = `COALESCE(m.published_at,
+  CASE WHEN m.collector IN ('google_news_rss', 'yahoo_finance_rss') THEN m.aggregator_published_at END,
+  m.provider_observed_at)`;
+const DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL = `(CASE WHEN ${DISPLAYED_SOURCE_CLOCK_SQL} IS NULL THEN 1 ELSE 0 END)`;
+const DISPLAYED_SOURCE_CLOCK_ORDER_SQL = `COALESCE(${DISPLAYED_SOURCE_CLOCK_SQL}, 0)`;
+const REVIEW_REVISION_KEY = "analyst_source_review_revision";
 const FOLLOWED_BASELINE_POLICY = "receipt-ingestion-success/1";
 const MAX_FOLLOWED_BASELINE_OBSERVATIONS = 50_000;
 const FOLLOWED_BASELINE_ELIGIBLE_FILTER = `m.company_id = ?
@@ -1083,6 +1093,10 @@ export class Desk {
     try {
       openedDb = new DatabaseSync(canonicalPath, openReadOnly ? { readOnly: true } : {});
       this.db = openedDb;
+      this.db.function("desk_saved_source_search_match", { deterministic: true }, (text, query) => {
+        if (typeof text !== "string" || typeof query !== "string") return 0;
+        return Number(savedSourceTextMatches(text, query));
+      });
       this.db.function("desk_issuer_identity_strong", { deterministic: true, varargs: true }, (...args) => {
         const [name, ticker, aliasesJson, ambiguous, title, snippet, scoped] = args;
         if (typeof name !== "string" || typeof ticker !== "string" || typeof aliasesJson !== "string"
@@ -2010,6 +2024,10 @@ export class Desk {
           next_question=excluded.next_question,
           updated_at=excluded.updated_at
       `).run(input.observationId, input.companyId, input.disposition, question, now, updatedAt);
+      this.prepare(`
+        INSERT INTO kv(key, value) VALUES (?, '1')
+        ON CONFLICT(key) DO UPDATE SET value = CAST(kv.value AS INTEGER) + 1
+      `).run(REVIEW_REVISION_KEY);
       this.exec("COMMIT");
       return this.analystSourceReview(input.observationId);
     } catch (error) {
@@ -3446,6 +3464,247 @@ export class Desk {
       ...rowToDTO(row),
       issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
     }));
+  }
+
+  /** Balanced, read-only snapshot for scanning saved source coverage by company. */
+  savedSourceCoverage(itemsPerCompany = 3, asOfMs = Date.now()): SavedSourceCoverageSnapshot<MentionDTO> {
+    if (!Number.isSafeInteger(itemsPerCompany) || itemsPerCompany < 1 || itemsPerCompany > 8
+      || !Number.isSafeInteger(asOfMs) || asOfMs < 0) {
+      throw new Error("invalid_saved_source_coverage_request");
+    }
+    const filter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
+    const identitySql = "desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)";
+    const rows = this.prepare(`
+      WITH candidates AS (
+        SELECT m.*, c.name AS coverage_company_name, c.ticker AS coverage_company_ticker,
+          ${identitySql} AS issuer_identity_strong,
+          r.disposition AS analyst_research_disposition,
+          r.updated_at AS analyst_research_disposition_updated_at,
+          ${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} AS coverage_source_time_unknown,
+          ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} AS coverage_order_at
+        FROM mentions m
+        JOIN companies c ON c.id = m.company_id
+        LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id AND r.company_id = m.company_id
+        WHERE ${filter}
+          AND m.status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')
+          AND m.ingested_at <= ?
+          AND COALESCE(${DISPLAYED_SOURCE_CLOCK_SQL}, m.retrieved_at) <= ?
+          AND (r.disposition IS NULL OR r.disposition <> 'dismissed')
+      ),
+      summaries AS (
+        SELECT company_id,
+          SUM(CASE WHEN issuer_identity_strong = 1 THEN 1 ELSE 0 END) AS identity_gate_pass_count,
+          SUM(CASE WHEN issuer_identity_strong = 1 THEN 0 ELSE 1 END) AS identity_review_count,
+          MAX(CASE WHEN issuer_identity_strong = 1 THEN retrieved_at END) AS latest_retrieved_at,
+          MAX(CASE WHEN issuer_identity_strong = 1 THEN publisher_published_at END) AS latest_publisher_at,
+          MAX(CASE WHEN issuer_identity_strong = 1 THEN provider_observed_at END) AS latest_provider_observed_at
+        FROM candidates
+        GROUP BY company_id
+      ),
+      ranked AS (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY company_id
+          ORDER BY coverage_source_time_unknown ASC, coverage_order_at DESC, retrieved_at DESC, ingested_at DESC, id DESC
+        ) AS company_position
+        FROM candidates
+        WHERE issuer_identity_strong = 1
+      )
+      SELECT c.id AS coverage_company_id, c.name AS coverage_company_name,
+        c.ticker AS coverage_company_ticker,
+        COALESCE(s.identity_gate_pass_count, 0) AS coverage_identity_gate_pass_count,
+        COALESCE(s.identity_review_count, 0) AS coverage_identity_review_count,
+        s.latest_retrieved_at AS coverage_latest_retrieved_at,
+        s.latest_publisher_at AS coverage_latest_publisher_at,
+        s.latest_provider_observed_at AS coverage_latest_provider_observed_at,
+        ranked.*
+      FROM companies c
+      LEFT JOIN summaries s ON s.company_id = c.id
+      LEFT JOIN ranked ON ranked.company_id = c.id AND ranked.company_position <= ?
+      ORDER BY c.ticker, ranked.coverage_source_time_unknown ASC, ranked.coverage_order_at DESC,
+        ranked.retrieved_at DESC, ranked.ingested_at DESC, ranked.id DESC
+    `).all(asOfMs, asOfMs, itemsPerCompany) as unknown as Array<MentionRow & {
+      coverage_company_id: string;
+      coverage_company_name: string;
+      coverage_company_ticker: string;
+      coverage_identity_gate_pass_count: number;
+      coverage_identity_review_count: number;
+      coverage_latest_retrieved_at: number | null;
+      coverage_latest_publisher_at: number | null;
+      coverage_latest_provider_observed_at: number | null;
+      issuer_identity_strong: number | null;
+      analyst_research_disposition: AnalystResearchDisposition | null;
+      analyst_research_disposition_updated_at: number | null;
+    }>;
+    const byCompany = new Map<string, SavedSourceCoverageSnapshot<MentionDTO>["companies"][number]>();
+    for (const row of rows) {
+      let company = byCompany.get(row.coverage_company_id);
+      if (!company) {
+        company = {
+          companyId: row.coverage_company_id,
+          name: row.coverage_company_name,
+          ticker: row.coverage_company_ticker,
+          identityGatePassCount: Number(row.coverage_identity_gate_pass_count),
+          identityReviewCount: Number(row.coverage_identity_review_count),
+          latestRetrievedAt: nullableNumber(row.coverage_latest_retrieved_at),
+          latestPublisherAt: nullableNumber(row.coverage_latest_publisher_at),
+          latestProviderObservedAt: nullableNumber(row.coverage_latest_provider_observed_at),
+          items: [],
+        };
+        byCompany.set(company.companyId, company);
+      }
+      if (typeof row.id === "string") {
+        company.items.push({
+          ...rowToDTO(row),
+          issuerIdentityStrong: row.issuer_identity_strong === 1,
+          analystResearchDisposition: row.analyst_research_disposition,
+          analystResearchDispositionUpdatedAt: nullableNumber(row.analyst_research_disposition_updated_at),
+        });
+      }
+    }
+    const companies = [...byCompany.values()];
+    return {
+      asOfMs,
+      trackedCompanyCount: companies.length,
+      companiesWithIdentityGatePasses: companies.filter((company) => company.identityGatePassCount > 0).length,
+      identityGatePassCount: companies.reduce((total, company) => total + company.identityGatePassCount, 0),
+      identityReviewCount: companies.reduce((total, company) => total + company.identityReviewCount, 0),
+      itemsPerCompany,
+      companies,
+    };
+  }
+
+  /** Bounded, read-only keyword search over the retained real-source archive. */
+  savedSourceSearch(input: {
+    query: string;
+    companyId?: string | null;
+    publisher?: string | null;
+    includeDismissed?: boolean;
+    snapshotAt?: number | null;
+    reviewRevision?: number | null;
+    cursor?: SavedSourceSearchCursor | null;
+    limit?: number;
+  }): SavedSourceSearchPage<MentionDTO & {
+    issuerIdentityStrong: boolean;
+    analystResearchDisposition: AnalystResearchDisposition | null;
+    analystResearchDispositionUpdatedAt: number | null;
+  }> {
+    const query = input.query.trim();
+    const companyId = input.companyId?.trim() || null;
+    const publisher = input.publisher?.trim() || null;
+    const includeDismissed = input.includeDismissed === true;
+    const limit = input.limit ?? 25;
+    const cursor = input.cursor ?? null;
+    const requestedSnapshot = input.snapshotAt ?? null;
+    const requestedReviewRevision = input.reviewRevision ?? null;
+    if (query.length < 2 || query.length > 120
+      || (companyId != null && companyId.length > 160)
+      || (publisher != null && publisher.length > 120)
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 50
+      || (requestedSnapshot != null && (!Number.isSafeInteger(requestedSnapshot) || requestedSnapshot < 0))) {
+      throw new Error("invalid_saved_source_search_request");
+    }
+
+    if (requestedReviewRevision != null
+      && (!Number.isSafeInteger(requestedReviewRevision) || requestedReviewRevision < 0)) {
+      throw new Error("invalid_saved_source_search_request");
+    }
+
+    const revisionRow = this.prepare("SELECT value FROM kv WHERE key = ?").get(REVIEW_REVISION_KEY) as { value: string } | undefined;
+    const currentReviewRevision = revisionRow == null ? 0 : Number(revisionRow.value);
+    if (!Number.isSafeInteger(currentReviewRevision) || currentReviewRevision < 0) {
+      throw new Error("saved_source_search_review_revision_invalid");
+    }
+    if ((requestedReviewRevision != null && requestedReviewRevision !== currentReviewRevision)
+      || (cursor != null && cursor.reviewRevision !== currentReviewRevision)) {
+      throw new Error("saved_source_search_snapshot_changed");
+    }
+    const reviewRevision = cursor?.reviewRevision ?? requestedReviewRevision ?? currentReviewRevision;
+
+    const asOfMs = cursor?.snapshotAt ?? requestedSnapshot ?? Date.now();
+    if (cursor && (cursor.query !== query || cursor.companyId !== companyId || cursor.publisher !== publisher
+      || cursor.includeDismissed !== includeDismissed || (requestedSnapshot != null && requestedSnapshot !== cursor.snapshotAt)
+      || (requestedReviewRevision != null && requestedReviewRevision !== cursor.reviewRevision))) {
+      throw new Error("saved_source_search_cursor_scope_mismatch");
+    }
+    const filters = [
+      "m.ingested_at <= ?",
+      `COALESCE(${DISPLAYED_SOURCE_CLOCK_SQL}, m.retrieved_at) <= ?`,
+      "m.status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
+      "(desk_saved_source_search_match(COALESCE(m.title, ''), ?) = 1 OR desk_saved_source_search_match(COALESCE(m.snippet, ''), ?) = 1)",
+      ...(companyId == null ? [] : ["m.company_id = ?"]),
+      ...(publisher == null ? [] : ["(instr(lower(COALESCE(m.publisher_name, '')), lower(?)) > 0 OR instr(lower(COALESCE(m.publisher_domain, '')), lower(?)) > 0 OR instr(lower(COALESCE(m.source_name, '')), lower(?)) > 0)"]),
+      ...(includeDismissed ? [] : ["(r.disposition IS NULL OR r.disposition <> 'dismissed')"]),
+    ];
+    const filter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
+    const scopeSql = `${filter} AND ${filters.join(" AND ")}`;
+    const baseParams: Array<string | number> = [asOfMs, asOfMs, query, query];
+    if (companyId != null) baseParams.push(companyId);
+    if (publisher != null) baseParams.push(publisher, publisher, publisher);
+
+    const cursorSql = cursor ? `AND (
+      ${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} > ?
+      OR (${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} = ? AND ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} < ?)
+      OR (${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} = ? AND ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} = ? AND m.retrieved_at < ?)
+      OR (${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} = ? AND ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} = ? AND m.retrieved_at = ? AND m.ingested_at < ?)
+      OR (${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} = ? AND ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} = ? AND m.retrieved_at = ? AND m.ingested_at = ? AND m.id < ?)
+    )` : "";
+    const cursorParams = cursor
+      ? [
+        cursor.sourceTimeUnknown ? 1 : 0,
+        cursor.sourceTimeUnknown ? 1 : 0, cursor.orderAt,
+        cursor.sourceTimeUnknown ? 1 : 0, cursor.orderAt, cursor.retrievedAt,
+        cursor.sourceTimeUnknown ? 1 : 0, cursor.orderAt, cursor.retrievedAt, cursor.ingestedAt,
+        cursor.sourceTimeUnknown ? 1 : 0, cursor.orderAt, cursor.retrievedAt, cursor.ingestedAt, cursor.id,
+      ]
+      : [];
+    const joins = `FROM mentions m
+      JOIN companies c ON c.id = m.company_id
+      LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id AND r.company_id = m.company_id`;
+    const countRow = this.prepare(`SELECT COUNT(*) AS count ${joins} WHERE ${scopeSql}`)
+      .get(...baseParams) as { count: number };
+    const rows = this.prepare(`SELECT m.*, c.name AS coverage_company_name, c.ticker AS coverage_company_ticker,
+        r.disposition AS analyst_research_disposition,
+        r.updated_at AS analyst_research_disposition_updated_at,
+        desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) AS issuer_identity_strong,
+        ${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} AS source_time_unknown,
+        ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} AS order_at
+      ${joins}
+      WHERE ${scopeSql} ${cursorSql}
+      ORDER BY ${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} ASC, ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} DESC,
+        m.retrieved_at DESC, m.ingested_at DESC, m.id DESC
+      LIMIT ?`).all(...baseParams, ...cursorParams, limit + 1) as unknown as Array<MentionRow & {
+        analyst_research_disposition: AnalystResearchDisposition | null;
+        analyst_research_disposition_updated_at: number | null;
+        issuer_identity_strong: number;
+        source_time_unknown: number;
+        order_at: number;
+      }>;
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const last = hasMore ? pageRows[pageRows.length - 1] : undefined;
+    return {
+      query,
+      companyId,
+      publisher,
+      includeDismissed,
+      snapshotAt: asOfMs,
+      reviewRevision,
+      totalCount: Number(countRow.count),
+      items: pageRows.map((row) => ({
+        ...rowToDTO(row),
+        issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
+        analystResearchDisposition: row.analyst_research_disposition,
+        analystResearchDispositionUpdatedAt: row.analyst_research_disposition_updated_at == null
+          ? null : Number(row.analyst_research_disposition_updated_at),
+      })),
+      nextCursor: last ? {
+        searchSemanticsVersion: 2,
+        query, companyId, publisher, includeDismissed, snapshotAt: asOfMs, reviewRevision,
+        sourceTimeUnknown: Number(last.source_time_unknown) === 1,
+        orderAt: Number(last.order_at), retrievedAt: Number(last.retrieved_at),
+        ingestedAt: Number(last.ingested_at), id: last.id,
+      } : null,
+    };
   }
 
   /** Identified scored mentions keyed to the time the Jev result became available. */

@@ -1,11 +1,22 @@
 import type { Mention } from "./api.js";
 import { mergeMentionPages } from "./snapshot-reconciliation.js";
+import { savedSourceSearchCursorSchema, type SavedSourceSearchCursor } from "../../../shared/saved-source-search.js";
 
 export type SavedSourcesBrowseState = {
   query: string;
   visibleCount: number;
   companyFilter: string | null;
   historyPageCounts: Record<string, number>;
+  archiveSearch?: {
+    query: string;
+    companyId: string | null;
+    publisher: string;
+    includeDismissed: boolean;
+    snapshotAt: number | null;
+    reviewRevision: number | null;
+    cursor: SavedSourceSearchCursor | null;
+    previousCursors: Array<SavedSourceSearchCursor | null>;
+  };
 };
 
 export const INITIAL_SAVED_SOURCES_BROWSE_STATE: SavedSourcesBrowseState = {
@@ -13,6 +24,16 @@ export const INITIAL_SAVED_SOURCES_BROWSE_STATE: SavedSourcesBrowseState = {
   visibleCount: 12,
   companyFilter: null,
   historyPageCounts: {},
+  archiveSearch: {
+    query: "",
+    companyId: null,
+    publisher: "",
+    includeDismissed: false,
+    snapshotAt: null,
+    reviewRevision: null,
+    cursor: null,
+    previousCursors: [],
+  },
 };
 
 export const SAVED_SOURCES_BROWSE_STORAGE_KEY = "sentiment-desk-saved-sources-browse";
@@ -64,11 +85,47 @@ export function readSavedSourcesBrowseState(storage: Pick<SessionStore, "getItem
     if (pageCountEntries.length > 64 || pageCountEntries.some(([companyId, count]) =>
       companyId.length === 0 || companyId.length > 160 || !Number.isSafeInteger(count) || Number(count) < 1 || Number(count) > MAX_SAVED_HISTORY_PAGES,
     )) return INITIAL_SAVED_SOURCES_BROWSE_STATE;
+    let parsedArchiveSearch: SavedSourcesBrowseState["archiveSearch"];
+    if (candidate.archiveSearch !== undefined) {
+      const rawArchiveSearch: unknown = candidate.archiveSearch;
+      if (typeof rawArchiveSearch !== "object" || rawArchiveSearch === null || Array.isArray(rawArchiveSearch)) {
+        return INITIAL_SAVED_SOURCES_BROWSE_STATE;
+      }
+      const archiveSearch = rawArchiveSearch as Partial<NonNullable<SavedSourcesBrowseState["archiveSearch"]>>;
+      if (typeof archiveSearch.query !== "string" || archiveSearch.query.length > 120
+        || (archiveSearch.companyId !== null && archiveSearch.companyId !== undefined
+          && (typeof archiveSearch.companyId !== "string" || archiveSearch.companyId.length > 160))
+        || typeof archiveSearch.publisher !== "string" || archiveSearch.publisher.length > 120
+        || typeof archiveSearch.includeDismissed !== "boolean"
+        || (archiveSearch.snapshotAt !== null && archiveSearch.snapshotAt !== undefined
+          && (!Number.isSafeInteger(archiveSearch.snapshotAt) || Number(archiveSearch.snapshotAt) < 0))
+        || (archiveSearch.reviewRevision !== null && archiveSearch.reviewRevision !== undefined
+          && (!Number.isSafeInteger(archiveSearch.reviewRevision) || Number(archiveSearch.reviewRevision) < 0))) {
+        return INITIAL_SAVED_SOURCES_BROWSE_STATE;
+      }
+      const cursorValid = (value: unknown): value is SavedSourceSearchCursor | null =>
+        value === null || savedSourceSearchCursorSchema.safeParse(value).success;
+      const cursors = [archiveSearch.cursor ?? null, ...(Array.isArray(archiveSearch.previousCursors) ? archiveSearch.previousCursors : [])];
+      const cursorStateValid = Array.isArray(archiveSearch.previousCursors ?? [])
+        && (archiveSearch.previousCursors ?? []).length <= 100
+        && cursors.every(cursorValid);
+      parsedArchiveSearch = {
+        query: archiveSearch.query,
+        companyId: archiveSearch.companyId ?? null,
+        publisher: archiveSearch.publisher,
+        includeDismissed: archiveSearch.includeDismissed,
+        snapshotAt: cursorStateValid ? archiveSearch.snapshotAt ?? null : null,
+        reviewRevision: cursorStateValid ? archiveSearch.reviewRevision ?? null : null,
+        cursor: cursorStateValid ? archiveSearch.cursor ?? null : null,
+        previousCursors: cursorStateValid ? archiveSearch.previousCursors ?? [] : [],
+      };
+    }
     return {
       query: candidate.query,
       visibleCount: candidate.visibleCount!,
       companyFilter: candidate.companyFilter,
       historyPageCounts: Object.fromEntries(pageCountEntries) as Record<string, number>,
+      ...(parsedArchiveSearch ? { archiveSearch: parsedArchiveSearch } : {}),
     };
   } catch {
     return INITIAL_SAVED_SOURCES_BROWSE_STATE;

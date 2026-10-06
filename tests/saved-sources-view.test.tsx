@@ -2,10 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { CompanySnapshot, Mention } from "../web/src/lib/api.js";
-import { filterSavedSources, recoverToSavedSources, SavedSourcesView } from "../web/src/components/SavedSourcesView.js";
-import type { SavedCompanyHistoryState } from "../web/src/components/SavedSourcesView.js";
+import { filterSavedSources, groupSavedArchiveSearchPage, newestSavedArchiveRetrievalAt, recoverToSavedSources, savedArchiveSearchMatchLocation, savedArchiveSearchMatchSummary, SavedSourcesView } from "../web/src/components/SavedSourcesView.js";
+import type { SavedCompanyHistoryState, SavedSourcesBrowseState } from "../web/src/components/SavedSourcesView.js";
 import { differentPossessiveHeadlineSubject, otherExplicitTickerSymbols, sourceLinkPathNamesCompany } from "../web/src/lib/issuer-symbols.js";
-import { mergeSavedHistoryStreamEvent, readSavedSourcesBrowseState, SAVED_SOURCES_BROWSE_STORAGE_KEY, shouldRestoreSavedHistoryPage, writeSavedSourcesBrowseState } from "../web/src/lib/saved-sources-browse-state.js";
+import { INITIAL_SAVED_SOURCES_BROWSE_STATE, mergeSavedHistoryStreamEvent, readSavedSourcesBrowseState, SAVED_SOURCES_BROWSE_STORAGE_KEY, shouldRestoreSavedHistoryPage, writeSavedSourcesBrowseState } from "../web/src/lib/saved-sources-browse-state.js";
+import type { SavedSourceCoverageSnapshot } from "../shared/saved-source-coverage.js";
 
 const now = Date.UTC(2026, 9, 6, 12);
 
@@ -28,10 +29,151 @@ const props = {
   companies: [company("apple", "Apple", "AAPL"), company("adobe", "Adobe", "ADBE"), company("walmart", "Walmart", "WMT"), company("lilly", "Eli Lilly", "LLY")],
   tickerOf: (companyId: string) => companyId === "apple" ? "AAPL" : companyId === "adobe" ? "ADBE" : companyId === "walmart" ? "WMT" : "UNKNOWN",
   companyNameOf: (companyId: string) => companyId === "apple" ? "Apple" : companyId === "adobe" ? "Adobe" : companyId === "walmart" ? "Walmart" : companyId === "lilly" ? "Eli Lilly" : companyId,
+  mode: "tape" as const,
   onOpen: vi.fn(), onRetry: vi.fn(),
 };
 
+const coverageSnapshot: SavedSourceCoverageSnapshot<Mention> = {
+  asOfMs: now,
+  trackedCompanyCount: 4,
+  companiesWithIdentityGatePasses: 2,
+  identityGatePassCount: 3,
+  identityReviewCount: 1,
+  itemsPerCompany: 2,
+  companies: [
+    { companyId: "adobe", name: "Adobe", ticker: "ADBE", identityGatePassCount: 1, identityReviewCount: 0,
+      latestRetrievedAt: now - 30_000, latestPublisherAt: now - 60_000, latestProviderObservedAt: null,
+      items: [mention({ id: "adobe-coverage", companyId: "adobe", title: "Adobe expands a real product line" })] },
+    { companyId: "apple", name: "Apple", ticker: "AAPL", identityGatePassCount: 2, identityReviewCount: 1,
+      latestRetrievedAt: now - 80_000, latestPublisherAt: now - 90_000, latestProviderObservedAt: null,
+      items: [mention({ id: "apple-coverage", title: "Apple expands its services business" }), mention({ id: "apple-coverage-old", title: "Apple reports a real product update", retrievedAt: now - 120_000 })] },
+    { companyId: "walmart", name: "Walmart", ticker: "WMT", identityGatePassCount: 0, identityReviewCount: 0,
+      latestRetrievedAt: null, latestPublisherAt: null, latestProviderObservedAt: null, items: [] },
+    { companyId: "lilly", name: "Eli Lilly", ticker: "LLY", identityGatePassCount: 0, identityReviewCount: 0,
+      latestRetrievedAt: null, latestPublisherAt: null, latestProviderObservedAt: null, items: [] },
+  ],
+};
+
 describe("saved sources browse surface", () => {
+  it("groups only same-company repeated headlines within the current archive page", () => {
+    const amd = mention({ id: "amd-yahoo", companyId: "amd", title: "AMD expands its AI business", collector: "yahoo_finance_rss" });
+    const amdGoogle = mention({ id: "amd-google", companyId: "amd", title: " amd   expands its AI business ", collector: "google_news_rss" });
+    const intel = mention({ id: "intel-google", companyId: "intel", title: "AMD expands its AI business", collector: "google_news_rss" });
+    const separate = mention({ id: "amd-other", companyId: "amd", title: "AMD product update" });
+
+    expect(groupSavedArchiveSearchPage([amd, intel, amdGoogle, separate])).toEqual([
+      { companyId: "amd", title: amd.title, mentions: [amd] },
+      { companyId: "intel", title: intel.title, mentions: [intel] },
+      { companyId: "amd", title: amdGoogle.title, mentions: [amdGoogle] },
+      { companyId: "amd", title: separate.title, mentions: [separate] },
+    ]);
+    expect(groupSavedArchiveSearchPage([amd, amdGoogle, intel, separate])).toEqual([
+      { companyId: "amd", title: amd.title, mentions: [amd, amdGoogle] },
+      { companyId: "intel", title: intel.title, mentions: [intel] },
+      { companyId: "amd", title: separate.title, mentions: [separate] },
+    ]);
+  });
+
+  it("reports the newest retrieval time from the visible archive records, not their search snapshot", () => {
+    const older = mention({ id: "older-result", retrievedAt: now - 7 * 86_400_000 });
+    const newer = mention({ id: "newer-result", retrievedAt: now - 2 * 86_400_000 });
+    expect(newestSavedArchiveRetrievalAt([older, newer])).toBe(now - 2 * 86_400_000);
+    expect(newestSavedArchiveRetrievalAt([])).toBeNull();
+  });
+
+  it("shows whether an archive query matched the headline, excerpt, or both using search semantics", () => {
+    expect(savedArchiveSearchMatchLocation(mention({ title: "AMD CPU Business", snippet: "A saved quarterly update." }), "CPU Business"))
+      .toBe("headline");
+    expect(savedArchiveSearchMatchLocation(mention({ title: "Demand outlook", snippet: "CPU Business plans shift." }), "CPU Business"))
+      .toBe("excerpt");
+    expect(savedArchiveSearchMatchLocation(mention({ title: "AI adoption", snippet: "Investors discuss AI." }), "AI"))
+      .toBe("headline and excerpt");
+    expect(savedArchiveSearchMatchLocation(mention({ title: "Taiwan chip exports", snippet: "Daily shipment note." }), "AI"))
+      .toBe("location unavailable");
+    expect(savedArchiveSearchMatchSummary([
+      mention({ id: "amd-one", title: "AMD CPU Business", snippet: "Saved quarterly update." }),
+      mention({ id: "amd-two", title: "AMD CPU Business", snippet: "Another saved report." }),
+    ], "CPU Business")).toBe("Match location: headline");
+    expect(savedArchiveSearchMatchSummary([
+      mention({ id: "amd-one", title: "AMD CPU Business", snippet: "Saved quarterly update." }),
+      mention({ id: "amd-two", title: "AMD CPU Business", snippet: "Investors discuss CPU Business plans." }),
+    ], "CPU Business")).toBe("Match location varies by source record; expand to inspect");
+  });
+
+  it("finds saved excerpt-only demand signals in the existing company history filter", () => {
+    const saved = mention({
+      title: "Jefferies sees softer iPhone demand in resale prices",
+      snippet: "Resale pricing in Hong Kong is below levels recorded for comparable models last year.",
+    });
+    expect(filterSavedSources([saved], "Hong Kong", props.tickerOf, props.companyNameOf)).toEqual([saved]);
+    expect(filterSavedSources([saved], "resale", props.tickerOf, props.companyNameOf)).toEqual([saved]);
+  });
+
+  it("defaults to a balanced, archive-labeled company coverage scan with exact saved-source actions", () => {
+    const html = renderToStaticMarkup(createElement(SavedSourcesView, {
+      ...props, mode: "coverage", coverageSnapshot, coverageState: "ready",
+      state: "ready", mentions: [],
+    }));
+    expect(html).toContain("SAVED ARCHIVE BY COMPANY");
+    expect(html).toContain("By company");
+    expect(html).toContain("Recent tape and full history");
+    expect(html).toContain("Coverage snapshot taken");
+    expect(html).toContain("2 of 4");
+    expect(html).toContain("3 rows pass the Desk’s limited ambiguous-name check");
+    expect(html).toContain("newest retrieval");
+    expect(html).toContain("This is not live market coverage or an opportunity ranking.");
+    expect(html).toContain("Adobe · ADBE");
+    expect(html).toContain("Apple · AAPL");
+    expect(html).toContain("Apple expands its services business");
+    expect(html).toContain("Review source record: Apple expands its services business");
+    expect(html).toContain("Open full AAPL history");
+    expect(html).toContain("2 tracked companies have no rows passing the ambiguity check");
+    expect(html).toContain("does not establish that the company is the article’s main subject");
+    expect(html).not.toContain("issuer-matched saved records");
+    expect(html).not.toContain("No demo source");
+  });
+
+  it("keeps coverage loading, failure, and true empty states distinct without inserting rows", () => {
+    const loading = renderToStaticMarkup(createElement(SavedSourcesView, {
+      ...props, mode: "coverage", coverageState: "loading", state: "ready", mentions: [],
+    }));
+    const failed = renderToStaticMarkup(createElement(SavedSourcesView, {
+      ...props, mode: "coverage", coverageState: "failed", state: "ready", mentions: [],
+    }));
+    const empty = renderToStaticMarkup(createElement(SavedSourcesView, {
+      ...props, mode: "coverage", coverageState: "ready", coverageSnapshot: {
+        ...coverageSnapshot, companiesWithIdentityGatePasses: 0, identityGatePassCount: 0, identityReviewCount: 0,
+        companies: coverageSnapshot.companies.map((entry) => ({ ...entry, identityGatePassCount: 0, identityReviewCount: 0, items: [], latestRetrievedAt: null, latestPublisherAt: null, latestProviderObservedAt: null })),
+      }, state: "ready", mentions: [],
+    }));
+    expect(loading).toContain("Loading saved archive by company");
+    expect(failed).toContain("Saved archive by company could not be read");
+    expect(failed).toContain("Retry saved archive");
+    expect(empty).toContain("No saved sources passed the Desk’s limited ambiguous-name check");
+    expect(empty).not.toContain("Apple expands its services business");
+  });
+
+  it("opens the all-archive search with excerpt, company, publisher, and dismissal controls", () => {
+    const html = renderToStaticMarkup(createElement(SavedSourcesView, {
+      ...props,
+      mode: "search",
+      state: "ready",
+      mentions: [],
+      browseState: {
+        ...INITIAL_SAVED_SOURCES_BROWSE_STATE,
+        archiveSearch: { ...INITIAL_SAVED_SOURCES_BROWSE_STATE.archiveSearch!, query: "Hong Kong" },
+      },
+    }));
+    expect(html).toContain("SEARCH SAVED ARCHIVE");
+    expect(html).toContain("Search retained source records");
+    expect(html).toContain("Search title and excerpt");
+    expect(html).toContain("Two-letter terms such as AI or EV match whole words");
+    expect(html).toContain("All tracked companies");
+    expect(html).toContain("Publisher contains");
+    expect(html).toContain("Include dismissed");
+    expect(html).toContain("sends no provider or classifier requests");
+  });
+
   it("makes existing records discoverable across companies with source and retrieval clocks", () => {
     const html = renderToStaticMarkup(createElement(SavedSourcesView, { ...props, state: "ready", mentions: [mention(), mention({ id: "source-2", companyId: "adobe", title: "Another saved source" })] }));
     expect(html).toContain("RECENT SAVED SOURCES");
@@ -145,11 +287,37 @@ describe("saved sources browse surface", () => {
     expect(values.has(SAVED_SOURCES_BROWSE_STORAGE_KEY)).toBe(true);
     expect(readSavedSourcesBrowseState(storage)).toEqual(state);
     values.set(SAVED_SOURCES_BROWSE_STORAGE_KEY, JSON.stringify({ ...state, visibleCount: 1_000_001 }));
-    expect(readSavedSourcesBrowseState(storage)).toEqual({ query: "", visibleCount: 12, companyFilter: null, historyPageCounts: {} });
+    expect(readSavedSourcesBrowseState(storage)).toEqual(INITIAL_SAVED_SOURCES_BROWSE_STATE);
     values.set(SAVED_SOURCES_BROWSE_STORAGE_KEY, JSON.stringify({ query: "McDonald", visibleCount: 24, companyFilter: "walmart" }));
     expect(readSavedSourcesBrowseState(storage)).toEqual({ query: "McDonald", visibleCount: 24, companyFilter: "walmart", historyPageCounts: {} });
     values.set(SAVED_SOURCES_BROWSE_STORAGE_KEY, JSON.stringify({ ...state, historyPageCounts: { walmart: 10_001 } }));
-    expect(readSavedSourcesBrowseState(storage)).toEqual({ query: "", visibleCount: 12, companyFilter: null, historyPageCounts: {} });
+    expect(readSavedSourcesBrowseState(storage)).toEqual(INITIAL_SAVED_SOURCES_BROWSE_STATE);
+
+    const searchState = {
+      ...INITIAL_SAVED_SOURCES_BROWSE_STATE,
+      archiveSearch: {
+        ...INITIAL_SAVED_SOURCES_BROWSE_STATE.archiveSearch!,
+        query: "Hong Kong",
+        snapshotAt: now,
+        reviewRevision: 0,
+        cursor: { searchSemanticsVersion: 2 as const, query: "Hong Kong", companyId: null, publisher: null, includeDismissed: false, snapshotAt: now, reviewRevision: 0, sourceTimeUnknown: false, orderAt: now - 1000, retrievedAt: now - 950, ingestedAt: now - 900, id: "source-search" },
+        previousCursors: [null],
+      },
+    };
+    writeSavedSourcesBrowseState(storage, searchState);
+    expect(readSavedSourcesBrowseState(storage)).toEqual(searchState);
+
+    const legacyCursorState = {
+      ...searchState,
+      archiveSearch: {
+        ...searchState.archiveSearch,
+        cursor: { query: "Hong Kong", companyId: null, publisher: null, includeDismissed: false, snapshotAt: now, orderAt: now - 1000, ingestedAt: now - 900, id: "legacy-cursor" },
+      },
+    } as unknown as SavedSourcesBrowseState;
+    writeSavedSourcesBrowseState(storage, legacyCursorState);
+    expect(readSavedSourcesBrowseState(storage).archiveSearch).toMatchObject({
+      query: "Hong Kong", snapshotAt: null, reviewRevision: null, cursor: null, previousCursors: [],
+    });
   });
 
   it("restores only previously opened history pages and stops on failure or exhaustion", () => {
@@ -165,11 +333,13 @@ describe("saved sources browse surface", () => {
     const transitions: unknown[] = [];
     recoverToSavedSources(
       (state) => transitions.push({ browseState: state }),
+      (mode) => transitions.push({ mode }),
       () => transitions.push({ view: "sources" }),
     );
 
     expect(transitions).toEqual([
-      { browseState: { query: "", visibleCount: 12, companyFilter: null, historyPageCounts: {} } },
+      { browseState: INITIAL_SAVED_SOURCES_BROWSE_STATE },
+      { mode: "search" },
       { view: "sources" },
     ]);
   });
@@ -299,6 +469,18 @@ describe("saved sources browse surface", () => {
       snippet: "Walmart said the holiday promotions begin this week.",
     });
     expect(differentPossessiveHeadlineSubject(headline.title, headline.snippet, "Walmart Inc.", "WMT")).toBeNull();
+  });
+
+  it("does not mistake a question word before the desk issuer for another headline subject", () => {
+    const title = "Can AMD’s CPU Business Fund Its AI Chip Ambitions?";
+    const snippet = "Advanced Micro Devices (NASDAQ:AMD) has an established processor business.";
+    expect(differentPossessiveHeadlineSubject(title, snippet, "AMD", "AMD")).toBeNull();
+  });
+
+  it("still detects a different company after a question word", () => {
+    const title = "Can Target’s Holiday Prices Capture Walmart Shoppers?";
+    const snippet = "Walmart said its holiday promotions begin this week.";
+    expect(differentPossessiveHeadlineSubject(title, snippet, "Walmart", "WMT")).toBe("Target");
   });
 
   it("does not treat clinical acronyms or FDA as company tickers and recognizes Lilly as Eli Lilly", () => {

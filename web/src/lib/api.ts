@@ -9,6 +9,8 @@ import type { ScoreBucketCoverage } from "../../../shared/score-bucket-coverage.
 import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../../../shared/company-fundamentals.js";
 import type { AnalystResearchDisposition, AnalystResearchDispositionChange, AnalystSourceReview } from "../../../shared/analyst-research.js";
 import type { SecFilingsInboxView } from "../../../shared/sec-filings-inbox.js";
+import type { SavedSourceCoverageSnapshot } from "../../../shared/saved-source-coverage.js";
+import type { SavedSourceSearchCursor, SavedSourceSearchPage } from "../../../shared/saved-source-search.js";
 
 /** Shared identity guard used before applying any selected-company response. */
 export function isCurrentCompanySelection(requestCompanyId: string, selectedCompanyId: string | null): boolean {
@@ -37,6 +39,34 @@ export function activateSecFilingsInbox(): Promise<SecFilingsInboxView> {
   return requestJSON<SecFilingsInboxView>("/api/sec-filings-inbox/activate", {
     method: "POST", body: JSON.stringify({ confirmUse: true }),
   });
+}
+
+export function getSavedSourceCoverage(signal?: AbortSignal): Promise<SavedSourceCoverageSnapshot<Mention>> {
+  return getJSON<SavedSourceCoverageSnapshot<Mention>>("/api/saved-source-coverage", signal);
+}
+
+export async function getSavedSourceSearch(input: {
+  query: string;
+  companyId: string | null;
+  publisher: string;
+  includeDismissed: boolean;
+  snapshotAt: number | null;
+  reviewRevision: number | null;
+  cursor: SavedSourceSearchCursor | null;
+  signal?: AbortSignal;
+}): Promise<SavedSourceSearchPage<Mention>> {
+  const params = new URLSearchParams({ q: input.query.trim(), limit: "25", includeDismissed: String(input.includeDismissed) });
+  if (input.companyId) params.set("companyId", input.companyId);
+  if (input.publisher.trim()) params.set("publisher", input.publisher.trim());
+  if (input.snapshotAt != null) params.set("snapshotAt", String(input.snapshotAt));
+  if (input.reviewRevision != null) params.set("reviewRevision", String(input.reviewRevision));
+  if (input.cursor) params.set("cursor", JSON.stringify(input.cursor));
+  const response = await fetch(`/api/saved-source-search?${params}`, { signal: input.signal });
+  const body = await response.json().catch(() => null) as { error?: unknown } | null;
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, typeof body?.error === "string" ? body.error : "saved_source_search_failed");
+  }
+  return body as SavedSourceSearchPage<Mention>;
 }
 
 export interface AnalystResearchQueueItem extends AnalystSourceReview {

@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SecFilingsInbox, retainLastAcceptedFilings, shouldShowDeskFallback } from "../web/src/components/SecFilingsInbox.js";
+import { SecFilingsInbox, deskFallbackMessage, retainLastAcceptedFilings, shouldShowDeskFallback } from "../web/src/components/SecFilingsInbox.js";
 import type { SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
 
 describe("first-run SEC filing browse surface", () => {
@@ -22,6 +22,22 @@ describe("first-run SEC filing browse surface", () => {
     expect(shouldShowDeskFallback("ready", 2, false)).toBe(false);
     expect(shouldShowDeskFallback("failed", 2, false)).toBe(false);
     expect(shouldShowDeskFallback(null, 0, true)).toBe(true);
+  });
+
+  it("distinguishes an unsupported filing feed from an unavailable Hub", () => {
+    const unsupported = deskFallbackMessage("unsupported", false, "The saved Hub receipt does not permit this display.");
+    expect(unsupported).toContain("The saved Hub receipt does not permit this display.");
+    expect(unsupported).toContain("Configure the SEC 8-K feed in the Hub, then check again.");
+    expect(unsupported).toContain("search saved headlines and excerpts");
+    expect(unsupported).toContain("historical leads, not current coverage");
+    expect(unsupported).not.toContain("cannot reach");
+    expect(deskFallbackMessage("unsupported", false)).toContain("not supported by the current Hub configuration");
+
+    const unavailable = deskFallbackMessage("unavailable", false);
+    expect(unavailable).toContain("cannot reach its local Public Data Hub");
+    expect(unavailable).toContain("search saved headlines and excerpts");
+    expect(unavailable).toContain("historical evidence, not current market coverage");
+    expect(unavailable).not.toContain("Hub is online");
   });
 
   it("keeps the exact last accepted filing receipt and clocks visible during transient refresh states", () => {

@@ -21,6 +21,7 @@ import type { Pipeline } from "./pipeline.js";
 import type { CompanyFundamentals } from "./company-fundamentals.js";
 import type { SecFilingsInbox } from "./sec-filings-inbox.js";
 import { MAX_ANALYST_RESEARCH_QUESTION_CHARS } from "../shared/analyst-research.js";
+import { savedSourceSearchCursorSchema, type SavedSourceSearchCursor } from "../shared/saved-source-search.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 import type { CategoricalBucketCursor } from "./types.js";
@@ -826,6 +827,69 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/tape", (c) => {
     const limit = clampNumber(c.req.query("limit"), 1, 100, 40);
     return c.json(deps.db.recentVisible(limit));
+  });
+
+  app.get("/api/saved-source-coverage", (c) => {
+    return c.json(deps.db.savedSourceCoverage(3, Date.now()));
+  });
+
+  app.get("/api/saved-source-search", (c) => {
+    const query = c.req.query("q")?.trim() ?? "";
+    if (query.length < 2 || query.length > 120) return c.json({ error: "invalid_search_query" }, 400);
+    const companyId = c.req.query("companyId")?.trim() || null;
+    if (companyId != null && (companyId.length > 160 || !deps.db.companies().some((company) => company.id === companyId))) {
+      return c.json({ error: "unknown_company" }, 404);
+    }
+    const publisher = c.req.query("publisher")?.trim() || null;
+    if (publisher != null && publisher.length > 120) return c.json({ error: "invalid_publisher_filter" }, 400);
+    const rawIncludeDismissed = c.req.query("includeDismissed");
+    if (rawIncludeDismissed != null && rawIncludeDismissed !== "true" && rawIncludeDismissed !== "false") {
+      return c.json({ error: "invalid_include_dismissed" }, 400);
+    }
+    const rawSnapshotAt = c.req.query("snapshotAt");
+    let snapshotAt: number | null = null;
+    if (rawSnapshotAt != null) {
+      if (!/^\d{1,16}$/.test(rawSnapshotAt)) return c.json({ error: "invalid_search_snapshot" }, 400);
+      snapshotAt = Number(rawSnapshotAt);
+      if (!Number.isSafeInteger(snapshotAt)) return c.json({ error: "invalid_search_snapshot" }, 400);
+    }
+    const rawReviewRevision = c.req.query("reviewRevision");
+    let reviewRevision: number | null = null;
+    if (rawReviewRevision != null) {
+      if (!/^\d{1,16}$/.test(rawReviewRevision)) return c.json({ error: "invalid_search_review_revision" }, 400);
+      reviewRevision = Number(rawReviewRevision);
+      if (!Number.isSafeInteger(reviewRevision)) return c.json({ error: "invalid_search_review_revision" }, 400);
+    }
+    const rawCursor = c.req.query("cursor");
+    let cursor: SavedSourceSearchCursor | null = null;
+    if (rawCursor != null) {
+      if (rawCursor.length > 1200) return c.json({ error: "invalid_cursor" }, 400);
+      let decoded: unknown;
+      try { decoded = JSON.parse(rawCursor); }
+      catch { return c.json({ error: "invalid_cursor" }, 400); }
+      const parsed = savedSourceSearchCursorSchema.safeParse(decoded);
+      if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
+      cursor = parsed.data;
+    }
+    try {
+      return c.json(deps.db.savedSourceSearch({
+        query,
+        companyId,
+        publisher,
+        includeDismissed: rawIncludeDismissed === "true",
+        snapshotAt,
+        reviewRevision,
+        cursor,
+        limit: clampNumber(c.req.query("limit"), 1, 50, 25),
+      }));
+    } catch (error) {
+      if (error instanceof Error && (error.message === "saved_source_search_cursor_scope_mismatch"
+        || error.message === "invalid_saved_source_search_request")) return c.json({ error: error.message }, 400);
+      if (error instanceof Error && error.message === "saved_source_search_snapshot_changed") {
+        return c.json({ error: error.message }, 409);
+      }
+      throw error;
+    }
   });
 
   app.get("/api/stream", (c) =>

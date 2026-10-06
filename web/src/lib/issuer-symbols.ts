@@ -36,6 +36,12 @@ export function otherExplicitTickerSymbols(
   return [...symbols].sort();
 }
 
+const QUESTION_LEAD_WORDS = new Set([
+  "can", "could", "did", "does", "do", "how", "is", "may", "might",
+  "should", "was", "were", "what", "when", "where", "which", "who",
+  "whom", "whose", "why", "will", "would",
+]);
+
 /**
  * Catch a narrow, legible issuer-context mismatch: a headline led by another
  * possessive company name while the saved excerpt mentions the desk company.
@@ -48,7 +54,16 @@ export function differentPossessiveHeadlineSubject(
   issuerName: string,
   issuerTicker: string,
 ): string | null {
-  const subject = title.match(/^\s*["“]?([\p{Lu}][\p{L}\p{N}&.-]*(?:\s+[\p{Lu}][\p{L}\p{N}&.-]*){0,3})[’']s(?:\s|:)/u)?.[1];
+  const matchedSubject = title.match(/^\s*["“]?([\p{Lu}][\p{L}\p{N}&.-]*(?:\s+[\p{Lu}][\p{L}\p{N}&.-]*){0,3})[’']s(?:\s|:)/u)?.[1];
+  if (!matchedSubject) return null;
+
+  // Headlines such as "Can AMD’s ..." put an auxiliary verb before the
+  // possessive issuer. Remove only a leading question word before comparing
+  // the candidate, so normal questions do not become false mismatch warnings.
+  const words = matchedSubject.split(/\s+/u);
+  const subject = QUESTION_LEAD_WORDS.has(words[0]?.toLocaleLowerCase("en-US") ?? "")
+    ? words.slice(1).join(" ")
+    : matchedSubject;
   if (!subject) return null;
 
   const normalizedSubject = normalizeCompanyName(subject);

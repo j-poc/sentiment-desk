@@ -3,6 +3,7 @@ import {
   getJSON,
   getCompanyFundamentals,
   getCompanySavedHistoryPage,
+  getSavedSourceCoverage,
   refreshCompanyFundamentals,
   isCurrentCompanySelection,
   readBackendSnapshot,
@@ -24,6 +25,7 @@ import {
   type AnalystResearchQueueItem,
 } from "./lib/api.js";
 import type { CompanyFundamentalsView } from "../../shared/company-fundamentals.js";
+import type { SavedSourceCoverageSnapshot } from "../../shared/saved-source-coverage.js";
 import type { AnalystResearchDispositionChange, AnalystSourceReview } from "../../shared/analyst-research.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
@@ -39,7 +41,7 @@ import { ScoreBucketEvidence } from "./components/ScoreBucketEvidence.js";
 import { OutcomeCheck } from "./components/OutcomeCheck.js";
 import { DeskConnectionState } from "./components/DeskConnectionState.js";
 import { SecFilingsInbox } from "./components/SecFilingsInbox.js";
-import { recoverToSavedSources, SavedSourcesView, type SavedCompanyHistoryState, type SavedSourcesState } from "./components/SavedSourcesView.js";
+import { recoverToSavedSources, SavedSourcesView, type SavedCompanyHistoryState, type SavedSourcesMode, type SavedSourcesState } from "./components/SavedSourcesView.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
 import { MentionDrawer } from "./components/MentionDrawer.js";
 import { MATERIAL_FILTER_DESCRIPTION, MaterialFilterDisclosure } from "./components/MaterialFilterDisclosure.js";
@@ -67,6 +69,7 @@ import { resetResearchScrollForSelection } from "./lib/research-scroll.js";
 import { INITIAL_SAVED_SOURCES_BROWSE_STATE, mergeSavedHistoryStreamEvent, readSavedSourcesBrowseState, shouldRestoreSavedHistoryPage, writeSavedSourcesBrowseState, type SavedSourcesBrowseState } from "./lib/saved-sources-browse-state.js";
 import { automaticHistoricalArchiveLookupAction, chartViewPreferenceAfterCompanySelection, deriveChartView, matchingCategoricalSnapshot, shouldLoadHistoricalJevForVisibleTab, shouldLookupHistoricalJev, shouldRefreshInactiveLunaSnapshot, type CategoricalChartSnapshot, type ChartViewPreference } from "./lib/chart-view-preference.js";
 import { mentionDrawerReturnTarget, researchViewAfterMentionClose, selectCompanyForResearch, type MentionDrawerReturnTarget, type ResearchView } from "./lib/research-navigation.js";
+import { readSessionPreference, writeSessionPreference } from "./lib/session-preferences.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
 import { hasComparableDeltas, orderWatchlistCompanies } from "./lib/watchlist-order.js";
@@ -205,14 +208,38 @@ export default function App() {
   } | null>(null);
   const fundamentalsRequestKeyRef = useRef<{ companyId: string; requestKey: string } | null>(null);
   const [researchView, setResearchView] = useState<ResearchView>(() => {
-    const saved = sessionStorage.getItem("sentiment-desk-research-view");
+    const saved = readSessionPreference("sentiment-desk-research-view");
     return saved === "sources" || saved === "filings" || saved === "queue" || saved === "desk" || saved === "radar" ? saved : "desk";
   });
-  const researchViewTouchedRef = useRef(sessionStorage.getItem("sentiment-desk-research-view") !== null);
+  const researchViewTouchedRef = useRef(readSessionPreference("sentiment-desk-research-view") !== null);
   const [researchQueueRevision, setResearchQueueRevision] = useState(0);
   const [sourceReviewRevision, setSourceReviewRevision] = useState(0);
   const [tape, setTape] = useState<Mention[]>([]);
   const [savedSourcesState, setSavedSourcesState] = useState<SavedSourcesState>("loading");
+  const [savedSourceCoverage, setSavedSourceCoverage] = useState<SavedSourceCoverageSnapshot<Mention> | null>(null);
+  const [savedSourceCoverageState, setSavedSourceCoverageState] = useState<"loading" | "ready" | "failed">("loading");
+  const [savedSourcesMode, setSavedSourcesMode] = useState<SavedSourcesMode>(() => {
+    const saved = readSessionPreference("sentiment-desk-saved-sources-mode");
+    return saved === "coverage" || saved === "search" || saved === "tape" ? saved : "coverage";
+  });
+  const savedSourceCoverageRequestSeq = useRef(0);
+  const loadSavedSourceCoverage = useCallback(async () => {
+    const requestSeq = ++savedSourceCoverageRequestSeq.current;
+    setSavedSourceCoverageState("loading");
+    try {
+      const snapshot = await getSavedSourceCoverage();
+      if (requestSeq !== savedSourceCoverageRequestSeq.current) return;
+      setSavedSourceCoverage(snapshot);
+      setSavedSourceCoverageState("ready");
+    } catch {
+      if (requestSeq !== savedSourceCoverageRequestSeq.current) return;
+      setSavedSourceCoverageState("failed");
+    }
+  }, []);
+  const changeSavedSourcesMode = useCallback((mode: SavedSourcesMode) => {
+    setSavedSourcesMode(mode);
+    writeSessionPreference("sentiment-desk-saved-sources-mode", mode);
+  }, []);
   const [savedSourcesBrowseState, setSavedSourcesBrowseState] = useState<SavedSourcesBrowseState>(() => {
     try {
       return readSavedSourcesBrowseState(typeof window === "undefined" ? null : window.sessionStorage);
@@ -231,6 +258,11 @@ export default function App() {
       // The in-memory browse state continues to work when session storage is unavailable.
     }
   }, []);
+  useEffect(() => {
+    if (researchView !== "sources") return;
+    void loadSavedSourceCoverage();
+    return () => { savedSourceCoverageRequestSeq.current += 1; };
+  }, [researchView, loadSavedSourceCoverage]);
   const loadSavedCompanyHistory = useCallback(async (companyId: string, cursor: MentionPage["nextCursor"] = null) => {
     if (savedCompanyHistoryInFlight.current.has(companyId)) return;
     const generation = savedCompanyHistoryGeneration.current;
@@ -347,6 +379,7 @@ export default function App() {
   const [session, setSession] = useState<SessionInfo>(() => sessionInfo());
   const researchScrollRef = useRef<HTMLElement | null>(null);
   const savedSourcesDrawerReturnScrollRef = useRef<MentionDrawerReturnTarget | null>(null);
+  const [savedSourcesDrawerReturnTarget, setSavedSourcesDrawerReturnTarget] = useState<MentionDrawerReturnTarget | null>(null);
   const previousResearchCompanyIdRef = useRef<string | null>(null);
   const previousResearchViewRef = useRef(researchView);
   const [drawerMention, setDrawerMention] = useState<Mention | null>(null);
@@ -362,27 +395,51 @@ export default function App() {
     drawerMentionIdRef.current = mention?.id ?? null;
     setDrawerMention(mention);
   }, []);
-  const closeDrawer = useCallback(() => {
+  const restoreSavedSourcesReturnTarget = useCallback((target: MentionDrawerReturnTarget | null) => {
+    requestAnimationFrame(() => {
+      if (researchScrollRef.current) researchScrollRef.current.scrollTop = target?.scrollTop ?? 0;
+      requestAnimationFrame(() => {
+        const trigger = target
+          ? [...document.querySelectorAll<HTMLElement>("[data-saved-source-id]")]
+            .find((element) => element.dataset.savedSourceId === target.mentionId)
+          : undefined;
+        (trigger ?? document.getElementById("saved-sources-heading"))?.focus();
+        setSavedSourcesDrawerReturnTarget(null);
+      });
+    });
+  }, []);
+  const closeDrawer = useCallback((restorePosition = true) => {
     const returnTarget = savedSourcesDrawerReturnScrollRef.current;
     savedSourcesDrawerReturnScrollRef.current = null;
     openDrawerMention(null);
     const nextView = researchViewAfterMentionClose(researchView, returnTarget);
-    if (nextView === researchView) return;
+    if (nextView === researchView) {
+      if (!restorePosition) setSavedSourcesDrawerReturnTarget(null);
+      return;
+    }
     researchViewTouchedRef.current = true;
-    sessionStorage.setItem("sentiment-desk-research-view", nextView);
+    writeSessionPreference("sentiment-desk-research-view", nextView);
     setResearchView(nextView);
+    const restoreAfterSearchLoads = restorePosition && returnTarget != null && nextView === "sources" && savedSourcesMode === "search";
+    if (!restorePosition) setSavedSourcesDrawerReturnTarget(null);
+    if (restoreAfterSearchLoads) setSavedSourcesDrawerReturnTarget(returnTarget);
     requestAnimationFrame(() => {
-      if (researchScrollRef.current && returnTarget) researchScrollRef.current.scrollTop = returnTarget.scrollTop;
+      if (!restorePosition) return;
+      if (!restoreAfterSearchLoads && researchScrollRef.current && returnTarget) researchScrollRef.current.scrollTop = returnTarget.scrollTop;
       requestAnimationFrame(() => {
         if (!returnTarget) return;
+        if (restoreAfterSearchLoads) {
+          document.getElementById("saved-sources-heading")?.focus();
+          return;
+        }
         const trigger = [...document.querySelectorAll<HTMLElement>("[data-saved-source-id]")]
           .find((element) => element.dataset.savedSourceId === returnTarget.mentionId);
         (trigger ?? document.getElementById("saved-sources-heading"))?.focus();
       });
     });
-  }, [openDrawerMention, researchView]);
+  }, [openDrawerMention, researchView, savedSourcesMode]);
   const openResearchQueue = useCallback(() => {
-    closeDrawer();
+    closeDrawer(false);
     setResearchView("queue");
   }, [closeDrawer]);
   const navigateToCompanyResearch = useCallback((companyId: string) => {
@@ -400,7 +457,7 @@ export default function App() {
     }
     setSelectedId(next.selectedCompanyId);
     researchViewTouchedRef.current = true;
-    sessionStorage.setItem("sentiment-desk-research-view", next.view);
+    writeSessionPreference("sentiment-desk-research-view", next.view);
     setResearchView(next.view);
   }, [researchView, selectedId]);
   const openQueuedEvidence = useCallback((item: AnalystResearchQueueItem) => {
@@ -1872,7 +1929,7 @@ export default function App() {
                 aria-pressed={researchView === view}
                 onClick={() => {
                   researchViewTouchedRef.current = true;
-                  sessionStorage.setItem("sentiment-desk-research-view", view);
+                  writeSessionPreference("sentiment-desk-research-view", view);
                   setResearchView(view);
                 }}
                 className={`rounded-md border px-2.5 py-1.5 text-[10.5px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 ${researchView === view ? "border-white/15 bg-white/[0.08] text-white/85" : "border-transparent text-white/40 hover:bg-white/[0.04] hover:text-white/70"}`}
@@ -1940,6 +1997,10 @@ export default function App() {
           {researchView === "sources" ? <SavedSourcesView
             mentions={tape}
             companies={companies}
+            coverageSnapshot={savedSourceCoverage}
+            coverageState={savedSourceCoverageState}
+            mode={savedSourcesMode}
+            onModeChange={changeSavedSourcesMode}
             companyInventoryState={companiesLoadState}
             state={savedSourcesState}
             companyHistory={savedSourcesBrowseState.companyFilter == null ? null : savedCompanyHistory[savedSourcesBrowseState.companyFilter] ?? null}
@@ -1949,7 +2010,10 @@ export default function App() {
             onOpen={openSavedSource}
             browseState={savedSourcesBrowseState}
             onBrowseStateChange={rememberSavedSourcesBrowseState}
+            drawerReturnTarget={savedSourcesDrawerReturnTarget}
+            onRestoreDrawerReturnTarget={restoreSavedSourcesReturnTarget}
             onRetryCompanyHistory={(companyId) => { void loadSavedCompanyHistory(companyId); }}
+            onRetryCoverage={() => { void loadSavedSourceCoverage(); }}
             onLoadOlderHistory={(companyId) => {
               const history = savedCompanyHistory[companyId];
               const cursor = history?.nextCursor;
@@ -1970,9 +2034,9 @@ export default function App() {
               void refreshBackendSnapshot();
             }}
           /> : researchView === "filings" ? <SecFilingsInbox onBrowseSavedSources={() => {
-            recoverToSavedSources(rememberSavedSourcesBrowseState, () => {
+            recoverToSavedSources(rememberSavedSourcesBrowseState, changeSavedSourcesMode, () => {
               researchViewTouchedRef.current = true;
-              sessionStorage.setItem("sentiment-desk-research-view", "sources");
+              writeSessionPreference("sentiment-desk-research-view", "sources");
               setResearchView("sources");
             });
           }} /> : researchView === "queue" ? (

@@ -1,6 +1,46 @@
 # Sentiment Desk Agent Board
 
-## Latest usability pass — 2026-10-06
+## Latest archive usability pass — 2026-10-06
+
+The priority is investor task usability. The rendered archive search now uses
+whole-token matching for short queries (`AI` returns 2,099 saved records rather
+than 3,733 substring hits), versions cursors across search-policy changes, and
+shows headline/excerpt match location, actual retrieval age, and adjacent
+repeated-title rows without claiming independent events. A false “Can AMD”
+issuer cue was also removed.
+
+- I reproduced the unsupported SEC filing path: “Browse saved sources” opened
+  the company roster and required another click for no-ticker search. It now
+  reads “Search saved archive,” clears stale filters, and opens the all-company
+  headline/excerpt search directly. Rendered search returned four real
+  `CPU Business` records in two title groups. The app labels the archive as
+  historical leads, not current coverage.
+- The rendered app says `SAVED DATA ONLY`, zero source records retrieved in
+  24 hours, and zero Luna requests. Latest source retrieval is two days old.
+  UI interactions were local reads; the separate authorized, keyless public
+  ETL smoke is recorded in the evidence file. No product rows or reviews were
+  changed.
+- At the effective browser width of 1156px, document and body width also equal
+  1156px. The browser's 390px viewport override did not change its effective
+  width, so 1440/390/320px responsive proof remains **unverified**.
+- Focused regressions pass 33/33, retained recovery replay passes 10/10,
+  full Vitest passes **752 tests across 97 files**, and typecheck/build/diff
+  checks pass. The 794.55 kB minified entry exceeds Vite's 500 kB advisory.
+  The public-source ETL suite passes except for the unsupported
+  `sec_filings_current_hub_receipt`.
+- Fresh independent review passes this no-ticker recovery route but keeps
+  whole-product readiness at **FAIL**. The largest usability gap is current
+  company discovery: a no-ticker investor still searches stale records for 24
+  tracked issuers. The all-issuer SEC feed and current evidence are missing;
+  no qualified Luna output or intended-user task results exist. Opportunity
+  Radar stays disabled.
+- Final engineering alignment, native completion receipt, and this iteration's
+  GitHub checkpoint remain open.
+
+See `project-record/4-log/2026-10-06-saved-source-archive-search.md` for the
+acceptance detail and rendered evidence.
+
+## Previous usability pass — 2026-10-06
 
 The user's priority is investor task completion rather than cosmetic polish.
 The selection fixes (watchlist selection, My Research navigation, and retaining
