@@ -29,7 +29,7 @@ function mention(sourceItemId: string, publishedAt: number): RawMention {
   return {
     companyId: company.id, kind: "rss", sourceName: "Reuters", sourceUrl: `https://reuters.com/${sourceItemId}`,
     tier: "wire", title: `Acme update ${sourceItemId}`, snippet: "Source-persisted fixture",
-    publishedAt, retrievedAt: Date.now(), collector: "google_news_rss",
+    publishedAt: null, aggregatorPublishedAt: publishedAt, retrievedAt: publishedAt, collector: "google_news_rss",
     sourceItemId, publisherName: "Reuters", publisherDomain: "reuters.com",
   };
 }

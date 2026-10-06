@@ -1,4 +1,5 @@
 import { Desk } from "../server/db.js";
+import type { DatabaseSync } from "node:sqlite";
 import type { StorageLimits } from "../server/storage-capacity.js";
 
 export const TEST_STORAGE_LIMITS: Readonly<StorageLimits> = Object.freeze({
@@ -11,5 +12,9 @@ export const TEST_STORAGE_LIMITS: Readonly<StorageLimits> = Object.freeze({
 export class TestDesk extends Desk {
   constructor(databasePath: string, limits: Readonly<StorageLimits> = TEST_STORAGE_LIMITS) {
     super(databasePath, limits);
+  }
+
+  get testDb(): DatabaseSync {
+    return (this as unknown as { db: DatabaseSync }).db;
   }
 }

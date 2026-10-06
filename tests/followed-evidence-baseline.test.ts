@@ -30,7 +30,7 @@ function observationInput(id: string, times: {
 }, deliveryId?: string): RawMention {
   return {
     companyId: company.id,
-    kind: "rss",
+    kind: "finnhub",
     sourceName: "Test publisher",
     sourceUrl: `https://publisher.example/research/${id}`,
     tier: "major",
@@ -39,7 +39,7 @@ function observationInput(id: string, times: {
     publishedAt: times.publishedAt,
     retrievedAt: times.retrievedAt,
     providerObservedAt: times.providerObservedAt ?? undefined,
-    collector: "google_news_rss",
+    collector: "finnhub",
     sourceItemId: id,
     publisherName: "Test publisher",
     publisherDomain: "publisher.example",
@@ -56,7 +56,7 @@ function persistReceiptBackedObservation(db: Desk, id: string, options: {
 } = {}): string {
   const now = Date.now();
   const deliveryId = db.recordDelivery({
-    collector: "google_news_rss",
+    collector: "finnhub",
     companyId: company.id,
     requestKey: `fixture-${id}`,
     startedAt: now - 10,
@@ -84,7 +84,7 @@ function persistReceiptBackedObservation(db: Desk, id: string, options: {
 function persistProcessingObservation(db: Desk, id: string): { observationId: string; deliveryId: string } {
   const now = Date.now();
   const deliveryId = db.recordDelivery({
-    collector: "google_news_rss", companyId: company.id, requestKey: `fixture-processing-${id}`,
+    collector: "finnhub", companyId: company.id, requestKey: `fixture-processing-${id}`,
     startedAt: now - 10, completedAt: now - 5, result: "success", parsedItemCount: 1,
     adapterVersion, processingRequired: true,
   });
@@ -98,7 +98,7 @@ function persistProcessingObservation(db: Desk, id: string): { observationId: st
 function persistReceiptWithoutRequiredIngestion(db: Desk, id: string): string {
   const now = Date.now();
   const deliveryId = db.recordDelivery({
-    collector: "google_news_rss", companyId: company.id, requestKey: `fixture-no-processing-${id}`,
+    collector: "finnhub", companyId: company.id, requestKey: `fixture-no-processing-${id}`,
     startedAt: now - 10, completedAt: now - 5, result: "success", parsedItemCount: 1,
     adapterVersion, processingRequired: false,
   });
@@ -280,7 +280,7 @@ describe("followed-company evidence baseline", () => {
     try {
       expect(db.mentionRow(existingId)).toBeTruthy();
       const upgraded = (db as unknown as { db: DatabaseSync }).db;
-      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
       expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='followed_company_baseline_items'").get())
         .toEqual({ name: "followed_company_baseline_items" });
       const factColumns = new Map((upgraded.prepare("PRAGMA table_info(sec_fundamental_facts)").all() as Array<{ name: string; dflt_value: string | null }>)
@@ -292,11 +292,11 @@ describe("followed-company evidence baseline", () => {
     }
 
     const future = new DatabaseSync(path);
-    future.exec("PRAGMA user_version = 16");
+    future.exec("PRAGMA user_version = 17");
     future.close();
-    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_16");
+    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_17");
     const preserved = new DatabaseSync(path);
-    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
     preserved.close();
   });
 });

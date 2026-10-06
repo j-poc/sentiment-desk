@@ -117,6 +117,11 @@ export function ScoreBucketEvidence({
                     Publisher-declared publication time: {coverageSummary.sourceTimes.publisherDeclared.timestampedRecordCount} of {coverageSummary.sourceTimes.publisherDeclared.recordCount} records timestamped; {formatCoverageRange(coverageSummary.sourceTimes.publisherDeclared.range)}.
                   </li>
                 )}
+                {coverageSummary.sourceTimes.aggregatorDeclared != null && coverageSummary.sourceTimes.aggregatorDeclared.recordCount > 0 && (
+                  <li>
+                    Aggregator-declared RSS feed time: {coverageSummary.sourceTimes.aggregatorDeclared.timestampedRecordCount} of {coverageSummary.sourceTimes.aggregatorDeclared.recordCount} records timestamped; {formatCoverageRange(coverageSummary.sourceTimes.aggregatorDeclared.range)}. Article publication time is unknown.
+                  </li>
+                )}
                 {coverageSummary.sourceTimes.providerObserved.recordCount > 0 && (
                   <li>
                     Provider-observed time: {coverageSummary.sourceTimes.providerObserved.timestampedRecordCount} of {coverageSummary.sourceTimes.providerObserved.recordCount} records timestamped; {formatCoverageRange(coverageSummary.sourceTimes.providerObserved.range)}.

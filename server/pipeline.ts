@@ -10,6 +10,7 @@ import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
 import { StorageCapacityError } from "./storage-capacity.js";
 import { ExternalRequestPausedError } from "./external-request-gate.js";
+import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js";
 import {
   applyPostRules,
   bucketMsFor,
@@ -32,6 +33,7 @@ import type {
   MentionScore,
   SeriesPoint,
   SeriesResult,
+  JevHistoryWeekResult,
   SourceTier,
 } from "./types.js";
 
@@ -878,6 +880,53 @@ export class Pipeline {
         (latest, item) => Math.max(latest ?? item.availableAt, item.availableAt),
         null,
       ),
+    };
+  }
+
+  jevHistoryWeek(companyId: string, weekStartMs: number | null): JevHistoryWeekResult | null {
+    const history = this.deps.db.jevHistoryWeeks(companyId, weekStartMs);
+    if (!history) return null;
+    const weekMs = 7 * DAY_MS;
+    const throughMs = history.weekStartMs + weekMs;
+    const bucketMs = 15 * 60_000;
+    const points = weightedBucketSeries(history.items, weekMs, bucketMs, throughMs);
+    const itemsByBucket = new Map<number, typeof history.items>();
+    for (const item of history.items) {
+      const bucketStartMs = Math.floor(item.scoredAt / bucketMs) * bucketMs;
+      const items = itemsByBucket.get(bucketStartMs) ?? [];
+      items.push(item);
+      itemsByBucket.set(bucketStartMs, items);
+    }
+    const pointsWithLineage = points.map((point) => {
+      if (point.scoredRecordCount === 0) return point;
+      const items = itemsByBucket.get(point.bucketStartAtMs);
+      if (!items || items.length !== point.scoredRecordCount) {
+        throw new Error("Historical Jev bucket lineage did not reconcile to its scored record count");
+      }
+      const coverage = summarizeScoreBucketCoverage(items.map((item) => ({
+        title: item.title,
+        scoredAt: item.scoredAt,
+        timeBasis: item.timeBasis,
+        publisherPublishedAt: item.publisherPublishedAt,
+        aggregatorPublishedAt: item.aggregatorPublishedAt,
+        providerObservedAt: item.providerObservedAt,
+        deliveryId: item.deliveryId,
+      })));
+      return {
+        ...point,
+        sourceLineage: {
+          recordCount: items.length,
+          receiptLinkedRecordCount: coverage.receiptLinkedRecordCount,
+          repeatedTitleRecordCount: coverage.repeatedTitleRecordCount,
+          exactNormalizedTitleCount: coverage.exactNormalizedTitleCount,
+        },
+      };
+    });
+    return {
+      companyId, weekStartMs: history.weekStartMs, fromMs: history.weekStartMs, throughMs,
+      points: pointsWithLineage, latestEligibleScoreAtMs: history.latestEligibleScoreAtMs,
+      olderWeekStartMs: history.olderWeekStartMs, newerWeekStartMs: history.newerWeekStartMs,
+      latestWeekStartMs: history.latestWeekStartMs,
     };
   }
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getCompanyFundamentals, isCurrentCompanySelection, refreshCompanyFundamentals } from "../web/src/lib/api.js";
+import { getCompanyFundamentals, getCompanySavedHistoryPage, isCurrentCompanySelection, refreshCompanyFundamentals } from "../web/src/lib/api.js";
+import type { MentionPage } from "../web/src/lib/api.js";
 import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../shared/company-fundamentals.js";
 
 const emptyView = (companyId: string): CompanyFundamentalsView => ({
@@ -11,6 +12,20 @@ const emptyView = (companyId: string): CompanyFundamentalsView => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe("company fundamentals API integration", () => {
+  it("reads retained company history with an optional cursor through GET only", async () => {
+    const page: MentionPage = { items: [], nextCursor: { orderAt: 123, ingestedAt: 124, id: "row-1" }, setAsideCount: 0, issuerIdentityReviewCount: 0 };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(page), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const cursor = { orderAt: 125, ingestedAt: 126, id: "row/2" };
+    const controller = new AbortController();
+
+    await expect(getCompanySavedHistoryPage("issuer/one", cursor, controller.signal)).resolves.toEqual(page);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/companies/issuer%2Fone/mentions-page?filter=history&limit=100&includeDismissed=true&cursor=${encodeURIComponent(JSON.stringify(cursor))}`);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBeUndefined();
+  });
+
   it("loads only the saved view with an abortable GET", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(emptyView("issuer/one")), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

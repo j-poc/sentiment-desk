@@ -166,6 +166,26 @@ describe("HealthPanel source approval disclosure", () => {
     expect(html).toContain("external requests enabled");
   });
 
+  it("keeps the last failed delivery outcome visible while saved-data mode pauses the collector", () => {
+    const html = renderToStaticMarkup(createElement(HealthPanel, { health: {
+      ...blockedHealth,
+      externalRequestsEnabled: false,
+      deliveryHealth: [{
+        collector: "gdelt_doc_api", enabled: false, state: "disabled", intervalSeconds: 60,
+        targetCount: 24, coverageCount: 24, latestDeliveryAt: 1_790_000_000_000,
+        latestResult: "rate_limited", latestItemCount: 0, latestError: null, adapterVersion: "gdelt-v1",
+        latestIngestionRequired: false, latestIngestionState: null, latestIngestionExpectedCount: null,
+        latestIngestionProcessedCount: null, latestIngestionInsertedCount: null, latestObservationAt: null,
+        latestObservationBasis: null, latestObservationRetrievedAt: null,
+      }],
+    } }));
+
+    expect(html).toContain("gdelt doc api");
+    expect(html).toContain("disabled");
+    expect(html).toContain("Last recorded outcome: rate limited");
+    expect(html).not.toContain("Last recorded outcome: success");
+  });
+
   it("explains alert uncertainty and names successful delivery as endpoint acceptance", () => {
     const html = renderToStaticMarkup(createElement(AlertDeliveryStatus, {
       delivery: {

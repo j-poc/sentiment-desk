@@ -17,6 +17,7 @@ const SEC_DATA = "https://data.sec.gov";
 const SEC_WEB = "https://www.sec.gov";
 const POLICY_VERSION = "sec-fundamentals/3";
 const FRESH_FOR_MS = 24 * 60 * 60 * 1_000;
+const OBSERVATION_FRESH_FOR_MS = 365 * 24 * 60 * 60 * 1_000;
 const DIRECTORY_MAX_BYTES = 4 * 1024 * 1024;
 const SUBMISSIONS_MAX_BYTES = 8 * 1024 * 1024;
 const COMPANYFACTS_MAX_BYTES = 32 * 1024 * 1024;
@@ -27,7 +28,7 @@ const FACT_VINTAGES_PER_PERIOD_LIMIT = 10;
 export interface CompanyFundamentalsOptions {
   db: Desk;
   externalRequestsEnabled: boolean;
-  secSourceEnabled: boolean;
+  secCompanyFactsEnabled: boolean;
   userAgent: string;
   fetcher?: typeof fetch;
   now?: () => number;
@@ -557,16 +558,17 @@ function friendlyError(error: unknown): string {
 export class CompanyFundamentals {
   private readonly db: Desk;
   private readonly externalRequestsEnabled: boolean;
-  private readonly secSourceEnabled: boolean;
+  private readonly secCompanyFactsEnabled: boolean;
   private readonly userAgent: string;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
   private readonly inflight = new Map<string, Promise<FundamentalRefreshResult>>();
+  private inflightCompanyId: string | null = null;
 
   constructor(options: CompanyFundamentalsOptions) {
     this.db = options.db;
     this.externalRequestsEnabled = options.externalRequestsEnabled;
-    this.secSourceEnabled = options.secSourceEnabled;
+    this.secCompanyFactsEnabled = options.secCompanyFactsEnabled;
     this.userAgent = options.userAgent;
     this.fetcher = options.fetcher ?? globalThis.fetch;
     this.now = options.now ?? Date.now;
@@ -578,10 +580,11 @@ export class CompanyFundamentals {
 
   private blockedReason(companyId: string): string | null {
     if (!this.externalRequestsEnabled) return "External requests are disabled; saved SEC facts remain available.";
-    if (!this.secSourceEnabled) return "SEC collection is not enabled by both the source allowlist and rights approval.";
+    if (!this.secCompanyFactsEnabled) return "Selected-company facts need the separate sec_company_facts request scope and matching source-use approval.";
     if (!this.userAgent) return "The SEC request identity is not configured for this Sentiment Desk process.";
     if (providerCoolingDown(this.db, "sec", this.now())) return "The SEC provider cooldown is active.";
     if (!this.db.externalRequestAllowed()) return "Local storage capacity is paused; SEC requests are not sent.";
+    if (this.inflightCompanyId != null && this.inflightCompanyId !== companyId) return "Another company's SEC refresh is running; retry after it finishes.";
     const latestAttempt = this.db.latestFundamentalAttempt(companyId);
     if (latestAttempt?.status === "running") return "Another SEC fundamentals refresh is already running for this company.";
     return null;
@@ -596,7 +599,16 @@ export class CompanyFundamentals {
     const coverage = snapshot?.coverage.slice() ?? [];
     const facts = snapshot ? resolvedFacts(snapshot.facts, coverage) : [];
     const retrievedAt = snapshot?.createdAt ?? null;
-    const stale = retrievedAt != null && this.now() - retrievedAt > FRESH_FOR_MS;
+    const checkedAt = this.now();
+    const staleDelivery = retrievedAt != null && checkedAt - retrievedAt > FRESH_FOR_MS;
+    const latestAcceptedAt = facts.reduce<number | null>((latest, fact) =>
+      Number.isSafeInteger(fact.acceptedAt) ? Math.max(latest ?? fact.acceptedAt!, fact.acceptedAt!) : latest, null);
+    const staleObservation = latestAcceptedAt != null && checkedAt - latestAcceptedAt > OBSERVATION_FRESH_FOR_MS;
+    const stale = staleDelivery || staleObservation;
+    const staleReasons = [
+      staleObservation ? "The newest saved matched SEC filing fact was accepted more than 365 days ago; a recent download does not make its underlying filing current." : null,
+      staleDelivery ? "The saved SEC response was last retrieved more than 24 hours ago; refresh to check whether newer filings are available." : null,
+    ].filter((reason): reason is string => reason != null);
     const attemptFailedAfterSnapshot = latestAttempt != null && ["failed", "interrupted", "blocked"].includes(latestAttempt.status)
       && (retrievedAt == null || latestAttempt.requestedAt > retrievedAt);
     const state: CompanyFundamentalsView["state"] = !snapshot
@@ -608,7 +620,7 @@ export class CompanyFundamentals {
       refreshAllowed: blocked == null,
       refreshBlockedReason: blocked,
       lastRefreshError: attemptFailedAfterSnapshot ? latestAttempt?.error : null,
-      staleReason: stale ? "The latest saved SEC response is more than 24 hours old. Refresh is explicit and may be blocked by current source controls." : null,
+      staleReason: stale ? staleReasons.join(" ") : null,
       latestAttemptAt: latestAttempt?.requestedAt ?? null, retrievedAt,
     };
   }
@@ -646,14 +658,18 @@ export class CompanyFundamentals {
       return { ...this.read(companyId), refresh: "reused" };
     }
     const operation = this.acquire(company, claim.attempt.id);
+    this.inflightCompanyId = companyId;
     this.inflight.set(key, operation);
     try { return await operation; }
-    finally { this.inflight.delete(key); }
+    finally {
+      this.inflight.delete(key);
+      if (this.inflightCompanyId === companyId) this.inflightCompanyId = null;
+    }
   }
 
   private async requestJson(url: string, userAgent: string, maxBytes: number): Promise<{ response: SecResponse; body: unknown; itemCount: number }> {
     if (providerCoolingDown(this.db, "sec", this.now())) throw new ProviderRateLimitError("sec", undefined, "SEC provider cooldown is active");
-    if (!this.externalRequestsEnabled || !this.secSourceEnabled || !this.userAgent || !this.db.externalRequestAllowed()) {
+    if (!this.externalRequestsEnabled || !this.secCompanyFactsEnabled || !this.userAgent || !this.db.externalRequestAllowed()) {
       throw new ExternalRequestPausedError();
     }
     await paceProviderRequest("sec", 125);
@@ -717,16 +733,22 @@ export class CompanyFundamentals {
     const payloads: SecFundamentalPayloadInput[] = [];
     try {
       const directoryResult = await this.requestJson(`${SEC_WEB}/files/company_tickers.json`, this.userAgent, DIRECTORY_MAX_BYTES);
+      const directoryPayload = { endpoint: "ticker_directory" as const, ...directoryResult.response, itemCount: directoryResult.itemCount };
+      this.db.persistCompanyFundamentalPayloadReceipt({ attemptId, companyId: company.id, payload: directoryPayload });
+      payloads.push(directoryPayload);
       const identity = parseCikDirectory(directoryResult.body, company.ticker);
-      payloads.push({ endpoint: "ticker_directory", ...directoryResult.response, itemCount: directoryResult.itemCount });
 
       const submissionsResult = await this.requestJson(`${SEC_DATA}/submissions/CIK${identity.cik}.json`, this.userAgent, SUBMISSIONS_MAX_BYTES);
+      const submissionsResponsePayload = { endpoint: "submissions" as const, ...submissionsResult.response, itemCount: submissionsResult.itemCount };
+      this.db.persistCompanyFundamentalPayloadReceipt({ attemptId, companyId: company.id, payload: submissionsResponsePayload });
       const submissions = parseRecentSubmissions(submissionsResult.body, identity.cik);
-      payloads.push({ endpoint: "submissions", ...submissionsResult.response, itemCount: submissions.size });
+      payloads.push({ ...submissionsResponsePayload, itemCount: submissions.size });
 
       const factsResult = await this.requestJson(`${SEC_DATA}/api/xbrl/companyfacts/CIK${identity.cik}.json`, this.userAgent, COMPANYFACTS_MAX_BYTES);
+      const companyfactsResponsePayload = { endpoint: "companyfacts" as const, ...factsResult.response, itemCount: factsResult.itemCount };
+      this.db.persistCompanyFundamentalPayloadReceipt({ attemptId, companyId: company.id, payload: companyfactsResponsePayload });
       const parsed = parseCompanyFacts(factsResult.body, identity.cik, submissions, factsResult.response.retrievedAt);
-      payloads.push({ endpoint: "companyfacts", ...factsResult.response, itemCount: parsed.facts.length });
+      payloads.push({ ...companyfactsResponsePayload, itemCount: parsed.facts.length });
 
       const mergedCoverage = parsed.coverage;
       const state = parsed.facts.length === 0 ? mergedCoverage.length ? "partial" : "empty"

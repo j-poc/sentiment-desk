@@ -17,8 +17,8 @@ const source = {
     id: "apple:immutable-source-id",
     companyId: "apple",
     source: {
-      name: "Reuters", url: "https://www.reuters.com/business/example", kind: "rss", tier: "wire",
-      collector: "google_news_rss", publisher: "Reuters", publisherDomain: "reuters.com", deliveryId: "receipt-1",
+      name: "Reuters", url: "https://www.reuters.com/business/example", kind: "finnhub", tier: "wire",
+      collector: "finnhub", publisher: "Reuters", publisherDomain: "reuters.com", deliveryId: "receipt-1",
     },
     title: "Supplier reports component delay",
     snippet: "The source-reported claim remains unverified.",
@@ -27,7 +27,7 @@ const source = {
     retrievedAt: 1_790_000_000_100,
     ingestedAt: 1_790_000_000_101,
     timeBasis: "publisher_declared",
-    collector: "google_news_rss",
+    collector: "finnhub",
     publisherName: "Reuters",
     publisherDomain: "reuters.com",
     status: "pending",
@@ -64,5 +64,23 @@ describe("My Research queue usability", () => {
     expect(html("ready")).toContain("Your queue is empty.");
     expect(html("failed")).toContain("Your saved source records have not been changed.");
     expect(html("failed")).toContain("Retry loading queue");
+  });
+
+  it("keeps RSS feed time distinct from publisher publication time in the saved queue", () => {
+    const rssItem: AnalystResearchQueueItem = {
+      ...source,
+      mention: {
+        ...source.mention,
+        source: { ...source.mention.source, kind: "rss", collector: "google_news_rss" },
+        publishedAt: null,
+        aggregatorPublishedAt: 1_790_000_000_000,
+        providerObservedAt: null,
+        timeBasis: "aggregator_declared",
+        collector: "google_news_rss",
+      },
+    };
+    const markup = html("ready", [rssItem]);
+    expect(markup).toContain("Google News feed time");
+    expect(markup).not.toContain("Publisher time");
   });
 });

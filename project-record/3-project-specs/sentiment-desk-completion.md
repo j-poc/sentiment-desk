@@ -1792,3 +1792,68 @@ analyst outcomes remain open. `engineering_gate.py check` has no bound evidence
 receipt, and the code-bound live-data ETL check remains FAIL. The current
 independent whole-build review remains about 4/10. Opportunity Radar remains
 disabled.
+
+## 2026-10-05 chart navigation acceptance — clarified 2026-10-06
+
+On the saved-data Desk, Luna is the current classifier and stays selected while
+its matching company/window snapshot is pending, failed, mismatched, or has
+eligible classifications. After a successful zero-category Luna result, make
+one bounded local lookup for the same company's newest saved Jev week. If that
+archive is populated, keep the current Luna view selected and show a deliberate
+Historical Jev action with the exact saved UTC week, score count, and latest
+score timestamp and age. Open the chart only after an explicit action or tab
+selection. Keep the saved-source recovery action first. Never present archived
+output as current Luna sentiment, independent investor opinion, prediction,
+or share-price return.
+
+The historical view states its full UTC week, latest score timestamp and age,
+and the matching Luna category count for the selected rolling evidence window.
+The 6H/24H/3D/7D controls continue to filter current source evidence; they do
+not change the fixed UTC Jev week. A deliberate tab choice remains authoritative
+for the selected company through polling, window changes, and late responses;
+switching companies resets to automatic selection. When Jev is chosen before
+its archive has been checked, load the latest saved week and show pending,
+unavailable, empty, and retry states honestly. The saved-source-feed action
+remains the first recovery step in Luna's empty state. Verify the rendered
+company transition and archive with retained real data, plus 320px/390px
+layouts without horizontal overflow. Do not create or display demo data.
+
+## 2026-10-05 Historical Jev archive access
+
+The Historical Jev action opens the newest UTC week containing eligible saved
+real Jev scores, even when those scores fall outside the current 7-day window.
+The chart states its exact UTC date range, the latest eligible score timestamp,
+and its age. Older and newer controls navigate between populated weeks, and a
+latest control returns to the newest one. Each request is bounded to one
+half-open UTC week and bucket evidence remains bound to the selected company,
+week, score snapshot, and exact 15-minute bucket. Empty intervals remain gaps.
+This archive read is local-only; it does not alter the Luna, source-feed, price,
+or other global time windows and makes no source or model request. Historical
+price comparison stays unavailable unless it can be read from verified saved
+prices for the exact same week. Loading, error, no-history, stale-snapshot, and
+recovery states remain distinct. Keyboard navigation and narrow layouts are
+required. Acceptance uses the protected local database plus isolated boundary,
+eligibility, request-race, and pagination tests; no synthetic or demo data may
+appear in the running app.
+
+The history request is either `latest` or one canonical UTC Monday week. A
+response carries `{ companyId, weekStartMs, fromMs, throughMs, points,
+latestEligibleScoreAtMs, olderWeekStartMs, newerWeekStartMs, latestWeekStartMs
+}`. The accepted read covers at most one half-open seven-day interval. A chart
+and every bucket request use that exact response identity; bucket pages also
+retain their existing snapshot hash, impact-band, and cursor identity. Only
+eligible real Jev rows determine the latest score, chart bars, and populated
+week navigation. The chart range is state separate from the existing global
+`windowHours`.
+
+
+## Cross-company saved-source context recovery — 2026-10-06
+
+When an investor opens a saved row in its issuer Desk and closes its detail,
+returning to Saved Sources preserves the current search, company filter, and
+loaded-result position for the current tab. This prevents repeated
+cross-company triage and applies whether the source review switched issuers
+or stayed on the current issuer. Preserve the existing read-only request
+boundary. Verify a real search result and a later page in the rendered app
+through the full open-return journey; a component remount test is supplemental
+evidence.

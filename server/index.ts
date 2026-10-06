@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { VERSION, config, loadCompanies } from "./config.js";
-import { intersectCollectorAllowlists } from "./collector-policy.js";
+import { intersectClassifierSourceAllowlist, intersectCollectorAllowlists } from "./collector-policy.js";
 import { Desk } from "./db.js";
 import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
@@ -8,6 +8,7 @@ import { OpenAIClassifier } from "./openai-classifier.js";
 import { Pipeline } from "./pipeline.js";
 import { createApp } from "./app.js";
 import { CompanyFundamentals } from "./company-fundamentals.js";
+import { SecFilingsInbox } from "./sec-filings-inbox.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import { SEC_EVIDENCE_ADAPTER_VERSION } from "./sources/sec.js";
 import {
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
   );
   const collectorEnabled = (collector: CollectorId) =>
     config.externalRequestsEnabled && activeSourceCollectors.has(collector);
-  const openaiAllowedCollectors = intersectCollectorAllowlists(
+  const openaiAllowedCollectors = intersectClassifierSourceAllowlist(
     config.openai.allowedCollectors,
     config.externalSourceCollectors,
     config.sourceRightsApprovedCollectors,
@@ -135,8 +136,11 @@ async function main(): Promise<void> {
   const companyFundamentals = new CompanyFundamentals({
     db,
     externalRequestsEnabled: config.externalRequestsEnabled,
-    secSourceEnabled: activeSourceCollectors.has("sec_edgar"),
+    secCompanyFactsEnabled: activeSourceCollectors.has("sec_company_facts"),
     userAgent: config.secUserAgent,
+  });
+  const secFilingsInbox = new SecFilingsInbox({
+    acquisitionEnabled: collectorEnabled("sec_latest_filings_8k"),
   });
   // Pending work drains on boot only when Jev is configured. Without a key,
   // real observations remain pending and create no scoring failure attempts.
@@ -154,6 +158,7 @@ async function main(): Promise<void> {
     version: VERSION,
     opportunityRadarEnabled: false,
     companyFundamentals,
+    secFilingsInbox,
     deliverySources: [
       { collector: "google_news_rss", enabled: collectorEnabled("google_news_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "yahoo_finance_rss", enabled: collectorEnabled("yahoo_finance_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
@@ -241,6 +246,7 @@ async function main(): Promise<void> {
   } else {
     console.log("[desk] external requests disabled; serving stored local data only");
   }
+  const hasScheduledSourceCollection = [...activeSourceCollectors].some((collector) => collector !== "sec_company_facts");
   const mode = !config.externalRequestsEnabled
     ? "OFFLINE (saved data only)"
     : activeSourceCollectors.size === 0
@@ -249,6 +255,8 @@ async function main(): Promise<void> {
         : "REQUESTS ENABLED (source approvals missing)"
       : activeProviderEnabled
       ? "LIVE"
+      : !hasScheduledSourceCollection
+        ? "ON-DEMAND FACTS ONLY (classification paused)"
       : "AWAITING CLASSIFIER CONFIGURATION (mentions stay pending)";
   console.log(`[desk] sentiment desk v${VERSION} ${mode} on http://localhost:${config.port}`);
   if (config.secUserAgent.includes("personal research desk")) {

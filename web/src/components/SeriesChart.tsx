@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ColorType,
   createChart,
@@ -13,7 +13,7 @@ import type { PricePoint, SeriesPoint } from "../lib/api.js";
 import { formatChartTimestamp } from "../lib/chart-time.js";
 import { timeAgo } from "../lib/format.js";
 import { isValidUtcMilliseconds } from "../lib/chart-time.js";
-import { chartVisibleThroughSeconds, scoreBucketChartTimeline, sentimentSeriesState } from "../lib/series-chart-state.js";
+import { chartDataFocusRange, chartVisibleRange, scoreBucketChartTimeline, sentimentSeriesState } from "../lib/series-chart-state.js";
 import { SavedPriceHistoryControl } from "./SavedPriceHistoryControl.js";
 
 function toSec(ms: number): UTCTimestamp {
@@ -21,6 +21,25 @@ function toSec(ms: number): UTCTimestamp {
   const seconds = ms / 1000;
   if (!Number.isFinite(seconds)) throw new RangeError("Chart timestamp is outside the UTC time range.");
   return seconds as UTCTimestamp;
+}
+
+function formatArchivePlotSpan(range: { fromMs: number; throughMs: number }): string {
+  const from = new Date(range.fromMs).toISOString();
+  const through = new Date(range.throughMs).toISOString();
+  const formatTime = (iso: string) => `${new Date(iso).toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${iso.slice(8, 10)} ${iso.slice(11, 19)}`;
+  const start = formatTime(from);
+  const end = from.slice(0, 10) === through.slice(0, 10) ? through.slice(11, 19) : formatTime(through);
+  return `Plot span (UTC, end exclusive) · ${start} to before ${end}`;
+}
+
+function formatCompactArchivePlotSpan(range: { fromMs: number; throughMs: number }): string {
+  const from = new Date(range.fromMs);
+  const through = new Date(range.throughMs);
+  const dateTime = (value: Date) => `${value.toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${value.toISOString().slice(8, 10)} ${value.toISOString().slice(11, 16)}`;
+  const end = from.toISOString().slice(0, 10) === through.toISOString().slice(0, 10)
+    ? through.toISOString().slice(11, 16)
+    : dateTime(through);
+  return `Plot · ${dateTime(from)}–${end} UTC`;
 }
 
 function seriesValue(value: unknown): number | null {
@@ -46,6 +65,7 @@ export function SeriesChart({
   seriesError = false,
   seriesReady = true,
   priceQuarantine,
+  range,
 }: {
   points: SeriesPoint[];
   hours: number;
@@ -63,6 +83,8 @@ export function SeriesChart({
   priceQuarantine?: unknown;
   seriesError?: boolean;
   seriesReady?: boolean;
+  /** Exact half-open interval for bounded archive charts; rolling windows remain the default. */
+  range?: { fromMs: number; throughMs: number };
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -71,6 +93,7 @@ export function SeriesChart({
   const priceRef = useRef<ISeriesApi<"Line"> | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const comparison = mode === "comparison";
+  const [archiveScale, setArchiveScale] = useState<"fit" | "full">("fit");
 
   const drawableSentiment = useMemo(
     () => points.filter((point) => Number.isSafeInteger(point.bucketEndAtMs)
@@ -125,6 +148,9 @@ export function SeriesChart({
   const scoredBuckets = chartSentiment
     .map(({ point }) => point)
     .filter((point) => point.scoredRecordCount > 0);
+  const visibleRange = useMemo(() => range == null || archiveScale === "full"
+    ? range
+    : chartDataFocusRange(drawableSentiment, range), [archiveScale, drawableSentiment, range]);
 
   // A new chart per mode gives comparison its own price pane while keeping the
   // sentiment-only view at full height. The two panes share one time scale.
@@ -223,7 +249,10 @@ export function SeriesChart({
         const impactRange = score.recordImpactMin != null && score.recordImpactMax != null
           ? ` · record spread ${score.recordImpactMin.toFixed(0)} to ${score.recordImpactMax.toFixed(0)}`
           : "";
-        parts.push(`Jev score-time bucket ending ${formatChartTimestamp(score.bucketEndAtMs)} · weighted mean impact ${value} · ${score.scoredRecordCount} saved source ${score.scoredRecordCount === 1 ? "record" : "records"}${impactRange}`);
+        const lineage = score.sourceLineage
+          ? ` · source receipts ${score.sourceLineage.receiptLinkedRecordCount}/${score.sourceLineage.recordCount} · rows in repeated exact-title groups ${score.sourceLineage.repeatedTitleRecordCount}/${score.sourceLineage.recordCount} (title cue only)`
+          : "";
+        parts.push(`Jev score-time bucket ending ${formatChartTimestamp(score.bucketEndAtMs)} · weighted mean impact ${value} · ${score.scoredRecordCount} saved source ${score.scoredRecordCount === 1 ? "record" : "records"}${impactRange}${lineage}`);
       }
       const priceValue = priceSeries ? seriesValue(param.seriesData.get(priceSeries)) : null;
       const activeCurrency = currencyRef.current;
@@ -288,12 +317,13 @@ export function SeriesChart({
     // is stale; empty time to the right is part of the freshness evidence.
     if (hasChartData) {
       const now = Date.now();
+      const visible = chartVisibleRange(hours, now, chartSentiment.at(-1)?.chartTimeSeconds ?? null, visibleRange);
       chart.timeScale().setVisibleRange({
-        from: toSec(now - hours * 60 * 60 * 1000),
-        to: chartVisibleThroughSeconds(now, chartSentiment.at(-1)?.chartTimeSeconds ?? null) as UTCTimestamp,
+        from: toSec(visible.fromMs),
+        to: toSec(visible.throughMs),
       });
     }
-  }, [chartSentiment, drawablePrice, hasChartData, hours]);
+  }, [chartSentiment, drawablePrice, hasChartData, hours, visibleRange]);
 
   const requestError = seriesError || (comparison && priceError);
   const noDataMessage = requestError
@@ -337,13 +367,30 @@ export function SeriesChart({
         ? `${legacyUnknownRows.toLocaleString("en-US")} legacy price rows are excluded because their source provenance is incomplete. This count covers all saved history for this ticker.`
         : "No legacy unknown-source price rows were found in all saved history for this ticker."}`
     : null;
+  const archiveRangeDescription = range && visibleRange
+    ? ` The visible plot span is ${new Date(visibleRange.fromMs).toISOString()} to before ${new Date(visibleRange.throughMs).toISOString()}; the selected archive week is ${new Date(range.fromMs).toISOString()} to before ${new Date(range.throughMs).toISOString()}.`
+    : "";
 
   return (
     <div className="relative">
+      {range && (
+        <div className="mb-2">
+          <div
+            role="note"
+            aria-label={`Plot span in UTC, end exclusive: ${new Date(visibleRange?.fromMs ?? range.fromMs).toISOString()} to before ${new Date(visibleRange?.throughMs ?? range.throughMs).toISOString()}`}
+            title={`Visible plot interval: ${new Date(visibleRange?.fromMs ?? range.fromMs).toISOString()} to before ${new Date(visibleRange?.throughMs ?? range.throughMs).toISOString()}. Selected archive week: ${new Date(range.fromMs).toISOString()} to before ${new Date(range.throughMs).toISOString()}.`}
+            className="text-[11px] leading-5 text-white/60 tabnum"
+          >
+            <span className="hidden sm:inline">{formatArchivePlotSpan(visibleRange ?? range)}</span>
+            <span className="sm:hidden">{formatCompactArchivePlotSpan(visibleRange ?? range)}</span>
+          </div>
+        </div>
+      )}
+      <div data-chart-overlay-frame="true" className="chart-canvas-frame relative">
       <div
         ref={containerRef}
         role="img"
-        aria-label={`Discrete histogram of observed Jev score-time buckets. Each bar is the weighted mean impact of saved Jev-scored source records completed in that 15-minute bucket, on a fixed scale from minus 100 to plus 100 impact points. Record spread is the minimum and maximum individual impact in the bucket; it is not a confidence interval. Empty buckets are blank gaps; values are never carried forward and no line connects buckets. Repeated coverage may count more than once, and records do not represent distinct investors. This is a model-derived record summary, not a stock return or validated investor opinion. The lower bars count saved scored records per bucket. Click a bucket or use View source records in the keyboard table to inspect evidence. Latest saved Jev score completed ${lastScoredAt == null ? "at an unknown time" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
+        aria-label={`Discrete histogram of observed Jev score-time buckets.${archiveRangeDescription} Each bar is the weighted mean impact of saved Jev-scored source records completed in that 15-minute bucket, on a fixed scale from minus 100 to plus 100 impact points. Bars are grouped by Jev score-completion time, not article publication, public-discussion volume, investor activity, or share-price changes. Record spread is the minimum and maximum individual impact in the bucket; it is not a confidence interval. Empty buckets are blank gaps; values are never carried forward and no line connects buckets. Repeated coverage can contribute more than once, and records do not represent distinct investors. Select a bucket to inspect source clocks, repeated-title cues, and delivery-receipt links. This is a model-derived record summary, not a stock return or validated investor opinion. The lower bars count saved scored records per bucket. Click a bucket or use View source records in the keyboard table to inspect evidence. Latest saved Jev score completed ${lastScoredAt == null ? "at an unknown time" : new Date(lastScoredAt).toISOString()}.${comparison ? ` Share price is shown in a separate aligned pane${currency ? ` in ${currency}` : "; currency unknown"}.` : ""}`}
         className={comparison ? "chart-canvas chart-canvas-comparison" : "chart-canvas chart-canvas-sentiment"}
       />
       {comparison && (
@@ -383,14 +430,9 @@ export function SeriesChart({
           Score history is withheld because the response contains invalid score timestamps or duplicate UTC bucket times.
         </div>
       )}
-      {priceEmptyDisclosure && (
-        <p role="status" aria-live="polite" className="chart-data-note mt-2 break-words text-[11px] leading-relaxed">
-          {priceEmptyDisclosure}
-        </p>
-      )}
       <div
         ref={tooltipRef}
-        className="pointer-events-none absolute right-[76px] top-2 z-20 max-w-[70%] rounded-md border border-desk-line bg-[#0c0e14]/95 px-2.5 py-1 text-[10.5px] text-white/85 tabnum opacity-0 transition-opacity"
+        className="chart-canvas-tooltip pointer-events-none absolute right-[76px] top-2 z-20 max-w-[70%] rounded-md border border-desk-line bg-[#0c0e14]/95 px-2.5 py-1 text-[10.5px] text-white/85 tabnum opacity-0 transition-opacity"
       />
       {loading && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-white/50">
@@ -432,6 +474,28 @@ export function SeriesChart({
           <span>{noDataMessage}</span>
         </div>
       )}
+      </div>
+      {range && (
+        <div role="group" aria-label="Chart time range" className="chart-archive-scale-control inline-flex min-h-11 rounded-md border border-white/10 p-0.5 text-[10px]">
+          <button
+            type="button"
+            aria-pressed={archiveScale === "fit"}
+            onClick={() => setArchiveScale("fit")}
+            className="min-h-11 min-w-24 rounded px-3 text-white/70 aria-pressed:bg-white/10 aria-pressed:text-white"
+          >Fit scores</button>
+          <button
+            type="button"
+            aria-pressed={archiveScale === "full"}
+            onClick={() => setArchiveScale("full")}
+            className="min-h-11 min-w-24 rounded px-3 text-white/70 aria-pressed:bg-white/10 aria-pressed:text-white"
+          >Full week</button>
+        </div>
+      )}
+      {priceEmptyDisclosure && (
+        <p role="status" aria-live="polite" className="chart-data-note mt-2 break-words text-[11px] leading-relaxed">
+          {priceEmptyDisclosure}
+        </p>
+      )}
       {bucketEvidence}
       {(scoredBuckets.length > 0 || comparison) && (
       <details className="chart-data-disclosure">
@@ -450,6 +514,7 @@ export function SeriesChart({
                   ? "Loading saved Jev score history…"
                   : "No saved Jev score buckets are available in this window."}
             {comparison && " Share-price rows show each saved provider source time and the separate time it was collected."}
+            {scoredBuckets.some((point) => point.sourceLineage) && " Receipt links show whether a saved record references a collection receipt; they do not validate publisher quality. Repeated-title counts are cues only and do not prove duplicate stories or independent publishers."}
           </p>
           {scoredBuckets.length > 0 && (
             <div className="chart-table-scroll" role="region" aria-label="Plotted score bucket data" tabIndex={0}>
@@ -461,6 +526,7 @@ export function SeriesChart({
                     <th scope="col">Weighted mean impact</th>
                     <th scope="col">Records</th>
                     <th scope="col">Record spread (impact points)</th>
+                    <th scope="col">Source delivery lineage</th>
                     <th scope="col">Saved source rows</th>
                   </tr>
                 </thead>
@@ -475,6 +541,9 @@ export function SeriesChart({
                       <td>{point.recordImpactMin == null || point.recordImpactMax == null
                         ? "Not available"
                         : `${point.recordImpactMin > 0 ? "+" : ""}${point.recordImpactMin.toFixed(0)} to ${point.recordImpactMax > 0 ? "+" : ""}${point.recordImpactMax.toFixed(0)}`}</td>
+                      <td>{point.sourceLineage
+                        ? `${point.sourceLineage.receiptLinkedRecordCount}/${point.sourceLineage.recordCount} receipt-linked · ${point.sourceLineage.repeatedTitleRecordCount}/${point.sourceLineage.recordCount} rows in repeated exact-title groups`
+                        : "Not summarized for this series"}</td>
                       <td><button type="button" onClick={(event) => onSelectBucket?.(
                         point.bucketStartAtMs,
                         point.bucketEndAtMs,

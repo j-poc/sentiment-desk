@@ -1,5 +1,6 @@
 import type { AnalystResearchQueueItem } from "../lib/api.js";
 import { timeAgo } from "../lib/format.js";
+import { sourceClockForMention } from "../lib/source-clock.js";
 
 export type QueueState = "loading" | "ready" | "failed";
 
@@ -19,9 +20,8 @@ function judgmentLabel(item: AnalystResearchQueueItem): string {
 }
 
 function reportedTime(item: AnalystResearchQueueItem): string {
-  if (item.mention.publishedAt != null) return `Publisher time ${timeAgo(item.mention.publishedAt)}`;
-  if (item.mention.providerObservedAt != null) return `Provider observed ${timeAgo(item.mention.providerObservedAt)}`;
-  return "Source time unknown";
+  const clock = sourceClockForMention(item.mention);
+  return clock.at == null ? clock.label : `${clock.label} ${timeAgo(clock.at)}`;
 }
 
 function safeHttpUrl(value: string): boolean {

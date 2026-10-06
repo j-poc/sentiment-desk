@@ -132,7 +132,8 @@ describe("score bucket evidence lineage copy", () => {
         untitledRecordCount: 0,
         scoreCompletionTime: { earliestAtMs: Date.parse("2026-09-28T09:50:24Z"), latestAtMs: Date.parse("2026-09-28T09:56:24Z") },
         sourceTimes: {
-          publisherDeclared: { recordCount: 74, timestampedRecordCount: 74, range: { earliestAtMs: Date.parse("2026-09-27T15:00:00Z"), latestAtMs: Date.parse("2026-09-28T09:43:32Z") } },
+          publisherDeclared: { recordCount: 72, timestampedRecordCount: 72, range: { earliestAtMs: Date.parse("2026-09-27T15:00:00Z"), latestAtMs: Date.parse("2026-09-28T09:43:32Z") } },
+          aggregatorDeclared: { recordCount: 2, timestampedRecordCount: 1, range: { earliestAtMs: Date.parse("2026-09-27T15:12:00Z"), latestAtMs: Date.parse("2026-09-27T15:12:00Z") } },
           providerObserved: { recordCount: 0, timestampedRecordCount: 0, range: null },
           unknownRecordCount: 0,
           legacyUnknownRecordCount: 0,
@@ -145,7 +146,9 @@ describe("score bucket evidence lineage copy", () => {
     expect(markup).toContain("36 records in repeated-title groups");
     expect(markup).toContain("Jev score completion");
     expect(markup).toContain("not a 15-minute measure of publication volume or investor activity");
-    expect(markup).toContain("Publisher-declared publication time: 74 of 74 records timestamped");
+    expect(markup).toContain("Publisher-declared publication time: 72 of 72 records timestamped");
+    expect(markup).toContain("Aggregator-declared RSS feed time: 1 of 2 records timestamped");
+    expect(markup).toContain("Article publication time is unknown.");
     expect(markup).toContain("0 of 74 records link to a delivery receipt");
     expect(markup).toContain("All counts cover the full interval and stay fixed while filtering or paging source rows");
   });

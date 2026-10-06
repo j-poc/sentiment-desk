@@ -17,6 +17,7 @@ export interface FeedItem {
   /** Publisher domain from the RSS source URL, or the direct item URL when it is not an aggregator redirect. */
   publisherDomain: string | null;
   publishedAt: number | null;
+  aggregatorPublishedAt: number | null;
   sourceItemId: string | null;
   snippet: string;
   tier: SourceTier;
@@ -100,7 +101,8 @@ function parseRssResponse(xml: string): { feed: boolean; result: FeedFetchResult
       url: link,
       sourceName,
       publisherDomain,
-      publishedAt: Number.isFinite(publishedAt) ? publishedAt : null,
+      publishedAt: null,
+      aggregatorPublishedAt: Number.isFinite(publishedAt) ? publishedAt : null,
       sourceItemId,
       snippet: cleanText(asText(item["description"])).slice(0, 600),
       tier: tierForHost(sourceMetadataUrl || publisherDomain || link),

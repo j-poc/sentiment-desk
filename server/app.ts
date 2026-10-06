@@ -19,6 +19,7 @@ import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
 import type { CompanyFundamentals } from "./company-fundamentals.js";
+import type { SecFilingsInbox } from "./sec-filings-inbox.js";
 import { MAX_ANALYST_RESEARCH_QUESTION_CHARS } from "../shared/analyst-research.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
@@ -40,6 +41,7 @@ export interface AppDeps {
   version: string;
   opportunityRadarEnabled?: boolean;
   companyFundamentals?: CompanyFundamentals;
+  secFilingsInbox?: SecFilingsInbox;
   webRoot?: string;
   deliverySources: DeliverySourceSchedule[];
 }
@@ -91,6 +93,7 @@ const mentionLookupSchema = z.object({
     .refine((ids) => new Set(ids).size === ids.length),
 });
 const fundamentalRefreshSchema = z.object({ requestKey: z.string().uuid() }).strict();
+const secFilingsInboxActivationSchema = z.object({ confirmUse: z.literal(true) }).strict();
 const analystResearchReviewSchema = z.object({
   disposition: z.enum(["investigate", "dismissed"]),
   nextQuestion: z.string().max(MAX_ANALYST_RESEARCH_QUESTION_CHARS),
@@ -264,7 +267,53 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(deps.companyFundamentals.read(companyId));
   });
 
+  app.get("/api/sec-filings-inbox", async (c) => {
+    if (!deps.secFilingsInbox) return c.json({ error: "sec_filings_inbox_unavailable" }, 503);
+    return c.json(await deps.secFilingsInbox.read());
+  });
+
+  app.post("/api/sec-filings-inbox/activate", async (c) => {
+    const requestUrl = new URL(c.req.url);
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    const hostHeader = c.req.header("host")?.toLowerCase();
+    const originHeader = c.req.header("origin");
+    let sameOrigin = true;
+    if (originHeader) {
+      try { sameOrigin = new URL(originHeader).origin === requestUrl.origin; }
+      catch { sameOrigin = false; }
+    }
+    if (!localHosts.has(requestUrl.hostname.toLowerCase())
+      || (hostHeader != null && hostHeader !== requestUrl.host.toLowerCase())
+      || !sameOrigin || c.req.header("sec-fetch-site")?.toLowerCase() === "cross-site") {
+      return c.json({ error: "unsafe_external_request_origin" }, 403);
+    }
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) {
+      return c.json({ error: "json_content_type_required" }, 415);
+    }
+    if (!deps.secFilingsInbox) return c.json({ error: "sec_filings_inbox_unavailable" }, 503);
+    const input = secFilingsInboxActivationSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "sec_filings_inbox_confirmation_required" }, 400);
+    return c.json(await deps.secFilingsInbox.activate());
+  });
+
   app.post("/api/companies/:id/fundamentals/refresh", async (c) => {
+    const requestUrl = new URL(c.req.url);
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    const hostHeader = c.req.header("host")?.toLowerCase();
+    const originHeader = c.req.header("origin");
+    let sameOrigin = true;
+    if (originHeader) {
+      try { sameOrigin = new URL(originHeader).origin === requestUrl.origin; }
+      catch { sameOrigin = false; }
+    }
+    if (!localHosts.has(requestUrl.hostname.toLowerCase())
+      || (hostHeader != null && hostHeader !== requestUrl.host.toLowerCase())
+      || !sameOrigin || c.req.header("sec-fetch-site")?.toLowerCase() === "cross-site") {
+      return c.json({ error: "unsafe_external_request_origin" }, 403);
+    }
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) {
+      return c.json({ error: "json_content_type_required" }, 415);
+    }
     const companyId = c.req.param("id");
     if (!deps.db.companies().some((company) => company.id === companyId)) return c.json({ error: "unknown_company" }, 404);
     if (!deps.companyFundamentals) return c.json({ error: "company_fundamentals_unavailable" }, 503);
@@ -497,6 +546,25 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(deps.pipeline.series(id, hours));
   });
 
+  app.get("/api/companies/:id/jev-history-week", (c) => {
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown_company" }, 404);
+    const rawWeek = c.req.query("week") ?? "latest";
+    let weekStartMs: number | null = null;
+    if (rawWeek !== "latest") {
+      if (!/^\d{13}$/.test(rawWeek)) return c.json({ error: "invalid_jev_history_week" }, 400);
+      weekStartMs = Number(rawWeek);
+      const date = new Date(weekStartMs);
+      if (!Number.isSafeInteger(weekStartMs) || date.getUTCDay() !== 1 || date.getUTCHours() !== 0
+        || date.getUTCMinutes() !== 0 || date.getUTCSeconds() !== 0 || date.getUTCMilliseconds() !== 0) {
+        return c.json({ error: "invalid_jev_history_week" }, 400);
+      }
+    }
+    const result = deps.pipeline.jevHistoryWeek(id, weekStartMs);
+    if (!result) return c.json({ error: "jev_history_week_unavailable" }, 404);
+    return c.json(result);
+  });
+
   app.get("/api/companies/:id/categorical-series", (c) => {
     const id = c.req.param("id");
     if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown_company" }, 404);
@@ -554,11 +622,24 @@ export function createApp(deps: AppDeps): Hono {
     const fromMs = Number(c.req.query("from"));
     const throughMs = Number(c.req.query("through"));
     const now = Date.now();
+    const rawArchiveWeek = c.req.query("archiveWeek");
+    let archiveWeekStartMs: number | null = null;
+    if (rawArchiveWeek != null) {
+      if (!/^\d{13}$/.test(rawArchiveWeek)) return c.json({ error: "invalid_score_bucket_archive_week" }, 400);
+      archiveWeekStartMs = Number(rawArchiveWeek);
+      const weekDate = new Date(archiveWeekStartMs);
+      if (!Number.isSafeInteger(archiveWeekStartMs) || weekDate.getUTCDay() !== 1 || weekDate.getUTCHours() !== 0
+        || weekDate.getUTCMinutes() !== 0 || weekDate.getUTCSeconds() !== 0 || weekDate.getUTCMilliseconds() !== 0) {
+        return c.json({ error: "invalid_score_bucket_archive_week" }, 400);
+      }
+    }
     const oldestPermittedFromMs = now - hours * 60 * 60_000 - SERIES_BUCKET_MS;
     const sameUtcBucket = Number.isSafeInteger(fromMs) && Number.isSafeInteger(throughMs)
       && Math.floor(fromMs / SERIES_BUCKET_MS) === Math.floor((throughMs - 1) / SERIES_BUCKET_MS);
     if (!Number.isSafeInteger(fromMs) || !Number.isSafeInteger(throughMs)
-      || fromMs < oldestPermittedFromMs || throughMs > now || throughMs <= fromMs
+      || (archiveWeekStartMs == null && fromMs < oldestPermittedFromMs)
+      || (archiveWeekStartMs != null && (fromMs < archiveWeekStartMs || throughMs > archiveWeekStartMs + 7 * DAY_MS))
+      || (archiveWeekStartMs == null && throughMs > now) || throughMs <= fromMs
       || throughMs - fromMs > SERIES_BUCKET_MS || !sameUtcBucket) {
       return c.json({ error: "invalid_score_bucket" }, 400);
     }

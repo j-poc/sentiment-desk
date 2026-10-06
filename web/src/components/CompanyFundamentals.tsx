@@ -276,6 +276,7 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
       <p id="cf-refresh-reason" className="cf-refresh-reason" role={state === "blocked" ? "status" : undefined}>
         {refreshAllowed ? "Refresh runs only when requested." : refreshBlockedReason || "Refresh is unavailable under current controls."}
       </p>
+      <p className="cf-refresh-reason">On-demand for this company. Scheduled SEC 8-K monitoring is a separate source.</p>
 
       {message && <p className={`cf-state cf-state-${state}`} role={state === "failed" ? "alert" : loading || state === "stale" || state === "blocked" ? "status" : "note"}>{message}</p>}
       {lastRefreshError && showData && <p className="cf-state cf-state-warning" role="status">The latest refresh failed; saved SEC facts below were retained. {lastRefreshError}</p>}

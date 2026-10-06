@@ -16,6 +16,7 @@ export type ScoreBucketCoverage = {
   scoreCompletionTime: ObservedTimeRange | null;
   sourceTimes: {
     publisherDeclared: KnownSourceTimeCoverage;
+    aggregatorDeclared?: KnownSourceTimeCoverage;
     providerObserved: KnownSourceTimeCoverage;
     unknownRecordCount: number;
     legacyUnknownRecordCount: number;
@@ -28,6 +29,7 @@ export type ScoreBucketCoverageInput = {
   scoredAt: number;
   timeBasis: string;
   publisherPublishedAt: number | null;
+  aggregatorPublishedAt?: number | null;
   providerObservedAt: number | null;
   deliveryId: string | null;
 };
@@ -60,10 +62,12 @@ export function summarizeScoreBucketCoverage(
   const titleCounts = new Map<string, number>();
   const scoreTimes: TimeAccumulator = { count: 0, earliestAtMs: null, latestAtMs: null };
   const publisherTimes: TimeAccumulator = { count: 0, earliestAtMs: null, latestAtMs: null };
+  const aggregatorTimes: TimeAccumulator = { count: 0, earliestAtMs: null, latestAtMs: null };
   const providerTimes: TimeAccumulator = { count: 0, earliestAtMs: null, latestAtMs: null };
   let untitledRecordCount = 0;
   let repeatedTitleRecordCount = 0;
   let publisherRecordCount = 0;
+  let aggregatorRecordCount = 0;
   let providerRecordCount = 0;
   let unknownRecordCount = 0;
   let legacyUnknownRecordCount = 0;
@@ -80,6 +84,9 @@ export function summarizeScoreBucketCoverage(
     if (record.timeBasis === "publisher_declared") {
       publisherRecordCount += 1;
       addTime(publisherTimes, record.publisherPublishedAt);
+    } else if (record.timeBasis === "aggregator_declared") {
+      aggregatorRecordCount += 1;
+      addTime(aggregatorTimes, record.aggregatorPublishedAt ?? null);
     } else if (record.timeBasis === "provider_observed") {
       providerRecordCount += 1;
       addTime(providerTimes, record.providerObservedAt);
@@ -104,6 +111,11 @@ export function summarizeScoreBucketCoverage(
         recordCount: publisherRecordCount,
         timestampedRecordCount: publisherTimes.count,
         range: accumulatedRange(publisherTimes),
+      },
+      aggregatorDeclared: {
+        recordCount: aggregatorRecordCount,
+        timestampedRecordCount: aggregatorTimes.count,
+        range: accumulatedRange(aggregatorTimes),
       },
       providerObserved: {
         recordCount: providerRecordCount,
@@ -168,10 +180,12 @@ export function isScoreBucketCoverage(
   }
   if (typeof sourceTimes !== "object" || sourceTimes == null
     || !isKnownSourceTimeCoverage(sourceTimes.publisherDeclared)
+    || (sourceTimes.aggregatorDeclared != null && !isKnownSourceTimeCoverage(sourceTimes.aggregatorDeclared))
     || !isKnownSourceTimeCoverage(sourceTimes.providerObserved)
     || !Number.isSafeInteger(sourceTimes.unknownRecordCount) || !Number.isSafeInteger(sourceTimes.legacyUnknownRecordCount)
     || sourceTimes.unknownRecordCount! < 0 || sourceTimes.legacyUnknownRecordCount! < 0) return false;
   return sourceTimes.publisherDeclared.recordCount + sourceTimes.providerObserved.recordCount
+    + (sourceTimes.aggregatorDeclared?.recordCount ?? 0)
     + sourceTimes.unknownRecordCount! + sourceTimes.legacyUnknownRecordCount! === recordCount;
 }
 

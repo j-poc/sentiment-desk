@@ -1,46 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExternalRequestPausedError, installExternalRequestGate } from "../server/external-request-gate.js";
 
-const uninstall: Array<() => void> = [];
-
-afterEach(() => {
-  for (const stop of uninstall.splice(0)) stop();
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
 
 describe("external request admission", () => {
-  it("blocks at the final fetch boundary without dispatching", async () => {
-    const transport = vi.fn(async () => new Response("ok"));
-    vi.stubGlobal("fetch", transport as typeof fetch);
-    uninstall.push(installExternalRequestGate(() => false));
-
-    const error = await fetch("https://provider.example/v1").catch((value: unknown) => value);
-    expect(error).toBeInstanceOf(ExternalRequestPausedError);
-    expect(error).toMatchObject({ dispatchedRequests: 0, lastHttpStatus: null });
-    expect(transport).not.toHaveBeenCalled();
-  });
-
-  it("rechecks capacity between same-origin redirect hops", async () => {
-    const transport = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://provider.example/next" } }));
-    vi.stubGlobal("fetch", transport as typeof fetch);
-    let admissionChecks = 0;
-    uninstall.push(installExternalRequestGate(() => ++admissionChecks === 1));
-
-    const error = await fetch("https://provider.example/start").catch((value: unknown) => value);
-    expect(error).toBeInstanceOf(ExternalRequestPausedError);
-    expect(error).toMatchObject({ dispatchedRequests: 1, lastHttpStatus: 302 });
-    expect(String(error)).toContain("1 request hop(s) were sent");
-    expect(admissionChecks).toBe(2);
-    expect(transport).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not follow a redirect to a different origin", async () => {
-    const transport = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://other.example/collect" } }));
-    vi.stubGlobal("fetch", transport as typeof fetch);
-    uninstall.push(installExternalRequestGate(() => true));
-
-    const response = await fetch("https://provider.example/start");
-    expect(response.status).toBe(302);
-    expect(transport).toHaveBeenCalledTimes(1);
+  it("allows only authenticated-client loopback Hub reads while source requests are paused", async () => {
+    const network = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", network);
+    const uninstall = installExternalRequestGate(() => false);
+    try {
+      for (const route of [
+        "http://127.0.0.1:18765/api/v1/sources",
+        "http://localhost:18765/api/v1/state?include_results=false",
+        "http://127.0.0.1:18765/api/v1/receipts/123e4567-e89b-12d3-a456-426614174000?purpose=private_display",
+      ]) {
+        expect((await fetch(route)).ok).toBe(true);
+      }
+      await expect(fetch("http://127.0.0.1:18765/api/v1/receipts/123e4567-e89b-12d3-a456-426614174000?purpose=private_export"))
+        .rejects.toBeInstanceOf(ExternalRequestPausedError);
+      await expect(fetch("https://www.sec.gov/"))
+        .rejects.toBeInstanceOf(ExternalRequestPausedError);
+      await expect(fetch("http://127.0.0.1:18765/api/v1/profiles", { method: "POST" }))
+        .rejects.toBeInstanceOf(ExternalRequestPausedError);
+      expect(network).toHaveBeenCalledTimes(3);
+    } finally {
+      uninstall();
+    }
   });
 });

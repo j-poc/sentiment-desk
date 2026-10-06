@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { intersectCollectorAllowlists, intersectJevSourceAllowlist } from "../server/collector-policy.js";
+import { intersectClassifierSourceAllowlist, intersectCollectorAllowlists, intersectJevSourceAllowlist } from "../server/collector-policy.js";
 
 // Config resolution must not inspect the real shared-machine credential file
 // while these tests exercise explicit or empty environment values.
@@ -31,6 +31,7 @@ describe("external request mode", () => {
     expect(parseExternalSourceCollectors(" sec_edgar, yahoo_chart,sec_edgar ")).toEqual(
       new Set(["sec_edgar", "yahoo_chart"]),
     );
+    expect(parseExternalSourceCollectors("sec_company_facts")).toEqual(new Set(["sec_company_facts"]));
     expect(() => parseExternalSourceCollectors("demo_simulation")).toThrow();
     expect(() => parseExternalSourceCollectors("not_a_source")).toThrow();
   });
@@ -45,6 +46,11 @@ describe("external request mode", () => {
       new Set(["sec_edgar", "reddit"]),
       new Set(["sec_edgar"]),
     )).toEqual(new Set(["sec_edgar"]));
+  });
+
+  it("never treats CompanyFacts payload receipts as classifier input", () => {
+    const admitted = new Set(["sec_company_facts", "sec_edgar", "google_news_rss"] as const);
+    expect(intersectClassifierSourceAllowlist(admitted, admitted, admitted)).toEqual(new Set(["sec_edgar", "google_news_rss"]));
   });
 
   it("requires an explicit account-use attestation and rejects malformed values", () => {
@@ -70,6 +76,11 @@ describe("external request mode", () => {
       new Set(["sec_edgar"]),
       new Set(),
     )).toEqual(new Set());
+    expect(intersectJevSourceAllowlist(
+      new Set(["sec_company_facts"]),
+      new Set(["sec_company_facts"]),
+      new Set(["sec_company_facts"]),
+    )).toEqual(new Set());
   });
 });
 
@@ -85,7 +96,7 @@ describe("SEC User-Agent configuration", () => {
   it("requires a bounded value with operator contact information", () => {
     expect(secContactUserAgent(undefined)).toBe("");
     expect(secContactUserAgent("generic research desk")).toBe("");
-    expect(secContactUserAgent("analyst@example.com")).toBe("");
+    expect(secContactUserAgent("analyst@example.com")).toBe("Sentiment Desk/0.2.0 analyst@example.com");
     expect(secContactUserAgent("Research Desk analyst@example.com")).toBe("Research Desk analyst@example.com");
     expect(secContactUserAgent(`${"x".repeat(250)} a@example.com`)).toBe("");
     expect(secContactUserAgent("Research\nDesk analyst@example.com")).toBe("");

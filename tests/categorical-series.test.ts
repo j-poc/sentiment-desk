@@ -50,7 +50,7 @@ function sourceInput(sourceItemId: string, at: number, deliveryId?: string): Raw
   return {
     companyId: company.id, kind: "rss", sourceName: "Reuters", sourceUrl: `https://reuters.example/${sourceItemId}`,
     tier: "wire", title: `Acme update ${sourceItemId}`, snippet: "Evidence excerpt from the source record.",
-    publishedAt: at - 60_000, retrievedAt: at - 5, collector: "google_news_rss", sourceItemId,
+    publishedAt: null, aggregatorPublishedAt: at - 60_000, retrievedAt: at - 5, collector: "google_news_rss", sourceItemId,
     publisherName: "Reuters", publisherDomain: "reuters.example", ...(deliveryId ? { deliveryId } : {}),
   };
 }
@@ -130,7 +130,7 @@ describe("Luna categorical trend and source bucket", () => {
 
     const reopened = openDesk(path);
     const raw = (reopened as unknown as { db: DatabaseSync }).db;
-    expect(raw.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+    expect(raw.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
     expect(raw.prepare("SELECT profile_sha256, attempt_id FROM categorical_classifications WHERE observation_id = ?")
       .get(sourceId)).toEqual({ profile_sha256: null, attempt_id: null });
 

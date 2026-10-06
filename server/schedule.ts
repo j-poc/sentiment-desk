@@ -135,6 +135,7 @@ export function startRssPoller(deps: {
                   title: item.title,
                   snippet: item.snippet,
                   publishedAt: item.publishedAt,
+                  aggregatorPublishedAt: item.aggregatorPublishedAt,
                   retrievedAt: Date.now(),
                   scoped: feed.fallbackName === "Yahoo Finance",
                 });

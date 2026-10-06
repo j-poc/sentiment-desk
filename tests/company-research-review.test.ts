@@ -157,7 +157,7 @@ describe("analyst research review persistence", () => {
 
     db = new Desk(path);
     db.seedCompanies([company]);
-    expect((db as unknown as { db: DatabaseSync }).db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 15 });
+    expect((db as unknown as { db: DatabaseSync }).db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 16 });
     expect(db.analystResearchQueue()).toEqual([]);
     expect(db.saveAnalystSourceReview({ observationId: id, companyId: company.id, disposition: "investigate", nextQuestion: "Check source." }))
       .toMatchObject({ observationId: id, disposition: "investigate" });
@@ -178,7 +178,7 @@ describe("analyst research review persistence", () => {
         .toThrow(AnalystResearchQueueLimitError);
       expect(db.analystResearchQueue()).toHaveLength(500);
       expect(db.analystSourceReview(overflowId)).toBeNull();
-      expect((db as unknown as { db: DatabaseSync }).db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 15 });
+      expect((db as unknown as { db: DatabaseSync }).db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 16 });
     } finally { db.close(); }
   });
 });

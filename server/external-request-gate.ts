@@ -7,6 +7,23 @@ export class ExternalRequestPausedError extends Error {
   }
 }
 
+function isPrivateHubRead(request: Request): boolean {
+  try {
+    const url = new URL(request.url);
+    if (request.method !== "GET" || url.protocol !== "http:" || url.username || url.password || url.hash
+      || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return false;
+    if (url.pathname === "/api/v1/sources" && url.search === "") return true;
+    if (url.pathname === "/api/v1/state" && url.searchParams.size === 1
+      && url.searchParams.getAll("include_results").length === 1
+      && url.searchParams.get("include_results") === "false") return true;
+    return /^\/api\/v1\/receipts\/[0-9a-f-]{36}$/i.test(url.pathname)
+      && url.searchParams.size === 1 && url.searchParams.getAll("purpose").length === 1
+      && url.searchParams.get("purpose") === "private_display";
+  } catch {
+    return false;
+  }
+}
+
 /** Install one final, synchronous admission check at the actual fetch boundary. */
 export function installExternalRequestGate(admit: () => boolean): () => void {
   const previousFetch = globalThis.fetch;
@@ -19,7 +36,7 @@ export function installExternalRequestGate(admit: () => boolean): () => void {
     let dispatchedRequests = 0;
     let lastHttpStatus: number | null = null;
     for (let redirectCount = 0; ; redirectCount += 1) {
-      if (!admit()) throw new ExternalRequestPausedError(dispatchedRequests, lastHttpStatus);
+      if (!isPrivateHubRead(request) && !admit()) throw new ExternalRequestPausedError(dispatchedRequests, lastHttpStatus);
       const response = await previousFetch(request, { redirect: "manual" });
       dispatchedRequests += 1;
       lastHttpStatus = response.status;

@@ -66,7 +66,7 @@ function setup(
     db, judge: judge ? async (state, prepared) => ({ ...(await judge(state, prepared)), httpStatus: 200 }) : null,
     provider: "typesafe", hub, health,
     engineLabel: "jev-latest", inputPricePerMTok: 0.042, concurrency: options.concurrency ?? 1,
-    allowedCollectors: options.allowedCollectors ?? new Set(["google_news_rss"]),
+    allowedCollectors: options.allowedCollectors ?? new Set([options.alert ? "finnhub" : "google_news_rss"]),
     externalRequestsEnabled: options.externalRequestsEnabled,
     dailyBudget: options.dailyBudget ?? {
       utcDay: () => "2026-09-28", maxRequests: 100, maxRequestBytes: 1_000_000,
@@ -74,17 +74,20 @@ function setup(
     alert: options.alert,
   });
   pipelines.push(pipeline);
+  const sourceCollector = options.alert ? "finnhub" : "google_news_rss";
   const source: RawMention = {
-    companyId: company.id, kind: "rss", sourceName: "Reuters", sourceUrl: "https://reuters.com/acme",
+    companyId: company.id, kind: options.alert ? "finnhub" : "rss", sourceName: "Reuters", sourceUrl: "https://reuters.com/acme",
     tier: "wire", title: "Acme announces a product launch", snippet: "A new product is available.",
-    publishedAt: Date.now() - 5_000, retrievedAt: Date.now(), collector: "google_news_rss",
+    publishedAt: options.alert ? Date.now() - 5_000 : null,
+    aggregatorPublishedAt: options.alert ? null : Date.now() - 5_000,
+    retrievedAt: Date.now(), collector: sourceCollector,
     sourceItemId: "reuters-acme-product", publisherName: "Reuters", publisherDomain: "reuters.com",
-    adapterVersion: "google_news_rss/1",
+    adapterVersion: `${sourceCollector}/1`,
   };
   source.deliveryId = db.recordDelivery({
-    collector: "google_news_rss", companyId: company.id, requestKey: "test:source-receipt",
+    collector: sourceCollector, companyId: company.id, requestKey: "test:source-receipt",
     startedAt: source.retrievedAt - 1_000, completedAt: source.retrievedAt + 1_000,
-    result: "success", parsedItemCount: 1, responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
+    result: "success", parsedItemCount: 1, responseDigest: "fixture-only", adapterVersion: `${sourceCollector}/1`,
   });
   return { db, pipeline, source, health, hub, dbPath: join(directory, "desk.db") };
 }
@@ -150,6 +153,7 @@ describe("Jev pipeline recovery", () => {
         companyId: company.id,
         title: source.title,
         publishedAt: source.publishedAt,
+        aggregatorPublishedAt: source.aggregatorPublishedAt,
         retrievedAt: source.retrievedAt,
         status: "pending",
       });
@@ -378,6 +382,37 @@ describe("Jev pipeline recovery", () => {
     });
     try {
       pipeline.ingest(source);
+      await pipeline.waitForIdle();
+      expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("scored");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { db.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("does not treat a fresh RSS feed date as article publication freshness for alerts", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const answers = fixtureAnswers();
+    answers.material = { type: "noul", noul: 1 };
+    answers.magnitude = { type: "noul", noul: 1 };
+    answers.surprise = { type: "noul", noul: 1 };
+    const { db, pipeline, source } = setup(async () => ({
+      answers, model: "jev-1.13.0", inputTokens: 100, outputTokens: 20, latencyMs: 10,
+    }), {
+      allowedCollectors: new Set(["google_news_rss"]),
+      alert: { webhookUrl: "https://alerts.invalid/hook", eventScore: 65, impact: 55, freshMinutes: 15 },
+    });
+    const retrievedAt = Date.now();
+    const feedReceipt = db.recordDelivery({
+      collector: "google_news_rss", companyId: company.id, requestKey: "test:rss-alert-source",
+      startedAt: retrievedAt - 1_000, completedAt: retrievedAt, result: "success", parsedItemCount: 1,
+      adapterVersion: "google_news_rss/1",
+    });
+    try {
+      pipeline.ingest({
+        ...source, kind: "rss", collector: "google_news_rss", sourceItemId: "rss-feed-clock-alert",
+        publishedAt: null, aggregatorPublishedAt: retrievedAt - 5_000, retrievedAt,
+        adapterVersion: "google_news_rss/1", deliveryId: feedReceipt,
+      });
       await pipeline.waitForIdle();
       expect(db.mentionsForCompany(company.id, 0, 10)[0]?.status).toBe("scored");
       expect(fetch).not.toHaveBeenCalled();

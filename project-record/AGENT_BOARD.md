@@ -1,21 +1,24 @@
-# Sentiment Desk continuation board — 2026-10-05
+# Sentiment Desk continuation board — 2026-10-06
 
 ## Current usability and checkpoint status
 
 | Owner | Scope | Status | Evidence / next |
 |---|---|---|---|
-| `/root` | Real-data usability acceptance, integration, verification, trace, GitHub checkpoint | In progress | Candidate is HEAD `39a028f9e5e8e197481017204c4d22c187c3e92c` plus the reviewed worktree changes. No application data, credentials, or private evaluation artifacts are staged. User-path trace: `TRACE-20261005-usability-path`. A clean reviewed checkpoint is still required. |
-| `/root/full_build_usability_review` | Independent whole-product and investor usability review | Complete | FAIL about 4/10. The current saved-data path is usable for selected-company source review, but zero-ticker small-cap discovery, current Luna output, outcome evidence, and other acceptance gates remain open. |
-| `/root/materiality_usability_judge` | Independent financial-product review of model-material labels | Complete | Recommended naming the Jev badge and disclosing the combined Jev/Luna filter rules; advised against tuning issuer identity from the small nonrepresentative sample. |
-| `/root` | Rendered saved-data UI verification | Complete for declared path | In-app preview confirms filter disclosure, one-action held-match recovery, source attribution and receipt, chart selection, and explicit stale/empty states. See `project-record/4-log/2026-10-04-issuer-review-usability.md`. No network/provider requests or canonical database writes. |
-| `/root` | Local checks | Complete for declared code checks | 640 tests across 82 files, typecheck, build, `git diff --check`, production dependency audit, and secret scan pass. Gitleaks scanned 11.74 MB without leaks and skipped ignored `data/desk.db` (97 MB), which is excluded from the checkpoint. |
-| `/root` | Operational evidence gates | Open | `live_data_etl_gate.py check` FAIL: evidence is not PASS and is stale for the current contract, adapters, and code; required keyless live smoke is not passing. `engineering_gate.py check` FAIL: missing evidence receipt. No live Luna output/usage evidence, no legacy-unknown usage reconciliation, and no observed investor/analyst outcomes. |
-| `/root` | Product acceptance | Open | Fixed 24-company roster still does not provide source-backed no-ticker small-cap discovery. Real SEC facts and current verified market prices are absent from the saved preview. Opportunity Radar remains disabled. |
+| `/root` | Stock-selection usability, integration, verification, trace, GitHub checkpoint | In progress | Fixed both Desk auto-scroll after archive load and My Research ticker selection that previously left the queue visible. Rendered mobile-picker and desktop-watchlist transitions now show the selected issuer in Desk. See `project-record/4-log/2026-10-06-investor-navigation-usability.md`. Checkpoint will contain reviewed source only; local database and private evidence stay excluded. |
+| `/root/post_fix_usability_review` | Independent full-build and post-fix navigation review | Complete | Confirmed route and scroll behavior are coherent in code and covered by native regressions; whole product still fails readiness because current Luna output, tickerless discovery, fundamental facts, user outcomes, and live receipts remain unavailable. Rendered proof was completed in the parent browser. |
+| `/root/finance_data_diff_review` | Whole-candidate source and financial-data boundary review | Complete | No evidenced secret or restricted filing data in the reviewed candidate; remaining issues are product acceptance gaps. The new navigation change received a separate focused review. |
+| `/root` | Current scoped operational evidence | Open | Fresh matching ETL evidence passes every declared check except `sec_filings_current_hub_receipt`; the shared Hub still has no supported current all-filers route. The latest source retrieval remains October 4. No model or source request was made in the rendered review. |
+| `/root` | Whole-product acceptance | Open | This focused usability fix does not deliver current Luna classifications, programmatic tickerless discovery, persisted SEC fundamentals, complete followed-company findings, legacy-unknown usage reconciliation, or observed intended-user outcomes. Opportunity Radar remains disabled. |
 
-The current verified product-data preview is `http://127.0.0.1:8879/`. It serves the
-production build against an isolated backup of real retained rows with external
-requests disabled. It is left open for review. No synthetic or demo rows were
-added to the product database.
+The user explicitly requested regular checkpoints to the existing GitHub
+branch. The current destination is the existing `j-poc/sentiment-desk`
+repository and the in-app UI remains available at `http://127.0.0.1:8787/`.
+
+The UI at `http://127.0.0.1:8787/` is the built production client over the local
+saved-data runtime. External source and classifier requests are disabled. No
+synthetic or demo rows were added to the product database. ADBE selection and
+its historical chart were freshly rendered: 17 saved rows are pending Luna;
+the labeled Jev archive shows 51 records in 20 buckets and is seven days old.
 
 ## Historical owners and prior reviews — 2026-10-04
 

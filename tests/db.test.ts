@@ -35,12 +35,22 @@ function score(eventType: string): MentionScore {
 }
 
 function mention(overrides: Partial<RawMention> = {}): RawMention {
+  const collector = overrides.collector ?? "google_news_rss";
+  const feedTime = overrides.aggregatorPublishedAt !== undefined
+    ? overrides.aggregatorPublishedAt
+    : overrides.publishedAt !== undefined ? overrides.publishedAt : Date.now() - 60_000;
+  const rss = collector === "google_news_rss" || collector === "yahoo_finance_rss";
+  const providerObserved = collector === "gdelt_doc_api";
+  const retrievedAt = overrides.retrievedAt ?? (rss || providerObserved ? feedTime ?? Date.now() : Date.now());
   return {
-    companyId: company.id, kind: "rss", sourceName: "Reuters", sourceUrl: "https://reuters.com/a",
-    tier: "wire", title: "Acme expands manufacturing capacity", snippet: "New plant announced",
-    publishedAt: Date.now() - 60_000, retrievedAt: Date.now(), collector: "google_news_rss",
+    companyId: company.id, kind: rss ? "rss" : collector === "finnhub" ? "finnhub" : "rss", sourceName: "Reuters", sourceUrl: "https://reuters.com/a",
+    tier: "wire", title: "Acme expands manufacturing capacity", snippet: "New plant announced", collector,
     sourceItemId: "reuters-a", publisherName: "Reuters", publisherDomain: "reuters.com",
     ...overrides,
+    publishedAt: rss || providerObserved ? null : overrides.publishedAt ?? Date.now() - 60_000,
+    aggregatorPublishedAt: rss ? feedTime : overrides.aggregatorPublishedAt,
+    providerObservedAt: providerObserved ? overrides.providerObservedAt ?? feedTime : overrides.providerObservedAt,
+    retrievedAt,
   };
 }
 
@@ -320,7 +330,7 @@ describe("Desk observation and judgment storage", () => {
       expect(listed?.publisherName).toBe("Reuters");
       expect(listed?.publisherDomain).toBeNull();
       expect(listed?.source.publisherDomain).toBeNull();
-      expect(radar?.publisherDomain).toBeNull();
+      expect(radar).toBeUndefined();
     } finally {
       db.close();
     }
@@ -712,9 +722,9 @@ describe("Desk observation and judgment storage", () => {
         error: "global bootstrap failure",
       });
       add({
-        collector: "sec_edgar", companyId: company.id, requestKey: "sec-fundamentals-companyfacts", startedAt,
+        collector: "sec_company_facts", companyId: company.id, requestKey: "sec-fundamentals-companyfacts", startedAt,
         completedAt: startedAt + 6, result: "success", parsedItemCount: 4,
-        adapterVersion: "sec-fundamentals-companyfacts/2",
+        adapterVersion: "sec-fundamentals-companyfacts/3",
       });
       add({
         collector: "finnhub", companyId: company.id, requestKey: "finnhub-news", startedAt,

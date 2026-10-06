@@ -8,6 +8,7 @@ import { withReadDeadline } from "./bounded-read.js";
 import type { ScoreBucketCoverage } from "../../../shared/score-bucket-coverage.js";
 import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../../../shared/company-fundamentals.js";
 import type { AnalystResearchDisposition, AnalystResearchDispositionChange, AnalystSourceReview } from "../../../shared/analyst-research.js";
+import type { SecFilingsInboxView } from "../../../shared/sec-filings-inbox.js";
 
 /** Shared identity guard used before applying any selected-company response. */
 export function isCurrentCompanySelection(requestCompanyId: string, selectedCompanyId: string | null): boolean {
@@ -26,6 +27,16 @@ export async function refreshCompanyFundamentals(
     `/api/companies/${encodeURIComponent(companyId)}/fundamentals/refresh`,
     { method: "POST", body: JSON.stringify({ requestKey }) },
   );
+}
+
+export function getSecFilingsInbox(signal?: AbortSignal): Promise<SecFilingsInboxView> {
+  return getJSON<SecFilingsInboxView>("/api/sec-filings-inbox", signal);
+}
+
+export function activateSecFilingsInbox(): Promise<SecFilingsInboxView> {
+  return requestJSON<SecFilingsInboxView>("/api/sec-filings-inbox/activate", {
+    method: "POST", body: JSON.stringify({ confirmUse: true }),
+  });
 }
 
 export interface AnalystResearchQueueItem extends AnalystSourceReview {
@@ -177,7 +188,7 @@ export interface CategoricalBucketEvidencePage {
   nextCursor: CategoricalBucketCursor | null;
 }
 export type SourceTier = "wire" | "major" | "trade" | "blog" | "social" | "filing";
-export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "finnhub" | "reddit" | "x" | "yahoo_chart";
+export type CollectorId = "legacy_unknown" | "google_news_rss" | "yahoo_finance_rss" | "yahoo_quote" | "gdelt_doc_api" | "sec_edgar" | "sec_company_facts" | "finnhub" | "reddit" | "x" | "yahoo_chart";
 export interface SecDocumentAttempt { role: "8k_primary" | "earnings_exhibit_99_1"; url: string; startedAt: number; completedAt: number; retrievedAt: number | null; httpStatus: number | null; outcome: "success" | "empty" | "failed" | "invalid" | "rate_limited" | "paused"; bodyBytes: number | null; bodySha256: string | null; excerpt: string; errorCode: string | null; }
 export interface SecDocumentContext { version: "sec-document-context/1"; cik: string; accessionNo: string; primaryUrl: string; acceptedAt: number; filedAt: number | null; classificationInputStatus: "ready" | "incomplete"; selectionReason: "primary_selected" | "unique_exhibit_selected" | "missing_exhibit" | "ambiguous_exhibit" | "invalid_exhibit_link" | "primary_unavailable" | "exhibit_unavailable" | "unverified_event_link" | "storage_paused"; item202Link: { kind: "linked"; itemCode: "2.02"; exhibitNumber: "99.1"; supportingText: string } | { kind: "unverified"; reason: string } | null; selectedRole: SecDocumentAttempt["role"] | null; selectedUrl: string | null; documents: SecDocumentAttempt[]; }
 
@@ -224,10 +235,11 @@ export interface Mention {
   snippet: string;
   issuerIdentityStrong?: boolean;
   publishedAt: number | null;
+  aggregatorPublishedAt?: number | null;
   providerObservedAt: number | null;
   retrievedAt: number;
   ingestedAt: number;
-  timeBasis: "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown";
+  timeBasis: "publisher_declared" | "aggregator_declared" | "provider_observed" | "unknown" | "legacy_unknown";
   collector: CollectorId;
   publisherName: string;
   publisherDomain: string | null;
@@ -248,6 +260,17 @@ export interface MentionPage {
   nextCursor: { orderAt: number; ingestedAt: number; id: string } | null;
   setAsideCount: number;
   issuerIdentityReviewCount: number;
+}
+
+/** Read one page of retained company history; this route never starts collection. */
+export function getCompanySavedHistoryPage(
+  companyId: string,
+  cursor: MentionPage["nextCursor"] = null,
+  signal?: AbortSignal,
+): Promise<MentionPage> {
+  const params = new URLSearchParams({ filter: "history", limit: "100", includeDismissed: "true" });
+  if (cursor != null) params.set("cursor", JSON.stringify(cursor));
+  return getJSON<MentionPage>(`/api/companies/${encodeURIComponent(companyId)}/mentions-page?${params}`, signal);
 }
 
 export interface FollowedCompanyBaseline {
@@ -477,6 +500,13 @@ export interface SeriesPoint {
   recordImpactMax: number | null;
   latestRecordScoredAtMs: number | null;
   bucketSnapshotKey: string | null;
+  /** Saved receipt/title cues, present only for historical Jev archive buckets. */
+  sourceLineage?: {
+    recordCount: number;
+    receiptLinkedRecordCount: number;
+    repeatedTitleRecordCount: number;
+    exactNormalizedTitleCount: number;
+  };
   /** Compatibility aliases retained while chart and watchlist consumers migrate. */
   t: number;
   v: number | null;
@@ -495,6 +525,23 @@ export interface SeriesResult {
   populatedBucketCount: number;
   points: SeriesPoint[];
   latestScoreAvailableAt: number | null;
+}
+
+export interface JevHistoryWeekResult {
+  companyId: string;
+  weekStartMs: number;
+  fromMs: number;
+  throughMs: number;
+  points: SeriesPoint[];
+  latestEligibleScoreAtMs: number;
+  olderWeekStartMs: number | null;
+  newerWeekStartMs: number | null;
+  latestWeekStartMs: number;
+}
+
+export async function getJevHistoryWeek(companyId: string, week: number | "latest", signal?: AbortSignal): Promise<JevHistoryWeekResult> {
+  const suffix = week === "latest" ? "latest" : String(week);
+  return getJSON<JevHistoryWeekResult>(`/api/companies/${encodeURIComponent(companyId)}/jev-history-week?week=${encodeURIComponent(suffix)}`, signal);
 }
 
 export interface Quote {

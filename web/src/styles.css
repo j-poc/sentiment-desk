@@ -34,6 +34,12 @@ body {
   font-size: 13px;
 }
 
+/* Keep the saved-data warning visible on narrow screens while reducing the
+   connection indicator to its accessible status dot before the header wraps. */
+@media (max-width: 360px) {
+  .header-connectivity-label { display: none; }
+}
+
 /* Numerals: mono + tabular, the terminal convention. */
 .tabnum,
 .num {
@@ -55,6 +61,38 @@ body {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0.006));
   border: 1px solid var(--color-desk-line);
   border-radius: 10px;
+}
+
+/* Source attribution and freshness are decision context, so keep every field
+   readable when a feed card is rendered in a narrow research pane. */
+.mention-card-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 6px 10px;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.35;
+}
+.mention-card { width: 100%; container-type: inline-size; }
+.mention-card-meta-item {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+.mention-card-meta-label {
+  color: rgba(232, 235, 242, 0.42);
+  font-size: 9px;
+  line-height: 1.2;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+.mention-card-publisher { min-width: 0; max-width: 100%; overflow-wrap: anywhere; color: rgba(232, 235, 242, 0.78); }
+@container (min-width: 560px) {
+  .mention-card-meta { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 .panel-head {
@@ -129,7 +167,8 @@ body {
 }
 
 .chart-panel-meta > span {
-  white-space: nowrap;
+  min-width: 0;
+  white-space: normal;
 }
 
 .chart-canvas {
@@ -339,6 +378,85 @@ body {
   background: rgba(170, 184, 205, 0.035);
 }
 
+.evidence-quick-access {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  margin: 0 0 7px;
+  padding: 6px 9px;
+  border: 1px solid rgba(170, 184, 205, 0.13);
+  border-radius: 7px;
+  background: rgba(170, 184, 205, 0.025);
+  color: rgba(232, 235, 242, 0.67);
+  font-size: 10.5px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.evidence-quick-access > span {
+  min-width: 0;
+}
+
+.evidence-quick-access > button {
+  flex: 0 0 auto;
+  color: rgba(134, 239, 172, 0.92);
+  text-decoration: underline;
+  text-decoration-color: rgba(134, 239, 172, 0.35);
+  text-underline-offset: 2px;
+}
+
+.evidence-quick-access > button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.historical-archive-summary-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  align-items: baseline;
+}
+
+.historical-archive-summary-main time {
+  color: rgba(232, 235, 242, 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+.historical-archive-controls > summary {
+  min-height: 44px;
+  padding: 12px;
+  color: rgba(232, 235, 242, 0.72);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.historical-archive-controls > summary:focus-visible,
+.historical-archive-control-buttons > button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.historical-archive-control-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 10px 10px;
+}
+
+.historical-archive-control-buttons > button {
+  min-height: 36px;
+}
+
+@media (max-width: 520px) {
+.evidence-quick-access {
+    align-items: flex-start;
+    padding: 5px 7px;
+    font-size: 10px;
+  }
+}
+
 .evidence-record-list {
   display: grid;
   gap: 3px;
@@ -438,6 +556,16 @@ body {
   line-height: 1.35;
 }
 
+.desk-operations-summary-mobile {
+  display: none;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(232, 235, 242, 0.62);
+}
+
 .desk-operations > summary::-webkit-details-marker,
 .desk-market-activity > summary::-webkit-details-marker {
   display: none;
@@ -451,6 +579,11 @@ body {
 
 .desk-operations-content {
   padding: 0 9px 9px;
+}
+
+@media (max-width: 720px) {
+  .desk-operations-summary-desktop { display: none; }
+  .desk-operations-summary-mobile { display: block; }
 }
 
 .desk-market-activity {
@@ -470,6 +603,38 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.selected-company-research-content {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.selected-company-chart,
+.selected-company-evidence {
+  min-width: 0;
+}
+
+@media (max-width: 360px) {
+  .chart-evidence-window-label { display: none; }
+  .chart-evidence-window .chart-range-control { gap: 4px; padding-inline: 6px; }
+  .mention-card-meta {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "publisher retrieved" "source source" "impact impact";
+    gap: 5px 12px;
+  }
+  .mention-card-meta-publisher { grid-area: publisher; }
+  .mention-card-meta-source-time { grid-area: source; }
+  .mention-card-meta-retrieved { grid-area: retrieved; align-items: flex-end; text-align: right; }
+  .mention-card-meta-impact { grid-area: impact; }
+}
+
+@media (min-width: 1280px) {
+  .selected-company-research-content {
+    grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.8fr);
+    align-items: start;
+  }
 }
 
 .evidence-breadth-heading {
@@ -887,7 +1052,12 @@ body {
   .selected-company {
     align-items: stretch;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
+  }
+
+  .selected-company-context {
+    font-size: 10.5px;
+    line-height: 1.25;
   }
 
   .chart-canvas-comparison {
@@ -1056,6 +1226,8 @@ body {
 .categorical-trend-empty p { margin:4px 0 0; color:rgba(203,213,225,.58); }
 .categorical-empty-mark { display:grid; flex:0 0 30px; width:30px; height:30px; place-items:center; border:1px solid rgba(148,163,184,.25); border-radius:9px; color:rgba(203,213,225,.65); font-size:20px; }
 .categorical-empty-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
+.categorical-history-action { display:inline-flex; flex-direction:column; align-items:flex-start; gap:2px; max-width:100%; text-align:left; white-space:normal; }
+.categorical-history-action-detail { color:rgba(203,213,225,.58); font-size:9px; line-height:1.35; }
 .categorical-blocked-reason { color:rgba(253,230,138,.82)!important; }
 .categorical-trend-error { border-color:rgba(251,113,133,.2); color:rgba(254,205,211,.86); }
 .categorical-trend-error button { margin-left:8px; }

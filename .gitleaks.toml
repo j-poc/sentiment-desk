@@ -1,9 +1,12 @@
-title = "Sentiment Desk secret scan"
-minVersion = "v8.25.0"
+title = "Sentiment Desk source scan"
 
 [extend]
 useDefault = true
 
 [allowlist]
-description = "Local mutable databases and ignored private run artifacts are not source and are never checkpointed."
-paths = ['''(^|/)data/''', '''(^|/)\.engineering-evidence/''']
+description = "Exclude Git-ignored local task records, evidence and runtime databases; they may contain user prompts, provider material or credentials and are never publishable source."
+paths = [
+  '''(^|/)\.quality-loop/''',
+  '''(^|/)\.engineering-evidence/''',
+  '''(^|/)data/''',
+]

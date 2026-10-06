@@ -28,7 +28,8 @@ describe("parseRss", () => {
     expect(first?.sourceName).toBe("Reuters");
     expect(first?.publisherDomain).toBe("reuters.com");
     expect(first?.tier).toBe("wire");
-    expect(first?.publishedAt).toBe(Date.parse("Wed, 23 Sep 2026 10:00:00 GMT"));
+    expect(first?.publishedAt).toBeNull();
+    expect(first?.aggregatorPublishedAt).toBe(Date.parse("Wed, 23 Sep 2026 10:00:00 GMT"));
     expect(first?.snippet).toContain("record data-center revenue");
     expect(first?.url).toContain("news.google.com");
 

@@ -9,3 +9,4 @@ output/
 !.env.example
 *.local
 .DS_Store
+.quality-loop/

@@ -13,6 +13,9 @@ export function MentionFeed({
   expandFirstGroup = false,
   onClearGroupFilter,
   onRetry,
+  tickerOf,
+  knownTickers = [],
+  companyNameOf,
 }: {
   mentions: Mention[];
   onOpen: (mention: Mention) => void;
@@ -24,6 +27,9 @@ export function MentionFeed({
   expandFirstGroup?: boolean;
   onClearGroupFilter?: () => void;
   onRetry?: () => void;
+  tickerOf?: (companyId: string) => string;
+  knownTickers?: readonly string[];
+  companyNameOf?: (companyId: string) => string;
 }) {
   const allEntries = groupExactHeadlineRepeats(mentions);
   const entries = filterExactHeadlineGroups(allEntries, groupFilter);
@@ -70,7 +76,7 @@ export function MentionFeed({
         </p>
       )}
       {!error && loaded && !loading && entries.map((entry, index) => entry.kind === "mention" ? (
-        <MentionCard key={entry.mention.id} m={entry.mention} dense onOpen={onOpen} />
+        <MentionCard key={entry.mention.id} m={entry.mention} dense onOpen={onOpen} tickerOf={tickerOf} knownTickers={knownTickers} companyNameOf={companyNameOf} />
       ) : entry.kind === "pending-title-repeats" ? (
         <details className="exact-title-group pending-title-group" key={entry.mentions[0]!.id} open={expandFirstGroup && index === 0}>
           <summary aria-label={`Unclassified exact title group “${entry.title}”: ${entry.mentions.length} loaded pending rows`}>
@@ -86,7 +92,7 @@ export function MentionFeed({
           </summary>
           <div className="exact-title-records">
             {entry.mentions.map((mention) => (
-              <MentionCard key={mention.id} m={mention} dense onOpen={onOpen} />
+              <MentionCard key={mention.id} m={mention} dense onOpen={onOpen} tickerOf={tickerOf} knownTickers={knownTickers} companyNameOf={companyNameOf} />
             ))}
           </div>
         </details>
@@ -109,7 +115,7 @@ export function MentionFeed({
           </summary>
           <div className="exact-title-records">
             {entry.mentions.map((mention) => (
-              <MentionCard key={mention.id} m={mention} dense onOpen={onOpen} />
+              <MentionCard key={mention.id} m={mention} dense onOpen={onOpen} tickerOf={tickerOf} knownTickers={knownTickers} companyNameOf={companyNameOf} />
             ))}
           </div>
         </details>

@@ -45,10 +45,48 @@ function renderDrawer(
     onClose: () => undefined,
     retryAvailability,
     onOpenOperations,
+    tickerOf: (companyId) => companyId === "walmart" ? "WMT" : "LLY",
+    companyNameOf: (companyId) => companyId === "walmart" ? "Walmart Inc." : "Eli Lilly and Company",
   }));
 }
 
 describe("MentionDrawer retry availability", () => {
+  it("warns when a saved item filed under one issuer explicitly names another ticker", () => {
+    const mention = { ...failedMention, companyId: "lilly", title: "Twist Bioscience (TWST) stock could re-rate" };
+    const html = renderDrawer(retryAvailabilityFor(null), mention);
+    expect(html).toContain("filed under LLY and also names TWST");
+    expect(html).toContain("Confirm which company the source is about");
+  });
+
+  it("keeps a headline-led issuer relevance cue in the saved source detail", () => {
+    const mention = {
+      ...failedMention,
+      companyId: "walmart",
+      title: "Target’s Holiday Blitz: Slashing Prices to Capture Market Share",
+      snippet: "Target cut prices ahead of the holidays as pricier rival Walmart prepared for promotions.",
+    };
+    const html = renderDrawer(retryAvailabilityFor(null), mention);
+    expect(html).toContain("headline leads with Target");
+    expect(html).toContain("does not determine whether the article is relevant");
+  });
+
+  it("explains a saved headline and link-path disagreement without claiming to verify the linked page", () => {
+    const mention = {
+      ...failedMention,
+      companyId: "walmart",
+      title: "McDonald's AI wants to know how much you're willing to pay",
+      snippet: "Walmart’s CEO just put in writing that his stores won’t do this.",
+      source: {
+        ...failedMention.source,
+        url: "https://www.thestreet.com/retail/walmart-makes-a-pricing-promise-other-retailers-havent?.tsrc=rss",
+      },
+    } satisfies Mention;
+    const html = renderDrawer(retryAvailabilityFor(null), mention);
+    expect(html).toContain("headline leads with McDonald");
+    expect(html).toContain("excerpt and URL path name Walmart Inc.");
+    expect(html).toContain("URL path does not verify page contents");
+  });
+
   it("puts SEC status and lineage before a collapsed saved excerpt", () => {
     const excerpt = "Quarterly results excerpt with revenue and margin details.";
     const context = {

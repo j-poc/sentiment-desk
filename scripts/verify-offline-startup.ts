@@ -88,9 +88,7 @@ async function verifyCollectorGate(
   companiesPath: string,
   collector: typeof sourceCollectors[number],
   options: {
-    jev?: { apiKey: string; allowedCollectors: string; expectedEnabled: boolean };
     sourceRightsApproved?: boolean;
-    typesafeAccountUseApproved?: boolean;
     luna?: { apiKey: string; allowedCollectors: string; accountApproved: boolean; maxDailyCostUsd: string; expectedEnabled: boolean };
   } = {},
 ): Promise<void> {
@@ -118,18 +116,18 @@ async function verifyCollectorGate(
       EXTERNAL_REQUESTS_ENABLED: "true",
       EXTERNAL_SOURCE_COLLECTORS: collector,
       SOURCE_RIGHTS_APPROVED_COLLECTORS: options.sourceRightsApproved === false ? "" : collector,
-      CLASSIFICATION_PROVIDER: options.luna ? "openai_luna" : "typesafe",
+      CLASSIFICATION_PROVIDER: "openai_luna",
       OPENAI_API_KEY: options.luna?.apiKey ?? "",
       OPENAI_ACCOUNT_USE_APPROVED: options.luna?.accountApproved ? "true" : "false",
       OPENAI_ALLOWED_COLLECTORS: options.luna?.allowedCollectors ?? "",
       OPENAI_MAX_REQUESTS_PER_DAY: options.luna ? "1" : "0",
       OPENAI_MAX_REQUEST_BYTES_PER_DAY: options.luna ? "40000" : "0",
       OPENAI_MAX_DAILY_COST_USD: options.luna?.maxDailyCostUsd ?? "0",
-      TYPESAFE_ACCOUNT_USE_APPROVED: options.typesafeAccountUseApproved ? "true" : "false",
-      TYPESAFE_API_KEY: options.jev?.apiKey ?? "",
-      TYPESAFE_ALLOWED_COLLECTORS: options.jev?.allowedCollectors ?? "",
-      TYPESAFE_MAX_REQUESTS_PER_DAY: options.jev ? "10" : "0",
-      TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: options.jev ? "100000" : "0",
+      TYPESAFE_ACCOUNT_USE_APPROVED: "false",
+      TYPESAFE_API_KEY: "offline-verifier-unused",
+      TYPESAFE_ALLOWED_COLLECTORS: collector,
+      TYPESAFE_MAX_REQUESTS_PER_DAY: "10",
+      TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: "100000",
       SEC_USER_AGENT: "Offline verifier verifier@example.invalid",
       FINNHUB_API_KEY: "offline-verifier-unused",
       REDDIT_CLIENT_ID: "offline-verifier-unused",
@@ -159,7 +157,9 @@ async function verifyCollectorGate(
     let health: Record<string, unknown> | null = null;
     const healthDeadline = Date.now() + 10_000;
     while (Date.now() < healthDeadline && health == null) {
-      if (exitResult != null) throw new Error(`${collector} server exited before health check (${exitResult})`);
+      if (exitResult != null) {
+        throw new Error(`${collector} server exited before health check (${exitResult}); stderr: ${stderr.slice(-2_000)}`);
+      }
       try {
         const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(500) });
         if (response.ok) health = await response.json() as Record<string, unknown>;
@@ -186,7 +186,8 @@ async function verifyCollectorGate(
     const sourceApproval = counters.sourceApproval;
     assert.ok(sourceApproval, "health should disclose source-use and account-approval gates");
     assert.deepEqual(sourceApproval.blockedRequestedCollectors, sourceIsApproved ? [] : [collector]);
-    assert.equal(sourceApproval.typesafeAccountUseApproved, options.typesafeAccountUseApproved ?? false);
+    assert.equal(sourceApproval.typesafeAccountUseApproved, false,
+      "retired Jev account use must stay disabled while Luna is the selected classifier");
     const expectedCounter: Record<string, string> = {
       google_news_rss: "rss", yahoo_finance_rss: "rss", gdelt_doc_api: "gdelt", yahoo_quote: "quotes",
       sec_edgar: "sec", finnhub: "finnhub", reddit: "reddit", x: "x",
@@ -197,13 +198,13 @@ async function verifyCollectorGate(
         : sourceIsApproved && source === collector;
       assert.equal(counters[counter]?.enabled, enabled, `${counter} health counter must reflect ${source} allowlist state`);
     }
-    assert.equal(counters.jev?.enabled, options.jev?.expectedEnabled ?? false,
-      "Jev dispatch must match the account approval, key, budget, and three-way source allowlist intersection");
+    assert.equal(counters.jev?.enabled, false,
+      "retired Jev dispatch must remain disabled while Luna is the selected classifier");
 
     const selectedClassifier = (health.health as { classifier?: { provider: string; enabled: boolean } }).classifier;
     assert.ok(selectedClassifier, "the selected classifier must be disclosed");
-    assert.equal(selectedClassifier.provider, options.luna ? "openai_luna" : "typesafe");
-    assert.equal(selectedClassifier.enabled, options.luna?.expectedEnabled ?? options.jev?.expectedEnabled ?? false);
+    assert.equal(selectedClassifier.provider, "openai_luna");
+    assert.equal(selectedClassifier.enabled, options.luna?.expectedEnabled ?? false);
     if (options.luna) assert.equal(counters.jev?.enabled, false, "Luna selection must never enable a TypeSafe fallback");
 
     if (sourceIsApproved && collector === "yahoo_chart") {
@@ -359,36 +360,15 @@ async function main(): Promise<void> {
     const singleCompanyPath = path.join(directory, "one-real-company.json");
     writeFileSync(singleCompanyPath, JSON.stringify({ companies: [apple] }));
     for (const collector of sourceCollectors) await verifyCollectorGate(repo, singleCompanyPath, collector);
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", {
-      jev: {
-        apiKey: "unused-offline-verification-key",
-        allowedCollectors: "google_news_rss",
-        expectedEnabled: false,
-      },
-    });
     await verifyCollectorGate(repo, singleCompanyPath, "finnhub", { sourceRightsApproved: false });
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", {
-      jev: {
-        apiKey: "unused-offline-verification-key",
-        allowedCollectors: "sec_edgar",
-        expectedEnabled: false,
-      },
-    });
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", {
-      jev: {
-        apiKey: "unused-offline-verification-key",
-        allowedCollectors: "sec_edgar",
-        expectedEnabled: true,
-      },
-      typesafeAccountUseApproved: true,
-    });
+    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar");
     const lunaGate = { apiKey: "unused-offline-verification-key", allowedCollectors: "sec_edgar", accountApproved: true, maxDailyCostUsd: "1", expectedEnabled: true };
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, apiKey: "", expectedEnabled: false } });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, accountApproved: false, expectedEnabled: false } });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, allowedCollectors: "google_news_rss", expectedEnabled: false } });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, maxDailyCostUsd: "0", expectedEnabled: false } });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: lunaGate });
-    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, a missing source approval made zero fetches, and Jev stayed disabled without account-use attestation or a matching source allowlist. Luna gates separately required a key, account approval, approved source overlap and a nonzero dollar cap, with no TypeSafe fallback. All outbound fetches were intercepted before network access.`);
+    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, a missing source approval made zero fetches, and the selected classifier stays GPT-6 Luna even when the retired Jev adapter is separately configured. Luna gates required a key, account approval, approved source overlap and a nonzero dollar cap, with no TypeSafe fallback. All outbound fetches were intercepted before network access.`);
   } finally {
     try {
       if (child && exitResult == null) {
@@ -412,6 +392,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
   process.exitCode = 1;
 });

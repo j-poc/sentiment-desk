@@ -42,7 +42,7 @@ export function StatusBar({
 }: {
   health: HealthDTO | null;
   session: SessionInfo;
-  connected: boolean;
+  connected: boolean | null;
   tape: Mention[];
 }) {
   const engine = health
@@ -57,11 +57,17 @@ export function StatusBar({
     <footer className="flex h-[26px] shrink-0 items-center gap-2 whitespace-nowrap border-t border-desk-line bg-black/60 px-2 text-[9px] text-white/40 sm:gap-4 sm:px-4 sm:text-[10px]">
       <span className="tabnum">v{health?.version ?? "0.2.0"}</span>
       <span
+        aria-live="polite"
+        aria-atomic="true"
         className="flex items-center gap-1.5"
-        title="The local desk app is connected; source collection status is shown separately."
+        title={connected == null
+          ? "Connecting to the local desk; source collection status is shown separately."
+          : connected
+            ? "The local desk event stream is connected; source collection status is shown separately."
+            : "The local desk event stream is disconnected. Saved data may remain available while automatic reconnection is attempted."}
       >
-        <span className={`h-1.5 w-1.5 rounded-full ${connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
-        {connected ? "app connected" : "app disconnected"}
+        <span className={`h-1.5 w-1.5 rounded-full ${connected == null ? "bg-amber-300" : connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
+        {connected == null ? "app connecting" : connected ? "app connected" : "app disconnected"}
       </span>
       <span className="hidden sm:inline">
         engine <span className="text-white/60">{engine}</span>

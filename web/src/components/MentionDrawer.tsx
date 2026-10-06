@@ -5,7 +5,9 @@ import { MAX_ANALYST_RESEARCH_QUESTION_CHARS, type AnalystSourceReview } from ".
 import type { RetryAvailability } from "../lib/retryAvailability.js";
 import { TAKEAWAY_LABEL } from "./MentionCard.js";
 import { CategoricalJudgment } from "./CategoricalJudgment.js";
-import { NEU, dayTime, fmtIndex, sentimentColor, shortTime, timeAgo } from "../lib/format.js";
+import { NEU, dayTime, fmtIndex, sentimentColor, timeAgo } from "../lib/format.js";
+import { sourceClockForMention } from "../lib/source-clock.js";
+import { differentPossessiveHeadlineSubject, otherExplicitTickerSymbols, sourceLinkPathNamesCompany } from "../lib/issuer-symbols.js";
 
 function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
   const pct = Math.round(Math.min(1, Math.max(0, value)) * 100);
@@ -94,6 +96,9 @@ export function MentionDrawer({
   onOpenOperations,
   onReviewChanged,
   onOpenResearchQueue,
+  tickerOf,
+  knownTickers = [],
+  companyNameOf,
 }: {
   mention: Mention | null;
   onClose: () => void;
@@ -103,6 +108,9 @@ export function MentionDrawer({
   onOpenOperations?: () => void;
   onReviewChanged?: (review: AnalystSourceReview) => void;
   onOpenResearchQueue?: () => void;
+  tickerOf?: (companyId: string) => string;
+  knownTickers?: readonly string[];
+  companyNameOf?: (companyId: string) => string;
 }) {
   const providerLabel = retryAvailability.kind === "available" ? retryAvailability.providerLabel ?? "Jev" : "classifier";
   const providerName = retryAvailability.kind === "available" ? retryAvailability.providerName ?? "TypeSafe" : "provider";
@@ -120,6 +128,20 @@ export function MentionDrawer({
   const [analystReviewReload, setAnalystReviewReload] = useState(0);
   const currentMentionIdRef = useRef<string | null>(mention?.id ?? null);
   currentMentionIdRef.current = mention?.id ?? null;
+  const otherTickers = mention && tickerOf
+    ? otherExplicitTickerSymbols(`${mention.title} ${mention.snippet}`, tickerOf(mention.companyId), knownTickers)
+    : [];
+  const differentHeadlineSubject = mention && tickerOf && companyNameOf
+    ? differentPossessiveHeadlineSubject(
+      mention.title,
+      mention.snippet,
+      companyNameOf(mention.companyId),
+      tickerOf(mention.companyId),
+    )
+    : null;
+  const titleLinkConflict = mention && companyNameOf && differentHeadlineSubject
+    ? sourceLinkPathNamesCompany(mention.source.url, companyNameOf(mention.companyId))
+    : false;
 
   useEffect(() => {
     if (!mention) return;
@@ -233,6 +255,7 @@ export function MentionDrawer({
   const s = mention.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
   const impactColor = s ? (s.impact > 0 ? "#34d399" : s.impact < 0 ? "#f87171" : NEU) : NEU;
+  const sourceClock = sourceClockForMention(mention);
 
   return (
     <>
@@ -272,15 +295,13 @@ export function MentionDrawer({
             />
             <span className="truncate">{mention.source.name}</span>
             <span className="text-white/20">·</span>
-            <span className="tabnum">
-              {mention.publishedAt != null
-                ? `published ${shortTime(mention.publishedAt)}`
-                : mention.timeBasis === "provider_observed" && mention.providerObservedAt != null
-                  ? `provider observed ${shortTime(mention.providerObservedAt)}`
-                  : "source time unknown"}
-            </span>
+            {sourceClock.at == null
+              ? <span className="tabnum">{sourceClock.label}</span>
+              : <time className="tabnum" dateTime={new Date(sourceClock.at).toISOString()} title={`${sourceClock.context} ${new Date(sourceClock.at).toISOString()}`}>
+                  {sourceClock.label} · {exactTimestamp(sourceClock.at)}
+                </time>}
             <span className="text-white/20">·</span>
-            <span>collected {timeAgo(mention.retrievedAt)}</span>
+            <time dateTime={new Date(mention.retrievedAt).toISOString()} title={`Retrieved ${new Date(mention.retrievedAt).toISOString()}`}>collected {timeAgo(mention.retrievedAt)}</time>
           </div>
           <div className="mt-1 text-[10px] text-white/35">
             {mention.secDocumentContext ? "filing-evidence operation" : "source request receipt"} · {mention.source.deliveryId == null ? "unlinked · historical record" : mention.source.deliveryId.slice(0, 12)}
@@ -288,6 +309,18 @@ export function MentionDrawer({
           {mention.issuerIdentityStrong === false && (
             <div className="mt-2 rounded border border-amber-300/20 bg-amber-200/[0.04] px-2.5 py-2 text-[10.5px] leading-relaxed text-amber-100/80" role="note">
               Issuer identity is uncertain under the current text rule. This item matched a company name without enough distinctive issuer context; that does not prove it is unrelated. The original source remains saved and is available in Held matches and History.
+            </div>
+          )}
+          {otherTickers.length > 0 && (
+            <div className="mt-2 rounded border border-amber-300/20 bg-amber-200/[0.04] px-2.5 py-2 text-[10.5px] leading-relaxed text-amber-100/80" role="note">
+              This record is filed under {tickerOf?.(mention.companyId)} and also names {otherTickers.join(", ")}. Confirm which company the source is about before treating it as issuer-specific evidence.
+            </div>
+          )}
+          {differentHeadlineSubject && (
+            <div className="mt-2 rounded border border-amber-300/20 bg-amber-200/[0.04] px-2.5 py-2 text-[10.5px] leading-relaxed text-amber-100/80" role="note">
+              {titleLinkConflict
+                ? `The headline leads with ${differentHeadlineSubject}, while the saved excerpt and URL path name ${companyNameOf?.(mention.companyId)}. Check that the headline and link belong together; the URL path does not verify page contents.`
+                : `The headline leads with ${differentHeadlineSubject}, while the saved excerpt names ${companyNameOf?.(mention.companyId)}. Confirm the connection before treating it as issuer-specific evidence; this cue does not determine whether the article is relevant.`}
             </div>
           )}
           <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-md border border-white/[0.07] bg-white/[0.02] px-2.5 py-2" role="group" aria-label="Source attribution">

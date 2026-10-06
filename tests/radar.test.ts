@@ -54,18 +54,22 @@ function score(sentiment: MentionScore["sentiment"], eventType: string): Mention
 }
 
 function storeItem(db: Desk, input: Partial<RawMention> & { sourceItemId: string }, judged?: MentionScore["sentiment"]): string {
+  const collector = input.collector ?? "google_news_rss";
+  const rss = collector === "google_news_rss" || collector === "yahoo_finance_rss";
+  const declaredTime = input.publishedAt === undefined ? Date.now() - 60 * 60_000 : input.publishedAt;
   const stored = db.insertObservation({
     companyId: company.id,
-    kind: "rss",
+    kind: collector === "finnhub" ? "finnhub" : "rss",
     sourceName: input.publisherName ?? "Publisher A",
     sourceUrl: input.sourceUrl ?? "https://a.example/story",
     tier: "trade",
     title: input.title ?? "Acme launches product update",
     snippet: "Normalized test excerpt",
-    publishedAt: input.publishedAt === undefined ? Date.now() - 60 * 60_000 : input.publishedAt,
-    providerObservedAt: input.providerObservedAt,
+    publishedAt: rss || collector === "gdelt_doc_api" ? null : declaredTime,
+    aggregatorPublishedAt: rss ? declaredTime : null,
+    providerObservedAt: input.providerObservedAt ?? (collector === "gdelt_doc_api" ? declaredTime : undefined),
     retrievedAt: input.retrievedAt ?? Date.now() - 30 * 60_000,
-    collector: input.collector ?? "google_news_rss",
+    collector,
     sourceItemId: input.sourceItemId,
     publisherName: input.publisherName ?? "Publisher A",
     publisherDomain: input.publisherDomain === undefined ? "a.example" : input.publisherDomain,
@@ -118,7 +122,7 @@ describe("Opportunity Radar evidence comparison", () => {
     const recent = now - 60 * 60_000;
     const collected = now - 30 * 60_000;
 
-    storeItem(db, { sourceItemId: "a1", publishedAt: recent, retrievedAt: collected }, "positive");
+    storeItem(db, { sourceItemId: "a1", collector: "finnhub", publishedAt: recent, retrievedAt: collected }, "positive");
     storeItem(db, {
       sourceItemId: "a2", publishedAt: recent + 1_000, retrievedAt: collected + 1_000,
       collector: "yahoo_finance_rss", title: "ACME launches product update!",
@@ -130,15 +134,15 @@ describe("Opportunity Radar evidence comparison", () => {
     }, "negative");
     storeItem(db, {
       sourceItemId: "a3", publishedAt: recent + 3_000, retrievedAt: collected + 3_000,
-      title: "Acme adds a manufacturing site", sourceUrl: "https://a.example/factory",
+      title: "Acme adds a manufacturing site", sourceUrl: "https://a.example/factory", collector: "finnhub",
     }, "positive");
     storeItem(db, {
       sourceItemId: "a4", publishedAt: recent + 4_000, retrievedAt: collected + 4_000,
-      title: "Acme quarterly results", sourceUrl: "https://a.example/results",
+      title: "Acme quarterly results", sourceUrl: "https://a.example/results", collector: "finnhub",
     }, "neutral");
     storeItem(db, {
       sourceItemId: "prior", publishedAt: now - 30 * 60 * 60_000,
-      retrievedAt: collected, title: "Acme prior product update", sourceUrl: "https://a.example/prior",
+      retrievedAt: collected, title: "Acme prior product update", sourceUrl: "https://a.example/prior", collector: "finnhub",
     }, "positive");
     const untimedId = storeItem(db, {
       sourceItemId: "untimed", publishedAt: null,
@@ -190,17 +194,17 @@ describe("Opportunity Radar evidence comparison", () => {
       expect(body).toEqual(expect.objectContaining({
         hours: 24,
         current: expect.objectContaining({
-          sourceRows: 5, headlineGroups: 3, publisherCount: 2,
-          publisherJudgments: 4, positive: 2, neutral: 1, negative: 1,
+          sourceRows: 3, headlineGroups: 3, publisherCount: 1,
+          publisherJudgments: 3, positive: 2, neutral: 1, negative: 0,
         }),
         previous: expect.objectContaining({ sourceRows: 1, headlineGroups: 1 }),
         headlineChange: 2,
-        untimedScored: 1,
+        untimedScored: 3,
         unjudged: 1,
         categories: expect.arrayContaining([
           expect.objectContaining({
             eventType: "product",
-            current: expect.objectContaining({ sourceRows: 4, headlineGroups: 2, publisherCount: 2, positive: 2, negative: 1 }),
+            current: expect.objectContaining({ sourceRows: 2, headlineGroups: 2, publisherCount: 1, positive: 2, negative: 0 }),
             previous: expect.objectContaining({ sourceRows: 1, headlineGroups: 1 }),
             recentEvidence: expect.arrayContaining([
               expect.objectContaining({

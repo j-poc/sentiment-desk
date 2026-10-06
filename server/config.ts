@@ -59,6 +59,8 @@ const externalSourceCollectorSchema = z.enum([
   "yahoo_chart",
   "gdelt_doc_api",
   "sec_edgar",
+  "sec_company_facts",
+  "sec_latest_filings_8k",
   "finnhub",
   "reddit",
   "x",
@@ -79,16 +81,18 @@ export function parseSourceRightsApprovedCollectors(value: string | undefined): 
   return parseExternalSourceCollectors(value);
 }
 
+export const VERSION = "0.2.0";
+
 export function secContactUserAgent(raw: string | undefined): string {
   const candidate = raw?.trim() ?? "";
   if (!candidate || candidate.length > 256 || /[\u0000-\u001f\u007f]/.test(candidate)) return "";
   const contact = candidate.match(/[^\s@]+@[^\s@]+\.[^\s@]+/);
   if (!contact) return "";
   const identifier = candidate.replace(contact[0], " ").trim();
-  return identifier.length >= 3 ? candidate : "";
+  if (identifier.length >= 3) return candidate;
+  if (identifier.length === 0) return `Sentiment Desk/${VERSION} ${contact[0]}`;
+  return "";
 }
-
-export const VERSION = "0.2.0";
 
 export const config = {
   classificationProvider: parseClassificationProvider(process.env.CLASSIFICATION_PROVIDER),

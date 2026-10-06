@@ -7,12 +7,14 @@ export type CollectorId =
   | "yahoo_quote"
   | "gdelt_doc_api"
   | "sec_edgar"
+  | "sec_company_facts"
+  | "sec_latest_filings_8k"
   | "finnhub"
   | "reddit"
   | "x"
   | "yahoo_chart";
 export type EvidenceChannel = "news" | "filing" | "social" | "market_context";
-export type TimeBasis = "publisher_declared" | "provider_observed" | "unknown" | "legacy_unknown";
+export type TimeBasis = "publisher_declared" | "aggregator_declared" | "provider_observed" | "unknown" | "legacy_unknown";
 export type DeliveryHealthState = "current" | "processing" | "overdue" | "failed" | "partial" | "never" | "disabled";
 
 export type SecDocumentRole = "8k_primary" | "earnings_exhibit_99_1";
@@ -64,6 +66,8 @@ export interface RawMention {
   title: string;
   snippet: string;
   publishedAt: number | null;
+  /** Feed-declared item time, which does not verify original article publication. */
+  aggregatorPublishedAt?: number | null;
   providerObservedAt?: number | null;
   retrievedAt: number;
   collector?: CollectorId;
@@ -257,6 +261,7 @@ export interface MentionDTO {
   issuerIdentityStrong?: boolean;
   /** Source-declared event time, null when the source did not provide one. */
   publishedAt: number | null;
+  aggregatorPublishedAt?: number | null;
   providerObservedAt: number | null;
   retrievedAt: number;
   ingestedAt: number;
@@ -329,6 +334,13 @@ export interface SeriesPoint {
   recordImpactMax: number | null;
   latestRecordScoredAtMs: number | null;
   bucketSnapshotKey: string | null;
+  /** Saved receipt/title cues, present only for historical Jev archive buckets. */
+  sourceLineage?: {
+    recordCount: number;
+    receiptLinkedRecordCount: number;
+    repeatedTitleRecordCount: number;
+    exactNormalizedTitleCount: number;
+  };
   /** Compatibility aliases for the existing visual consumers. */
   t: number;
   v: number | null;
@@ -355,4 +367,16 @@ export interface SeriesResult {
   points: SeriesPoint[];
   /** Latest Jev completion time across saved identified score history, even outside the visible window. */
   latestScoreAvailableAt: number | null;
+}
+
+export interface JevHistoryWeekResult {
+  companyId: string;
+  weekStartMs: number;
+  fromMs: number;
+  throughMs: number;
+  points: SeriesPoint[];
+  latestEligibleScoreAtMs: number;
+  olderWeekStartMs: number | null;
+  newerWeekStartMs: number | null;
+  latestWeekStartMs: number;
 }

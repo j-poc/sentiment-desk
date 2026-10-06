@@ -19,6 +19,14 @@ function bytes(value: number | null): string {
   return `${(value / 1024 ** 3).toFixed(2)} GB`;
 }
 
+function recordedDeliveryOutcome(result: string | null): string | null {
+  if (result === "partial") return "partial response";
+  if (result === "failed") return "failed";
+  if (result === "rate_limited") return "rate limited";
+  if (result === "invalid") return "invalid response";
+  return null;
+}
+
 export function HealthPanel({ health }: { health: HealthDTO | null }) {
   if (!health) return null;
   const { jev, rss, gdelt, x } = health.health;
@@ -117,6 +125,7 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
           const evidenceLabel = delivery.latestObservationAt == null
             ? delivery.latestObservationBasis === "unknown" || delivery.latestObservationBasis === "legacy_unknown" ? "source time unknown" : "no stored item"
             : `${delivery.latestObservationBasis === "provider_observed" ? "seen" : "published"} ${timeAgo(delivery.latestObservationAt)}`;
+          const recordedOutcome = recordedDeliveryOutcome(delivery.latestResult);
           return (
             <div key={delivery.collector} className="py-[2px]" title={delivery.adapterVersion ?? undefined}>
               <div className="flex items-baseline gap-2 text-[10.5px]">
@@ -132,13 +141,14 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
                   {delivery.latestIngestionRequired && ` · ingestion ${delivery.latestIngestionState ?? "not started"} ${delivery.latestIngestionProcessedCount ?? 0}/${delivery.latestIngestionExpectedCount ?? 0}`}
                 </span>
               </div>
-              {delivery.latestError && (delivery.state === "partial" || delivery.state === "failed" || delivery.state === "overdue" || delivery.state === "processing") && (
+              {recordedOutcome && (
                 <div
                   role="status"
                   aria-live="polite"
-                  className={`ml-1 mt-0.5 clamp-2 text-[9.5px] ${delivery.state === "failed" ? "text-red-300/75" : "text-amber-200/75"}`}
+                  className={`ml-1 mt-0.5 clamp-2 text-[9.5px] ${delivery.latestResult === "failed" || delivery.latestResult === "invalid" ? "text-red-300/75" : "text-amber-200/75"}`}
+                  title={delivery.latestError ?? undefined}
                 >
-                  {delivery.latestError}
+                  Last recorded outcome: {recordedOutcome}{delivery.latestDeliveryAt == null ? "" : ` · ${timeAgo(delivery.latestDeliveryAt)}`}{delivery.latestError ? ` · ${delivery.latestError}` : ""}
                 </div>
               )}
             </div>

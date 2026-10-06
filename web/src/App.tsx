@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   getJSON,
   getCompanyFundamentals,
+  getCompanySavedHistoryPage,
   refreshCompanyFundamentals,
   isCurrentCompanySelection,
   readBackendSnapshot,
@@ -17,6 +18,8 @@ import {
   type PriceSeriesDTO,
   type SeriesPoint,
   type SeriesResult,
+  type JevHistoryWeekResult,
+  getJevHistoryWeek,
   type FirstRunEvidenceDTO,
   type AnalystResearchQueueItem,
 } from "./lib/api.js";
@@ -27,11 +30,16 @@ import { Header } from "./components/Header.js";
 import { MobileCompanyPicker } from "./components/MobileCompanyPicker.js";
 import { Watchlist } from "./components/Watchlist.js";
 import { SeriesChart } from "./components/SeriesChart.js";
+import { HistoricalJevCaveat } from "./components/HistoricalJevCaveat.js";
 import { MentionFeed } from "./components/MentionFeed.js";
 import { EvidenceBreadth } from "./components/EvidenceBreadth.js";
+import { EvidenceQuickAccess } from "./components/EvidenceQuickAccess.js";
+import { SelectedCompanyResearchSections } from "./components/SelectedCompanyResearchSections.js";
 import { ScoreBucketEvidence } from "./components/ScoreBucketEvidence.js";
 import { OutcomeCheck } from "./components/OutcomeCheck.js";
 import { DeskConnectionState } from "./components/DeskConnectionState.js";
+import { SecFilingsInbox } from "./components/SecFilingsInbox.js";
+import { recoverToSavedSources, SavedSourcesView, type SavedCompanyHistoryState, type SavedSourcesState } from "./components/SavedSourcesView.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
 import { MentionDrawer } from "./components/MentionDrawer.js";
 import { MATERIAL_FILTER_DESCRIPTION, MaterialFilterDisclosure } from "./components/MaterialFilterDisclosure.js";
@@ -45,7 +53,7 @@ import { FollowedEvidenceBaseline } from "./components/FollowedEvidenceBaseline.
 import { CompanyFundamentals } from "./components/CompanyFundamentals.js";
 import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
 import { AnalystResearchQueue } from "./components/AnalystResearchQueue.js";
-import { refreshedScoreBucketState, scoreBucketEvidenceBaseline, scoreBucketSnapshotMatches } from "./lib/series-chart-state.js";
+import { reconcileScoreBucketAgainstRollingSeries, scoreBucketEvidenceBaseline, scoreBucketSnapshotMatches, shouldRefreshScoreBucketFromRollingSeries } from "./lib/series-chart-state.js";
 import { scoreBucketRetryMode } from "./lib/score-bucket-retry.js";
 import { isScoreBucketCoverage, sameScoreBucketCoverage } from "../../shared/score-bucket-coverage.js";
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
@@ -54,6 +62,11 @@ import { filterMentionFeed, matchesMentionFeedFilter } from "./lib/mention-filte
 import { applyDispositionChange, includesWeakIssuerMatches, visibleInWorkingScan } from "./lib/analyst-feed.js";
 import { operationsAttentionCount } from "./lib/operations-attention.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
+import { historicalJevRevealTarget, revealScrollTarget } from "./lib/reveal-scroll-target.js";
+import { resetResearchScrollForSelection } from "./lib/research-scroll.js";
+import { INITIAL_SAVED_SOURCES_BROWSE_STATE, mergeSavedHistoryStreamEvent, readSavedSourcesBrowseState, shouldRestoreSavedHistoryPage, writeSavedSourcesBrowseState, type SavedSourcesBrowseState } from "./lib/saved-sources-browse-state.js";
+import { automaticHistoricalArchiveLookupAction, chartViewPreferenceAfterCompanySelection, deriveChartView, matchingCategoricalSnapshot, shouldLoadHistoricalJevForVisibleTab, shouldLookupHistoricalJev, shouldRefreshInactiveLunaSnapshot, type CategoricalChartSnapshot, type ChartViewPreference } from "./lib/chart-view-preference.js";
+import { mentionDrawerReturnTarget, researchViewAfterMentionClose, selectCompanyForResearch, type MentionDrawerReturnTarget, type ResearchView } from "./lib/research-navigation.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
 import { hasComparableDeltas, orderWatchlistCompanies } from "./lib/watchlist-order.js";
@@ -117,7 +130,6 @@ const FILTERS = [
 ] as const;
 const RECONNECT_LOOKUP_BATCH_SIZE = 900;
 type FilterKey = (typeof FILTERS)[number]["key"];
-type ResearchView = "desk" | "radar" | "queue";
 type MentionFeedState = {
   companyId: string;
   filter: FilterKey;
@@ -146,6 +158,7 @@ type EvidenceBreadthState = {
 type ScoreBucketEvidenceState = {
   companyId: string;
   hours: number;
+  archiveWeekStartMs: number | null;
   bucketFromMs: number;
   bucketThroughMs: number;
   expectedCount: number;
@@ -191,10 +204,105 @@ export default function App() {
     transportError: string | null;
   } | null>(null);
   const fundamentalsRequestKeyRef = useRef<{ companyId: string; requestKey: string } | null>(null);
-  const [researchView, setResearchView] = useState<ResearchView>("desk");
+  const [researchView, setResearchView] = useState<ResearchView>(() => {
+    const saved = sessionStorage.getItem("sentiment-desk-research-view");
+    return saved === "sources" || saved === "filings" || saved === "queue" || saved === "desk" || saved === "radar" ? saved : "desk";
+  });
+  const researchViewTouchedRef = useRef(sessionStorage.getItem("sentiment-desk-research-view") !== null);
   const [researchQueueRevision, setResearchQueueRevision] = useState(0);
   const [sourceReviewRevision, setSourceReviewRevision] = useState(0);
   const [tape, setTape] = useState<Mention[]>([]);
+  const [savedSourcesState, setSavedSourcesState] = useState<SavedSourcesState>("loading");
+  const [savedSourcesBrowseState, setSavedSourcesBrowseState] = useState<SavedSourcesBrowseState>(() => {
+    try {
+      return readSavedSourcesBrowseState(typeof window === "undefined" ? null : window.sessionStorage);
+    } catch {
+      return INITIAL_SAVED_SOURCES_BROWSE_STATE;
+    }
+  });
+  const [savedCompanyHistory, setSavedCompanyHistory] = useState<Record<string, SavedCompanyHistoryState>>({});
+  const savedCompanyHistoryInFlight = useRef(new Set<string>());
+  const savedCompanyHistoryGeneration = useRef(0);
+  const rememberSavedSourcesBrowseState = useCallback((state: SavedSourcesBrowseState) => {
+    setSavedSourcesBrowseState(state);
+    try {
+      writeSavedSourcesBrowseState(typeof window === "undefined" ? null : window.sessionStorage, state);
+    } catch {
+      // The in-memory browse state continues to work when session storage is unavailable.
+    }
+  }, []);
+  const loadSavedCompanyHistory = useCallback(async (companyId: string, cursor: MentionPage["nextCursor"] = null) => {
+    if (savedCompanyHistoryInFlight.current.has(companyId)) return;
+    const generation = savedCompanyHistoryGeneration.current;
+    savedCompanyHistoryInFlight.current.add(companyId);
+    setSavedCompanyHistory((current) => {
+      const previous = current[companyId];
+      return {
+        ...current,
+        [companyId]: cursor == null
+          ? { companyId, status: "loading", items: [], nextCursor: null, pagesLoaded: 0, loadingMore: false, loadMoreFailed: false }
+          : { companyId, status: previous?.status ?? "ready", items: previous?.items ?? [], nextCursor: previous?.nextCursor ?? cursor, pagesLoaded: previous?.pagesLoaded ?? 1, loadingMore: true, loadMoreFailed: false },
+      };
+    });
+    try {
+      const page = await getCompanySavedHistoryPage(companyId, cursor);
+      if (generation !== savedCompanyHistoryGeneration.current) return;
+      setSavedCompanyHistory((current) => {
+        const previous = current[companyId];
+        const items = page.items.filter(isApplicationMention);
+        return {
+          ...current,
+          [companyId]: {
+            companyId,
+            status: "ready",
+            items: cursor == null ? mergeMentionPages(items, previous?.items ?? []) : mergeMentionPages(previous?.items ?? [], items),
+            nextCursor: page.nextCursor,
+            pagesLoaded: cursor == null ? 1 : (previous?.pagesLoaded ?? 1) + 1,
+            loadingMore: false,
+            loadMoreFailed: false,
+          },
+        };
+      });
+    } catch {
+      if (generation !== savedCompanyHistoryGeneration.current) return;
+      setSavedCompanyHistory((current) => {
+        const previous = current[companyId];
+        return {
+          ...current,
+          [companyId]: cursor == null
+            ? { companyId, status: "failed", items: [], nextCursor: null, pagesLoaded: 0, loadingMore: false, loadMoreFailed: false }
+            : { companyId, status: previous?.status ?? "ready", items: previous?.items ?? [], nextCursor: previous?.nextCursor ?? cursor, pagesLoaded: previous?.pagesLoaded ?? 1, loadingMore: false, loadMoreFailed: true },
+        };
+      });
+    } finally {
+      if (generation === savedCompanyHistoryGeneration.current) savedCompanyHistoryInFlight.current.delete(companyId);
+    }
+  }, []);
+  useEffect(() => {
+    if (researchView !== "sources" || companiesLoadState !== "ready" || savedSourcesBrowseState.companyFilter == null) return;
+    if (!companies.some((company) => company.id === savedSourcesBrowseState.companyFilter)) return;
+    if (savedCompanyHistory[savedSourcesBrowseState.companyFilter]) return;
+    void loadSavedCompanyHistory(savedSourcesBrowseState.companyFilter);
+  }, [companies, companiesLoadState, researchView, savedSourcesBrowseState.companyFilter, savedCompanyHistory, loadSavedCompanyHistory]);
+  useEffect(() => {
+    const companyId = savedSourcesBrowseState.companyFilter;
+    const history = companyId == null ? null : savedCompanyHistory[companyId];
+    if (researchView !== "sources" || companiesLoadState !== "ready" || companyId == null || history?.status !== "ready") return;
+    if (!shouldRestoreSavedHistoryPage({
+      loadedPageCount: history.pagesLoaded ?? 1,
+      requestedPageCount: savedSourcesBrowseState.historyPageCounts[companyId] ?? 1,
+      hasNextPage: history.nextCursor != null,
+      loading: history.loadingMore,
+      failed: history.loadMoreFailed,
+    })) return;
+    void loadSavedCompanyHistory(companyId, history.nextCursor);
+  }, [companiesLoadState, loadSavedCompanyHistory, researchView, savedCompanyHistory, savedSourcesBrowseState.companyFilter, savedSourcesBrowseState.historyPageCounts]);
+  useEffect(() => {
+    const companyId = savedSourcesBrowseState.companyFilter;
+    if (companiesLoadState !== "ready" || companyId == null || companies.some((company) => company.id === companyId)) return;
+    rememberSavedSourcesBrowseState({ ...INITIAL_SAVED_SOURCES_BROWSE_STATE });
+  }, [companies, companiesLoadState, savedSourcesBrowseState, rememberSavedSourcesBrowseState]);
+  const savedSourcesSnapshotSeenRef = useRef(false);
   const [mentionFeedPage, setMentionFeedPage] = useState<MentionFeedState | null>(null);
   const [evidenceBreadthPage, setEvidenceBreadthPage] = useState<EvidenceBreadthState | null>(null);
   const [scoreBucketEvidence, setScoreBucketEvidence] = useState<ScoreBucketEvidenceState | null>(null);
@@ -202,6 +310,9 @@ export default function App() {
   const [seriesLatestScoreAvailableAt, setSeriesLatestScoreAvailableAt] = useState<number | null>(null);
   const [seriesKey, setSeriesKey] = useState<string | null>(null);
   const [seriesLoadErrorKey, setSeriesLoadErrorKey] = useState<string | null>(null);
+  const [jevArchive, setJevArchive] = useState<{ companyId: string; requestedWeek: number | "latest"; result: JevHistoryWeekResult | null; loading: boolean; error: boolean; notFound: boolean } | null>(null);
+  const jevArchiveRequestSeq = useRef(0);
+  const jevArchiveRef = useRef<JevHistoryWeekResult | null>(null);
   const [sparks, setSparks] = useState<Record<string, SeriesPoint[]>>({});
   const [market, setMarket] = useState<MarketSnapshot | null>(null);
   const [price, setPrice] = useState<PricePoint[]>([]);
@@ -211,7 +322,8 @@ export default function App() {
   const [health, setHealth] = useState<HealthDTO | null>(null);
   const [healthLoadState, setHealthLoadState] = useState<"loading" | "ready" | "failed">("loading");
   const [firstRunEvidence, setFirstRunEvidence] = useState<{ state: "loading" | "error" } | ({ state: "ready" } & FirstRunEvidenceDTO)>({ state: "loading" });
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [streamRuntimeId, setStreamRuntimeId] = useState<string | null>(null);
   const [reconnectLookupFailedIds, setReconnectLookupFailedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const firstEvidenceRecoveryRef = useRef(new FirstEvidenceRecovery());
@@ -220,17 +332,23 @@ export default function App() {
   const [windowHours, setWindowHours] = useState(168);
   const [chartMode, setChartMode] = useState<"sentiment" | "comparison">("sentiment");
   const [chartView, setChartView] = useState<"luna" | "jev">("luna");
+  const [chartViewPreference, setChartViewPreference] = useState<ChartViewPreference>({ kind: "automatic" });
+  const automaticJevLookupKeyRef = useRef<string | null>(null);
+  const automaticJevRetryKeyRef = useRef<string | null>(null);
+  const chartViewPreferenceRef = useRef(chartViewPreference);
   const chartViewRef = useRef(chartView);
-  const [categoricalChartSnapshot, setCategoricalChartSnapshot] = useState<{
-    key: string;
-    eligibleObservationCount: number;
-  } | null>(null);
+  const [categoricalChartSnapshot, setCategoricalChartSnapshot] = useState<CategoricalChartSnapshot | null>(null);
+  const [categoricalRefreshRequest, setCategoricalRefreshRequest] = useState<{ companyId: string; revision: number } | null>(null);
   const [feedFilter, setFeedFilter] = useState<FilterKey>("all");
   const [includeSetAside, setIncludeSetAside] = useState(false);
   const [feedGroupFilter, setFeedGroupFilter] = useState<ExactTitleGroupFilter>(null);
   const [sortMode, setSortMode] = useState<"delta" | "alpha">("delta");
   const [clock, setClock] = useState(Date.now());
   const [session, setSession] = useState<SessionInfo>(() => sessionInfo());
+  const researchScrollRef = useRef<HTMLElement | null>(null);
+  const savedSourcesDrawerReturnScrollRef = useRef<MentionDrawerReturnTarget | null>(null);
+  const previousResearchCompanyIdRef = useRef<string | null>(null);
+  const previousResearchViewRef = useRef(researchView);
   const [drawerMention, setDrawerMention] = useState<Mention | null>(null);
   const drawerMentionIdRef = useRef<string | null>(null);
   const drawerMentionRef = useRef<Mention | null>(drawerMention);
@@ -244,16 +362,56 @@ export default function App() {
     drawerMentionIdRef.current = mention?.id ?? null;
     setDrawerMention(mention);
   }, []);
-  const closeDrawer = useCallback(() => openDrawerMention(null), [openDrawerMention]);
+  const closeDrawer = useCallback(() => {
+    const returnTarget = savedSourcesDrawerReturnScrollRef.current;
+    savedSourcesDrawerReturnScrollRef.current = null;
+    openDrawerMention(null);
+    const nextView = researchViewAfterMentionClose(researchView, returnTarget);
+    if (nextView === researchView) return;
+    researchViewTouchedRef.current = true;
+    sessionStorage.setItem("sentiment-desk-research-view", nextView);
+    setResearchView(nextView);
+    requestAnimationFrame(() => {
+      if (researchScrollRef.current && returnTarget) researchScrollRef.current.scrollTop = returnTarget.scrollTop;
+      requestAnimationFrame(() => {
+        if (!returnTarget) return;
+        const trigger = [...document.querySelectorAll<HTMLElement>("[data-saved-source-id]")]
+          .find((element) => element.dataset.savedSourceId === returnTarget.mentionId);
+        (trigger ?? document.getElementById("saved-sources-heading"))?.focus();
+      });
+    });
+  }, [openDrawerMention, researchView]);
   const openResearchQueue = useCallback(() => {
     closeDrawer();
     setResearchView("queue");
   }, [closeDrawer]);
+  const navigateToCompanyResearch = useCallback((companyId: string) => {
+    const next = selectCompanyForResearch({ selectedCompanyId: selectedId, view: researchView }, companyId);
+    if (next.selectedCompanyId !== selectedId) {
+      const preference = chartViewPreferenceAfterCompanySelection(
+        chartViewPreferenceRef.current,
+        selectedId,
+        companyId,
+      );
+      chartViewPreferenceRef.current = preference;
+      setChartViewPreference(preference);
+      chartViewRef.current = deriveChartView(preference);
+      setChartView(chartViewRef.current);
+    }
+    setSelectedId(next.selectedCompanyId);
+    researchViewTouchedRef.current = true;
+    sessionStorage.setItem("sentiment-desk-research-view", next.view);
+    setResearchView(next.view);
+  }, [researchView, selectedId]);
   const openQueuedEvidence = useCallback((item: AnalystResearchQueueItem) => {
-    setSelectedId(item.companyId);
-    setResearchView("desk");
+    navigateToCompanyResearch(item.companyId);
     openDrawerMention(item.mention);
-  }, [openDrawerMention]);
+  }, [navigateToCompanyResearch, openDrawerMention]);
+  const openSavedSource = useCallback((mention: Mention) => {
+    savedSourcesDrawerReturnScrollRef.current = mentionDrawerReturnTarget(researchView, researchScrollRef.current?.scrollTop ?? 0, mention.id);
+    navigateToCompanyResearch(mention.companyId);
+    openDrawerMention(mention);
+  }, [navigateToCompanyResearch, openDrawerMention, researchView]);
   const applyResearchDispositionChange = useCallback((change: AnalystResearchDispositionChange) => {
     if (!applyDispositionChange(researchDispositionOverrides.current, change)) return;
     setMentionFeedPage((current) => {
@@ -285,19 +443,47 @@ export default function App() {
     });
   }, [applyResearchDispositionChange]);
   const chooseChartView = useCallback((next: "luna" | "jev") => {
+    const preference = { kind: "manual", view: next } as const;
+    chartViewPreferenceRef.current = preference;
+    setChartViewPreference(preference);
     chartViewRef.current = next;
     setChartView(next);
+    if (next === "jev") {
+      requestAnimationFrame(() => {
+        const region = document.querySelector<HTMLElement>(".research-scroll");
+        const panel = document.getElementById("chart-panel-jev");
+        const target = panel && historicalJevRevealTarget(panel);
+        if (!region || !target) return;
+        revealScrollTarget(region, target, window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      });
+    }
   }, []);
-  const reportCategoricalChartSnapshot = useCallback((snapshot: {
-    companyId: string;
-    windowHours: number;
-    eligibleObservationCount: number;
-  }) => {
-    const key = `${snapshot.companyId}:${snapshot.windowHours}`;
-    setCategoricalChartSnapshot((current) => current?.key === key
-      && current.eligibleObservationCount === snapshot.eligibleObservationCount
-      ? current
-      : { key, eligibleObservationCount: snapshot.eligibleObservationCount });
+  const loadJevArchiveWeek = useCallback(async (companyId: string, week: number | "latest") => {
+    const requestSeq = ++jevArchiveRequestSeq.current;
+    scoreBucketRequestSeq.current += 1;
+    jevArchiveRef.current = null;
+    setScoreBucketEvidence(null);
+    setJevArchive((current) => ({ companyId, requestedWeek: week,
+      result: current?.companyId === companyId ? current.result : null, loading: true, error: false, notFound: false }));
+    try {
+      const result = await getJevHistoryWeek(companyId, week);
+      if (requestSeq !== jevArchiveRequestSeq.current || selectedIdRef.current !== companyId) return;
+      jevArchiveRef.current = result;
+      setJevArchive({ companyId, requestedWeek: week, result, loading: false, error: false, notFound: false });
+    } catch (error) {
+      if (requestSeq !== jevArchiveRequestSeq.current || selectedIdRef.current !== companyId) return;
+      const notFound = error instanceof Error && error.message.includes("-> 404");
+      setJevArchive((current) => current?.companyId === companyId
+        ? { ...current, requestedWeek: week, result: notFound ? null : current.result, loading: false, error: !notFound, notFound }
+        : { companyId, requestedWeek: week, result: null, loading: false, error: !notFound, notFound });
+    }
+  }, []);
+  useEffect(() => {
+    if (chartViewPreference.kind !== "manual" || chartViewPreference.view !== "jev" || !selectedId) return;
+    void loadJevArchiveWeek(selectedId, "latest");
+  }, [chartViewPreference, selectedId, loadJevArchiveWeek]);
+  const reportCategoricalChartSnapshot = useCallback((snapshot: CategoricalChartSnapshot) => {
+    setCategoricalChartSnapshot(snapshot);
   }, []);
   const openOperationsFromDrawer = useCallback(() => {
     closeDrawer();
@@ -349,6 +535,12 @@ export default function App() {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+  useLayoutEffect(() => {
+    const enteringDesk = researchView === "desk" && previousResearchViewRef.current !== "desk";
+    resetResearchScrollForSelection(researchScrollRef.current, previousResearchCompanyIdRef.current, selectedId, enteringDesk);
+    previousResearchCompanyIdRef.current = selectedId;
+    previousResearchViewRef.current = researchView;
+  }, [researchView, selectedId]);
   useEffect(() => {
     windowRef.current = windowHours;
   }, [windowHours]);
@@ -427,6 +619,74 @@ export default function App() {
   }, [selected, selectedFundamentals]);
   const selectedQuote = selected && market ? market.quotes[selected.ticker] ?? null : null;
   const selectedSeriesKey = selectedId == null ? null : `${selectedId}:${windowHours}`;
+  const selectedJevArchive = selectedId != null && jevArchive?.companyId === selectedId ? jevArchive : null;
+  const jevArchiveResult = selectedJevArchive?.result ?? null;
+  const selectedJevArchiveScoredRecordCount = jevArchiveResult?.points.reduce((total, point) => total + point.scoredRecordCount, 0) ?? 0;
+  const historicalJevHeaderSummary = jevArchiveResult
+    ? `${selectedJevArchiveScoredRecordCount.toLocaleString()} saved scores · UTC week [${new Date(jevArchiveResult.fromMs).toISOString().slice(0, 10)}, ${new Date(jevArchiveResult.throughMs).toISOString().slice(0, 10)}) · latest ${new Date(jevArchiveResult.latestEligibleScoreAtMs).toISOString().slice(0, 16).replace("T", " ")} UTC (${timeAgo(jevArchiveResult.latestEligibleScoreAtMs, clock)})${selectedJevArchive?.loading ? " · refreshing" : selectedJevArchive?.error ? " · refresh failed" : ""}`
+    : selectedJevArchive?.loading ? "loading saved archive"
+      : selectedJevArchive?.error ? "saved archive unavailable"
+        : selectedJevArchive?.notFound ? "no eligible saved Jev scores"
+          : "saved archive not checked";
+  const matchingCategoricalChartSnapshot = matchingCategoricalSnapshot(categoricalChartSnapshot, selectedId, windowHours);
+  const lunaWindowHeader = !matchingCategoricalChartSnapshot
+    ? `GPT-6 Luna ${windowLabel(windowHours)} snapshot not confirmed`
+    : matchingCategoricalChartSnapshot.status === "ready"
+      ? `GPT-6 Luna: ${matchingCategoricalChartSnapshot.eligibleObservationCount?.toLocaleString() ?? "unknown"} in ${windowLabel(windowHours)}`
+      : `${matchingCategoricalChartSnapshot.status === "loading" ? "GPT-6 Luna refresh in progress" : "GPT-6 Luna refresh failed"} · last confirmed ${matchingCategoricalChartSnapshot.eligibleObservationCount?.toLocaleString() ?? "unavailable"} in ${windowLabel(windowHours)}${matchingCategoricalChartSnapshot.observedAt == null ? "" : ` · last success ${timeAgo(matchingCategoricalChartSnapshot.observedAt, clock)} ago`}`;
+  const resolvedChartView = deriveChartView(chartViewPreference);
+  useEffect(() => {
+    if (chartViewPreference.kind !== "automatic") return;
+    chartViewRef.current = resolvedChartView;
+    setChartView(resolvedChartView);
+  }, [chartViewPreference, resolvedChartView]);
+  useEffect(() => {
+    automaticJevLookupKeyRef.current = null;
+    automaticJevRetryKeyRef.current = null;
+  }, [selectedId, streamRuntimeId]);
+  useEffect(() => {
+    if (!shouldLookupHistoricalJev(chartViewPreference, matchingCategoricalChartSnapshot, selectedId, windowHours)) return;
+    const lookupKey = `${selectedId}:${streamRuntimeId ?? "unknown-runtime"}`;
+    const action = automaticHistoricalArchiveLookupAction(
+      lookupKey,
+      automaticJevLookupKeyRef.current,
+      automaticJevRetryKeyRef.current,
+      { loading: selectedJevArchive?.loading === true, failed: selectedJevArchive?.error === true },
+    );
+    if (action === "lookup") {
+      automaticJevLookupKeyRef.current = lookupKey;
+      automaticJevRetryKeyRef.current = null;
+      void loadJevArchiveWeek(selectedId!, "latest");
+      return;
+    }
+    if (action === "retry") {
+      // One bounded local retry recovers transient failures. Further retries
+      // wait for a new backend runtime or the user's explicit Retry action.
+      automaticJevRetryKeyRef.current = lookupKey;
+      void loadJevArchiveWeek(selectedId!, "latest");
+    }
+  }, [chartViewPreference, matchingCategoricalChartSnapshot, selectedId, windowHours, streamRuntimeId, selectedJevArchive?.loading, selectedJevArchive?.error, loadJevArchiveWeek]);
+  useEffect(() => {
+    if (selectedId == null) return;
+    const lookupKey = `${selectedId}:${streamRuntimeId ?? "unknown-runtime"}`;
+    if (!shouldLoadHistoricalJevForVisibleTab({
+      chartView,
+      companyId: selectedId,
+      lookupKey,
+      attemptedKey: automaticJevLookupKeyRef.current,
+      archive: selectedJevArchive == null
+        ? null
+        : {
+          companyId: selectedJevArchive.companyId,
+          loading: selectedJevArchive.loading,
+          hasResult: selectedJevArchive.result != null,
+          confirmedEmpty: selectedJevArchive.notFound,
+          failed: selectedJevArchive.error,
+        },
+    })) return;
+    automaticJevLookupKeyRef.current = lookupKey;
+    void loadJevArchiveWeek(selectedId, "latest");
+  }, [chartView, selectedId, streamRuntimeId, selectedJevArchive?.companyId, selectedJevArchive?.loading, selectedJevArchive?.result, selectedJevArchive?.notFound, selectedJevArchive?.error, loadJevArchiveWeek]);
   const selectedSeriesReady = selectedSeriesKey != null && seriesKey === selectedSeriesKey;
   const selectedSeries = selectedSeriesReady ? series : [];
   const selectedSeriesHistoryLatestScoredAt = selectedSeriesReady ? seriesLatestScoreAvailableAt : null;
@@ -470,6 +730,7 @@ export default function App() {
     const requestKey = `${id}:${hours}`;
     const requestSeq = ++seriesRequestSeq.current;
     setScoreBucketEvidence((current) => current?.companyId === id && current.hours === hours
+      && shouldRefreshScoreBucketFromRollingSeries(current.archiveWeekStartMs)
       ? { ...current, expectedCountFreshness: "refreshing" }
       : current);
     try {
@@ -481,7 +742,8 @@ export default function App() {
         setSeriesLoadErrorKey(null);
         setScoreBucketEvidence((current) => {
           if (!current || current.companyId !== id || current.hours !== hours) return current;
-          const refreshedState = refreshedScoreBucketState(result.points, current);
+          const refreshedState = reconcileScoreBucketAgainstRollingSeries(result.points, current);
+          if (refreshedState == null) return current;
           return current.expectedCount === refreshedState.expectedCount
             && current.expectedCountFreshness === "current"
             && current.snapshotStale === refreshedState.snapshotStale
@@ -502,6 +764,7 @@ export default function App() {
       if (seriesRequestSeq.current === requestSeq && selectedIdRef.current === id && windowRef.current === hours) {
         setSeriesLoadErrorKey(requestKey);
         setScoreBucketEvidence((current) => current?.companyId === id && current.hours === hours
+          && shouldRefreshScoreBucketFromRollingSeries(current.archiveWeekStartMs)
           ? { ...current, expectedCountFreshness: "error" }
           : current);
       }
@@ -571,6 +834,11 @@ export default function App() {
   }, []);
 
   const refreshBackendSnapshot = useCallback(async (reset = false, expectedRuntimeId?: string) => {
+    if (reset) {
+      savedCompanyHistoryGeneration.current += 1;
+      savedCompanyHistoryInFlight.current.clear();
+      setSavedCompanyHistory({});
+    }
     const requestSeq = ++snapshotRequestSeq.current;
     const healthAtStart = healthRef.current;
     const streamSequenceAtStart = mentionStreamSequence.current;
@@ -658,6 +926,8 @@ export default function App() {
     ));
 
     if (tapeSnapshot) {
+      savedSourcesSnapshotSeenRef.current = true;
+      setSavedSourcesState("ready");
       setOutcomeRefreshRevision((revision) => revision + 1);
       setTape((current) => mergeSnapshotWithLive(
         realTape,
@@ -667,6 +937,8 @@ export default function App() {
         60,
         !reset,
       ));
+    } else {
+      setSavedSourcesState(savedSourcesSnapshotSeenRef.current ? "stale" : "failed");
     }
     setDrawerMention((current) => reconcileDrawerMentionOnReconnect(
         current,
@@ -750,6 +1022,7 @@ export default function App() {
         const previousRuntimeId = runtimeIdRef.current ?? healthRef.current?.runtimeId ?? null;
         const runtimeChanged = previousRuntimeId != null && previousRuntimeId !== d.runtimeId;
         runtimeIdRef.current = d.runtimeId;
+        setStreamRuntimeId(d.runtimeId);
         if (runtimeChanged) {
           snapshotRequestSeq.current += 1;
           mentionStreamSequence.current += 1;
@@ -757,6 +1030,8 @@ export default function App() {
           setCompanies([]);
           setCompaniesLoadState("loading");
           setTape([]);
+          savedSourcesSnapshotSeenRef.current = false;
+          setSavedSourcesState("loading");
           setMarket(null);
           setSparks({});
           setMentionFeedPage(null);
@@ -766,6 +1041,7 @@ export default function App() {
           setHealth(null);
           setHealthLoadState("loading");
           healthRef.current = null;
+          setCategoricalChartSnapshot(null);
           seriesRequestSeq.current += 1;
           priceRequestSeq.current += 1;
           setSeries([]);
@@ -857,8 +1133,27 @@ export default function App() {
           analystResearchDisposition: researchDispositionOverrides.current.get(m.id)?.disposition
             ?? m.analystResearchDisposition ?? null,
         };
+        if (isApplicationMention(liveMention)) {
+          savedSourcesSnapshotSeenRef.current = true;
+          setSavedSourcesState((current) => current === "loading" || current === "failed" ? "ready" : current);
+          setSavedCompanyHistory((current) => {
+            const history = current[liveMention.companyId];
+            const updated = mergeSavedHistoryStreamEvent(history, liveMention);
+            return updated === history ? current : { ...current, [liveMention.companyId]: updated! };
+          });
+        }
         if (m.companyId === selectedIdRef.current) {
           setOutcomeRefreshRevision((revision) => revision + 1);
+          if (shouldRefreshInactiveLunaSnapshot(chartViewRef.current, selectedIdRef.current, {
+            companyId: m.companyId,
+            provider: m.classification?.provider ?? null,
+            classifiedAt: m.classification?.classifiedAt ?? null,
+          })) {
+            setCategoricalRefreshRequest((current) => ({
+              companyId: m.companyId,
+              revision: current?.companyId === m.companyId ? current.revision + 1 : 1,
+            }));
+          }
         }
         const wasStreamed = latestStreamedMention.current.has(m.id);
         const sequence = ++mentionStreamSequence.current;
@@ -1110,7 +1405,7 @@ export default function App() {
         if (ids.length === 0) return;
         const idx = ids.indexOf(selectedIdRef.current ?? "");
         const next = ids[(idx + dir + ids.length) % ids.length];
-        if (next != null) setSelectedId(next);
+        if (next != null) navigateToCompanyResearch(next);
         e.preventDefault();
       };
       if (e.key === "j" || e.key === "ArrowDown") move(1);
@@ -1123,7 +1418,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chartView, drawerMention, feedFilter]);
+  }, [chartView, drawerMention, feedFilter, navigateToCompanyResearch]);
 
   // Fresh, high-strength events across the whole watchlist: the speed lane.
   const breaking = useMemo(
@@ -1138,6 +1433,11 @@ export default function App() {
     (id: string) => companies.find((c) => c.id === id)?.ticker ?? id.slice(0, 4).toUpperCase(),
     [companies],
   );
+  const companyNameOf = useCallback(
+    (id: string) => companies.find((c) => c.id === id)?.name ?? id,
+    [companies],
+  );
+  const knownTickers = useMemo(() => companies.map((company) => company.ticker), [companies]);
   const activeMentionFeed = selectedId
     && mentionFeedPage?.companyId === selectedId
     && mentionFeedPage.filter === feedFilter
@@ -1154,6 +1454,12 @@ export default function App() {
     && firstRunEvidence.state === "ready"
     && firstRunEvidence.eligibleObservationCount === 0
     && !localObservationArrived;
+  useEffect(() => {
+    if (researchViewTouchedRef.current) return;
+    if (firstRunEvidence.state === "ready" && firstRunEvidence.eligibleObservationCount === 0 && !localObservationArrived) {
+      setResearchView("filings");
+    }
+  }, [firstRunEvidence, localObservationArrived]);
   const healthAttentionCount = health ? operationsAttentionCount(health) : 0;
   const webhookNotConfigured = health != null && !health.alertDelivery.configured;
   const selectedMentions = (activeMentionFeed?.items ?? []).filter((mention) =>
@@ -1171,6 +1477,7 @@ export default function App() {
   const mentionsPending = selectedId != null && !activeMentionFeed?.loaded && !activeMentionFeed?.error;
   const mentionsFailed = selectedId != null && activeMentionFeed?.error === true;
   const activeScoreBucketEvidence = scoreBucketEvidence?.companyId === selectedId && scoreBucketEvidence.hours === windowHours
+    && scoreBucketEvidence.archiveWeekStartMs === (chartView === "jev" ? jevArchiveResult?.weekStartMs ?? null : null)
     ? scoreBucketEvidence
     : null;
   const activeFeedRefreshWarning = hasUnrefreshedRecord(activeMentionFeed?.items ?? [], reconnectLookupFailedIds)
@@ -1250,6 +1557,7 @@ export default function App() {
     expectedSnapshotKey: string | null,
     expectedCount: number,
     returnFocus?: HTMLButtonElement,
+    archiveWeekStartMs: number | null = null,
   ) => {
     const companyId = selectedIdRef.current;
     const hours = windowRef.current;
@@ -1259,7 +1567,7 @@ export default function App() {
     setFeedGroupFilter(null);
     setFeedFilter("all");
     setScoreBucketEvidence({
-      companyId, hours, bucketFromMs, bucketThroughMs, expectedCount,
+      companyId, hours, archiveWeekStartMs, bucketFromMs, bucketThroughMs, expectedCount,
       matchingRecordCount: expectedCount, impactBin: null,
       expectedCountFreshness: "current", items: [],
       nextCursor: null, snapshotKey: null, recordCount: expectedCount,
@@ -1274,12 +1582,14 @@ export default function App() {
       hours: String(hours),
       limit: "50",
     });
+    if (archiveWeekStartMs != null) params.set("archiveWeek", String(archiveWeekStartMs));
     if (expectedSnapshotKey) params.set("snapshot", expectedSnapshotKey);
     try {
       const page = await getJSON<ScoreBucketEvidencePage>(
         `/api/companies/${encodeURIComponent(companyId)}/score-bucket?${params}`,
       );
-      if (requestSeq !== scoreBucketRequestSeq.current || selectedIdRef.current !== companyId || windowRef.current !== hours) return;
+      if (requestSeq !== scoreBucketRequestSeq.current || selectedIdRef.current !== companyId || windowRef.current !== hours
+        || (archiveWeekStartMs != null && jevArchiveRef.current?.weekStartMs !== archiveWeekStartMs)) return;
       const items = page.items.filter((mention) => isApplicationMention(mention)
         && mention.status === "scored" && mention.score != null);
       const coverageValid = isScoreBucketCoverage(page.coverageSummary, page.recordCount, bucketFromMs, bucketThroughMs);
@@ -1345,13 +1655,15 @@ export default function App() {
       limit: "50",
       snapshot: current.snapshotKey,
     });
+    if (current.archiveWeekStartMs != null) params.set("archiveWeek", String(current.archiveWeekStartMs));
     if (impactBin != null) params.set("impactBin", String(impactBin));
     try {
       const page = await getJSON<ScoreBucketEvidencePage>(
         `/api/companies/${encodeURIComponent(current.companyId)}/score-bucket?${params}`,
       );
       if (requestSeq !== scoreBucketRequestSeq.current || selectedIdRef.current !== current.companyId
-        || windowRef.current !== current.hours) return;
+        || windowRef.current !== current.hours
+        || (current.archiveWeekStartMs != null && jevArchiveRef.current?.weekStartMs !== current.archiveWeekStartMs)) return;
       const validRows = page.items.every((mention) => {
         const impact = mention.score?.impact;
         if (impactBin == null) return true;
@@ -1396,7 +1708,9 @@ export default function App() {
     const current = activeScoreBucketEvidence;
     if (!current) return;
     const requestSeq = scoreBucketRequestSeq.current;
-    const refreshed = await refreshSeries(current.companyId);
+    const refreshed = current.archiveWeekStartMs == null
+      ? await refreshSeries(current.companyId)
+      : await getJevHistoryWeek(current.companyId, current.archiveWeekStartMs).catch(() => null);
     if (requestSeq !== scoreBucketRequestSeq.current
       || selectedIdRef.current !== current.companyId
       || windowRef.current !== current.hours
@@ -1413,6 +1727,8 @@ export default function App() {
       baseline.bucketThroughMs,
       baseline.snapshotKey,
       baseline.recordCount,
+      undefined,
+      current.archiveWeekStartMs,
     );
   }, [activeScoreBucketEvidence, inspectScoreBucket, refreshSeries]);
 
@@ -1441,12 +1757,14 @@ export default function App() {
       cursor: JSON.stringify(cursor),
       snapshot: current.snapshotKey ?? "",
     });
+    if (current.archiveWeekStartMs != null) params.set("archiveWeek", String(current.archiveWeekStartMs));
     if (current.impactBin != null) params.set("impactBin", String(current.impactBin));
     try {
       const page = await getJSON<ScoreBucketEvidencePage>(
         `/api/companies/${encodeURIComponent(current.companyId)}/score-bucket?${params}`,
       );
-      if (requestSeq !== scoreBucketRequestSeq.current) return;
+      if (requestSeq !== scoreBucketRequestSeq.current || (current.archiveWeekStartMs != null
+        && jevArchiveRef.current?.weekStartMs !== current.archiveWeekStartMs)) return;
       if (page.bucketFromMs !== current.bucketFromMs || page.bucketThroughMs !== current.bucketThroughMs
         || page.snapshotKey !== current.snapshotKey || page.recordCount !== current.recordCount
         || page.matchingRecordCount !== current.matchingRecordCount || page.impactBin !== current.impactBin
@@ -1507,10 +1825,10 @@ export default function App() {
     <>
     <div className="flex h-full flex-col overflow-hidden" inert={drawerMention !== null}>
       <Header connected={connected} health={health} totalMentions={totalMentions} clock={clock} />
-      <MobileCompanyPicker companies={companies} selectedId={selectedId} onSelect={setSelectedId} />
+      {researchView !== "filings" && researchView !== "sources" && <MobileCompanyPicker companies={companies} selectedId={selectedId} onSelect={navigateToCompanyResearch} />}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[232px_minmax(0,1fr)]">
-        <aside className="hidden min-h-0 overflow-y-auto border-r border-desk-line lg:block">
+      <div className={`grid min-h-0 flex-1 grid-cols-1 overflow-hidden ${researchView === "filings" || researchView === "sources" ? "lg:grid-cols-1" : "lg:grid-cols-[232px_minmax(0,1fr)]"}`}>
+        {researchView !== "filings" && researchView !== "sources" && <aside className="hidden min-h-0 overflow-y-auto border-r border-desk-line lg:block">
           <div className="panel-head sticky top-0 z-10 bg-[#0a0c11]/95 backdrop-blur">
             <div className="flex items-center gap-2">
               <span className="micro">Watchlist</span>
@@ -1535,14 +1853,16 @@ export default function App() {
             selectedId={selectedId}
             sparks={sparks}
             quotes={market?.quotes ?? {}}
-            onSelect={setSelectedId}
+            onSelect={navigateToCompanyResearch}
           />
-        </aside>
+        </aside>}
 
-        <main className="research-scroll flex min-h-0 flex-col overflow-y-auto px-3 py-2 sm:px-5 sm:py-3">
-          <div className="mb-2 flex shrink-0 items-center gap-1" role="group" aria-label="Research view">
+        <main ref={researchScrollRef} className="research-scroll flex min-h-0 min-w-0 flex-col overflow-y-auto px-3 py-2 sm:px-5 sm:py-3">
+          <div className="mb-2 flex shrink-0 flex-wrap items-center gap-1" role="group" aria-label="Research view">
             {([
               ["desk", "Desk"],
+              ["sources", "Saved Sources"],
+              ["filings", "Recent Filings"],
               ["queue", "My Research"],
               ...(health?.opportunityRadarEnabled === true ? [["radar", "Opportunity Radar"] as const] : []),
             ] as const).map(([view, label]) => (
@@ -1550,7 +1870,11 @@ export default function App() {
                 key={view}
                 type="button"
                 aria-pressed={researchView === view}
-                onClick={() => setResearchView(view)}
+                onClick={() => {
+                  researchViewTouchedRef.current = true;
+                  sessionStorage.setItem("sentiment-desk-research-view", view);
+                  setResearchView(view);
+                }}
                 className={`rounded-md border px-2.5 py-1.5 text-[10.5px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 ${researchView === view ? "border-white/15 bg-white/[0.08] text-white/85" : "border-transparent text-white/40 hover:bg-white/[0.04] hover:text-white/70"}`}
               >
                 {label}
@@ -1568,7 +1892,7 @@ export default function App() {
             <details id="desk-operations" ref={operationsDisclosureRef} className="desk-operations">
               <summary>
                 <span>Sources &amp; operations</span>
-                <span className="desk-operations-summary">
+                <span className="desk-operations-summary desk-operations-summary-desktop">
                   <span className={healthLoadState === "failed" || healthAttentionCount > 0 || webhookNotConfigured ? "text-amber-200/85" : "text-white/60"}>
                     {health == null
                       ? healthLoadState === "failed" ? "status unavailable" : "checking status"
@@ -1580,6 +1904,14 @@ export default function App() {
                   {healthAttentionCount > 0 && healthLoadState !== "failed" && <span className="text-amber-200/80">{healthAttentionCount} health or alert signals</span>}
                   {webhookNotConfigured && <span className="text-amber-200/85">webhook not configured</span>}
                   <span className="text-white/50">Model output independently unvalidated</span>
+                </span>
+                <span className="desk-operations-summary-mobile">
+                  {health == null
+                    ? healthLoadState === "failed" ? "Status unavailable" : "Checking status"
+                    : healthLoadState === "failed" ? "Status unavailable · showing last known state"
+                      : health.storage.state !== "ready" ? "Storage paused · saved data only"
+                        : health.externalRequestsEnabled ? "External requests enabled" : "Saved data only"}
+                  {healthAttentionCount > 0 && healthLoadState !== "failed" ? ` · ${healthAttentionCount} issues` : ""}
                 </span>
                 <span className="desk-operations-detail">details</span>
               </summary>
@@ -1596,7 +1928,7 @@ export default function App() {
                     <span className="micro">Jev weighted-mean movers</span>
                     <span className="text-[9px] text-white/55">3h − 24h Δ · impact pts</span>
                   </div>
-                  <TopMovers companies={companies} selectedId={selectedId} onSelect={setSelectedId} />
+                  <TopMovers companies={companies} selectedId={selectedId} onSelect={navigateToCompanyResearch} />
                   <div className="panel-head mt-2 border-t border-desk-line">
                     <span className="micro">{health?.externalRequestsEnabled && health.deliveryHealth.some((source) => source.enabled) ? "Live tape" : "Recent tape"}</span>
                   </div>
@@ -1605,7 +1937,45 @@ export default function App() {
               </div>
             </details>
           )}
-          {researchView === "queue" ? (
+          {researchView === "sources" ? <SavedSourcesView
+            mentions={tape}
+            companies={companies}
+            companyInventoryState={companiesLoadState}
+            state={savedSourcesState}
+            companyHistory={savedSourcesBrowseState.companyFilter == null ? null : savedCompanyHistory[savedSourcesBrowseState.companyFilter] ?? null}
+            tickerOf={tickerOf}
+            knownTickers={knownTickers}
+            companyNameOf={companyNameOf}
+            onOpen={openSavedSource}
+            browseState={savedSourcesBrowseState}
+            onBrowseStateChange={rememberSavedSourcesBrowseState}
+            onRetryCompanyHistory={(companyId) => { void loadSavedCompanyHistory(companyId); }}
+            onLoadOlderHistory={(companyId) => {
+              const history = savedCompanyHistory[companyId];
+              const cursor = history?.nextCursor;
+              if (history == null || cursor == null) return;
+              if (!history.loadMoreFailed && savedSourcesBrowseState.companyFilter === companyId) {
+                rememberSavedSourcesBrowseState({
+                  ...savedSourcesBrowseState,
+                  historyPageCounts: {
+                    ...savedSourcesBrowseState.historyPageCounts,
+                    [companyId]: Math.max(savedSourcesBrowseState.historyPageCounts[companyId] ?? 1, (history.pagesLoaded ?? 1) + 1),
+                  },
+                });
+              }
+              void loadSavedCompanyHistory(companyId, cursor);
+            }}
+            onRetry={() => {
+              if (!savedSourcesSnapshotSeenRef.current) setSavedSourcesState("loading");
+              void refreshBackendSnapshot();
+            }}
+          /> : researchView === "filings" ? <SecFilingsInbox onBrowseSavedSources={() => {
+            recoverToSavedSources(rememberSavedSourcesBrowseState, () => {
+              researchViewTouchedRef.current = true;
+              sessionStorage.setItem("sentiment-desk-research-view", "sources");
+              setResearchView("sources");
+            });
+          }} /> : researchView === "queue" ? (
             <AnalystResearchQueue
               refreshRevision={researchQueueRevision}
               onReviewChanged={reportResearchReviewChanged}
@@ -1658,15 +2028,11 @@ export default function App() {
                       );
                     })()}
                   </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-white/40">
+                  <div className="selected-company-context mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-white/40">
                     <span>
-                      {selected.sector} · {windowLabel(windowHours)} saved window · Historical Jev: {selectedSeriesError
-                        ? "unavailable"
-                        : !selectedSeriesReady
-                            ? "loading saved history"
-                            : selectedSeriesScoredItemCount > 0
-                            ? `${selectedSeriesScoredItemCount} scored records · ${selectedSeriesLastScoredAt == null ? "latest time unavailable" : `latest ${timeAgo(selectedSeriesLastScoredAt)}`}`
-                            : `No scored records in ${windowLabel(windowHours)}`}
+                        {selected.sector} · {chartView === "jev"
+                        ? "Historical Jev archive · complete UTC week"
+                        : `${lunaWindowHeader}${matchingCategoricalChartSnapshot?.status === "ready" ? " · rolling saved window" : ""}`}
                       {health?.health.classifier?.provider === "openai_luna" && (
                         <span title={health.health.classifier.enabled
                           ? "Luna is available for new categorical classifications. Historical Jev probabilities and this chart retain their original profile; no synthetic probability or impact is assigned."
@@ -1697,6 +2063,16 @@ export default function App() {
                         {selected.lastSurprise.percent.toFixed(1)}%
                       </span>
                     )}
+                    {chartView === "jev" && matchingCategoricalChartSnapshot?.status === "failed" && (
+                      <button
+                        type="button"
+                        className="text-[10px] text-amber-200 underline underline-offset-2"
+                        onClick={() => setCategoricalRefreshRequest((current) => ({
+                          companyId: selected.id,
+                          revision: current?.companyId === selected.id ? current.revision + 1 : 1,
+                        }))}
+                      >Retry Luna trend</button>
+                    )}
                   </div>
                   {(selected.indexWindow === "24h" || selected.indexWindow === "3h") && (
                     <div className="mt-1.5 text-[11.5px] text-white/55" title="Jev's per-record impact mean is a research label, not share-price return or investor opinion. The 24-hour baseline includes the latest three hours.">
@@ -1708,13 +2084,14 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <div className="flex w-full flex-row justify-between gap-1 pt-2 sm:ml-auto sm:w-auto sm:shrink-0 sm:justify-start sm:pt-0">
+                <div role="group" aria-label="Current saved evidence window" className="chart-evidence-window flex min-w-0 w-full flex-row flex-wrap items-center justify-between gap-1 pt-2 sm:ml-auto sm:w-auto sm:shrink-0 sm:flex-nowrap sm:justify-start sm:pt-0">
+                  <span className="chart-evidence-window-label micro mr-1">Saved-source window</span>
                   {WINDOWS.map((w, i) => (
                     <button
                       key={w.h}
                       onClick={() => setWindowHours(w.h)}
                       aria-pressed={windowHours === w.h}
-                      className={`chart-range-control flex items-center justify-between gap-2 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      className={`chart-range-control flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors sm:flex-none ${
                         windowHours === w.h
                           ? "bg-white/[0.09] text-white"
                           : "text-white/40 hover:bg-white/[0.04] hover:text-white/70"
@@ -1727,6 +2104,9 @@ export default function App() {
                 </div>
               </div>
 
+              <SelectedCompanyResearchSections
+                chart={
+                  <>
               <div className="chart-view-tabs" role="tablist" aria-label={`${selected.name} sentiment chart`}>
                 <button
                   id="chart-tab-luna"
@@ -1741,7 +2121,7 @@ export default function App() {
                       event.preventDefault();
                       const next = event.key === "Home" || event.key === "ArrowLeft" ? "luna" : "jev";
                       chooseChartView(next);
-                      requestAnimationFrame(() => document.getElementById(`chart-tab-${next}`)?.focus());
+                      requestAnimationFrame(() => document.getElementById(`chart-tab-${next}`)?.focus({ preventScroll: true }));
                     }
                   }}
                 >Luna categories</button>
@@ -1758,24 +2138,26 @@ export default function App() {
                       event.preventDefault();
                       const next = event.key === "Home" || event.key === "ArrowLeft" ? "luna" : "jev";
                       chooseChartView(next);
-                      requestAnimationFrame(() => document.getElementById(`chart-tab-${next}`)?.focus());
+                      requestAnimationFrame(() => document.getElementById(`chart-tab-${next}`)?.focus({ preventScroll: true }));
                     }
                   }}
                 >Historical Jev</button>
               </div>
               <div id="chart-panel-luna" role="tabpanel" aria-labelledby="chart-tab-luna" hidden={chartView !== "luna"} className="mt-2">
                 <CategoricalTrendChart
-                  key={`${selected.id}:${windowHours}`}
+                  key={`${selected.id}:${windowHours}:${streamRuntimeId ?? "unknown-runtime"}`}
                   companyId={selected.id}
                   hours={windowHours}
                   active={chartView === "luna"}
+                  refreshRevision={categoricalRefreshRequest?.companyId === selected.id ? categoricalRefreshRequest.revision : 0}
                   classifierEnabled={health?.health.classifier?.provider === "openai_luna" && health.health.classifier.enabled}
                   blockedReason={health?.health.classifier?.provider === "openai_luna" ? health.health.classifier.blockedReason : null}
+                  historicalJevSummary={historicalJevHeaderSummary}
                   onOpenMention={openDrawerMention}
                   onOpenOperations={openOperationsFromDrawer}
                   onViewHistoricalJev={() => {
                     chooseChartView("jev");
-                    requestAnimationFrame(() => document.getElementById("chart-tab-jev")?.focus());
+                    requestAnimationFrame(() => document.getElementById("chart-tab-jev")?.focus({ preventScroll: true }));
                   }}
                   onReviewSourceRecords={() => showMentionFeed()}
                   onSnapshot={reportCategoricalChartSnapshot}
@@ -1783,87 +2165,70 @@ export default function App() {
               </div>
               <div id="chart-panel-jev" role="tabpanel" aria-labelledby="chart-tab-jev" hidden={chartView !== "jev"}>
                 {chartView === "jev" && <>
-              {categoricalChartSnapshot?.key === selectedSeriesKey && categoricalChartSnapshot.eligibleObservationCount === 0 && (
-                <section className="panel mt-2 px-3 py-2.5 text-[12px] text-white/65" role="status">
-                  Historical Jev only. No Luna categories are saved for this company and window.
-                  {health && !health.externalRequestsEnabled && " External requests are paused."}
-                  <button type="button" className="ml-2 rounded border border-white/10 px-2 py-1 text-white/80" onClick={() => chooseChartView("luna")}>View Luna status</button>
-                </section>
-              )}
-              {selectedSeriesReady && !selectedSeriesHasSentiment && health?.health.classifier?.provider === "openai_luna" && chartMode === "sentiment" ? (
-                <section className="panel mt-2 px-3 py-3 text-[12px] text-white/55" role="status">
-                  No saved Jev-scored records in this window. Inspect saved source records and categorical judgments below.
-                  <button type="button" className="ml-2 rounded border border-white/10 px-2 py-1 text-white/75" onClick={() => setChartMode("comparison")}>Inspect saved price history</button>
-                </section>
-              ) : <div className="panel mt-2 shrink-0">
+              <section className="historical-archive-summary panel mt-2 px-3 py-2 text-[11px] text-white/70" aria-label="Saved Jev history navigation">
+                <div className="historical-archive-summary-main" aria-live="polite">
+                  {selectedJevArchive?.loading && !jevArchiveResult && <span>Loading saved Jev weeks…</span>}
+                  {selectedJevArchive?.error && !jevArchiveResult && <span role="alert">Saved Jev history is unavailable.</span>}
+                  {!selectedJevArchive?.loading && !selectedJevArchive?.error && !jevArchiveResult && <span>
+                    {selectedJevArchive?.notFound ? "No eligible saved Jev scores exist in that week." : "No eligible saved Jev history for this company."}
+                  </span>}
+                  {jevArchiveResult && <>
+                    <strong
+                      className="text-white/90"
+                      title={`Selected UTC week [${new Date(jevArchiveResult.fromMs).toISOString()}, ${new Date(jevArchiveResult.throughMs).toISOString()})`}
+                    >
+                      UTC week [{new Date(jevArchiveResult.fromMs).toISOString().slice(0, 10)}, {new Date(jevArchiveResult.throughMs).toISOString().slice(0, 10)})
+                    </strong>
+                    <time
+                      dateTime={new Date(jevArchiveResult.latestEligibleScoreAtMs).toISOString()}
+                      title={`Latest eligible Jev score completed ${new Date(jevArchiveResult.latestEligibleScoreAtMs).toISOString()}`}
+                    >
+                      Latest score {new Date(jevArchiveResult.latestEligibleScoreAtMs).toISOString().slice(0, 16).replace("T", " ")} UTC · {timeAgo(jevArchiveResult.latestEligibleScoreAtMs)}
+                    </time>
+                    {selectedJevArchive?.loading && <span role="status">Loading requested week · showing saved week.</span>}
+                    {selectedJevArchive?.error && <span role="alert">Refresh failed · showing saved week.</span>}
+                  </>}
+                </div>
+              </section>
+              {jevArchiveResult && <div id="historical-jev-chart" className="panel mt-2 shrink-0">
+                <HistoricalJevCaveat />
                 <div className="panel-head chart-panel-head">
                   <div className="chart-panel-topline">
-                    <span className="micro">
-                      {chartMode === "comparison" ? "Historical Jev Weighted Mean + Price" : "Historical Jev Weighted Mean"}
-                    </span>
-                    <button
-                      onClick={() => setChartMode((m) => (m === "comparison" ? "sentiment" : "comparison"))}
-                      aria-pressed={chartMode === "comparison"}
-                      aria-label={chartMode === "comparison" ? "Switch to Jev weighted mean only" : "Compare Jev weighted mean impact with share price"}
-                      className="tabnum rounded border border-white/10 px-1.5 py-[1px] hover:bg-white/[0.05]"
-                    >
-                      {chartMode === "comparison" ? "Mean only" : "Compare price"}
-                      <kbd className="ml-1">c</kbd>
-                    </button>
+                    <span className="micro">Historical Jev Weighted Mean · saved local scores</span>
                   </div>
                   <div className="chart-panel-meta flex items-center gap-2 text-[11px] text-white/60">
                     <span className="flex items-center gap-1">
                       <span className="inline-block h-[3px] w-3 rounded-sm bg-gradient-to-r from-rose-400 to-emerald-400" />
                       Saved-record weighted mean · impact points −100 to +100
                     </span>
-                    <span title="Bars count Jev-scored source records completed in each 15-minute bucket. Repeated coverage may count more than once; bars do not count distinct stories or investors.">
-                      <span className="mr-1 inline-block h-[7px] w-[7px] rounded-sm bg-slate-400/70" />scored records / 15m
-                    </span>
                     <span
                       className="text-white/65"
-                      title="Count of Jev-scored source records by score-availability time. Syndicated or repeated coverage can appear as multiple records; this is not a count of independent investor opinions."
+                      title="Repeated coverage can appear more than once; records do not represent distinct investors. Empty 15-minute intervals remain blank, and no value is carried forward or decayed."
                     >
-                      {selectedSeriesScoredItemCount} source records · {selectedSeriesScoredBucketCount} buckets · repeats included
+                      {jevArchiveResult.points.reduce((sum, point) => sum + point.scoredRecordCount, 0)} source records · repeats included · {jevArchiveResult.points.filter((point) => point.scoredRecordCount > 0).length} populated buckets
                     </span>
-                    <span className="text-white/65">
-                      {selectedSeriesFreshness}
-                    </span>
-                    <span className="text-white/65" title="Each populated bar summarizes saved Jev-scored records completed in one UTC-aligned 15-minute bucket. Empty intervals remain blank; no value is carried forward or decayed.">
-                      15m buckets · gaps preserved · no decay
-                    </span>
-                    {chartMode === "comparison" && (
-                      <span className="flex items-center gap-1">
-                        <span className="inline-block h-[2px] w-3 bg-white/80" /> price{selectedPriceCurrency ? ` · ${selectedPriceCurrency}` : " · unit unavailable"}
-                      </span>
-                    )}
-                    {chartMode === "comparison" && (
-                      <span
-                        className={selectedPriceError || selectedPriceSource?.refreshError ? "text-amber-200" : "text-white/65"}
-                        title={selectedPriceSource ? `${selectedPriceCollector ?? "Provider unknown"}; delivery ${selectedPrice.at(-1)?.deliveryId ?? "unknown"}; latest source observation ${selectedPriceSource.sourceLatestAt == null ? "time unknown" : new Date(selectedPriceSource.sourceLatestAt).toISOString()}; latest point retrieved ${selectedPriceRetrievedAt == null ? "time unknown" : new Date(selectedPriceRetrievedAt).toISOString()}${selectedPriceRefreshLabels.titleDetail ? `; ${selectedPriceRefreshLabels.titleDetail}` : ""}; served ${new Date(selectedPriceSource.servedAt).toISOString()}${selectedPriceSource.cacheAgeMs == null ? "" : `; memory cache age ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`}; only provider-timestamped points with known currency are plotted.` : undefined}
-                      >
-                        {selectedPriceRefreshLabels.label ?? (selectedPriceSource
-                          ? `${selectedPriceCollector ?? "provider unknown"} · ${selectedPriceSource.delivery.replaceAll("_", " ")}${selectedPriceSource.cacheAgeMs == null ? "" : ` ${Math.round(selectedPriceSource.cacheAgeMs / 1000)}s`} · source ${timeAgo(selectedPriceSource.sourceLatestAt)}`
-                          : "price waiting")}
-                      </span>
-                    )}
+                    <span className="text-white/60">15-minute gaps preserved · no price history aligned</span>
                   </div>
                 </div>
                 <div className="chart-context-layout px-3 py-2">
                   <div className="chart-context-plot">
                     <SeriesChart
-                      key={`${selectedSeriesKey ?? "no-selection"}:${chartMode}`}
-                      points={selectedSeries}
-                      hours={windowHours}
-                      loading={chartLoading}
-                      mode={chartMode}
-                      price={selectedPrice}
-                      currency={selectedPriceCurrency}
-                      latestPriceAt={selectedPriceSource?.sourceLatestAt ?? null}
-                      latestScoreAvailableAt={selectedSeriesHistoryLatestScoredAt}
-                      onViewHistory={() => setWindowHours(168)}
+                      key={`${selectedId ?? "no-selection"}:${jevArchiveResult.weekStartMs}`}
+                      points={jevArchiveResult.points}
+                      hours={168}
+                      range={{ fromMs: jevArchiveResult.fromMs, throughMs: jevArchiveResult.throughMs }}
+                      loading={selectedJevArchive?.loading ?? true}
+                      mode="sentiment"
+                      price={[]}
+                      currency={null}
+                      latestPriceAt={null}
+                      latestScoreAvailableAt={jevArchiveResult.latestEligibleScoreAtMs}
+                      seriesError={selectedJevArchive?.error ?? false}
+                      seriesReady={!selectedJevArchive?.loading}
                       onSelectBucket={(bucketFromMs, bucketThroughMs, returnFocus) => {
-                        const bucket = selectedSeries.find((point) => point.bucketEndAtMs === bucketThroughMs);
-                        void inspectScoreBucket(bucketFromMs, bucketThroughMs, bucket?.bucketSnapshotKey ?? null, bucket?.scoredRecordCount ?? 0, returnFocus);
+                        const bucket = jevArchiveResult.points.find((point) => point.bucketEndAtMs === bucketThroughMs);
+                        void inspectScoreBucket(bucketFromMs, bucketThroughMs, bucket?.bucketSnapshotKey ?? null,
+                          bucket?.scoredRecordCount ?? 0, returnFocus, jevArchiveResult.weekStartMs);
                       }}
                       bucketEvidence={activeScoreBucketEvidence ? (
                         <ScoreBucketEvidence
@@ -1897,33 +2262,54 @@ export default function App() {
                           onSelectImpactBin={(bin) => void selectScoreBucketImpactBin(bin)}
                         />
                       ) : null}
-                      {...selectedPriceChartState}
-                      seriesError={selectedSeriesError}
-                      seriesReady={selectedSeriesReady}
                     />
                   </div>
                 </div>
               </div>}
+              <details className="historical-archive-controls mt-1 panel" aria-label="Browse saved Jev weeks">
+                <summary>Browse saved weeks</summary>
+                <div className="historical-archive-control-buttons">
+                  <button type="button" disabled={!jevArchiveResult?.olderWeekStartMs || selectedJevArchive?.loading} onClick={() => jevArchiveResult?.olderWeekStartMs != null && selectedId && void loadJevArchiveWeek(selectedId, jevArchiveResult.olderWeekStartMs)} className="rounded border border-white/15 px-2 py-1 disabled:opacity-40">Older week</button>
+                  <button type="button" disabled={!jevArchiveResult?.newerWeekStartMs || selectedJevArchive?.loading} onClick={() => jevArchiveResult?.newerWeekStartMs != null && selectedId && void loadJevArchiveWeek(selectedId, jevArchiveResult.newerWeekStartMs)} className="rounded border border-white/15 px-2 py-1 disabled:opacity-40">Newer week</button>
+                  <button type="button" disabled={selectedJevArchive?.loading || (jevArchiveResult != null && jevArchiveResult.weekStartMs === jevArchiveResult.latestWeekStartMs)} onClick={() => selectedId && void loadJevArchiveWeek(selectedId, "latest")} className="rounded border border-white/15 px-2 py-1 disabled:opacity-40">Latest</button>
+                  {selectedJevArchive?.error && <button type="button" onClick={() => selectedId && void loadJevArchiveWeek(selectedId, selectedJevArchive.requestedWeek)} className="rounded border border-amber-200/30 px-2 py-1 text-amber-100">Retry</button>}
+                  {selectedJevArchive?.notFound && <button type="button" onClick={() => showMentionFeed()} className="rounded border border-white/15 px-2 py-1">Review saved source records</button>}
+                </div>
+              </details>
                 </>}
               </div>
 
-              <EvidenceBreadth
-                mentions={evidenceBreadthMentions}
-                hours={windowHours}
-                loaded={activeEvidenceBreadthPage?.loaded === true}
-                error={activeEvidenceBreadthPage?.error === true}
-                hasMore={activeEvidenceBreadthPage?.hasMore === true}
-                now={clock}
-                refreshWarning={evidenceBreadthRefreshWarning}
-                onRetry={() => setSnapshotRevision((revision) => revision + 1)}
-                onRetryRefresh={() => {
-                  void refreshBackendSnapshot();
-                  setSnapshotRevision((revision) => revision + 1);
-                }}
-                onShowRecords={showMentionFeed}
-                onShowUnscoredHistory={showUnscoredHistory}
-                recentlyRetrievedCount={selected?.sourceRecords24h ?? 0}
-                onOpenMention={openDrawerMention}
+                </>}
+                afterChart={<EvidenceQuickAccess
+                  mentions={evidenceBreadthMentions}
+                  hours={windowHours}
+                  loaded={activeEvidenceBreadthPage?.loaded === true}
+                  error={activeEvidenceBreadthPage?.error === true}
+                  hasMore={activeEvidenceBreadthPage?.hasMore === true}
+                  now={clock}
+                  onReview={() => showMentionFeed()}
+                  onRetry={() => setSnapshotRevision((revision) => revision + 1)}
+                />}
+                evidence={
+                  <EvidenceBreadth
+                    mentions={evidenceBreadthMentions}
+                    hours={windowHours}
+                    loaded={activeEvidenceBreadthPage?.loaded === true}
+                    error={activeEvidenceBreadthPage?.error === true}
+                    hasMore={activeEvidenceBreadthPage?.hasMore === true}
+                    now={clock}
+                    refreshWarning={evidenceBreadthRefreshWarning}
+                    onRetry={() => setSnapshotRevision((revision) => revision + 1)}
+                    onRetryRefresh={() => {
+                      void refreshBackendSnapshot();
+                      setSnapshotRevision((revision) => revision + 1);
+                    }}
+                    onShowRecords={showMentionFeed}
+                    onShowUnscoredHistory={showUnscoredHistory}
+                    recentlyRetrievedCount={selected?.sourceRecords24h ?? 0}
+                    onOpenMention={openDrawerMention}
+                  />
+                }
               />
 
               <CompanyFundamentals
@@ -2063,6 +2449,9 @@ export default function App() {
                     <MentionFeed
                       mentions={filteredMentions}
                       onOpen={openDrawerMention}
+                      tickerOf={tickerOf}
+                      knownTickers={knownTickers}
+                      companyNameOf={companyNameOf}
                       groupFilter={feedGroupFilter}
                       hasOlderPages={activeMentionFeed?.nextCursor != null}
                       loaded={activeMentionFeed?.loaded === true}
@@ -2162,6 +2551,9 @@ export default function App() {
       onOpenOperations={openOperationsFromDrawer}
       onReviewChanged={reportResearchReviewChanged}
       onOpenResearchQueue={openResearchQueue}
+      tickerOf={tickerOf}
+      knownTickers={knownTickers}
+      companyNameOf={companyNameOf}
     />
     </>
   );

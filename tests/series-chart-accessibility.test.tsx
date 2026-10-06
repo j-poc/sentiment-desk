@@ -4,7 +4,15 @@ import { describe, it } from "vitest";
 import { SeriesChart } from "../web/src/components/SeriesChart.js";
 import type { SeriesPoint } from "../web/src/lib/api.js";
 
-function scorePoint(t: number, v: number | null, n: number, min: number | null, max: number | null, latest: number | null): SeriesPoint {
+function scorePoint(
+  t: number,
+  v: number | null,
+  n: number,
+  min: number | null,
+  max: number | null,
+  latest: number | null,
+  sourceLineage?: SeriesPoint["sourceLineage"],
+): SeriesPoint {
   return {
     bucketStartAtMs: t - 15 * 60_000,
     bucketEndAtMs: t,
@@ -14,11 +22,104 @@ function scorePoint(t: number, v: number | null, n: number, min: number | null, 
     recordImpactMin: min,
     recordImpactMax: max,
     latestRecordScoredAtMs: latest,
+    ...(sourceLineage ? { sourceLineage } : {}),
     t, v, n, itemImpactMin: min, itemImpactMax: max, lastScoredAt: latest,
   };
 }
 
+function htmlDivRegion(html: string, marker: string): string {
+  const markerIndex = html.indexOf(marker);
+  assert.notEqual(markerIndex, -1, `missing ${marker}`);
+  const openTagStart = html.lastIndexOf("<div", markerIndex);
+  const tags = /<\/?div\b[^>]*>/g;
+  tags.lastIndex = openTagStart;
+  let depth = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tags.exec(html)) != null) {
+    if (match[0].startsWith("</")) depth -= 1;
+    else depth += 1;
+    if (depth === 0) return html.slice(openTagStart, tags.lastIndex);
+  }
+  assert.fail(`unclosed div containing ${marker}`);
+}
+
 describe("chart keyboard data inspection", () => {
+  it("anchors plot overlays to the canvas and keeps controls outside that frame", () => {
+    const timestamp = Date.parse("2026-09-28T10:15:00.000Z");
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[scorePoint(timestamp, 42, 1, 42, 42, timestamp)]}
+        hours={168}
+        range={{ fromMs: Date.parse("2026-09-28T00:00:00.000Z"), throughMs: Date.parse("2026-10-05T00:00:00.000Z") }}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={timestamp}
+      />,
+    );
+
+    const frame = htmlDivRegion(html, 'data-chart-overlay-frame="true"');
+    assert.match(frame, /Discrete histogram of observed Jev score-time buckets/);
+    assert.match(html, /grouped by Jev score-completion time, not article publication, public-discussion volume, investor activity, or share-price changes/);
+    assert.match(html, /Select a bucket to inspect source clocks, repeated-title cues, and delivery-receipt links/);
+    assert.match(frame, /SCORED RECORDS \/ 15M/);
+    assert.match(frame, /chart-canvas-tooltip/);
+    assert.doesNotMatch(frame, /aria-label="Chart time range"/);
+    assert.ok(html.indexOf('aria-label="Chart time range"') > html.indexOf(frame) + frame.length);
+  });
+
+  it("offers a fit-to-scores view without discarding the selected archive week", () => {
+    const timestamp = Date.parse("2026-09-28T10:15:00.000Z");
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[scorePoint(timestamp, 42, 1, 42, 42, timestamp)]}
+        hours={168}
+        range={{ fromMs: Date.parse("2026-09-28T00:00:00.000Z"), throughMs: Date.parse("2026-10-05T00:00:00.000Z") }}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={timestamp}
+      />,
+    );
+
+    assert.match(html, /aria-label="Chart time range"/);
+    assert.match(html, /aria-pressed="true"[^>]*>Fit scores/);
+    assert.match(html, /aria-pressed="false"[^>]*>Full week/);
+    assert.ok(html.indexOf('role="img" aria-label="Discrete histogram of observed Jev score-time buckets.') < html.indexOf('aria-label="Chart time range"'));
+    assert.match(html, /Plot span \(UTC, end exclusive\) · Sep 28 09:07:30 to before 11:07:30/);
+    assert.match(html, /Plot · Sep 28 09:07–11:07 UTC/);
+    assert.match(html, /visible plot span is 2026-09-28T09:07:30\.000Z to before 2026-09-28T11:07:30\.000Z; the selected archive week is 2026-09-28T00:00:00\.000Z to before 2026-10-05T00:00:00\.000Z/);
+  });
+
+  it("shows each archive bucket's receipt and repeated-title cues in its keyboard data row", () => {
+    const timestamp = Date.parse("2026-09-28T10:15:00.000Z");
+    const html = renderToStaticMarkup(
+      <SeriesChart
+        points={[scorePoint(timestamp, -23.2, 50, -100, 97, timestamp, {
+          recordCount: 50,
+          receiptLinkedRecordCount: 0,
+          repeatedTitleRecordCount: 11,
+          exactNormalizedTitleCount: 44,
+        })]}
+        hours={168}
+        range={{ fromMs: Date.parse("2026-09-28T00:00:00.000Z"), throughMs: Date.parse("2026-10-05T00:00:00.000Z") }}
+        loading={false}
+        mode="sentiment"
+        currency={null}
+        latestPriceAt={null}
+        latestScoreAvailableAt={timestamp}
+      />,
+    );
+
+    assert.match(html, /Source delivery lineage/);
+    assert.match(html, /0\/50 receipt-linked/);
+    assert.match(html, /11\/50 rows in repeated exact-title groups/);
+    assert.match(html, /Repeated-title counts are cues only/);
+    assert.match(html, /do not prove duplicate stories or independent publishers/);
+  });
+
   it("contains duplicate timestamps and withholds those rows accessibly", () => {
     const boundary = Date.parse("2026-09-29T14:45:00.420Z");
     const html = renderToStaticMarkup(

@@ -236,7 +236,7 @@ function processIsAlive(pid: number): boolean {
 function hasCurrentReadableSchema(db: DatabaseSync): boolean {
   try {
     const version = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-    if (version?.user_version !== 15) return false;
+    if (version?.user_version !== 16) return false;
     const objects = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name));
     if (!["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
       "source_deliveries", "source_ingestions", "followed_company_baselines", "followed_company_baseline_items",
@@ -289,6 +289,7 @@ CREATE TABLE IF NOT EXISTS source_observations (
   title TEXT NOT NULL,
   snippet TEXT NOT NULL,
   publisher_published_at INTEGER,
+  aggregator_published_at INTEGER,
   provider_observed_at INTEGER,
   retrieved_at INTEGER NOT NULL,
   ingested_at INTEGER NOT NULL,
@@ -757,6 +758,7 @@ export interface MentionRow {
   snippet: string;
   published_at: number | null;
   publisher_published_at: number | null;
+  aggregator_published_at: number | null;
   provider_observed_at: number | null;
   retrieved_at: number;
   ingested_at: number;
@@ -1032,7 +1034,7 @@ export class Desk {
       const probe = new DatabaseSync(canonicalPath, { readOnly: true });
       try {
         schemaVersion = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (schemaVersion > 15) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
+        if (schemaVersion > 16) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
         currentSchema = hasCurrentReadableSchema(probe);
         // v11+ upgrades are additive; older upgrades may rebuild legacy rows,
         // so they retain the full-database startup reserve.
@@ -1067,7 +1069,7 @@ export class Desk {
           const probe = new DatabaseSync(canonicalPath, { readOnly: true });
           try {
             const version = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-            if (version > 15) throw new Error(`unsupported_database_schema_version_${version}`);
+            if (version > 16) throw new Error(`unsupported_database_schema_version_${version}`);
             currentSchema = hasCurrentReadableSchema(probe);
           }
           finally { probe.close(); }
@@ -1109,7 +1111,7 @@ export class Desk {
       this.exec("PRAGMA journal_mode = WAL");
       if (!currentSchema) {
         const version = Number((this.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (version > 15) throw new Error(`unsupported_database_schema_version_${version}`);
+        if (version > 16) throw new Error(`unsupported_database_schema_version_${version}`);
         this.exec(SCHEMA);
         this.migrate();
       }
@@ -1121,7 +1123,7 @@ export class Desk {
         .run(this.runtimeId, process.pid, Date.now());
       this.recoverUnfinishedJevAttempts();
       this.recoverUnfinishedFundamentalAttempts();
-      this.exec("PRAGMA user_version = 15");
+      this.exec("PRAGMA user_version = 16");
       this.storageEnforcementEnabled = true;
     } catch (error) {
       try { openedDb?.close(); } catch { /* preserve startup failure */ }
@@ -1210,6 +1212,9 @@ export class Desk {
     );
     if (!observationCols.has("delivery_id")) {
       this.exec("ALTER TABLE source_observations ADD COLUMN delivery_id TEXT REFERENCES source_deliveries(id)");
+    }
+    if (!observationCols.has("aggregator_published_at")) {
+      this.exec("ALTER TABLE source_observations ADD COLUMN aggregator_published_at INTEGER");
     }
     this.exec("CREATE INDEX IF NOT EXISTS observations_delivery ON source_observations(delivery_id)");
     const deliveryCols = new Set(
@@ -1376,10 +1381,18 @@ export class Desk {
   }
 
   private createMentionsView(): void {
+    const rss = "o.collector IN ('google_news_rss', 'yahoo_finance_rss')";
+    const publisherTime = `CASE WHEN ${rss} THEN NULL ELSE o.publisher_published_at END`;
+    const aggregatorTime = `CASE WHEN ${rss} THEN COALESCE(o.aggregator_published_at, o.publisher_published_at) ELSE o.aggregator_published_at END`;
     this.exec(`CREATE VIEW mentions AS
       SELECT o.id, o.company_id, o.source_name, o.source_url, o.source_kind, o.source_tier,
-        o.title, o.snippet, o.publisher_published_at AS published_at, o.publisher_published_at,
-        o.provider_observed_at, o.retrieved_at, o.ingested_at, o.time_basis, o.collector, o.delivery_id,
+        o.title, o.snippet, ${publisherTime} AS published_at, ${publisherTime} AS publisher_published_at,
+        ${aggregatorTime} AS aggregator_published_at,
+        CASE WHEN ${rss} THEN o.retrieved_at ELSE COALESCE(o.publisher_published_at, o.provider_observed_at, o.retrieved_at) END AS event_at,
+        o.provider_observed_at, o.retrieved_at, o.ingested_at,
+        CASE WHEN ${rss} THEN CASE WHEN ${aggregatorTime} IS NOT NULL THEN 'aggregator_declared'
+          WHEN o.provider_observed_at IS NOT NULL THEN 'provider_observed' ELSE 'unknown' END ELSE o.time_basis END AS time_basis,
+        o.collector, o.delivery_id,
         o.publisher_name, o.publisher_domain, o.filed_at, o.scoped, d.sec_document_context_json AS sec_document_context_json,
         COALESCE(c.disposition, j.status) AS status, j.sentiment, j.confidence, j.p_pos, j.p_neu, j.p_neg, j.about, j.material,
         j.novel, j.credible, j.investor_relevant, j.event_type, j.takeaway, j.magnitude,
@@ -1589,6 +1602,81 @@ export class Desk {
     if (Number(result.changes) !== 1) throw new Error("SEC fundamentals refresh attempt is not running");
   }
 
+  persistCompanyFundamentalPayloadReceipt(input: {
+    attemptId: string;
+    companyId: string;
+    payload: SecFundamentalPayloadInput;
+  }): string {
+    const attempt = this.prepare(`SELECT company_id, request_key, status, started_at FROM sec_fundamental_attempts WHERE id=?`)
+      .get(input.attemptId) as { company_id: string; request_key: string; status: string; started_at: number } | undefined;
+    if (!attempt || attempt.company_id !== input.companyId || attempt.status !== "running") {
+      throw new Error("SEC fundamentals attempt is not available for response receipt persistence");
+    }
+    const payload = input.payload;
+    const target = new URL(payload.url);
+    const allowedHost = payload.endpoint === "ticker_directory" ? target.hostname === "www.sec.gov" : target.hostname === "data.sec.gov";
+    if (target.protocol !== "https:" || !allowedHost || target.username || target.password) throw new Error("SEC receipt URL is outside the official SEC API hosts");
+    if (!Number.isSafeInteger(payload.startedAt) || !Number.isSafeInteger(payload.retrievedAt)
+      || payload.startedAt < attempt.started_at || payload.retrievedAt < payload.startedAt
+      || !Number.isSafeInteger(payload.bodyBytes) || payload.bodyBytes < 1 || payload.bodyBytes > 32 * 1024 * 1024
+      || Buffer.byteLength(payload.body, "utf8") !== payload.bodyBytes
+      || !/^[a-f0-9]{64}$/.test(payload.sha256)
+      || createHash("sha256").update(payload.body, "utf8").digest("hex") !== payload.sha256) {
+      throw new Error("SEC payload receipt failed its size, digest, or timestamp checks");
+    }
+    JSON.parse(payload.body);
+
+    const requestKey = `fundamentals:${attempt.request_key}:${payload.endpoint}`;
+    const requestKeyHash = createHash("sha256").update(requestKey).digest("hex");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.prepare(`SELECT d.id, d.result, d.response_digest, d.adapter_version,
+          p.endpoint, p.url, p.retrieved_at, p.body_bytes, p.sha256, b.body
+        FROM source_deliveries d
+        JOIN sec_fundamental_payloads p ON p.delivery_id=d.id
+        JOIN sec_fundamental_payload_blobs b ON b.sha256=p.sha256
+        WHERE d.collector='sec_company_facts' AND d.company_id=? AND d.request_key_hash=? AND p.endpoint=?
+        ORDER BY d.rowid DESC LIMIT 1`).get(input.companyId, requestKeyHash, payload.endpoint) as
+        { id: string; result: string; response_digest: string | null; adapter_version: string; endpoint: string;
+          url: string; retrieved_at: number; body_bytes: number; sha256: string; body: string } | undefined;
+      if (existing) {
+        if (existing.result !== "success" || existing.response_digest !== payload.sha256
+          || existing.adapter_version !== `sec-fundamentals-${payload.endpoint}/3`
+          || existing.endpoint !== payload.endpoint || existing.url !== payload.url
+          || Number(existing.retrieved_at) !== payload.retrievedAt || Number(existing.body_bytes) !== payload.bodyBytes
+          || existing.sha256 !== payload.sha256 || existing.body !== payload.body) {
+          throw new Error("Existing SEC response receipt does not match the immutable response");
+        }
+        this.exec("COMMIT");
+        return existing.id;
+      }
+
+      this.prepare(`INSERT OR IGNORE INTO sec_fundamental_payload_blobs (sha256, body_bytes, body)
+        VALUES (?, ?, ?)`).run(payload.sha256, payload.bodyBytes, payload.body);
+      const storedBlob = this.prepare(`SELECT body_bytes, body FROM sec_fundamental_payload_blobs WHERE sha256=?`)
+        .get(payload.sha256) as { body_bytes: number; body: string } | undefined;
+      if (!storedBlob || Number(storedBlob.body_bytes) !== payload.bodyBytes || storedBlob.body !== payload.body) {
+        throw new Error("SEC content-addressed payload blob does not match its digest and size");
+      }
+      const deliveryId = this.recordDelivery({
+        collector: "sec_company_facts", companyId: input.companyId, requestKey,
+        startedAt: payload.startedAt, completedAt: payload.retrievedAt, result: "success",
+        // This receipt is a successful JSON response; financial facts are persisted separately from source observations.
+        parsedItemCount: 0, responseDigest: payload.sha256,
+        adapterVersion: `sec-fundamentals-${payload.endpoint}/3`,
+      });
+      this.prepare(`INSERT INTO sec_fundamental_payloads
+        (delivery_id, endpoint, url, retrieved_at, body_bytes, sha256)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(deliveryId, payload.endpoint, payload.url, payload.retrievedAt,
+        payload.bodyBytes, payload.sha256);
+      this.exec("COMMIT");
+      return deliveryId;
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
   saveCompanyFundamentals(input: SaveSecFundamentalsInput): { snapshotId: string; deliveryIds: Record<SecFundamentalPayloadInput["endpoint"], string> } {
     if (!/^\d{10}$/.test(input.cik)) throw new Error("SEC fundamentals issuer CIK must be 10 digits");
     if (!Number.isSafeInteger(input.completedAt) || input.completedAt < 0) throw new Error("SEC fundamentals completion time is invalid");
@@ -1627,30 +1715,18 @@ export class Desk {
       throw new Error("SEC fundamentals state does not match the saved fact count");
     }
 
-    const snapshotId = randomUUID();
     const deliveryIds = {} as Record<SecFundamentalPayloadInput["endpoint"], string>;
+    for (const payload of input.payloads) {
+      deliveryIds[payload.endpoint] = this.persistCompanyFundamentalPayloadReceipt({
+        attemptId: input.attemptId, companyId: input.companyId, payload,
+      });
+    }
+    const snapshotId = randomUUID();
     this.exec("BEGIN IMMEDIATE");
     try {
       for (const payload of input.payloads) {
-        this.prepare(`INSERT OR IGNORE INTO sec_fundamental_payload_blobs (sha256, body_bytes, body)
-          VALUES (?, ?, ?)`).run(payload.sha256, payload.bodyBytes, payload.body);
-        const storedBlob = this.prepare(`SELECT body_bytes, body FROM sec_fundamental_payload_blobs WHERE sha256=?`)
-          .get(payload.sha256) as { body_bytes: number; body: string } | undefined;
-        if (!storedBlob || Number(storedBlob.body_bytes) !== payload.bodyBytes || storedBlob.body !== payload.body) {
-          throw new Error("SEC content-addressed payload blob does not match its digest and size");
-        }
-        const deliveryId = this.recordDelivery({
-          collector: "sec_edgar", companyId: input.companyId,
-          requestKey: `fundamentals:${attempt.request_key}:${payload.endpoint}`,
-          startedAt: payload.startedAt, completedAt: payload.retrievedAt, result: "success",
-          parsedItemCount: payload.itemCount, responseDigest: payload.sha256,
-          adapterVersion: `sec-fundamentals-${payload.endpoint}/3`,
-        });
-        this.prepare(`INSERT INTO sec_fundamental_payloads
-          (delivery_id, endpoint, url, retrieved_at, body_bytes, sha256)
-          VALUES (?, ?, ?, ?, ?, ?)`).run(deliveryId, payload.endpoint, payload.url, payload.retrievedAt,
-          payload.bodyBytes, payload.sha256);
-        deliveryIds[payload.endpoint] = deliveryId;
+        const deliveryId = deliveryIds[payload.endpoint];
+        if (!deliveryId) throw new Error("SEC fundamentals response receipt is missing for a required endpoint");
       }
       this.prepare(`INSERT INTO sec_fundamental_snapshots
         (id, attempt_id, company_id, cik, created_at, state, policy_version,
@@ -1728,7 +1804,7 @@ export class Desk {
     const facts = this.prepare(`SELECT id, company_id, cik, metric, taxonomy, concept, unit, value,
       reported_decimals, reported_precision_status,
       start_date, end_date, fiscal_year, fiscal_period, form, accession, filed_at, accepted_at,
-      retrieved_at, source_url, response_sha256, directory_delivery_id, submissions_delivery_id,
+      retrieved_at, source_url, response_sha256, directory_delivery_id, submissions_delivery_id, companyfacts_delivery_id,
       duration_class, amended FROM sec_fundamental_facts WHERE snapshot_id=?
       ORDER BY end_date DESC, metric, concept, accession`).all(snapshot.id) as Array<Record<string, unknown>>;
     return {
@@ -1784,7 +1860,9 @@ export class Desk {
     const publisherName = m.publisherName ?? m.sourceName;
     const publisherDomain = m.publisherDomain === undefined ? domainOf(m.sourceUrl) : m.publisherDomain;
     const providerObservedAt = m.providerObservedAt ?? null;
-    const publisherPublishedAt = m.publishedAt ?? null;
+    const rss = collector === "google_news_rss" || collector === "yahoo_finance_rss";
+    const aggregatorPublishedAt = m.aggregatorPublishedAt ?? (rss ? m.publishedAt : null) ?? null;
+    const publisherPublishedAt = rss ? null : m.publishedAt ?? null;
     const adapterVersion = m.adapterVersion ?? `${collector}/1`;
     const deliveryId = m.deliveryId ?? null;
     if (deliveryId != null) {
@@ -1813,26 +1891,28 @@ export class Desk {
     }
     const stableRevision = JSON.stringify({
       title: m.title.trim(), snippet: m.snippet.trim(), url: canonicalUrl(m.sourceUrl),
-      publisherPublishedAt, filedAt: m.filedAt ?? null,
+      // Keep the original RSS date under the historical revision key so replay finds the same immutable ID.
+      publisherPublishedAt: rss ? aggregatorPublishedAt : publisherPublishedAt, filedAt: m.filedAt ?? null,
     });
     const revisionDigest = createHash("sha256").update(stableRevision).digest("hex");
     const observationId = `${m.companyId}:${createHash("sha256").update(`${identityMaterial}\u0000${revisionDigest}`).digest("hex")}`;
     const timeBasis: TimeBasis = publisherPublishedAt != null
       ? "publisher_declared"
-      : providerObservedAt != null ? "provider_observed" : "unknown";
+      : aggregatorPublishedAt != null ? "aggregator_declared"
+        : providerObservedAt != null ? "provider_observed" : "unknown";
     this.exec("BEGIN IMMEDIATE");
     try {
       const res = this.prepare(
         `INSERT OR IGNORE INTO source_observations
          (id, company_id, identity_key, revision_digest, collector, channel, publisher_name,
           publisher_domain, source_item_id, source_name, source_url, source_kind, source_tier,
-          title, snippet, publisher_published_at, provider_observed_at, retrieved_at, ingested_at,
+          title, snippet, publisher_published_at, aggregator_published_at, provider_observed_at, retrieved_at, ingested_at,
           time_basis, legacy_published_at, filed_at, scoped, response_digest, adapter_version, delivery_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
       ).run(
         observationId, m.companyId, identityKey, revisionDigest, collector, channelFor(m.kind), publisherName,
         publisherDomain, sourceItemId, m.sourceName, m.sourceUrl, m.kind, m.tier, m.title, m.snippet,
-        publisherPublishedAt, providerObservedAt, m.retrievedAt, Date.now(), timeBasis, m.filedAt ?? null,
+        publisherPublishedAt, aggregatorPublishedAt, providerObservedAt, m.retrievedAt, Date.now(), timeBasis, m.filedAt ?? null,
         m.scoped ? 1 : 0, m.responseDigest ?? null, adapterVersion, deliveryId,
       );
       if (Number(res.changes) > 0) {
@@ -2715,7 +2795,7 @@ export class Desk {
         SELECT collector, publisher_published_at AS publisherPublishedAt,
           provider_observed_at AS providerObservedAt, retrieved_at AS retrievedAt, time_basis AS timeBasis,
           ROW_NUMBER() OVER (PARTITION BY collector ORDER BY ingested_at DESC) AS rn
-        FROM source_observations WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')
+        FROM mentions WHERE collector NOT IN ('demo_simulation', 'legacy_unknown')
       )
       SELECT collector, publisherPublishedAt, providerObservedAt, retrievedAt, timeBasis
       FROM ranked WHERE rn = 1`,
@@ -3197,19 +3277,21 @@ export class Desk {
       const eligible = this.prepare(
         `SELECT id, scored_at AS scoredAt, impact, weight, title, time_basis AS timeBasis,
                 publisher_published_at AS publisherPublishedAt,
+                aggregator_published_at AS aggregatorPublishedAt,
                 provider_observed_at AS providerObservedAt, delivery_id AS deliveryId FROM mentions
          WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
            AND scored_at >= ? AND scored_at < ? AND impact BETWEEN -100 AND 100 AND weight >= 0
          ORDER BY scored_at, id`,
       ).all(companyId, fromMs, throughMs) as unknown as Array<{
         id: string; scoredAt: number; impact: number; weight: number; title: string; timeBasis: string;
-        publisherPublishedAt: number | null; providerObservedAt: number | null; deliveryId: string | null;
+        publisherPublishedAt: number | null; aggregatorPublishedAt: number | null; providerObservedAt: number | null; deliveryId: string | null;
       }>;
       const coverageSummary = summarizeScoreBucketCoverage(eligible.map((row) => ({
         title: row.title,
         scoredAt: row.scoredAt,
         timeBasis: row.timeBasis,
         publisherPublishedAt: row.publisherPublishedAt,
+        aggregatorPublishedAt: row.aggregatorPublishedAt,
         providerObservedAt: row.providerObservedAt,
         deliveryId: row.deliveryId,
       })));
@@ -3405,6 +3487,40 @@ export class Desk {
       eventType: r.event_type,
       takeaway: r.takeaway,
     }));
+  }
+
+  jevHistoryWeeks(companyId: string, requestedWeekStartMs: number | null): {
+    weekStartMs: number; latestWeekStartMs: number; olderWeekStartMs: number | null; newerWeekStartMs: number | null;
+    latestEligibleScoreAtMs: number; items: Array<{
+      id: string; companyId: string; availableAt: number; impact: number; weight: number; scoredAt: number; eventType: string; takeaway: string;
+      title: string; timeBasis: string; publisherPublishedAt: number | null; aggregatorPublishedAt: number | null;
+      providerObservedAt: number | null; deliveryId: string | null;
+    }>;
+  } | null {
+    const weekMs = 7 * 24 * 60 * 60_000;
+    const epochMondayOffsetMs = 3 * 24 * 60 * 60_000;
+    const weekExpr = `CAST((scored_at + ${epochMondayOffsetMs}) / ${weekMs} AS INTEGER) * ${weekMs} - ${epochMondayOffsetMs}`;
+    const eligible = `company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored' AND scored_at IS NOT NULL
+      AND scored_at - scored_at = 0 AND impact BETWEEN -100 AND 100 AND weight >= 0 AND weight - weight = 0`;
+    const nav = this.prepare(`SELECT ${weekExpr} AS weekStartMs, MAX(scored_at) AS latestAt FROM mentions WHERE ${eligible} GROUP BY weekStartMs ORDER BY weekStartMs DESC`).all(companyId) as Array<{ weekStartMs: number; latestAt: number }>;
+    if (!nav.length) return null;
+    const latestWeekStartMs = nav[0]!.weekStartMs;
+    const weekStartMs = requestedWeekStartMs ?? latestWeekStartMs;
+    const currentIndex = nav.findIndex((row) => row.weekStartMs === weekStartMs);
+    if (currentIndex < 0) return null;
+    const throughMs = weekStartMs + weekMs;
+    const rows = this.prepare(`SELECT id, company_id AS companyId, scored_at AS availableAt, impact, weight, scored_at AS scoredAt,
+      event_type AS eventType, takeaway, title, time_basis AS timeBasis, publisher_published_at AS publisherPublishedAt,
+      aggregator_published_at AS aggregatorPublishedAt, provider_observed_at AS providerObservedAt, delivery_id AS deliveryId
+      FROM mentions WHERE ${eligible} AND scored_at >= ? AND scored_at < ? ORDER BY scored_at, id`)
+      .all(companyId, weekStartMs, throughMs) as Array<{
+        id: string; companyId: string; availableAt: number; impact: number; weight: number; scoredAt: number; eventType: string; takeaway: string;
+        title: string; timeBasis: string; publisherPublishedAt: number | null; aggregatorPublishedAt: number | null;
+        providerObservedAt: number | null; deliveryId: string | null;
+      }>;
+    if (!rows.length) return null;
+    const latestEligibleScoreAtMs = rows.reduce((latest, row) => Math.max(latest, row.availableAt), Number.NEGATIVE_INFINITY);
+    return { weekStartMs, latestWeekStartMs, olderWeekStartMs: nav[currentIndex + 1]?.weekStartMs ?? null, newerWeekStartMs: nav[currentIndex - 1]?.weekStartMs ?? null, latestEligibleScoreAtMs, items: rows };
   }
 
   /** Saved GPT-6 Luna observations, bucketed by classification availability. */
@@ -3996,6 +4112,7 @@ export function rowToDTO(r: MentionRow): MentionDTO {
     title: r.title,
     snippet: r.snippet,
     publishedAt: r.publisher_published_at,
+    aggregatorPublishedAt: r.aggregator_published_at ?? null,
     retrievedAt: r.retrieved_at,
     ingestedAt: r.ingested_at,
     providerObservedAt: r.provider_observed_at,

@@ -57,6 +57,7 @@ describe("full score-bucket coverage", () => {
           timestampedRecordCount: 2,
           range: { earliestAtMs: 1_799_999_000_000, latestAtMs: 1_799_999_000_000 },
         },
+        aggregatorDeclared: { recordCount: 0, timestampedRecordCount: 0, range: null },
         providerObserved: {
           recordCount: 1,
           timestampedRecordCount: 1,
@@ -79,6 +80,7 @@ describe("full score-bucket coverage", () => {
     const empty = summarizeScoreBucketCoverage([]);
     expect(empty.scoreCompletionTime).toBeNull();
     expect(empty.sourceTimes.publisherDeclared.range).toBeNull();
+    expect(empty.sourceTimes.aggregatorDeclared?.range).toBeNull();
     expect(isScoreBucketCoverage(empty, 0)).toBe(true);
     expect(isScoreBucketCoverage({ ...empty, scoreCompletionTime: { earliestAtMs: 1, latestAtMs: 1 } }, 0)).toBe(false);
     expect(isScoreBucketCoverage({

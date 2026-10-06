@@ -36,7 +36,7 @@ export function Header({
   totalMentions,
   clock,
 }: {
-  connected: boolean;
+  connected: boolean | null;
   health: HealthDTO | null;
   totalMentions: number;
   clock: number;
@@ -72,11 +72,19 @@ export function Header({
           {totalMentions} source {totalMentions === 1 ? "record" : "records"} retrieved in 24h
         </span>
         <span
-          className="flex whitespace-nowrap items-center gap-1 font-medium tracking-[0.04em] sm:gap-1.5 sm:tracking-wider"
-          title="The local desk app is connected; source collection status is shown separately."
+          role="status"
+          aria-label={connected == null ? "App connecting" : connected ? "App connected" : "App disconnected"}
+          aria-live="polite"
+          aria-atomic="true"
+          className="header-connectivity-status flex shrink-0 whitespace-nowrap items-center gap-1 font-medium tracking-[0.04em] sm:gap-1.5 sm:tracking-wider"
+          title={connected == null
+            ? "Connecting to the local desk; source collection status is shown separately."
+            : connected
+              ? "The local desk event stream is connected; source collection status is shown separately."
+              : "The local desk event stream is disconnected. Saved data may remain available while automatic reconnection is attempted."}
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
-          {connected ? "APP CONNECTED" : "APP DISCONNECTED"}
+          <span className={`h-1.5 w-1.5 rounded-full ${connected == null ? "bg-amber-300" : connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
+          <span className="header-connectivity-label">{connected == null ? "APP CONNECTING" : connected ? "APP CONNECTED" : "APP DISCONNECTED"}</span>
         </span>
         <span className="tabnum hidden w-16 text-right sm:inline">{clockTime(clock)}</span>
       </div>

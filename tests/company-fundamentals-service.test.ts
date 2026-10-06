@@ -59,7 +59,7 @@ describe("selected-company SEC fundamentals service", () => {
   it("keeps missing process identity blocked and sends no external request", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const db = memoryDesk();
-    const service = new CompanyFundamentals({ db, externalRequestsEnabled: true, secSourceEnabled: true, userAgent: "", fetcher });
+    const service = new CompanyFundamentals({ db, externalRequestsEnabled: true, secCompanyFactsEnabled: true, userAgent: "", fetcher });
 
     const saved = service.read(apple.id);
     expect(saved.state).toBe("blocked");
@@ -74,19 +74,43 @@ describe("selected-company SEC fundamentals service", () => {
     expect(db.latestFundamentalAttempt(apple.id)).toBeNull();
   });
 
-  it("requires SEC collection to be enabled by both operator gates before fetching", async () => {
+  it("requires the separate CompanyFacts scope before fetching", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const db = memoryDesk();
     const service = new CompanyFundamentals({
-      db, externalRequestsEnabled: true, secSourceEnabled: false,
+      db, externalRequestsEnabled: true, secCompanyFactsEnabled: false,
       userAgent: "Sentiment Desk test contact security@example.org", fetcher,
     });
 
     const result = await service.refresh(apple.id, randomUUID());
     expect(result.refresh).toBe("blocked");
-    expect(result.refreshBlockedReason).toContain("allowlist and rights approval");
+    expect(result.refreshBlockedReason).toContain("separate sec_company_facts request scope");
     expect(fetcher).not.toHaveBeenCalled();
     expect(db.latestFundamentalAttempt(apple.id)).toBeNull();
+  });
+
+  it("serializes selected-company SEC refreshes across issuers", async () => {
+    const other = { ...apple, id: "other-company", ticker: "OTHER", name: "Other Company" };
+    const db = memoryDesk(apple);
+    db.seedCompanies([other]);
+    let releaseFirstRequest!: (response: Response) => void;
+    const firstResponse = new Promise<Response>((resolve) => { releaseFirstRequest = resolve; });
+    const fetcher = vi.fn<typeof fetch>(() => firstResponse);
+    const service = new CompanyFundamentals({
+      db, externalRequestsEnabled: true, secCompanyFactsEnabled: true,
+      userAgent: "Sentiment Desk isolated fixture contact security@example.org", fetcher,
+    });
+
+    const first = service.refresh(apple.id, randomUUID());
+    const second = await service.refresh(other.id, randomUUID());
+    expect(second.refresh).toBe("blocked");
+    expect(second.refreshBlockedReason).toContain("Another company's SEC refresh is running");
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(db.latestFundamentalAttempt(other.id)).toBeNull();
+
+    releaseFirstRequest(new Response("unavailable", { status: 503 }));
+    await first;
   });
 
   it("recovers a request claim as interrupted after process restart", () => {
@@ -168,7 +192,7 @@ describe("selected-company SEC fundamentals service", () => {
     let clock = Date.UTC(2026, 9, 4);
     const fetcher = secResponseFetcher(true);
     const service = new CompanyFundamentals({
-      db, externalRequestsEnabled: true, secSourceEnabled: true,
+      db, externalRequestsEnabled: true, secCompanyFactsEnabled: true,
       userAgent: "Sentiment Desk isolated fixture contact security@example.org",
       fetcher, now: () => ++clock,
     });
@@ -176,6 +200,10 @@ describe("selected-company SEC fundamentals service", () => {
     const result = await service.refresh(issuer.id, randomUUID());
     const currentFact = result.facts.find((fact) => fact.endDate === "2024-12-31");
     expect(fetcher).toHaveBeenCalledTimes(3);
+    const raw = (db as unknown as { db: import("node:sqlite").DatabaseSync }).db;
+    expect(raw.prepare("SELECT DISTINCT collector FROM source_deliveries").all()).toEqual([{ collector: "sec_company_facts" }]);
+    expect(result.state).toBe("stale");
+    expect(result.staleReason).toContain("accepted more than 365 days ago");
     expect(currentFact).toMatchObject({ value: "101000000", reportedDecimals: "-6", reportedPrecisionStatus: "declared" });
     expect(result.points.map((point) => [point.value, point.reportedDecimals, point.reportedPrecisionStatus])).toEqual([
       ["100000000", "-6", "declared"], ["101000000", "-6", "declared"],
@@ -187,12 +215,48 @@ describe("selected-company SEC fundamentals service", () => {
     expect(result.coverage.every((item) => !item.startsWith("revenue:"))).toBe(true);
   });
 
+  it("keeps each completed SEC response receipt when a later endpoint fails and preserves the prior snapshot", async () => {
+    const issuer = { ...apple, id: "isolated-sec-test-issuer", name: "Isolated test issuer", ticker: "TEST" };
+    const db = memoryDesk(issuer);
+    let clock = Date.UTC(2025, 2, 1);
+    const good = secResponseFetcher(true);
+    let calls = 0;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      calls += 1;
+      if (calls === 5) return new Response("temporarily unavailable", { status: 503 });
+      return good(input, init);
+    });
+    const service = new CompanyFundamentals({
+      db, externalRequestsEnabled: true, secCompanyFactsEnabled: true,
+      userAgent: "Sentiment Desk isolated fixture contact security@example.org",
+      fetcher, now: () => ++clock,
+    });
+
+    const first = await service.refresh(issuer.id, randomUUID());
+    // This isolated issuer exposes revenue only. Keep the coverage gap visible
+    // instead of calling a partial fundamental snapshot complete.
+    expect(first.state).toBe("partial");
+    const previousSnapshotId = db.latestCompanyFundamentals(issuer.id)?.snapshotId;
+    const previousFactIds = db.latestCompanyFundamentals(issuer.id)?.facts.map((fact) => fact.id);
+    expect(previousSnapshotId).toBeTruthy();
+
+    const failed = await service.refresh(issuer.id, randomUUID());
+    expect(failed.refresh).toBe("completed");
+    expect(failed.state).toBe("partial");
+    expect(db.latestFundamentalAttempt(issuer.id)).toMatchObject({ status: "failed" });
+    expect(db.latestCompanyFundamentals(issuer.id)?.snapshotId).toBe(previousSnapshotId);
+    expect(db.latestCompanyFundamentals(issuer.id)?.facts.map((fact) => fact.id)).toEqual(previousFactIds);
+    const raw = (db as unknown as { db: import("node:sqlite").DatabaseSync }).db;
+    expect(raw.prepare("SELECT COUNT(*) AS count FROM source_deliveries WHERE collector='sec_company_facts'").get()).toEqual({ count: 4 });
+    expect(raw.prepare("SELECT COUNT(*) AS count FROM sec_fundamental_payloads").get()).toEqual({ count: 4 });
+  });
+
   it("withholds percentage changes even when a finite-precision difference exceeds its bound", async () => {
     const issuer = { ...apple, id: "isolated-sec-test-issuer", name: "Isolated test issuer", ticker: "TEST" };
     const db = memoryDesk(issuer);
     let clock = Date.UTC(2026, 9, 4);
     const service = new CompanyFundamentals({
-      db, externalRequestsEnabled: true, secSourceEnabled: true,
+      db, externalRequestsEnabled: true, secCompanyFactsEnabled: true,
       userAgent: "Sentiment Desk isolated fixture contact security@example.org",
       fetcher: secResponseFetcher(true, 104_000_000), now: () => ++clock,
     });
@@ -212,7 +276,7 @@ describe("selected-company SEC fundamentals service", () => {
     let clock = Date.UTC(2026, 9, 4);
     const fetcher = secResponseFetcher(false);
     const service = new CompanyFundamentals({
-      db, externalRequestsEnabled: true, secSourceEnabled: true,
+      db, externalRequestsEnabled: true, secCompanyFactsEnabled: true,
       userAgent: "Sentiment Desk isolated fixture contact security@example.org",
       fetcher, now: () => ++clock,
     });

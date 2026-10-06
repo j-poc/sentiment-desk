@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { getCategoricalBucket, getCategoricalTrend, type CategoricalBucketEvidencePage, type CategoricalTrendCounts, type CategoricalTrendPoint, type CategoricalTrendResult, type Mention } from "../lib/api.js";
 import { aggregateCategoricalTrend, displayBucketMsForWindow, displayIntervalLabel, formatUtcInstant, formatUtcRange } from "../lib/categorical-chart.js";
+import type { CategoricalChartSnapshot } from "../lib/chart-view-preference.js";
 import { MentionFeed } from "./MentionFeed.js";
 
 const CATEGORIES = [
@@ -56,6 +57,7 @@ export function CategoricalEmptyState({
   onViewHistoricalJev,
   onOpenOperations,
   onRefresh,
+  historicalJevSummary,
 }: {
   withheldInvalidCount: number;
   classifierEnabled: boolean;
@@ -64,6 +66,7 @@ export function CategoricalEmptyState({
   onViewHistoricalJev: () => void;
   onOpenOperations: () => void;
   onRefresh: () => void;
+  historicalJevSummary: string;
 }) {
   return (
     <div className="categorical-trend-empty" role="status">
@@ -76,7 +79,10 @@ export function CategoricalEmptyState({
         {!classifierEnabled && blockedReason && <p className="categorical-blocked-reason">New classifications are blocked: {blockedReason}</p>}
         <div className="categorical-empty-actions">
           <button type="button" onClick={onReviewSourceRecords}>Review saved source records</button>
-          <button type="button" onClick={onViewHistoricalJev}>View historical Jev chart</button>
+          <button type="button" className="categorical-history-action" onClick={onViewHistoricalJev}>
+            <span>View historical Jev chart</span>
+            <span className="categorical-history-action-detail">{historicalJevSummary}</span>
+          </button>
           {(!classifierEnabled || withheldInvalidCount > 0) && <button type="button" onClick={onOpenOperations}>Review classification requirements</button>}
           <button type="button" onClick={onRefresh}>Refresh saved history</button>
         </div>
@@ -113,6 +119,7 @@ export function CategoricalTrendChart({
   companyId,
   hours,
   active,
+  refreshRevision = 0,
   classifierEnabled,
   blockedReason,
   onOpenMention,
@@ -120,17 +127,20 @@ export function CategoricalTrendChart({
   onViewHistoricalJev,
   onReviewSourceRecords,
   onSnapshot,
+  historicalJevSummary,
 }: {
   companyId: string;
   hours: number;
   active: boolean;
+  refreshRevision?: number;
   classifierEnabled: boolean;
   blockedReason: string | null;
   onOpenMention: (mention: Mention) => void;
   onOpenOperations: () => void;
   onViewHistoricalJev: () => void;
   onReviewSourceRecords: () => void;
-  onSnapshot: (snapshot: Pick<CategoricalTrendResult, "companyId" | "windowHours" | "eligibleObservationCount">) => void;
+  onSnapshot: (snapshot: CategoricalChartSnapshot) => void;
+  historicalJevSummary: string;
 }) {
   const [result, setResult] = useState<CategoricalTrendResult | null>(null);
   const resultRef = useRef<CategoricalTrendResult | null>(null);
@@ -142,6 +152,8 @@ export function CategoricalTrendChart({
   const [evidence, setEvidence] = useState<EvidenceState>(emptyEvidence);
   const [focusedBucket, setFocusedBucket] = useState(0);
   const requestSequence = useRef(0);
+  const lastSuccessfulRefreshAtRef = useRef<number | null>(null);
+  const handledRefreshRevisionRef = useRef(0);
   const bucketSequence = useRef(0);
   const barRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const evidenceHeadingRef = useRef<HTMLHeadingElement | null>(null);
@@ -159,14 +171,28 @@ export function CategoricalTrendChart({
     setLoadState("ready");
   }, []);
 
-  const refresh = useCallback(async (manual = false) => {
+  const refresh = useCallback(async () => {
     const sequence = ++requestSequence.current;
-    if (!resultRef.current || manual) setLoadState("loading");
+    setLoadState("loading");
+    onSnapshot({
+      companyId,
+      windowHours: hours,
+      status: "loading",
+      eligibleObservationCount: resultRef.current?.eligibleObservationCount ?? null,
+      observedAt: lastSuccessfulRefreshAtRef.current,
+    });
     try {
       const next = await getCategoricalTrend(companyId, hours);
       if (sequence !== requestSequence.current) return;
       if (next.companyId !== companyId || next.windowHours !== hours) throw new Error("Trend identity did not match the selected company and window");
-      onSnapshot({ companyId: next.companyId, windowHours: next.windowHours, eligibleObservationCount: next.eligibleObservationCount });
+      lastSuccessfulRefreshAtRef.current = Date.now();
+      onSnapshot({
+        companyId: next.companyId,
+        windowHours: next.windowHours,
+        status: "ready",
+        eligibleObservationCount: next.eligibleObservationCount,
+        observedAt: lastSuccessfulRefreshAtRef.current,
+      });
       const current = resultRef.current;
       if (current && current.snapshotGeneration !== next.snapshotGeneration) {
         bucketSequence.current += 1;
@@ -183,12 +209,22 @@ export function CategoricalTrendChart({
       }
       setLoadState("ready");
     } catch {
-      if (sequence === requestSequence.current) setLoadState("error");
+      if (sequence === requestSequence.current) {
+        setLoadState("error");
+        onSnapshot({
+          companyId,
+          windowHours: hours,
+          status: "failed",
+          eligibleObservationCount: resultRef.current?.eligibleObservationCount ?? null,
+          observedAt: lastSuccessfulRefreshAtRef.current,
+        });
+      }
     }
   }, [applyResult, companyId, hours, onSnapshot]);
 
   useEffect(() => {
     resultRef.current = null;
+    lastSuccessfulRefreshAtRef.current = null;
     selectedBucketRef.current = null;
     setResult(null);
     setPendingResult(null);
@@ -201,13 +237,26 @@ export function CategoricalTrendChart({
 
   useEffect(() => {
     if (!active) return;
-    void refresh(true);
-    const timer = window.setInterval(() => void refresh(false), 30_000);
+    if (lastSuccessfulRefreshAtRef.current == null || Date.now() - lastSuccessfulRefreshAtRef.current > 5_000) {
+      void refresh();
+    }
+    const timer = window.setInterval(() => void refresh(), 30_000);
     return () => {
       requestSequence.current += 1;
       window.clearInterval(timer);
     };
   }, [active, refresh]);
+
+  useEffect(() => {
+    if (handledRefreshRevisionRef.current === refreshRevision) return;
+    handledRefreshRevisionRef.current = refreshRevision;
+    if (active || refreshRevision === 0) return;
+    // Keep the Luna snapshot fresh when a new result arrives while the user
+    // deliberately inspects the historical archive. Routine polling remains
+    // limited to the visible chart, and this refresh is debounced.
+    const timer = window.setTimeout(() => void refresh(), 150);
+    return () => window.clearTimeout(timer);
+  }, [active, refresh, refreshRevision]);
 
   useEffect(() => () => {
     requestSequence.current += 1;
@@ -321,7 +370,7 @@ export function CategoricalTrendChart({
     selectedBucketRef.current = null;
     setSelectedBucketStartMs(null);
     setEvidence(emptyEvidence());
-    void refresh(true);
+    void refresh();
   }, [refresh]);
 
   const onBucketKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -368,7 +417,7 @@ export function CategoricalTrendChart({
       ) : loadState === "error" && !result ? (
         <div className="categorical-trend-state categorical-trend-error" role="alert">
           The saved Luna trend could not be read. No chart is shown from stale or incomplete data.
-          <button type="button" onClick={() => void refresh(true)}>Retry trend</button>
+          <button type="button" onClick={() => void refresh()}>Retry trend</button>
         </div>
       ) : result && result.eligibleObservationCount === 0 && loadState === "loading" ? (
         <div className="categorical-trend-state" role="status">
@@ -377,7 +426,7 @@ export function CategoricalTrendChart({
       ) : result && result.eligibleObservationCount === 0 && loadState === "error" ? (
         <div className="categorical-trend-state categorical-trend-error" role="alert">
           The last confirmed saved read found no eligible Luna classifications. Refresh failed, so the current history is unknown.
-          <button type="button" onClick={() => void refresh(true)}>Retry trend</button>
+          <button type="button" onClick={() => void refresh()}>Retry trend</button>
         </div>
       ) : result && result.eligibleObservationCount === 0 ? (
         <CategoricalEmptyState
@@ -387,10 +436,15 @@ export function CategoricalTrendChart({
           onReviewSourceRecords={onReviewSourceRecords}
           onViewHistoricalJev={onViewHistoricalJev}
           onOpenOperations={onOpenOperations}
-          onRefresh={() => void refresh(true)}
+          onRefresh={() => void refresh()}
+          historicalJevSummary={historicalJevSummary}
         />
       ) : result && (
         <>
+          {loadState === "error" && <div className="categorical-trend-state categorical-trend-error" role="alert">
+            The chart below is the last successful saved read. The current window has not been re-confirmed.
+            <button type="button" onClick={() => void refresh()}>Retry trend</button>
+          </div>}
           <div className="categorical-trend-meta">
             <span>{result.counts.positive} positive · {result.counts.neutral} neutral · {result.counts.negative} negative</span>
             <span>{result.counts.reviewRequired} needs review · {result.counts.excluded} excluded</span>

@@ -1,5 +1,7 @@
 import type { Mention } from "../lib/api.js";
 import { NEU, fmtIndex, sentimentColor, sourceDateTime, timeAgo } from "../lib/format.js";
+import { sourceClockForMention } from "../lib/source-clock.js";
+import { differentPossessiveHeadlineSubject, otherExplicitTickerSymbols, sourceLinkPathNamesCompany } from "../lib/issuer-symbols.js";
 import { CategoricalJudgment } from "./CategoricalJudgment.js";
 
 const TIER_DOT: Record<string, string> = {
@@ -74,42 +76,66 @@ export function MentionCard({
   compact,
   dense,
   onOpen,
+  tickerOf,
+  knownTickers = [],
+  companyNameOf,
 }: {
   m: Mention;
   compact?: boolean;
   dense?: boolean;
   onOpen?: (m: Mention) => void;
+  tickerOf?: (companyId: string) => string;
+  knownTickers?: readonly string[];
+  companyNameOf?: (companyId: string) => string;
 }) {
   const s = m.score;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
   const impactColor = s ? (s.impact > 0 ? "#34d399" : s.impact < 0 ? "#f87171" : NEU) : NEU;
   const offTarget = m.status === "off_target" || m.status === "excluded";
-  const sourceTime = m.publishedAt ?? (m.timeBasis === "provider_observed" ? m.providerObservedAt : null);
+  const sourceClock = sourceClockForMention(m);
+  const publisher = m.publisherName || m.source.publisher || m.source.name;
+  const issuerName = companyNameOf?.(m.companyId);
+  const issuerTicker = tickerOf?.(m.companyId);
+  const otherSymbols = issuerTicker ? otherExplicitTickerSymbols(`${m.title} ${m.snippet}`, issuerTicker, knownTickers) : [];
+  const leadSubject = issuerName && issuerTicker
+    ? differentPossessiveHeadlineSubject(m.title, m.snippet, issuerName, issuerTicker)
+    : null;
+  const titleLinkConflict = Boolean(leadSubject && issuerName && sourceLinkPathNamesCompany(m.source.url, issuerName));
 
   const body = (
     <>
-      <div className="flex items-center gap-2 text-[11.5px] text-desk-dim">
-        <span
-          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{ background: TIER_DOT[m.source.tier] ?? NEU }}
-          title={m.source.tier}
-        />
-        <span className="truncate">{m.source.name}</span>
-        <span className="text-white/20">·</span>
-        {sourceTime == null
-          ? <span className="tabnum shrink-0">source time unknown</span>
-          : <time className="tabnum shrink-0" dateTime={new Date(sourceTime).toISOString()} title={new Date(sourceTime).toISOString()}>
-              {sourceDateTime(sourceTime)}
-            </time>}
-        <span className="truncate text-[10.5px] text-white/55">collected {timeAgo(m.retrievedAt)}</span>
+      <div className="mention-card-meta text-[11px] text-desk-dim" role="group" aria-label="Source and freshness details">
+        <span className="mention-card-meta-item mention-card-meta-publisher" role="group" aria-label={`Publisher: ${publisher}`} title={`Publisher: ${publisher}`}>
+          <span className="mention-card-meta-label">Publisher</span>
+          <span className="mention-card-publisher"><span
+            aria-hidden="true"
+            className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+            style={{ background: TIER_DOT[m.source.tier] ?? NEU }}
+            title={m.source.tier}
+          />{publisher}</span>
+        </span>
+        <span className="mention-card-meta-item mention-card-meta-source-time" role="group" aria-label={`${sourceClock.label}: ${sourceClock.at == null ? "time unavailable" : sourceDateTime(sourceClock.at)}`}>
+          <span className="mention-card-meta-label">Source time</span>
+          {sourceClock.at == null
+            ? <span className="tabnum">{sourceClock.label}</span>
+            : <time className="tabnum" dateTime={new Date(sourceClock.at).toISOString()} title={`${sourceClock.context} ${new Date(sourceClock.at).toISOString()}`}>
+                {sourceClock.label}: {sourceDateTime(sourceClock.at)}
+              </time>}
+        </span>
+        <span className="mention-card-meta-item mention-card-meta-retrieved" role="group" aria-label={`Retrieved ${new Date(m.retrievedAt).toISOString()}; ${timeAgo(m.retrievedAt)}`}>
+          <span className="mention-card-meta-label">Retrieved</span>
+          <time className="text-[10.5px] text-white/65" dateTime={new Date(m.retrievedAt).toISOString()} title={`Retrieved ${new Date(m.retrievedAt).toISOString()}`}>{timeAgo(m.retrievedAt)}</time>
+        </span>
         {s && (
           <span
-            className="tabnum ml-auto shrink-0 font-medium"
+            className="mention-card-meta-item mention-card-meta-impact tabnum font-medium"
+            role="group"
             style={{ color: impactColor }}
             title="Directional impact is 100 × [Jev P(positive) − P(negative)] impact points. It can be positive or negative even when the most likely class is neutral."
             aria-label={`Jev directional impact ${fmtIndex(s.impact)}; most likely sentiment class ${s.sentiment}. Impact is 100 times positive probability minus negative probability, in impact points.`}
           >
-            impact {fmtIndex(s.impact)}
+            <span className="mention-card-meta-label">Historical Jev impact</span>
+            <span>impact {fmtIndex(s.impact)}</span>
           </span>
         )}
       </div>
@@ -137,6 +163,20 @@ export function MentionCard({
       )}
       {m.issuerIdentityStrong === false && (
         <div className="mt-1 text-[10px] text-amber-100/70">Issuer match uncertain · may still concern this company</div>
+      )}
+      {m.issuerIdentityStrong !== false && issuerTicker && otherSymbols.length > 0 && (
+        <div className="mt-1 text-[10px] text-amber-100/75" title={`This record is filed under ${issuerTicker} and also names ${otherSymbols.join(", ")}. Check which issuer the source concerns before using it as issuer-specific evidence.`}>
+          Also names {otherSymbols.join(", ")} · verify issuer relevance
+        </div>
+      )}
+      {m.issuerIdentityStrong !== false && leadSubject && issuerName && (
+        <div className="mt-1 text-[10px] text-amber-100/75" title={titleLinkConflict
+          ? `The headline leads with ${leadSubject}, while the saved excerpt and URL path name ${issuerName}. Check that the headline and link belong together; the path does not verify page contents.`
+          : `The headline leads with ${leadSubject}, while the saved excerpt also mentions ${issuerName}. Check relevance before using it as issuer-specific evidence.`}>
+          {titleLinkConflict
+            ? `Headline leads with ${leadSubject}; excerpt and URL path name ${issuerName} · check title/link`
+            : `Headline leads with ${leadSubject}; excerpt names ${issuerName} · verify ${issuerTicker} relevance`}
+        </div>
       )}
       {m.status === "pending" && <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>}
       {m.classification && <CategoricalJudgment judgment={m.classification} />}
@@ -187,7 +227,7 @@ export function MentionCard({
     </>
   );
 
-  const cls = `panel block text-left transition-colors hover:border-white/15 ${dense ? "px-3 py-2" : "px-3.5 py-3"} ${
+  const cls = `panel mention-card block min-w-0 max-w-full text-left transition-colors hover:border-white/15 ${dense ? "px-3 py-2" : "px-3.5 py-3"} ${
     offTarget ? "opacity-55" : ""
   }`;
 

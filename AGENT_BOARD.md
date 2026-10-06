@@ -1,6 +1,50 @@
 # Sentiment Desk Agent Board
 
-## Active continuation — full-build closeout, 2026-10-04
+## Latest usability pass — 2026-10-06
+
+The user's priority is investor task completion rather than cosmetic polish.
+The selection fixes (watchlist selection, My Research navigation, and retaining
+the intended scroll target across chart/source transitions) have passed their
+native regressions. A fresh rendered check at `http://127.0.0.1:8787/` used
+saved data only: selecting Adobe opened ADBE Desk with 17 saved rows pending
+Luna; the separately labeled historical Jev archive rendered 51 scores across
+20 observed buckets, with its age, UTC week, and interpretation limits visible.
+The screen also says source collection is paused and zero records were
+retrieved in the last 24 hours. No model or source request was made.
+
+- Full Vitest suite: **733 tests across 94 files passed**. Current matching
+  code-bound ETL evidence passes every declared check except
+  `sec_filings_current_hub_receipt`, which remains blocked by the shared Hub's
+  unsupported all-filers route. The failure is a real product gap, not a chart
+  or layout issue.
+- The Apple historical bucket was reconciled to 50 saved rows: weighted mean
+  −23.22, record spread −100 to +97, 0/50 linked delivery receipts, and 11/50
+  rows in repeated-title groups. The chart now exposes those lineage cues at
+  the bucket and in its keyboard table; this improves evidence inspection but
+  does not validate Jev sentiment.
+- Independent scoped review passes the historical-chart lineage disclosure;
+  independent whole-build review remains **FAIL, about 4/10**. Tickerless
+  discovery, current Luna output, fresh feed coverage, SEC facts, completed
+  investor outcomes, and legacy-unknown usage reconciliation remain open.
+  Opportunity Radar remains disabled. Do not call the product complete or
+  10/10.
+- Saved evidence is real but stale (latest retrieval was October 4), and the
+  visible source rows are pending Luna. Do not make stale history look current
+  through visual changes; the highest-value next step is qualifying the shared
+  Hub's all-filers route and then the real Luna path.
+- A fresh Gitleaks scan, final engineering-gate run, exact-branch readback, and
+  reviewed checkpoint are pending. The requested destination is the existing
+  `https://github.com/j-poc/sentiment-desk` repository and
+  `codex/real-data-rebuild` branch. Keep databases, credentials, and private
+  evaluation receipts out of the commit.
+- See `project-record/4-log/2026-10-06-investor-navigation-usability.md` for
+  current acceptance criteria, rendered proof, and limits.
+
+## Baseline review — 2026-10-05 (historical)
+
+The product-level findings below remain current unless superseded by the
+latest usability note above. This older runtime snapshot should not be read as
+current feed freshness.
 
 The user requires a complete, real-data-only Sentiment Desk, OpenAI GPT-6 Luna
 for new categorical judgments, regular reviewed GitHub checkpoints, and no
@@ -10,9 +54,11 @@ record, or fabricated price is allowed. Product fixtures stay isolated to tests.
 
 The protected local preview at `http://127.0.0.1:8879/` uses an isolated
 SQLite backup of retained real data. It is running with external requests and
-all classifiers disabled. Its source database remains unchanged. The latest
-saved retrieval in the main database is `2026-09-28T17:47:42Z`; Apple history
-is archival, not current. Verified price history is absent; 2,889
+all classifiers disabled. Its source database remains unchanged. The last
+bounded source collection in the canonical database completed at
+`2026-10-04T00:41:43Z`; publisher times reach `2026-10-04T00:14:56Z`. Apple
+Jev scoring is archival, last completed `2026-09-28T17:47:12.141Z`. Verified
+price history is absent; 2,889
 `legacy_unknown` price rows stay quarantined. The graph uses observed
 historical buckets and labels its model profile; empty spans are not filled.
 Selecting Adobe updates its heading, chart, saved Jev series, evidence feed,
@@ -111,8 +157,16 @@ source proof. Focused tests and typecheck pass, but this is not a populated-data
 or complete investor workflow. The higher-value gaps remain tickerless
 discovery, driver/counterevidence synthesis, live Luna operation, source
 breadth, historical reconciliation, and observed investor task outcomes. The
-fresh whole-suite, typecheck, and production build now pass as recorded below;
-final security/dependency gates and a reviewed GitHub checkpoint remain pending.
+640-test suite, typecheck, production build, production dependency audit, and
+Gitleaks scan passed for the earlier pushed baseline `d69b3c5`; those results
+do not bind to the current candidate. This worktree has fresh passing typecheck
+and focused offline suites for chart navigation, source history, first-run
+recovery, followed baselines, fundamentals, analyst research, SEC filings UI,
+categorical charts, RSS clock semantics, and the disabled Radar. The code-bound
+live-data ETL check remains FAIL, and the engineering evidence check reports a
+missing receipt. No full build or live smoke was run with about 510 MB free.
+The current candidate is not pushed. Exact current evidence and limitations are
+recorded in the chart usability log below.
 
 ### Actual saved-data UI review — 2026-10-05
 
@@ -139,6 +193,18 @@ synthetic chart.
 This verifies the saved-data usability path only. It does not clear live Luna
 qualification, current small-cap discovery, fresh market-price history, complete
 delivery reconciliation, source breadth, or observed investor task outcomes.
+
+### Previously pushed GitHub checkpoint — 2026-10-05
+
+The earlier source checkpoint is pushed to
+`https://github.com/j-poc/sentiment-desk`, branch `codex/real-data-rebuild`,
+commit `d69b3c5c06d1119a36966f6beb17829fad54b903`. `git ls-remote` returned the
+same SHA at that checkpoint. Current worktree changes are based on that commit
+and remain uncommitted and unpushed. The repository is public, so publishing
+this candidate is awaiting explicit authorization. No database, secret,
+dependency tree, build output, or private evaluation artifact is staged. The
+whole-build product readiness review still fails; this is not a completed or
+release-ready Desk.
 
 ## Historical resumed Luna acceptance run at 52bb6f7
 

@@ -15,5 +15,16 @@ export function intersectJevSourceAllowlist(
   externalCollectors: ReadonlySet<CollectorId>,
   sourceRightsApprovedCollectors: ReadonlySet<CollectorId>,
 ): Set<CollectorId> {
-  return intersectCollectorAllowlists(jevCollectors, externalCollectors, sourceRightsApprovedCollectors);
+  return withoutNonClassificationSources(intersectCollectorAllowlists(jevCollectors, externalCollectors, sourceRightsApprovedCollectors));
+}
+
+/** SEC CompanyFacts payloads are stored as filing evidence, never classifier input. */
+export function intersectClassifierSourceAllowlist(
+  ...allowlists: readonly ReadonlySet<CollectorId>[]
+): Set<CollectorId> {
+  return withoutNonClassificationSources(intersectCollectorAllowlists(...allowlists));
+}
+
+function withoutNonClassificationSources(collectors: ReadonlySet<CollectorId>): Set<CollectorId> {
+  return new Set([...collectors].filter((collector) => collector !== "sec_company_facts"));
 }

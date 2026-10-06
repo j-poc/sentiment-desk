@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SeriesPoint } from "../web/src/lib/api.js";
 import { formatChartTimestamp } from "../web/src/lib/chart-time.js";
-import { chartVisibleThroughSeconds, hasOlderSavedPriceHistory, refreshedScoreBucketState, scoreBucketEvidenceBaseline, scoreBucketChartTimeline, scoreBucketSnapshotMatches, sentimentSeriesState } from "../web/src/lib/series-chart-state.js";
+import { chartDataFocusRange, chartVisibleRange, chartVisibleThroughSeconds, hasOlderSavedPriceHistory, reconcileScoreBucketAgainstRollingSeries, refreshedScoreBucketState, scoreBucketEvidenceBaseline, scoreBucketChartTimeline, scoreBucketSnapshotMatches, sentimentSeriesState, shouldRefreshScoreBucketFromRollingSeries } from "../web/src/lib/series-chart-state.js";
 
 function point(t: number, v: number | null, n: number): SeriesPoint {
   return {
@@ -21,6 +21,38 @@ describe("sentiment chart data states", () => {
   it("prints exact UTC milliseconds on saved scored chart timestamps", () => {
     const timestamp = Date.parse("2026-09-28T10:00:00.000Z");
     expect(formatChartTimestamp(timestamp)).toBe("2026-09-28 10:00:00.000 UTC");
+  });
+
+  it("keeps an archived UTC week visible instead of recentering it on today", () => {
+    const fromMs = Date.parse("2026-09-28T00:00:00.000Z");
+    const throughMs = Date.parse("2026-10-05T00:00:00.000Z");
+    const now = Date.parse("2026-10-05T18:00:00.000Z");
+    expect(chartVisibleRange(168, now, (throughMs - 15 * 60_000) / 1000, { fromMs, throughMs }))
+      .toEqual({ fromMs, throughMs });
+    expect(chartVisibleRange(168, now, null)).toEqual({ fromMs: now - 168 * 60 * 60_000, throughMs: now });
+  });
+
+  it("fits a sparse archive to its real scored buckets while staying inside the selected UTC week", () => {
+    const fromMs = Date.parse("2026-09-28T00:00:00.000Z");
+    const throughMs = Date.parse("2026-10-05T00:00:00.000Z");
+    const first = point(Date.parse("2026-09-28T10:15:00.000Z"), 20, 1);
+    const last = point(Date.parse("2026-09-28T18:00:00.000Z"), 55, 3);
+    const outside = point(Date.parse("2026-10-05T00:15:00.000Z"), -30, 1);
+
+    const focused = chartDataFocusRange([first, last, outside], { fromMs, throughMs });
+
+    expect(focused).toEqual({
+      fromMs: Date.parse("2026-09-28T08:00:00.000Z"),
+      throughMs: Date.parse("2026-09-28T20:00:00.000Z"),
+    });
+    expect(focused.fromMs).toBeLessThanOrEqual(first.bucketStartAtMs);
+    expect(focused.throughMs).toBeGreaterThanOrEqual(last.bucketEndAtMs);
+    expect(focused.throughMs).toBeLessThan(throughMs);
+  });
+
+  it("leaves the selected interval intact when the archive has no scored buckets", () => {
+    const selected = { fromMs: 100_000, throughMs: 700_000 };
+    expect(chartDataFocusRange([point(200_000, null, 0)], selected)).toEqual(selected);
   });
 
   it("does not claim chart data when the series contains only empty buckets", () => {
@@ -87,6 +119,26 @@ describe("sentiment chart data states", () => {
     expect(scoreBucketSnapshotMatches("b".repeat(64), 3, "b".repeat(64), 3)).toBe(true);
     expect(scoreBucketSnapshotMatches("a".repeat(64), 3, "b".repeat(64), 3)).toBe(false);
     expect(scoreBucketSnapshotMatches(baseline!.snapshotKey, baseline!.recordCount, "c".repeat(64), 4)).toBe(false);
+  });
+
+  it("does not use rolling-series refreshes to expire a selected historical archive bucket", () => {
+    const archiveWeekStartMs = Date.parse("2026-09-28T00:00:00.000Z");
+    const bucketFromMs = Date.parse("2026-09-28T09:45:00.000Z");
+    const bucketThroughMs = Date.parse("2026-09-28T10:00:00.000Z");
+    const rollingPoint = point(Date.parse("2026-10-06T10:15:00.000Z"), 12, 2);
+    const archivedSelection = {
+      archiveWeekStartMs,
+      bucketFromMs,
+      bucketThroughMs,
+      snapshotKey: "a".repeat(64),
+      recordCount: 50,
+    };
+
+    expect(shouldRefreshScoreBucketFromRollingSeries(archiveWeekStartMs)).toBe(false);
+    expect(reconcileScoreBucketAgainstRollingSeries([rollingPoint], archivedSelection)).toBeNull();
+    expect(shouldRefreshScoreBucketFromRollingSeries(null)).toBe(true);
+    expect(reconcileScoreBucketAgainstRollingSeries([rollingPoint], { ...archivedSelection, archiveWeekStartMs: null }))
+      .toEqual(refreshedScoreBucketState([rollingPoint], archivedSelection));
   });
 
   it("accepts a refreshed empty interval without a bucket hash only when it still has zero records", () => {

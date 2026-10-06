@@ -29,7 +29,7 @@ function sourceMention(sourceItemId: string, publishedAt: number, title = `Acme 
     companyId: company.id, kind: "rss", sourceName: "Reuters",
     sourceUrl: `https://reuters.com/${sourceItemId}`, tier: "wire",
     title, snippet: "Isolated score-bucket API fixture",
-    publishedAt, retrievedAt: publishedAt, collector: "google_news_rss",
+    publishedAt: null, aggregatorPublishedAt: publishedAt, retrievedAt: publishedAt, collector: "google_news_rss",
     sourceItemId, publisherName: "Reuters", publisherDomain: "reuters.com",
   };
 }
@@ -109,6 +109,7 @@ describe("score-bucket evidence API", () => {
           scoreCompletionTime: { earliestAtMs: number; latestAtMs: number } | null;
           sourceTimes: {
             publisherDeclared: { recordCount: number; timestampedRecordCount: number; range: { earliestAtMs: number; latestAtMs: number } | null };
+            aggregatorDeclared: { recordCount: number; timestampedRecordCount: number; range: { earliestAtMs: number; latestAtMs: number } | null };
             providerObserved: { recordCount: number; timestampedRecordCount: number; range: { earliestAtMs: number; latestAtMs: number } | null };
             unknownRecordCount: number; legacyUnknownRecordCount: number;
           };
@@ -135,7 +136,8 @@ describe("score-bucket evidence API", () => {
         untitledRecordCount: 1,
         scoreCompletionTime: { earliestAtMs: from, latestAtMs: from + 530_001 },
         sourceTimes: {
-          publisherDeclared: { recordCount: 55, timestampedRecordCount: 55, range: { earliestAtMs: from, latestAtMs: from + 530_001 } },
+          publisherDeclared: { recordCount: 0, timestampedRecordCount: 0, range: null },
+          aggregatorDeclared: { recordCount: 55, timestampedRecordCount: 55, range: { earliestAtMs: from, latestAtMs: from + 530_001 } },
           providerObserved: { recordCount: 0, timestampedRecordCount: 0, range: null },
           unknownRecordCount: 0,
           legacyUnknownRecordCount: 0,

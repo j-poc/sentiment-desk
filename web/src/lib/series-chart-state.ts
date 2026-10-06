@@ -4,6 +4,33 @@ import { isValidUtcMilliseconds } from "./chart-time.js";
 const SEVEN_DAYS_MS = 168 * 60 * 60 * 1000;
 const SERIES_BUCKET_MS = 15 * 60_000;
 
+/** Focus an explicit archive plot on its observed score buckets without
+ * changing the selected archive interval or excluding any observed bucket. */
+export function chartDataFocusRange(
+  points: SeriesPoint[],
+  enclosingRange: { fromMs: number; throughMs: number },
+): { fromMs: number; throughMs: number } {
+  if (!Number.isSafeInteger(enclosingRange.fromMs) || !Number.isSafeInteger(enclosingRange.throughMs)
+    || enclosingRange.fromMs < 0 || enclosingRange.throughMs <= enclosingRange.fromMs
+    || !isValidUtcMilliseconds(enclosingRange.fromMs) || !isValidUtcMilliseconds(enclosingRange.throughMs)) return enclosingRange;
+
+  const scored = points.filter((point) => point.scoredRecordCount > 0
+    && Number.isSafeInteger(point.bucketStartAtMs) && Number.isSafeInteger(point.bucketEndAtMs)
+    && point.bucketStartAtMs >= enclosingRange.fromMs && point.bucketEndAtMs <= enclosingRange.throughMs
+    && isValidUtcMilliseconds(point.bucketStartAtMs) && isValidUtcMilliseconds(point.bucketEndAtMs)
+    && point.bucketEndAtMs > point.bucketStartAtMs);
+  if (scored.length === 0) return enclosingRange;
+
+  const first = Math.min(...scored.map((point) => point.bucketStartAtMs));
+  const last = Math.max(...scored.map((point) => point.bucketEndAtMs));
+  const observedSpan = Math.max(SERIES_BUCKET_MS, last - first);
+  const enclosingSpan = enclosingRange.throughMs - enclosingRange.fromMs;
+  const targetSpan = Math.min(enclosingSpan, Math.max(2 * 60 * 60_000, Math.ceil(observedSpan * 1.5)));
+  const midpoint = first + (last - first) / 2;
+  const fromMs = Math.max(enclosingRange.fromMs, Math.min(Math.round(midpoint - targetSpan / 2), enclosingRange.throughMs - targetSpan));
+  return { fromMs, throughMs: fromMs + targetSpan };
+}
+
 export function hasOlderSavedPriceHistory(latestPriceAt: number | null, hours: number, now: number): boolean {
   return latestPriceAt != null
     && Number.isFinite(latestPriceAt)
@@ -45,6 +72,13 @@ export function scoreBucketChartTimeline(points: SeriesPoint[]): Array<{
 export function chartVisibleThroughSeconds(nowMs: number, lastChartTimeSeconds: number | null): number {
   const nowSeconds = nowMs / 1000;
   return lastChartTimeSeconds == null ? nowSeconds : Math.max(nowSeconds, lastChartTimeSeconds);
+}
+
+export function chartVisibleRange(hours: number, nowMs: number, lastChartTimeSeconds: number | null,
+  explicit?: { fromMs: number; throughMs: number }): { fromMs: number; throughMs: number } {
+  if (explicit && Number.isSafeInteger(explicit.fromMs) && Number.isSafeInteger(explicit.throughMs)
+    && explicit.fromMs >= 0 && explicit.throughMs > explicit.fromMs) return explicit;
+  return { fromMs: nowMs - hours * 60 * 60_000, throughMs: chartVisibleThroughSeconds(nowMs, lastChartTimeSeconds) * 1000 };
 }
 
 export function scoreBucketEvidenceBaseline(points: SeriesPoint[], requestedFromMs: number, requestedThroughMs: number): {
@@ -97,4 +131,22 @@ export function refreshedScoreBucketState(
       || baseline!.bucketThroughMs !== selection.bucketThroughMs
       || !scoreBucketSnapshotMatches(selection.snapshotKey, selection.recordCount, baseline!.snapshotKey ?? "", baseline!.recordCount),
   };
+}
+
+export function shouldRefreshScoreBucketFromRollingSeries(archiveWeekStartMs: number | null): boolean {
+  return archiveWeekStartMs == null;
+}
+
+export function reconcileScoreBucketAgainstRollingSeries(
+  points: SeriesPoint[],
+  selection: {
+    archiveWeekStartMs: number | null;
+    bucketFromMs: number;
+    bucketThroughMs: number;
+    snapshotKey: string | null;
+    recordCount: number;
+  },
+): ReturnType<typeof refreshedScoreBucketState> | null {
+  if (!shouldRefreshScoreBucketFromRollingSeries(selection.archiveWeekStartMs)) return null;
+  return refreshedScoreBucketState(points, selection);
 }
