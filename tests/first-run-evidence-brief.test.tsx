@@ -7,12 +7,13 @@ describe("first-run evidence states", () => {
     expect(renderToStaticMarkup(<FirstRunEvidenceBrief state="error" />)).toContain("cannot determine whether this is a first run");
     expect(renderToStaticMarkup(<FirstRunEvidenceBrief state="error" localObservationArrived />)).toBe("");
     expect(renderToStaticMarkup(<FirstRunEvidenceBrief state="ready" eligibleObservationCount={1} secCollectorEnabled={false} jevSecScoringEnabled={false} />)).toBe("");
-    const markup = renderToStaticMarkup(<FirstRunEvidenceBrief state="ready" eligibleObservationCount={0} secCollectorEnabled={false} jevSecScoringEnabled={false} onOpenOperations={() => undefined} />);
+    const markup = renderToStaticMarkup(<FirstRunEvidenceBrief state="ready" eligibleObservationCount={0} secCollectorEnabled={false} jevSecScoringEnabled={false} onOpenOperations={() => undefined} onOpenDisclosures={() => undefined} />);
     expect(markup).toContain("No eligible saved observations");
     expect(markup).toContain("Start with real saved evidence");
     expect(markup).toContain("no archived samples or demonstration results");
     expect(markup).toContain("External requests remain under explicit operator controls");
     expect(markup).toContain("Open Sources &amp; operations");
+    expect(markup).toContain("Browse recent SEC filings");
     expect(markup).not.toMatch(/Tesla|TSLA|Archived SEC|jev-1\.13/);
     expect(markup).not.toContain("example");
   });

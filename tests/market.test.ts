@@ -323,6 +323,52 @@ describe("market quote provenance", () => {
     db.close();
   });
 
+  it("expires an old quote from the live view while preserving its saved price history", async () => {
+    const db = new Desk(":memory:");
+    const hub = new Hub();
+    try {
+      db.seedCompanies([company]);
+      let now = Date.now();
+      const events: Array<{ event: string; data: string }> = [];
+      hub.add((event, data) => { events.push({ event, data }); });
+      const data = new MarketData({
+        companies: [company], indices: [], hub,
+        health: new HealthTracker(false, false, "unconfigured"), db,
+        externalRequestsEnabled: true, quoteRequestsEnabled: true, chartRequestsEnabled: false,
+        now: () => now,
+      });
+      globalThis.fetch = vi.fn(async () => chartResponse());
+      await data.refresh();
+      const retrievedAt = now;
+      const chartDeliveryId = db.recordDelivery({
+        collector: "yahoo_chart", companyId: company.id, requestKey: "quote-cache-history",
+        startedAt: retrievedAt, completedAt: retrievedAt, result: "success", parsedItemCount: 1,
+        adapterVersion: "yahoo-chart/1", responseDigest: "quote-cache-history-digest",
+      });
+      db.upsertPricePoint({
+        ticker: company.ticker, t: retrievedAt - 60_000, price: 124.5, collector: "yahoo_chart",
+        currency: "USD", retrievedAt, adapterVersion: "yahoo-chart/1", deliveryId: chartDeliveryId,
+      });
+      const savedPriceCount = db.priceWindow(company.ticker, 0).length;
+      expect(data.current().quotes.ACME).toBeDefined();
+      expect(savedPriceCount).toBeGreaterThan(0);
+
+      now += 15 * 60 * 1_000 + 1;
+      expect(data.current().quotes.ACME).toBeUndefined();
+      globalThis.fetch = vi.fn(async () => new Response("unavailable", { status: 503 }));
+      await data.refresh();
+
+      expect(data.current().quotes.ACME).toBeUndefined();
+      expect(db.priceWindow(company.ticker, 0)).toHaveLength(savedPriceCount);
+      const expiryEvent = events.findLast((item) => item.event === "quotes");
+      expect(expiryEvent).toBeDefined();
+      expect(JSON.parse(expiryEvent!.data).quotes).toEqual({});
+    } finally {
+      hub.closeAll();
+      db.close();
+    }
+  });
+
   it("does not let a failed auxiliary index quote degrade company quote health", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-market-"));
     let db: Desk | undefined;

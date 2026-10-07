@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { SecFilingInboxRow, SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
+import { secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
 
 const DATASET = "sec.latest_filings_8k";
 const CONSUMER = "sentiment-desk";
@@ -59,10 +59,10 @@ function normalizeRows(value: unknown): SecFilingInboxRow[] | null {
     const declaredAccessionCik = typeof attributes?.accession_cik === "string" ? attributes.accession_cik : accession.slice(0, 10);
     const declaredFilingCikPath = typeof attributes?.filing_cik_path === "string" ? attributes.filing_cik_path : null;
     const form = attributes?.form;
-    const issuer = typeof attributes?.issuer_label === "string" ? attributes.issuer_label.trim() : "";
+    const issuer = typeof attributes?.issuer_label === "string" ? secIssuerDisplayName(attributes.issuer_label.trim()) : "";
     if (!/^[0-9]{10}-[0-9]{2}-[0-9]{6}$/.test(accession) || !/^\d{10}$/.test(cik)
       || !/^\d{10}$/.test(declaredAccessionCik) || accession.slice(0, 10) !== declaredAccessionCik
-      || !["8-K", "8-K/A"].includes(String(form))
+      || form !== "8-K"
       || issuer.length < 1 || issuer.length > 200 || seen.has(accession)) return null;
     const filing = validateFilingUrl(row?.source_address, accession, declaredFilingCikPath);
     if (!filing || attributes?.filing_url !== filing.url) return null;
@@ -70,10 +70,13 @@ function normalizeRows(value: unknown): SecFilingInboxRow[] | null {
     if (attributes?.filed_at != null && !filedOn) return null;
     const acceptedAt = validTimestamp(attributes?.accepted_at);
     if (attributes?.accepted_at != null && !acceptedAt) return null;
+    const publishedValue = attributes?.published_source_timestamp;
+    const feedPublishedAt = publishedValue === "" || publishedValue == null ? null : validTimestamp(publishedValue);
+    if (publishedValue != null && publishedValue !== "" && !feedPublishedAt) return null;
     const feedUpdatedAt = validTimestamp(attributes?.feed_updated_at);
     if (attributes?.feed_updated_at != null && !feedUpdatedAt) return null;
     rows.push({ accession, cik, accessionCik: declaredAccessionCik, filingCikPath: filing.filingCikPath,
-      issuer, form: form as SecFilingInboxRow["form"], filedOn, acceptedAt, feedUpdatedAt, filingUrl: filing.url });
+      issuer, form, filedOn, acceptedAt, feedPublishedAt, feedUpdatedAt, filingUrl: filing.url });
     seen.add(accession);
   }
   return rows;

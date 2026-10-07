@@ -26,6 +26,7 @@ import {
 } from "./lib/api.js";
 import type { CompanyFundamentalsView } from "../../shared/company-fundamentals.js";
 import type { SavedSourceCoverageSnapshot } from "../../shared/saved-source-coverage.js";
+import { filterFreshQuotes, nextQuoteExpiryDelayMs } from "../../shared/quote-freshness.js";
 import type { AnalystResearchDispositionChange, AnalystSourceReview } from "../../shared/analyst-research.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
@@ -351,6 +352,31 @@ export default function App() {
   const jevArchiveRef = useRef<JevHistoryWeekResult | null>(null);
   const [sparks, setSparks] = useState<Record<string, SeriesPoint[]>>({});
   const [market, setMarket] = useState<MarketSnapshot | null>(null);
+  useEffect(() => {
+    const quotes = market?.quotes;
+    if (!quotes) return;
+    const delayMs = nextQuoteExpiryDelayMs(quotes);
+    if (delayMs == null) return;
+    const expire = () => {
+      setMarket((current) => {
+        if (!current) return current;
+        const quotes = filterFreshQuotes(current.quotes);
+        if (Object.keys(quotes).length === Object.keys(current.quotes).length) return current;
+        return { ...current, quotes };
+      });
+    };
+    const timer = window.setTimeout(expire, delayMs);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") expire();
+    };
+    window.addEventListener("focus", expire);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", expire);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [market?.quotes]);
   const [price, setPrice] = useState<PricePoint[]>([]);
   const [priceResultKey, setPriceResultKey] = useState<string | null>(null);
   const [priceLoadErrorKey, setPriceLoadErrorKey] = useState<string | null>(null);
@@ -557,6 +583,23 @@ export default function App() {
       disclosure.querySelector<HTMLElement>("summary")?.focus();
     }));
   }, [closeDrawer]);
+  const openOperationsFromFilings = useCallback(() => {
+    researchViewTouchedRef.current = true;
+    writeSessionPreference("sentiment-desk-research-view", "desk");
+    setResearchView("desk");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const disclosure = operationsDisclosureRef.current;
+      if (!disclosure) return;
+      disclosure.open = true;
+      disclosure.scrollIntoView({ behavior: "auto", block: "start" });
+      disclosure.querySelector<HTMLElement>("summary")?.focus();
+    }));
+  }, []);
+  const openRecentFilingsFromFirstRun = useCallback(() => {
+    researchViewTouchedRef.current = true;
+    writeSessionPreference("sentiment-desk-research-view", "filings");
+    setResearchView("filings");
+  }, []);
   const openAlertEvidence = useCallback(async (companyId: string, observationId: string) => {
     try {
       const mention = (await lookupMentionsByIds(companyId, [observationId]))[0];
@@ -1301,8 +1344,7 @@ export default function App() {
       },
       onResearchDisposition: applyResearchDispositionChange,
       onCompany: (s) => setCompanies((prev) => prev.map((c) => (c.id === s.id ? s : c))),
-      onQuotes: (s) =>
-        setMarket((prev) => ({ quotes: { ...prev?.quotes, ...s.quotes }, updatedAt: s.updatedAt })),
+      onQuotes: (s) => setMarket(s),
     });
     return () => {
       close();
@@ -1975,6 +2017,7 @@ export default function App() {
               {...firstRunEvidence}
               localObservationArrived={localObservationArrived}
               onOpenOperations={openOperationsFromDrawer}
+              onOpenDisclosures={openRecentFilingsFromFirstRun}
             />
           )}
           {researchView === "desk" && (
@@ -2065,13 +2108,17 @@ export default function App() {
               if (!savedSourcesSnapshotSeenRef.current) setSavedSourcesState("loading");
               void refreshBackendSnapshot();
             }}
-          /> : researchView === "filings" ? <SecFilingsInbox onBrowseSavedSources={() => {
-            recoverToSavedSources(rememberSavedSourcesBrowseState, changeSavedSourcesMode, () => {
-              researchViewTouchedRef.current = true;
-              writeSessionPreference("sentiment-desk-research-view", "sources");
-              setResearchView("sources");
-            });
-          }} /> : researchView === "queue" ? (
+          /> : researchView === "filings" ? <SecFilingsInbox
+            archiveStatus={firstRunEvidence.state !== "ready" ? "unknown" : firstRunEvidence.eligibleObservationCount > 0 ? "available" : "empty"}
+            onOpenOperations={openOperationsFromFilings}
+            onBrowseSavedSources={firstRunEvidence.state === "ready" && firstRunEvidence.eligibleObservationCount > 0 ? () => {
+              recoverToSavedSources(rememberSavedSourcesBrowseState, changeSavedSourcesMode, () => {
+                researchViewTouchedRef.current = true;
+                writeSessionPreference("sentiment-desk-research-view", "sources");
+                setResearchView("sources");
+              });
+            } : undefined}
+          /> : researchView === "queue" ? (
             <AnalystResearchQueue
               refreshRevision={researchQueueRevision}
               onReviewChanged={reportResearchReviewChanged}

@@ -32,6 +32,37 @@ describe("bounded SEC filing evidence adapter", () => {
     expect(calls).toEqual([primaryUrl, exhibitUrl]);
   });
 
+  it("fetches primary and exhibit documents from the SEC archive path CIK when it differs from issuer CIK", async () => {
+    const issuerCik = "0000751978";
+    const accessionNo = "0001193125-26-370420";
+    const archiveDirectory = "https://www.sec.gov/Archives/edgar/data/1193125/000119312526370420/";
+    const filing: SecFiling = {
+      cik: issuerCik,
+      archiveCikPath: "1193125",
+      ticker: "VICR",
+      accessionNo,
+      formType: "8-K",
+      items: ["2.02", "9.01"],
+      filedAt: Date.parse("2026-08-27T00:00:00Z"),
+      acceptanceAt: Date.parse("2026-08-27T13:00:00Z"),
+      primaryDocUrl: `${archiveDirectory}d123.htm`,
+    };
+    const expectedExhibitUrl = `${archiveDirectory}release.htm`;
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      const body = url === filing.primaryDocUrl ? parentHtml : exhibitHtml;
+      return new Response(body, { status: 200, headers: { "content-type": "text/html" } });
+    }));
+
+    const result = await fetchFilingEvidence(filing, "offline-fixture-test");
+
+    expect(result.context.classificationInputStatus).toBe("ready");
+    expect(result.selected?.url).toBe(expectedExhibitUrl);
+    expect(calls).toEqual([filing.primaryDocUrl, expectedExhibitUrl]);
+  });
+
   it("keeps nested hidden Item 2.02 and table markup from authorizing an exhibit request", async () => {
     const parent = `<div hidden><div>prefix</div><p>Item 2.02 Results of Operations. The company announced results in a press release that is attached hereto as Exhibit 99.1.</p><table hidden><tr><td>99.1</td><td>Press Release</td><td><a href="release.htm">Release</a></td></tr></table></div><p>Visible filing text without an Item 2.02 declaration.</p>`;
     vi.stubGlobal("fetch", vi.fn(async () => new Response(parent, { status: 200, headers: { "content-type": "text/html" } })));

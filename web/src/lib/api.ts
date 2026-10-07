@@ -8,7 +8,7 @@ import { withReadDeadline } from "./bounded-read.js";
 import type { ScoreBucketCoverage } from "../../../shared/score-bucket-coverage.js";
 import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../../../shared/company-fundamentals.js";
 import type { AnalystResearchDisposition, AnalystResearchDispositionChange, AnalystSourceReview } from "../../../shared/analyst-research.js";
-import type { SecFilingsInboxView } from "../../../shared/sec-filings-inbox.js";
+import type { SecFilingDetail, SecFilingsInboxView, SecIssuerFollowup } from "../../../shared/sec-filings-inbox.js";
 import type { SavedSourceCoverageSnapshot } from "../../../shared/saved-source-coverage.js";
 import type { SavedSourceSearchCursor, SavedSourceSearchPage } from "../../../shared/saved-source-search.js";
 
@@ -39,6 +39,28 @@ export function activateSecFilingsInbox(): Promise<SecFilingsInboxView> {
   return requestJSON<SecFilingsInboxView>("/api/sec-filings-inbox/activate", {
     method: "POST", body: JSON.stringify({ confirmUse: true }),
   });
+}
+
+export function inspectSecFiling(accession: string): Promise<SecFilingDetail> {
+  return requestJSON<SecFilingDetail>("/api/sec-filings-inbox/evidence", {
+    method: "POST", body: JSON.stringify({ accession, confirmUse: true }),
+  });
+}
+
+export async function getSecIssuerFollowups(signal?: AbortSignal): Promise<SecIssuerFollowup[]> {
+  return (await getJSON<{ items: SecIssuerFollowup[] }>("/api/sec-issuer-followups", signal)).items;
+}
+
+export function saveSecIssuerFollowup(accession: string): Promise<SecIssuerFollowup> {
+  return requestJSON<SecIssuerFollowup>("/api/sec-issuer-followups", {
+    method: "POST", body: JSON.stringify({ accession }),
+  });
+}
+
+export async function removeSecIssuerFollowup(cik: string): Promise<SecIssuerFollowup[]> {
+  return (await requestJSON<{ items: SecIssuerFollowup[] }>(`/api/sec-issuer-followups/${encodeURIComponent(cik)}`, {
+    method: "DELETE",
+  })).items;
 }
 
 export function getSavedSourceCoverage(signal?: AbortSignal): Promise<SavedSourceCoverageSnapshot<Mention>> {

@@ -282,6 +282,13 @@ CREATE TABLE IF NOT EXISTS companies (
   color TEXT NOT NULL,
   ambiguous INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS sec_issuer_followups (
+  cik TEXT PRIMARY KEY CHECK (length(cik) = 10 AND cik NOT GLOB '*[^0-9]*'),
+  issuer TEXT NOT NULL,
+  triggering_accession TEXT NOT NULL,
+  filing_url TEXT NOT NULL,
+  saved_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS source_observations (
   id TEXT PRIMARY KEY,
   company_id TEXT NOT NULL REFERENCES companies(id),
@@ -1130,6 +1137,14 @@ export class Desk {
         this.migrate();
       }
       this.exec(ANALYST_SOURCE_REVIEW_GUARDS);
+      // Additive: issuer research leads exist independently of the old fixed company/watchlist table.
+      this.exec(`CREATE TABLE IF NOT EXISTS sec_issuer_followups (
+        cik TEXT PRIMARY KEY CHECK (length(cik) = 10 AND cik NOT GLOB '*[^0-9]*'),
+        issuer TEXT NOT NULL,
+        triggering_accession TEXT NOT NULL,
+        filing_url TEXT NOT NULL,
+        saved_at INTEGER NOT NULL
+      )`);
       // Additive and idempotent: existing v9 databases receive the guard on
       // writable startup without a table rebuild or historical row rewrite.
       this.exec(CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER);
@@ -4270,6 +4285,36 @@ export class Desk {
       unknownOutcomes: row.unknown_outcomes ?? 0, unpricedAttempts,
       usageIncompleteAttempts,
     };
+  }
+
+  secIssuerFollowups(): Array<{ cik: string; issuer: string; triggeringAccession: string; filingUrl: string; savedAt: string }> {
+    return (this.prepare(`SELECT cik, issuer, triggering_accession, filing_url, saved_at
+      FROM sec_issuer_followups ORDER BY saved_at DESC, cik ASC`).all() as Array<{
+      cik: string; issuer: string; triggering_accession: string; filing_url: string; saved_at: number;
+    }>).map((row) => ({ cik: row.cik, issuer: row.issuer, triggeringAccession: row.triggering_accession,
+      filingUrl: row.filing_url, savedAt: new Date(row.saved_at).toISOString() }));
+  }
+
+  saveSecIssuerFollowup(input: { cik: string; issuer: string; triggeringAccession: string; filingUrl: string }): void {
+    if (!/^\d{10}$/.test(input.cik) || !input.issuer.trim() || input.issuer.length > 200
+      || !/^\d{10}-\d{2}-\d{6}$/.test(input.triggeringAccession)) throw new Error("invalid_sec_issuer_followup");
+    const filing = new URL(input.filingUrl);
+    if (filing.protocol !== "https:" || filing.hostname !== "www.sec.gov"
+      || !filing.pathname.startsWith("/Archives/edgar/data/")) throw new Error("invalid_sec_filing_url");
+    this.prepare(`INSERT INTO sec_issuer_followups(cik, issuer, triggering_accession, filing_url, saved_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(cik) DO UPDATE SET issuer = excluded.issuer,
+        triggering_accession = excluded.triggering_accession,
+        filing_url = excluded.filing_url,
+        saved_at = MAX(sec_issuer_followups.saved_at + 1, excluded.saved_at)
+      WHERE sec_issuer_followups.triggering_accession <> excluded.triggering_accession`).run(
+      input.cik, input.issuer.trim(), input.triggeringAccession, filing.toString(), Date.now(),
+    );
+  }
+
+  removeSecIssuerFollowup(cik: string): boolean {
+    if (!/^\d{10}$/.test(cik)) throw new Error("invalid_sec_issuer_cik");
+    return this.prepare("DELETE FROM sec_issuer_followups WHERE cik = ?").run(cik).changes > 0;
   }
 
   close(): void {

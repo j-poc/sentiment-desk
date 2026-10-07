@@ -20,6 +20,7 @@ import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
 import type { CompanyFundamentals } from "./company-fundamentals.js";
 import type { SecFilingsInbox } from "./sec-filings-inbox.js";
+import type { SecFilingDetailService } from "./sec-filing-detail.js";
 import { MAX_ANALYST_RESEARCH_QUESTION_CHARS } from "../shared/analyst-research.js";
 import { savedSourceSearchCursorSchema, type SavedSourceSearchCursor } from "../shared/saved-source-search.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
@@ -43,6 +44,7 @@ export interface AppDeps {
   opportunityRadarEnabled?: boolean;
   companyFundamentals?: CompanyFundamentals;
   secFilingsInbox?: SecFilingsInbox;
+  secFilingDetail?: SecFilingDetailService;
   webRoot?: string;
   deliverySources: DeliverySourceSchedule[];
 }
@@ -95,6 +97,8 @@ const mentionLookupSchema = z.object({
 });
 const fundamentalRefreshSchema = z.object({ requestKey: z.string().uuid() }).strict();
 const secFilingsInboxActivationSchema = z.object({ confirmUse: z.literal(true) }).strict();
+const secIssuerFollowupSchema = z.object({ accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/) }).strict();
+const secFilingDetailSchema = z.object({ accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/), confirmUse: z.literal(true) }).strict();
 const analystResearchReviewSchema = z.object({
   disposition: z.enum(["investigate", "dismissed"]),
   nextQuestion: z.string().max(MAX_ANALYST_RESEARCH_QUESTION_CHARS),
@@ -271,6 +275,63 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/sec-filings-inbox", async (c) => {
     if (!deps.secFilingsInbox) return c.json({ error: "sec_filings_inbox_unavailable" }, 503);
     return c.json(await deps.secFilingsInbox.read());
+  });
+
+  app.post("/api/sec-filings-inbox/evidence", async (c) => {
+    const requestUrl = new URL(c.req.url);
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    const hostHeader = c.req.header("host")?.toLowerCase();
+    const originHeader = c.req.header("origin");
+    let sameOrigin = true;
+    if (originHeader) { try { sameOrigin = new URL(originHeader).origin === requestUrl.origin; } catch { sameOrigin = false; } }
+    if (!localHosts.has(requestUrl.hostname.toLowerCase()) || (hostHeader != null && hostHeader !== requestUrl.host.toLowerCase())
+      || !sameOrigin || c.req.header("sec-fetch-site")?.toLowerCase() === "cross-site") return c.json({ error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
+    if (!deps.secFilingsInbox || !deps.secFilingDetail) return c.json({ error: "sec_filing_detail_unavailable" }, 503);
+    const input = secFilingDetailSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_sec_filing_detail_request" }, 400);
+    const current = await deps.secFilingsInbox.read();
+    const row = current.rows.find((item) => item.accession === input.data.accession && item.form === "8-K");
+    if (!row || !/^\d{10}$/.test(row.cik) || row.filingUrl == null) return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
+    return c.json(await deps.secFilingDetail.inspect(row));
+  });
+
+  app.get("/api/sec-issuer-followups", (c) => c.json({ items: deps.db.secIssuerFollowups() }));
+
+  app.post("/api/sec-issuer-followups", async (c) => {
+    const requestUrl = new URL(c.req.url);
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    const hostHeader = c.req.header("host")?.toLowerCase();
+    const originHeader = c.req.header("origin");
+    let sameOrigin = true;
+    if (originHeader) { try { sameOrigin = new URL(originHeader).origin === requestUrl.origin; } catch { sameOrigin = false; } }
+    if (!localHosts.has(requestUrl.hostname.toLowerCase()) || (hostHeader != null && hostHeader !== requestUrl.host.toLowerCase())
+      || !sameOrigin || c.req.header("sec-fetch-site")?.toLowerCase() === "cross-site") return c.json({ error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
+    if (!deps.secFilingsInbox) return c.json({ error: "sec_filings_inbox_unavailable" }, 503);
+    const input = secIssuerFollowupSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_sec_issuer_followup" }, 400);
+    const source = (await deps.secFilingsInbox.read()).rows.find((row) => row.accession === input.data.accession && row.form === "8-K");
+    if (!source || !/^\d{10}$/.test(source.cik) || source.filingUrl == null) return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
+    deps.db.saveSecIssuerFollowup({ cik: source.cik, issuer: source.issuer, triggeringAccession: source.accession, filingUrl: source.filingUrl });
+    const saved = deps.db.secIssuerFollowups().find((item) => item.cik === source.cik);
+    if (!saved) return c.json({ error: "sec_issuer_followup_readback_failed" }, 500);
+    return c.json(saved, 201);
+  });
+
+  app.delete("/api/sec-issuer-followups/:cik", (c) => {
+    const requestUrl = new URL(c.req.url);
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    const hostHeader = c.req.header("host")?.toLowerCase();
+    const originHeader = c.req.header("origin");
+    let sameOrigin = true;
+    if (originHeader) { try { sameOrigin = new URL(originHeader).origin === requestUrl.origin; } catch { sameOrigin = false; } }
+    if (!localHosts.has(requestUrl.hostname.toLowerCase()) || (hostHeader != null && hostHeader !== requestUrl.host.toLowerCase())
+      || !sameOrigin || c.req.header("sec-fetch-site")?.toLowerCase() === "cross-site") return c.json({ error: "unsafe_external_request_origin" }, 403);
+    const cik = c.req.param("cik");
+    if (!/^\d{10}$/.test(cik)) return c.json({ error: "invalid_sec_issuer_cik" }, 400);
+    deps.db.removeSecIssuerFollowup(cik);
+    return c.json({ items: deps.db.secIssuerFollowups() });
   });
 
   app.post("/api/sec-filings-inbox/activate", async (c) => {

@@ -12,6 +12,7 @@ import {
   recordProviderRateLimit,
 } from "./provider-cooldown.js";
 import { ExternalRequestPausedError } from "./external-request-gate.js";
+import { filterFreshQuotes } from "../shared/quote-freshness.js";
 
 /**
  * The market store: one poll loop, one in-memory snapshot, broadcast on change.
@@ -60,14 +61,26 @@ export class MarketData {
       externalRequestsEnabled?: boolean;
       quoteRequestsEnabled?: boolean;
       chartRequestsEnabled?: boolean;
+      now?: () => number;
     },
   ) {}
 
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
   current(): MarketSnapshot {
-    return this.snapshot;
+    return { ...this.snapshot, quotes: filterFreshQuotes(this.snapshot.quotes, this.now()) };
   }
 
   async refresh(): Promise<void> {
+    const beforeExpiry = Object.keys(this.snapshot.quotes).length;
+    const current = this.current();
+    const expired = Object.keys(current.quotes).length !== beforeExpiry;
+    if (expired) {
+      this.snapshot = current;
+      this.deps.hub.broadcast("quotes", this.snapshot);
+    }
     if (!this.quoteRequestsAllowed()) return;
     if (!this.deps.db.prepareExternalWork()) return;
     if (providerCoolingDown(this.deps.db, "yahoo")) return;
@@ -80,12 +93,12 @@ export class MarketData {
     for (const ticker of tickers) {
       if (!this.deps.db.canStartExternalWork()) break;
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
-      const startedAt = Date.now();
+      const startedAt = this.now();
       const company = this.deps.companies.find((c) => c.ticker === ticker) ?? null;
       let deliveryId: string | null = null;
       try {
         const received = await fetchQuote(ticker);
-        const retrievedAt = Date.now();
+        const retrievedAt = this.now();
         quotes[ticker] = { ...received, retrievedAt, lastAttemptAt: retrievedAt, delivery: "network" };
         const recordedDeliveryId = recordDelivery({
           db: this.deps.db, collector: "yahoo_quote", companyId: company?.id ?? null,
@@ -116,8 +129,8 @@ export class MarketData {
         }
       } catch (err) {
         if (err instanceof ExternalRequestPausedError && err.dispatchedRequests === 0) break;
-        const prior = this.snapshot.quotes[ticker];
-        if (prior) quotes[ticker] = { ...prior, lastAttemptAt: Date.now(), delivery: "cache" };
+        const prior = this.current().quotes[ticker];
+        if (prior) quotes[ticker] = { ...prior, lastAttemptAt: this.now(), delivery: "cache" };
         if (deliveryId == null) recordDelivery({
           db: this.deps.db, collector: "yahoo_quote", companyId: company?.id ?? null,
           requestKey: `yahoo-quote:${ticker}`, startedAt, adapterVersion: "yahoo-quote/1",
@@ -149,15 +162,15 @@ export class MarketData {
     }
     // Keep last-known values for failed tickers; refresh what succeeded.
     this.snapshot = {
-      quotes: { ...this.snapshot.quotes, ...quotes },
-      updatedAt: ok > 0 ? Date.now() : this.snapshot.updatedAt,
+      quotes: { ...this.current().quotes, ...quotes },
+      updatedAt: ok > 0 ? this.now() : this.snapshot.updatedAt,
     };
     // Company price points are persisted and their receipt outcomes finalized
     // inside the per-ticker request boundary above. Index quotes stay in memory.
     if (this.chartRequestsAllowed()) this.startBackfill();
     if (companyOk > 0) this.deps.health.recordQuotes(true);
     if (companyFail > 0) this.deps.health.recordQuotes(false, companyError ?? "company quote fetch failures");
-    if (Object.keys(quotes).length > 0) this.deps.hub.broadcast("quotes", { quotes, updatedAt: this.snapshot.updatedAt });
+    if (Object.keys(quotes).length > 0) this.deps.hub.broadcast("quotes", this.current());
   }
 
   async waitForIdle(): Promise<void> {
@@ -184,11 +197,11 @@ export class MarketData {
       if (!this.deps.db.canStartExternalWork()) break;
       if (this.backfilled.has(company.ticker)) continue;
       if (providerCoolingDown(this.deps.db, "yahoo")) break;
-      const startedAt = Date.now();
+      const startedAt = this.now();
       let deliveryId: string | null = null;
       try {
         const points = await fetchPriceSeries(company.ticker, 72);
-        const retrievedAt = Date.now();
+        const retrievedAt = this.now();
         const recordedDeliveryId = recordDelivery({
           db: this.deps.db, collector: "yahoo_chart", companyId: company.id,
           requestKey: `yahoo-chart:series:${company.ticker}:72h`, startedAt,
@@ -233,7 +246,7 @@ export class MarketData {
     const bucket = hours <= 24 ? 24 : hours <= 72 ? 72 : hours <= 168 ? 168 : 24 * 30;
     const key = `${ticker}:${bucket}`;
     if (!this.chartRequestsAllowed()) {
-      const servedAt = Date.now();
+      const servedAt = this.now();
       const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
       return {
         points,
@@ -244,7 +257,7 @@ export class MarketData {
       };
     }
     const cached = this.seriesCache.get(key);
-    const now = Date.now();
+    const now = this.now();
     if (cached && now - cached.retrievedAt < SERIES_CACHE_TTL_MS) {
       return {
         points: cached.points,
@@ -257,7 +270,7 @@ export class MarketData {
     const existing = this.seriesRequests.get(key);
     if (existing) return existing;
     if (!this.deps.db.prepareExternalWork()) {
-      const servedAt = Date.now();
+      const servedAt = this.now();
       const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
       return {
         points,
@@ -279,19 +292,19 @@ export class MarketData {
   private async loadPriceSeries(ticker: string, bucket: number): Promise<PriceSeriesResult> {
     const key = `${ticker}:${bucket}`;
     if (!this.deps.db.canStartExternalWork()) {
-      const servedAt = Date.now();
+      const servedAt = this.now();
       const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
       return { points, delivery: "local_store", servedAt, sourceLatestAt: points.at(-1)?.t ?? null, cacheAgeMs: null };
     }
     const cooldownUntil = providerRetryAt(this.deps.db, "yahoo");
-    if (cooldownUntil > Date.now()) {
-      throw new RateLimitedError(cooldownUntil - Date.now(), "Yahoo Finance cooldown active", true);
+    if (cooldownUntil > this.now()) {
+      throw new RateLimitedError(cooldownUntil - this.now(), "Yahoo Finance cooldown active", true);
     }
-    const startedAt = Date.now();
+    const startedAt = this.now();
     let deliveryId: string | null = null;
     try {
       const points = await fetchPriceSeries(ticker, bucket);
-      const retrievedAt = Date.now();
+      const retrievedAt = this.now();
       const company = this.deps.companies.find((item) => item.ticker === ticker);
       const recordedDeliveryId = recordDelivery({
         db: this.deps.db, collector: "yahoo_chart", companyId: company?.id ?? null,
@@ -324,7 +337,7 @@ export class MarketData {
       };
     } catch (error) {
       if (error instanceof ExternalRequestPausedError) {
-        const servedAt = Date.now();
+        const servedAt = this.now();
         const points = this.deps.db.priceWindow(ticker, servedAt - bucket * 60 * 60 * 1000);
         if (error.dispatchedRequests > 0 && deliveryId == null) {
           const company = this.deps.companies.find((item) => item.ticker === ticker);

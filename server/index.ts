@@ -9,6 +9,7 @@ import { Pipeline } from "./pipeline.js";
 import { createApp } from "./app.js";
 import { CompanyFundamentals } from "./company-fundamentals.js";
 import { SecFilingsInbox } from "./sec-filings-inbox.js";
+import { SecFilingDetailService } from "./sec-filing-detail.js";
 import { MarketData, startQuotesPoller } from "./market.js";
 import { SEC_EVIDENCE_ADAPTER_VERSION } from "./sources/sec.js";
 import {
@@ -142,6 +143,10 @@ async function main(): Promise<void> {
   const secFilingsInbox = new SecFilingsInbox({
     acquisitionEnabled: collectorEnabled("sec_latest_filings_8k"),
   });
+  const secFilingDetail = new SecFilingDetailService({
+    enabled: collectorEnabled("sec_edgar") && collectorEnabled("sec_latest_filings_8k") && config.secUserAgent !== "",
+    userAgent: config.secUserAgent,
+  });
   // Pending work drains on boot only when Jev is configured. Without a key,
   // real observations remain pending and create no scoring failure attempts.
   // Existing completed scores remain untouched when the current rubric changes.
@@ -159,6 +164,7 @@ async function main(): Promise<void> {
     opportunityRadarEnabled: false,
     companyFundamentals,
     secFilingsInbox,
+    secFilingDetail,
     deliverySources: [
       { collector: "google_news_rss", enabled: collectorEnabled("google_news_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "yahoo_finance_rss", enabled: collectorEnabled("yahoo_finance_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },

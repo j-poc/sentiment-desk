@@ -1,4 +1,12 @@
-# Sentiment Desk continuation board — 2026-10-06
+# Sentiment Desk continuation board — 2026-10-07
+
+## Selected filing evidence usability — 2026-10-07
+
+| Owner | Scope | Status | Evidence / next |
+|---|---|---|---|
+| `/root` | SEC filing detail, integration, verification, independent review, trace, and checkpoint | In progress | A selected real 8-K now has an explicit inline evidence path: exact issuer/accession metadata, dates and acceptance/retrieval clocks, bounded primary/exhibit excerpts, source links and digest. No list-render fetch, classifier call, or body persistence. Design and criteria: `project-record/4-log/2026-10-07-sec-filing-disclosure-usability.md`. Run native, live-rendered and independent whole-build verification; push only reviewed source. |
+| `/root/sec_accession_metadata` | Exact accession submissions lookup and parsing regressions | Complete | One paced bounded metadata request; issuer CIK is checked independently from submitting/accession CIK; exact 8-K accession and safe primary-document path are validated. `tests/sec-accession.test.ts` and `tests/sec.test.ts`: 22 focused tests passed. |
+| `/root` | Broader operational acceptance | Open | This slice does not close the missing current Hub receipt, live OpenAI Luna route/evaluation, tickerless issuer-universe discovery, completed company/followed-company analysis, legacy provider-usage reconciliation, or uncoached investor outcomes. No demo or synthetic runtime data; Opportunity Radar remains disabled. |
 
 ## Archive-search and no-ticker recovery — 2026-10-06
 

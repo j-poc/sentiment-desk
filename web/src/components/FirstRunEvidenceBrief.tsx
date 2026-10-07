@@ -4,7 +4,7 @@ type Props = (
   | { state: "loading" }
   | { state: "error" }
   | ({ state: "ready" } & FirstRunEvidenceDTO)
-) & { localObservationArrived?: boolean; onOpenOperations?: () => void };
+) & { localObservationArrived?: boolean; onOpenOperations?: () => void; onOpenDisclosures?: () => void };
 
 export function FirstRunEvidenceBrief(props: Props) {
   if (props.localObservationArrived) return null;
@@ -20,6 +20,11 @@ export function FirstRunEvidenceBrief(props: Props) {
           This installation has no eligible saved source observations to chart or classify. The Desk shows no archived samples or demonstration results in place of saved evidence.
         </p>
         <p className="first-run-source">Check collection and classifier readiness. External requests remain under explicit operator controls.</p>
+        {props.onOpenDisclosures && (
+          <button type="button" className="first-run-open-operations" onClick={props.onOpenDisclosures}>
+            Browse recent SEC filings
+          </button>
+        )}
         {props.onOpenOperations && (
           <button type="button" className="first-run-open-operations" onClick={props.onOpenOperations}>
             Open Sources &amp; operations

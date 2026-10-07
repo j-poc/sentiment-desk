@@ -18,15 +18,22 @@ import { ExternalRequestPausedError } from "../external-request-gate.js";
 
 const SEC_BASE = "https://data.sec.gov";
 const SEC_WWW = "https://www.sec.gov";
+const SEC_SUBMISSIONS_MAX_BYTES = 8 * 1024 * 1024;
+const SEC_SUBMISSIONS_MAX_ROWS = 10_000;
+const SEC_SUBMISSIONS_TIMEOUT_MS = 15_000;
 
 export interface SecFiling {
   cik: string;
+  /** SEC Archives path CIK. May be the filing agent's CIK, not the issuer CIK. */
+  archiveCikPath?: string;
   ticker: string;
   accessionNo: string;
   formType: string;
   items: string[];
   filedAt: number | null; // filingDate, absent if EDGAR did not provide a valid value
+  reportDate?: string | null; // SEC-reported period date; not an event date
   acceptanceAt: number; // acceptanceDateTime, the exchange-accepted instant
+  metadataRetrievedAt?: number;
   primaryDocUrl: string;
 }
 
@@ -149,6 +156,198 @@ export async function fetchRecent8Ks(opts: {
   return parseRecent8Ks((await res.json()) as SubmissionsBody, opts.cik, opts.ticker, opts.sinceMs);
 }
 
+function normalizedCik(value: string): string {
+  if (!/^\d{1,10}$/.test(value) || Number(value) <= 0) throw new Error("SEC lookup requires a valid issuer CIK");
+  return value.padStart(10, "0");
+}
+
+async function readBoundedSubmissionsJson(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") throw new Error("SEC submissions returned a non-JSON response");
+  const lengthHeader = response.headers.get("content-length");
+  if (lengthHeader && /^\d+$/.test(lengthHeader) && Number(lengthHeader) > SEC_SUBMISSIONS_MAX_BYTES) {
+    try { await response.body?.cancel(); } catch { /* release provider response */ }
+    throw new Error("SEC submissions response exceeded its byte limit");
+  }
+  if (!response.body) throw new Error("SEC submissions returned an empty response body");
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > SEC_SUBMISSIONS_MAX_BYTES) {
+        try { await reader.cancel(); } catch { /* release provider response */ }
+        throw new Error("SEC submissions response exceeded its byte limit");
+      }
+      chunks.push(next.value);
+    }
+  } catch (error) {
+    try { await reader.cancel(); } catch { /* release provider response */ }
+    throw error;
+  }
+
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))); }
+  catch { throw new Error("SEC submissions response was not valid UTF-8"); }
+  try { return JSON.parse(text) as unknown; }
+  catch { throw new Error("SEC submissions response was not valid JSON"); }
+}
+
+function parseExact8K(body: unknown, requestedCik: string, archiveCikPath: string, accessionNo: string, ticker: string, metadataRetrievedAt: number): SecFiling | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new Error("SEC submissions returned an invalid response shape");
+  }
+  const root = body as Record<string, unknown>;
+  const bodyCik = root.cik;
+  if (typeof bodyCik !== "number" || !Number.isSafeInteger(bodyCik) || bodyCik <= 0
+    || String(bodyCik).padStart(10, "0") !== requestedCik) {
+    throw new Error("SEC submissions issuer CIK did not match the requested CIK");
+  }
+  const filings = root.filings;
+  if (typeof filings !== "object" || filings === null || Array.isArray(filings)) {
+    throw new Error("SEC submissions omitted its filings object");
+  }
+  const recent = (filings as Record<string, unknown>).recent;
+  if (typeof recent !== "object" || recent === null || Array.isArray(recent)) {
+    throw new Error("SEC submissions omitted its recent-filing arrays");
+  }
+  const rows = recent as Record<string, unknown>;
+  const fields = ["form", "filingDate", "acceptanceDateTime", "accessionNumber", "primaryDocument", "items"] as const;
+  const arrays = fields.map((field) => rows[field]);
+  if (arrays.some((value) => !Array.isArray(value))) {
+    throw new Error("SEC submissions omitted required recent-filing arrays");
+  }
+  const [forms, filingDates, acceptanceTimes, accessionNumbers, primaryDocuments, items] = arrays as unknown[][];
+  if (!forms || !filingDates || !acceptanceTimes || !accessionNumbers || !primaryDocuments || !items) {
+    throw new Error("SEC submissions omitted required recent-filing arrays");
+  }
+  if (forms.length > SEC_SUBMISSIONS_MAX_ROWS) throw new Error("SEC submissions exceeded its recent-filing row limit");
+  if (arrays.some((value) => (value as unknown[]).length !== forms.length)) {
+    throw new Error("SEC submissions recent-filing arrays have inconsistent lengths");
+  }
+  const reportDates = rows.reportDate;
+  if (reportDates !== undefined && (!Array.isArray(reportDates) || reportDates.length !== forms.length
+    || reportDates.some((value) => typeof value !== "string"))) {
+    throw new Error("SEC submissions report-date array has an invalid shape");
+  }
+  if (forms.some((value) => typeof value !== "string")
+    || filingDates.some((value) => typeof value !== "string")
+    || acceptanceTimes.some((value) => typeof value !== "string")
+    || accessionNumbers.some((value) => typeof value !== "string")
+    || primaryDocuments.some((value) => typeof value !== "string")
+    || items.some((value) => value !== null && typeof value !== "string")) {
+    throw new Error("SEC submissions recent-filing arrays contain a malformed row");
+  }
+
+  const matches: number[] = [];
+  for (let index = 0; index < accessionNumbers.length; index++) {
+    if (accessionNumbers[index] === accessionNo) matches.push(index);
+  }
+  if (matches.length > 1) throw new Error("SEC submissions contained duplicate rows for the requested accession");
+  if (matches.length === 0) return null;
+
+  const index = matches[0]!;
+  if (forms[index] !== "8-K") return null;
+  const filingDate = filingDates[index] as string;
+  const acceptanceTime = acceptanceTimes[index] as string;
+  const primaryDocument = primaryDocuments[index] as string;
+  const rawItems = items[index] as string | null;
+  const reportDate = Array.isArray(reportDates) ? reportDates[index] as string : undefined;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(acceptanceTime)) {
+    throw new Error("SEC 8-K row is missing a timezone-qualified acceptance timestamp");
+  }
+  const acceptanceAt = Date.parse(acceptanceTime);
+  if (!Number.isFinite(acceptanceAt)) throw new Error("SEC 8-K row has an invalid acceptance timestamp");
+
+  let filedAt: number | null = null;
+  if (filingDate !== "") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(filingDate)) throw new Error("SEC 8-K row has an invalid filing date");
+    const parsedFiledAt = Date.parse(`${filingDate}T00:00:00.000Z`);
+    if (!Number.isFinite(parsedFiledAt) || new Date(parsedFiledAt).toISOString().slice(0, 10) !== filingDate) {
+      throw new Error("SEC 8-K row has an invalid filing date");
+    }
+    filedAt = parsedFiledAt;
+  }
+  if (reportDate && (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)
+    || !Number.isFinite(Date.parse(`${reportDate}T00:00:00.000Z`))
+    || new Date(Date.parse(`${reportDate}T00:00:00.000Z`)).toISOString().slice(0, 10) !== reportDate)) {
+    throw new Error("SEC 8-K row has an invalid report date");
+  }
+
+  if (!/^[0-9]{10}-[0-9]{2}-[0-9]{6}$/.test(accessionNo)) {
+    throw new Error("SEC 8-K row has an invalid accession number");
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.html?$/i.test(primaryDocument)
+    || primaryDocument === "." || primaryDocument === "..") {
+    throw new Error("SEC 8-K row has an invalid primary document path");
+  }
+  const archiveDirectory = `https://www.sec.gov/Archives/edgar/data/${Number(archiveCikPath)}/${accessionNo.replace(/-/g, "")}/`;
+  const primaryDocUrl = new URL(primaryDocument, archiveDirectory);
+  const expectedPath = `/Archives/edgar/data/${Number(archiveCikPath)}/${accessionNo.replace(/-/g, "")}/${primaryDocument}`;
+  if (primaryDocUrl.origin !== SEC_WWW || primaryDocUrl.pathname !== expectedPath || primaryDocUrl.search || primaryDocUrl.hash) {
+    throw new Error("SEC 8-K primary document identity did not match its issuer and accession");
+  }
+
+  return {
+    cik: requestedCik,
+    archiveCikPath,
+    ticker,
+    accessionNo,
+    formType: "8-K",
+    items: (rawItems ?? "").split(",").map((item) => item.trim()).filter(Boolean),
+    filedAt,
+    ...(reportDates === undefined ? {} : { reportDate: reportDate || null }),
+    acceptanceAt,
+    metadataRetrievedAt,
+    primaryDocUrl: primaryDocUrl.href,
+  };
+}
+
+/** Fetch one issuer's submissions once and return only the exact requested 8-K. */
+export async function fetchFilingByAccession(opts: {
+  cik: string;
+  /** SEC index-page path CIK; independent from issuer and accession CIK. */
+  archiveCikPath?: string;
+  accessionNo: string;
+  ticker?: string;
+  userAgent: string;
+}): Promise<SecFiling | null> {
+  const cik = normalizedCik(opts.cik);
+  const archiveCikPath = normalizedCik(opts.archiveCikPath ?? opts.cik);
+  const ticker = opts.ticker?.trim() ?? "";
+  const providerLabel = ticker || `CIK ${cik}`;
+  if (!/^[0-9]{10}-[0-9]{2}-[0-9]{6}$/.test(opts.accessionNo)) {
+    throw new Error("SEC lookup requires a valid accession number");
+  }
+  if (!opts.userAgent.trim()) throw new Error("SEC lookup requires a User-Agent");
+
+  await paceProviderRequest("sec", 125);
+  const response = await fetch(`${SEC_BASE}/submissions/CIK${cik}.json`, {
+    method: "GET",
+    redirect: "manual",
+    headers: { "user-agent": opts.userAgent, accept: "application/json" },
+    signal: AbortSignal.timeout(SEC_SUBMISSIONS_TIMEOUT_MS),
+  });
+  if (response.status === 429) {
+    try { await response.body?.cancel(); } catch { /* release provider response */ }
+    throw new ProviderRateLimitError("sec", parseRetryAfterMs(response.headers.get("retry-after")), `SEC submissions HTTP 429 for ${providerLabel}`);
+  }
+  if (response.status >= 300 && response.status < 400) {
+    try { await response.body?.cancel(); } catch { /* release provider response */ }
+    throw new Error("SEC submissions redirect rejected");
+  }
+  if (!response.ok) {
+    try { await response.body?.cancel(); } catch { /* release provider response */ }
+    throw new Error(`SEC submissions HTTP ${response.status} for ${providerLabel}`);
+  }
+  const body = await readBoundedSubmissionsJson(response);
+  return parseExact8K(body, cik, archiveCikPath, opts.accessionNo, ticker, Date.now());
+}
+
 export const SEC_PRIMARY_ADAPTER_VERSION = "sec-primary-document/2";
 export const SEC_EVIDENCE_ADAPTER_VERSION = "sec-filing-evidence/1";
 const SEC_DOCUMENT_LIMIT = 2_097_152;
@@ -162,8 +361,10 @@ function closeVisibleTag(stack: VisibleTag[], name: string): void {
 function textIsSuppressed(stack: VisibleTag[]): boolean { return stack.some((tag) => tag.suppressesText); }
 
 function secDirectory(filing: SecFiling): string | null {
-  if (!/^\d{1,10}$/.test(filing.cik) || !/^\d{10}-\d{2}-\d{6}$/.test(filing.accessionNo)) return null;
-  return `https://www.sec.gov/Archives/edgar/data/${Number(filing.cik)}/${filing.accessionNo.replace(/-/g, "")}/`;
+  const archiveCikPath = filing.archiveCikPath ?? filing.cik;
+  if (!/^\d{1,10}$/.test(archiveCikPath) || Number(archiveCikPath) <= 0
+    || !/^\d{10}-\d{2}-\d{6}$/.test(filing.accessionNo)) return null;
+  return `https://www.sec.gov/Archives/edgar/data/${Number(archiveCikPath)}/${filing.accessionNo.replace(/-/g, "")}/`;
 }
 
 function validatedDocumentUrl(raw: string, filing: SecFiling): string | null {

@@ -16,6 +16,7 @@ type HubFilingRecord = {
     filing_url: string;
     filed_at?: string;
     accepted_at?: string | null;
+    published_source_timestamp?: string;
     feed_updated_at?: string | null;
   };
 };
@@ -25,6 +26,7 @@ const validRow: HubFilingRecord = {
     issuer_label: "Example Issuer", form: "8-K", accession: "0000000320-25-000001",
     accession_cik: "0000000320", filing_cik_path: "320",
     filing_url: filingUrl, filed_at: "2026-10-04", accepted_at: "2026-10-04T15:20:00Z",
+    published_source_timestamp: "2026-10-04T15:19:00-04:00",
     feed_updated_at: "2026-10-04T15:21:00Z",
   },
 };
@@ -66,10 +68,18 @@ describe("real SEC filings inbox Hub boundary", () => {
     expect(result.rows).toEqual([{
       accession: "0000000320-25-000001", cik: "0000000320", accessionCik: "0000000320", filingCikPath: "320",
       issuer: "Example Issuer", form: "8-K",
-      filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z", filingUrl,
+      filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedPublishedAt: "2026-10-04T19:19:00.000Z",
+      feedUpdatedAt: "2026-10-04T15:21:00.000Z", filingUrl,
     }]);
     const receiptRequest = fetcher.mock.calls.find(([input]) => String(input).includes("/api/v1/receipts/"));
     expect(String(receiptRequest?.[0])).toBe(`${base}/api/v1/receipts/receipt-1?purpose=private_display`);
+  });
+
+  it("normalizes the exact machine suffix used in live SEC Atom issuer titles", async () => {
+    const liveTitle = structuredClone(validRow);
+    liveTitle.attributes.issuer_label = "BIOFORCE NANOSCIENCES HOLDINGS, INC. (0001310488) (Filer)";
+    const result = await makeInbox(responseFor({ records: [liveTitle] })).read();
+    expect(result.rows[0]?.issuer).toBe("BIOFORCE NANOSCIENCES HOLDINGS, INC.");
   });
 
   it("keeps fresh retrieval separate from an old SEC source observation", async () => {
@@ -110,6 +120,7 @@ describe("real SEC filings inbox Hub boundary", () => {
     agentFiled.attributes.issuer_label = "VICOR CORP";
     agentFiled.attributes.filed_at = "2026-08-27";
     agentFiled.attributes.accepted_at = null;
+    agentFiled.attributes.published_source_timestamp = "";
     agentFiled.attributes.feed_updated_at = null;
 
     const result = await makeInbox(responseFor({ records: [agentFiled] })).read();
@@ -117,8 +128,22 @@ describe("real SEC filings inbox Hub boundary", () => {
     expect(result.rows).toEqual([{
       accession: "0001193125-26-370420", cik: "0000751978", accessionCik: "0001193125", filingCikPath: "1193125",
       issuer: "VICOR CORP", form: "8-K", filedOn: "2026-08-27", acceptedAt: null,
-      feedUpdatedAt: null, filingUrl,
+      feedPublishedAt: null, feedUpdatedAt: null, filingUrl,
     }]);
+  });
+
+  it("rejects forms outside the exact 8-K Hub profile and keeps Atom publication separate from filing time", async () => {
+    const amendment = structuredClone(validRow);
+    amendment.attributes.form = "8-K/A";
+    const result = await makeInbox(responseFor({ records: [amendment] })).read();
+    expect(result.state).toBe("unsupported");
+    expect(result.rows).toEqual([]);
+
+    const noFilingClocks = structuredClone(validRow);
+    delete noFilingClocks.attributes.filed_at;
+    delete noFilingClocks.attributes.accepted_at;
+    const clockResult = await makeInbox(responseFor({ records: [noFilingClocks] })).read();
+    expect(clockResult.rows[0]).toMatchObject({ filedOn: null, acceptedAt: null, feedPublishedAt: "2026-10-04T19:19:00.000Z" });
   });
 
   it("fails closed on inconsistent accession or archive identities and on any export permission", async () => {

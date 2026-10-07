@@ -1,5 +1,27 @@
 # Sentiment Desk completion plan
 
+## Current execution objective
+
+Complete Sentiment Desk as a real-data-only, locally operational investor
+product under this plan and the current v2 `engineering-contract.json`. For
+new classifications, use the accepted OpenAI GPT-6 Luna categorical contract
+and complete its frozen real-source evaluation within finite
+account-owner-approved request, byte, and USD budgets and the source, account,
+usage, and retention gates; preserve historical Jev records separately. Verify
+the full investor journey, including tickerless discovery, fundamental
+research, and followed-company change, with authorized evidence, interruption
+recovery, and rendered UI proof of persisted saved-state readback. Keep the
+frozen Master Eval, investor outcome gates, and complete product ambition
+binding; independent subagent references are diagnostic and do not replace
+human ground truth or user-outcome evidence. Opportunity Radar stays disabled
+until operational acceptance passes. Use only the explicitly authorized
+`j-poc/sentiment-desk` repository on `codex/real-data-rebuild`; verify the
+remote SHA after each reviewed checkpoint and preserve current repository
+visibility. The native Goal objective remains unchanged because its exposed
+control is status-only; the accepted Luna
+direction supersedes its stale Jev-core wording for new classifications. This
+documentation authorizes no model calls, source collection, or authority change.
+
 ## Highest-level product-success evaluation: Master Eval — BLOCKED
 
 The intended users are serious individual investors and professional analysts,

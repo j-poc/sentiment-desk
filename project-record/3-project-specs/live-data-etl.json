@@ -697,8 +697,7 @@
       "endpoint": "SEC ticker directory, submissions metadata, and bounded official 8-K filing-document requests at https://www.sec.gov/Archives/edgar/data/{CIK}/{accession}/{HTML}",
       "freshness_budget_seconds": 604800,
       "delivery_states": [
-        "network",
-        "cache"
+        "network"
       ],
       "freshness_states": [
         "current",
@@ -718,9 +717,11 @@
       "consumer_paths": [
         "/api/companies/:id/mentions",
         "/api/tape",
-        "Desk mention cards and drawer"
+        "Desk mention cards and drawer",
+        "/api/sec-filings-inbox/evidence",
+        "Recent Filings inline evidence panel (single user-selected accession)"
       ],
-      "coverage_limit": "CIK-mapped filings with valid declared metadata only. Item2.02 supports a unique same-accession HTML99.1 explicitly linked to results in the visible primary body. Missing, unsafe, ambiguous, failed, empty, 99.2-only, inline-only or unrecognized attachment language remains incomplete with no new observation. Recent delivery never resets filing/acceptance age. Requests remain globally opt-in.",
+      "coverage_limit": "CIK-mapped filings with valid declared metadata only. Item2.02 supports a unique same-accession HTML99.1 explicitly linked to results in the visible primary body. Missing, unsafe, ambiguous, failed, empty, 99.2-only, inline-only or unrecognized attachment language remains incomplete with no new observation. Recent delivery never resets filing/acceptance age. Requests remain globally opt-in. Recent Filings inspection is initiated only by the user for an accession in the current private-display 8-K receipt. It makes one exact issuer submissions lookup using the issuer CIK while retaining the verified archive-path CIK independently from the accession CIK and at most two bounded document requests. It displays source excerpts, URLs, retrieval time and digest without persisting document bodies or forwarding text to a classifier; missing or ambiguous Item 2.02 relationships remain partial.",
       "acquisition": {
         "method": "api",
         "adapter_paths": [
@@ -730,10 +731,17 @@
           "server/company-fundamentals.ts",
           "server/db.ts",
           "server/app.ts",
-          "server/index.ts"
+          "server/index.ts",
+          "server/sec-filing-detail.ts",
+          "tests/sec-filing-detail.test.ts",
+          "tests/app-sec-filing-detail.test.ts",
+          "tests/sec-accession.test.ts"
         ]
       },
-      "source_mode": "live_observation"
+      "source_mode": "live_observation",
+      "content_scope": "filing_metadata_and_bounded_user_requested_document_excerpts",
+      "document_body_use": "Display-only excerpt in the user-requested filing panel; no retained body and no classifier forwarding.",
+      "delivery_ttl_seconds": null
     },
     {
       "id": "sec_company_facts",
@@ -814,16 +822,20 @@
         "selected-company header",
         "ticker tape"
       ],
-      "coverage_limit": "Per-symbol snapshot; source time can be delayed or unknown; request pacing is local-process only. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
+      "coverage_limit": "The latest quote is available in the live view for at most 900 seconds from retrieval. A cached quote never resets its retrieval clock; expired quotes are removed from API, SSE, and browser state. Persisted price points remain available in saved history with their original source timestamps.",
       "acquisition": {
         "method": "api",
         "adapter_paths": [
           "server/sources/quotes.ts",
           "server/schedule.ts",
-          "server/app.ts"
+          "server/app.ts",
+          "server/market.ts",
+          "shared/quote-freshness.ts",
+          "web/src/App.tsx"
         ]
       },
-      "source_mode": "live_observation"
+      "source_mode": "live_observation",
+      "delivery_ttl_seconds": 900
     },
     {
       "id": "yahoo_chart",
@@ -910,8 +922,7 @@
       "endpoint": "https://www.reddit.com/search.json",
       "freshness_budget_seconds": 604800,
       "delivery_states": [
-        "network",
-        "cache"
+        "network"
       ],
       "freshness_states": [
         "current",
@@ -931,7 +942,7 @@
         "/api/companies/:id/mentions",
         "Desk mention cards and drawer"
       ],
-      "coverage_limit": "Optional credentialed collector is disabled by default; one page per company/cycle. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
+      "coverage_limit": "Optional credentialed collector is disabled by default; one page per company/cycle. Previously accepted observations or classifications remain persisted history with their original observation clocks; persistence is not a provider-response cache.",
       "acquisition": {
         "method": "api",
         "adapter_paths": [
@@ -940,7 +951,8 @@
           "server/pipeline.ts"
         ]
       },
-      "source_mode": "live_observation"
+      "source_mode": "live_observation",
+      "delivery_ttl_seconds": null
     },
     {
       "id": "x",
@@ -948,8 +960,7 @@
       "endpoint": "https://api.x.com/2/tweets/search/recent",
       "freshness_budget_seconds": 604800,
       "delivery_states": [
-        "network",
-        "cache"
+        "network"
       ],
       "freshness_states": [
         "current",
@@ -969,7 +980,7 @@
         "/api/companies/:id/mentions",
         "Desk mention cards and drawer"
       ],
-      "coverage_limit": "Recent search covers at most seven days and requires a credentialed optional collector. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
+      "coverage_limit": "Recent search covers at most seven days and requires a credentialed optional collector. Previously accepted observations or classifications remain persisted history with their original observation clocks; persistence is not a provider-response cache.",
       "acquisition": {
         "method": "api",
         "adapter_paths": [
@@ -978,7 +989,8 @@
           "server/pipeline.ts"
         ]
       },
-      "source_mode": "live_observation"
+      "source_mode": "live_observation",
+      "delivery_ttl_seconds": null
     },
     {
       "id": "typesafe_jev",
@@ -986,8 +998,7 @@
       "endpoint": "POST https://api.typesafe.ai/v1/systemone",
       "freshness_budget_seconds": 604800,
       "delivery_states": [
-        "network",
-        "cache"
+        "network"
       ],
       "freshness_states": [
         "current",
@@ -1008,7 +1019,7 @@
         "score aggregates",
         "Desk mention detail drawer"
       ],
-      "coverage_limit": "Derived classification output, not an independent source fact. The result remains tied to its immutable input, model version, and rubric; it cannot upgrade the input's source freshness or completeness. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
+      "coverage_limit": "Derived classification output, not an independent source fact. The result remains tied to its immutable input, model version, and rubric; it cannot upgrade the input's source freshness or completeness. Previously accepted observations or classifications remain persisted history with their original observation clocks; persistence is not a provider-response cache.",
       "acquisition": {
         "method": "api",
         "adapter_paths": [
@@ -1016,7 +1027,8 @@
           "server/pipeline.ts"
         ]
       },
-      "source_mode": "live_observation"
+      "source_mode": "live_observation",
+      "delivery_ttl_seconds": null
     },
     {
       "id": "openai_luna",
@@ -1024,8 +1036,7 @@
       "endpoint": "POST https://api.openai.com/v1/responses",
       "freshness_budget_seconds": 604800,
       "delivery_states": [
-        "network",
-        "cache"
+        "network"
       ],
       "freshness_states": [
         "current",
@@ -1055,7 +1066,8 @@
           "server/db.ts"
         ]
       },
-      "source_mode": "live_observation"
+      "source_mode": "live_observation",
+      "delivery_ttl_seconds": null
     },
     {
       "id": "sec_latest_filings_8k",
@@ -1074,8 +1086,9 @@
       "timing_fields": [
         "observation",
         "retrieved",
-        "filing_date",
-        "acceptance_time_when_explicit",
+        "filing_date_when_source_declares_it",
+        "acceptance_time_when_source_declares_it",
+        "atom_published_at_when_explicit",
         "feed_updated_at_when_explicit",
         "ingested_at"
       ],
@@ -1085,9 +1098,10 @@
       "consumer_paths": [
         "GET /api/sec-filings-inbox",
         "Desk Recent Filings page",
-        "Official SEC archive filing link"
+        "Official SEC archive filing link",
+        "Explicit user-selected SEC detail request after verifying this exact accession in the current receipt"
       ],
-      "coverage_limit": "At most the newest 40 Form 8-K/8-K/A filings in the SEC feed window, across issuers. Not exhaustive, not an issuer universe or small-cap screen, and not ranked by filing materiality or investment merit. Issuer identity is the exact SEC CIK plus accession.",
+      "coverage_limit": "At most the newest 40 SEC Atom entries filtered to Form 8-K, across issuers. Form 8-K/A amendments are not included. Not exhaustive, not an issuer universe or small-cap screen, and not ranked by filing materiality or investment merit. Issuer identity is the exact SEC issuer CIK plus accession; submitting CIK and archive-path CIK remain separate. The receipt supplies the issuer/accession authority for the separate sec_edgar detail action; direct SEC text retrieval is governed by sec_edgar and cannot be initiated by a list render or background poll.",
       "acquisition": {
         "method": "connector",
         "adapter_paths": [
@@ -1329,7 +1343,7 @@
         "tests/sec-filings-inbox-ui.test.tsx",
         "tests/external-request-gate.test.ts"
       ],
-      "covers": "Fixed SEC 8-K profile identity, display-only rights, exact SEC archive URL and CIK/accession matching, source and retrieval clocks, bounded response parsing, Hub failures, rate limits, no request while gates are closed, and first-run UI caveats. Positive in-test protocol cases are never persisted or served by the product.",
+      "covers": "Fixed SEC 8-K profile identity, display-only rights, exact SEC archive URL and CIK/accession matching, source and retrieval clocks, bounded response parsing, Hub failures, rate limits, no request while gates are closed, and first-run UI caveats. Positive in-test protocol cases are never persisted or served by the product. Includes the explicit detail action’s source-gate and no-persistence boundary through its focused service and API regressions.",
       "kind": "fixture",
       "required": true,
       "source_ids": [
@@ -1368,7 +1382,7 @@
         "tests/external-request-gate.test.ts"
       ],
       "timeout_seconds": 120,
-      "covers": "Malformed/mismatched CIK and accession, unapproved export rights, failed and pending Hub state, request cadence, and closed source gates fail visibly without emitting filing rows or provider requests."
+      "covers": "Malformed/mismatched CIK and accession, unapproved export rights, failed and pending Hub state, request cadence, and closed source gates fail visibly without emitting filing rows or provider requests. Detail failure tests include exact accession/issuer mismatch, disabled source gate, partial ambiguous Item 2.02 extraction and SEC rate limit."
     }
   ],
   "gate_execution_scope": {
