@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SecFilingsInbox } from "../server/sec-filings-inbox.js";
+import { isCurrentSecFilingsFeed } from "../scripts/verify-sec-filings-hub.js";
 
 const base = "http://127.0.0.1:18765";
 const filingUrl = "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm";
@@ -104,6 +105,24 @@ describe("real SEC filings inbox Hub boundary", () => {
     observed.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
     const result = await makeInbox(responseFor({ records: [observed] }), Date.parse("2026-10-05T12:05:00Z")).read();
     expect(result).toMatchObject({ state: "ready", freshness: "current", feedUpdatedAt: "2026-10-05T12:04:00.000Z" });
+  });
+
+  it("does not treat a future Atom update clock as current source data", async () => {
+    const future = structuredClone(validRow);
+    future.attributes.feed_updated_at = "2026-10-05T12:06:00Z";
+    const result = await makeInbox(responseFor({ records: [future] }), Date.parse("2026-10-05T12:05:00Z")).read();
+    expect(result).toMatchObject({ state: "ready", freshness: "stale", feedUpdatedAt: "2026-10-05T12:06:00.000Z" });
+  });
+
+  it("requires current source time before the live-receipt verifier can pass", async () => {
+    const feed = await makeInbox(responseFor(), Date.parse("2026-10-05T12:05:00Z")).read();
+    expect(feed).toMatchObject({ state: "ready", freshness: "stale", retrievedAt: "2026-10-05T12:00:00.000Z" });
+    expect(isCurrentSecFilingsFeed(feed)).toBe(false);
+
+    const current = structuredClone(validRow);
+    current.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
+    const currentFeed = await makeInbox(responseFor({ records: [current] }), Date.parse("2026-10-05T12:05:00Z")).read();
+    expect(isCurrentSecFilingsFeed(currentFeed)).toBe(true);
   });
 
   it("keeps the issuer, EDGAR login CIK, and archive-path CIK distinct", async () => {
