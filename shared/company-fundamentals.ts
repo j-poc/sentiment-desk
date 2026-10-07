@@ -1,6 +1,7 @@
 /** Saved, source-linked SEC CompanyFacts view for a configured Desk company. */
 export type FundamentalMetricKey = "revenue" | "operating_income" | "net_income" | "operating_cash_flow";
 export type FundamentalsState = "idle" | "loading" | "refreshing" | "ready" | "partial" | "empty" | "stale" | "blocked" | "failed";
+export type FundamentalPeriodAlignment = "calendar_anniversary" | "same_filing_52_week" | "same_filing_53_week";
 
 export interface PersistedFundamentalFact {
   id: string;
@@ -35,6 +36,7 @@ export interface PersistedFundamentalFact {
 export interface FundamentalComparison {
   metric: FundamentalMetricKey;
   state: "comparable" | "insufficient" | "not_comparable";
+  periodAlignment: FundamentalPeriodAlignment | null;
   currentFactId: string | null;
   priorFactId: string | null;
   delta: string | null;
@@ -56,6 +58,7 @@ export interface PersistedFundamentalPoint {
 export interface CompanyFundamentalsView {
   companyId: string;
   state: Exclude<FundamentalsState, "loading" | "refreshing">;
+  periodComparisonPolicyVersion: string;
   snapshotId: string | null;
   facts: PersistedFundamentalFact[];
   comparisons: FundamentalComparison[];

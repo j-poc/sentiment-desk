@@ -20,6 +20,8 @@ describe("Luna empty chart state", () => {
     expect(html.indexOf("Review saved source records")).toBeLessThan(html.indexOf("View historical Jev chart"));
     expect(html).toContain("New classifications are blocked: external requests are disabled");
     expect(html).toContain("51 saved scores in UTC week [2026-09-28, 2026-10-05)");
+    expect(html).toContain('title="Re-reads only results already saved locally; it does not collect source records or run GPT-6 Luna."');
+    expect(html).toContain("Reload saved results locally");
   });
 
   it("shows withheld-lineage state without implying a classifier result", () => {

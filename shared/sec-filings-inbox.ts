@@ -15,6 +15,8 @@ export interface SecFilingInboxRow {
 
 export interface SecFilingsInboxView {
   state: "ready" | "stale" | "empty" | "pending" | "rate_limited" | "failed" | "not_configured" | "unsupported" | "unavailable";
+  /** Freshness of the SEC source observation, independent of when the Hub retrieved the saved receipt. */
+  freshness: "current" | "stale" | "unknown";
   rows: SecFilingInboxRow[];
   receiptId: string | null;
   retrievedAt: string | null;

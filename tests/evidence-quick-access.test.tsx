@@ -55,7 +55,7 @@ describe("evidence quick access", () => {
     expect(html).toContain("7D evidence · 2 saved rows · 1 unclassified by Luna");
     expect(html).toContain("latest 1d ago · publisher time");
     expect(html).toContain('aria-label="7D: 2 loaded saved source rows; 1 has no Luna classification');
-    expect(html).toContain(">Review rows ↓</button>");
+    expect(html).toContain(">Review 2 saved source records ↓</button>");
   });
 
   it("does not imply coverage when only a limited loaded sample is visible", () => {
@@ -67,6 +67,7 @@ describe("evidence quick access", () => {
     expect(html).toContain("3D evidence · 1 latest loaded row");
     expect(html).toContain("older rows available");
     expect(html).toContain("1 unclassified by Luna");
+    expect(html).toContain(">Review latest 1 saved source record ↓</button>");
   });
 
   it("offers recovery for failed evidence loads and reports empty windows plainly", () => {
@@ -82,6 +83,6 @@ describe("evidence quick access", () => {
     expect(failed).toContain("Saved 24H evidence is unavailable.");
     expect(failed).toContain(">Retry</button>");
     expect(empty).toContain("No saved source-timed rows in 24H.");
-    expect(empty).not.toContain("Review rows");
+    expect(empty).not.toContain("Review latest");
   });
 });

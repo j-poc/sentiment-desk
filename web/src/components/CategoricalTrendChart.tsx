@@ -84,7 +84,13 @@ export function CategoricalEmptyState({
             <span className="categorical-history-action-detail">{historicalJevSummary}</span>
           </button>
           {(!classifierEnabled || withheldInvalidCount > 0) && <button type="button" onClick={onOpenOperations}>Review classification requirements</button>}
-          <button type="button" onClick={onRefresh}>Refresh saved history</button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            title="Re-reads only results already saved locally; it does not collect source records or run GPT-6 Luna."
+          >
+            Reload saved results locally
+          </button>
         </div>
       </div>
     </div>

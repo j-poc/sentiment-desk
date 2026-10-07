@@ -73,7 +73,7 @@ describe("selected-company SEC fundamentals routes", () => {
     expect(read.status).toBe(200);
     expect(await read.json()).toMatchObject({
       companyId: company.id, state: "blocked", facts: [], comparisons: [], points: [],
-      refreshAllowed: false, refreshBlockedReason: "External requests are disabled; saved SEC facts remain available.",
+      refreshAllowed: false, refreshBlockedReason: "No SEC facts are saved for this company; external requests are disabled.",
     });
 
     const refresh = await app.request(`/api/companies/${encodeURIComponent(company.id)}/fundamentals/refresh`, {

@@ -24,6 +24,7 @@ export function EvidenceQuickAccess({
   const period = hours === 6 ? "6H" : hours === 24 ? "24H" : hours === 72 ? "3D" : "7D";
   const summary = summarizeEvidenceBreadth(mentions);
   const unclassifiedByLuna = mentions.filter((mention) => mention.classification == null).length;
+  const loadedRecordsLabel = `${mentions.length.toLocaleString("en-US")} saved source ${mentions.length === 1 ? "record" : "records"}`;
   const latestSource = summary.latestSourceAt == null
     ? null
     : `${timeAgo(summary.latestSourceAt, now)} · ${summary.latestSourceTimeBasis} time`;
@@ -43,7 +44,9 @@ export function EvidenceQuickAccess({
         </span>
       )}
       {loaded && !error && mentions.length > 0 ? (
-        <button type="button" onClick={onReview} aria-controls="mention-feed-panel">Review rows ↓</button>
+        <button type="button" onClick={onReview} aria-controls="mention-feed-panel">
+          {hasMore ? `Review latest ${loadedRecordsLabel} ↓` : `Review ${loadedRecordsLabel} ↓`}
+        </button>
       ) : error ? (
         <button type="button" onClick={onRetry} aria-label={`Retry loading saved ${period} evidence`}>Retry</button>
       ) : null}

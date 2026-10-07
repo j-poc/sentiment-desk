@@ -50,6 +50,33 @@ function filedDateLabel(value: number | null): string {
   return Number.isNaN(date.valueOf()) ? "Unparseable date" : dateLabel(date.toISOString().slice(0, 10));
 }
 
+function periodRange(fact: PersistedFundamentalFact): string {
+  return fact.startDate ? `${dateLabel(fact.startDate)} – ${dateLabel(fact.endDate)}` : `as of ${dateLabel(fact.endDate)}`;
+}
+
+function periodLengthDays(fact: PersistedFundamentalFact): number | null {
+  if (!fact.startDate) return null;
+  const start = Date.parse(`${fact.startDate}T00:00:00.000Z`);
+  const end = Date.parse(`${fact.endDate}T00:00:00.000Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return (end - start) / 86_400_000 + 1;
+}
+
+function comparisonPeriodContext(
+  alignment: FundamentalComparison["periodAlignment"],
+  current: PersistedFundamentalFact,
+  prior: PersistedFundamentalFact,
+): string | null {
+  if (alignment == null) return null;
+  const currentDays = periodLengthDays(current);
+  const priorDays = periodLengthDays(prior);
+  const alignmentLabel = alignment === "calendar_anniversary" ? "Calendar-anniversary match"
+    : alignment === "same_filing_52_week" ? "Same-filing period boundaries 52 weeks apart"
+      : "Same-filing period boundaries 53 weeks apart";
+  const durations = currentDays === priorDays && currentDays !== null ? ` Both periods span ${currentDays} days.` : "";
+  return `${alignmentLabel}. Current period: ${periodRange(current)}. Prior period: ${periodRange(prior)}.${durations}`;
+}
+
 function formatValue(value: string, unit: string): string {
   const match = value.match(/^(-?)(?:0|[1-9]\d*)(?:\.\d+)?$/);
   if (!match || value.length > 80) return "Unavailable";
@@ -215,6 +242,37 @@ function stateMessage(state: FundamentalsState, staleReason?: string | null): st
   }
 }
 
+const PERIOD_DURATION_PRIORITY: Record<PersistedFundamentalFact["durationClass"], number> = {
+  quarter: 0,
+  ytd_q2: 1,
+  ytd_q3: 2,
+  annual: 3,
+  unknown: 4,
+};
+
+function compareFactPeriods(a: PersistedFundamentalFact, b: PersistedFundamentalFact): number {
+  return b.endDate.localeCompare(a.endDate)
+    || PERIOD_DURATION_PRIORITY[a.durationClass] - PERIOD_DURATION_PRIORITY[b.durationClass]
+    || (b.startDate ?? "").localeCompare(a.startDate ?? "");
+}
+
+function comparisonForFact(
+  fact: PersistedFundamentalFact,
+  comparisons: readonly FundamentalComparison[],
+): FundamentalComparison | undefined {
+  return comparisons.find((comparison) => comparison.metric === fact.metric && comparison.currentFactId === fact.id);
+}
+
+function periodKindLabel(fact: PersistedFundamentalFact): string {
+  switch (fact.durationClass) {
+    case "quarter": return "Quarter";
+    case "ytd_q2":
+    case "ytd_q3": return "Year to date";
+    case "annual": return "Fiscal year";
+    default: return "Reported period";
+  }
+}
+
 export function CompanyFundamentals(props: CompanyFundamentalsProps) {
   const { companyName, ticker, state, facts, comparisons, points, coverage, refreshAllowed, refreshBlockedReason, lastRefreshError, staleReason, onRefresh } = props;
   const factsByMetric = new Map<FundamentalMetricKey, PersistedFundamentalFact[]>();
@@ -224,22 +282,27 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
     group.push(fact);
     factsByMetric.set(fact.metric, group);
   }
-  for (const group of factsByMetric.values()) group.sort((a, b) => b.endDate.localeCompare(a.endDate));
+  for (const group of factsByMetric.values()) group.sort(compareFactPeriods);
   const loading = state === "loading" || state === "refreshing";
   const message = stateMessage(state, staleReason);
   const showData = facts.length > 0;
   const chart = renderChart(points);
   const headingId = `company-fundamentals-${ticker.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`;
-  const latestRevenue = facts.filter((fact) => fact.metric === "revenue")
-    .sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
-  const researchFact = latestRevenue ?? [...facts].sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
-  const researchComparison = researchFact
-    ? comparisons.find((comparison) => comparison.metric === researchFact.metric && comparison.currentFactId === researchFact.id)
-    : undefined;
+  const revenueFacts = facts.filter((fact) => fact.metric === "revenue").sort(compareFactPeriods);
+  const latestRevenue = revenueFacts[0];
+  // Triage must describe the newest reported revenue fact. Picking an older
+  // fact merely because it has a comparison makes stale context look current.
+  // Keep older comparisons in the detailed history; the headline comparison
+  // is only the one explicitly attached to this newest fact.
+  const researchFact = latestRevenue ?? [...facts].sort(compareFactPeriods)[0];
+  const researchComparison = researchFact ? comparisonForFact(researchFact, comparisons) : undefined;
   const researchPriorFact = researchComparison?.priorFactId
     ? facts.find((fact) => fact.id === researchComparison.priorFactId)
     : undefined;
   const researchPriorDate = researchPriorFact?.endDate ? dateLabel(researchPriorFact.endDate) : "the earlier matched period";
+  const researchPeriodContext = researchPriorFact && researchFact
+    ? comparisonPeriodContext(researchComparison?.periodAlignment ?? null, researchFact, researchPriorFact)
+    : null;
   const filingFinding = !researchFact
     ? null
     : researchComparison?.state !== "comparable" || researchComparison.delta === null
@@ -254,7 +317,7 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
   const filingNextCheck = !researchFact
     ? null
     : researchComparison?.state !== "comparable" || researchComparison.delta === null
-      ? "Open the cited filing and locate the same metric in a calendar-matched prior-year statement."
+      ? "Open the cited filing and locate the same metric in an eligible earlier reported period."
       : researchComparison.changeInterpretation === "within_reported_precision"
         ? "Check the filed statement and narrative disclosures; the reported gap is too close to source precision for a directional read."
         : researchComparison.changeInterpretation === "reported_values_only"
@@ -281,7 +344,24 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
       {message && <p className={`cf-state cf-state-${state}`} role={state === "failed" ? "alert" : loading || state === "stale" || state === "blocked" ? "status" : "note"}>{message}</p>}
       {lastRefreshError && showData && <p className="cf-state cf-state-warning" role="status">The latest refresh failed; saved SEC facts below were retained. {lastRefreshError}</p>}
       {lastRefreshError && !showData && state === "failed" && <p className="cf-detail" role="status">{lastRefreshError}</p>}
-      {showData ? (
+      {filingFinding && filingNextCheck && researchFact && <aside className="cf-next-question" aria-label="Filing triage">
+        <p className="micro">FILING TRIAGE · {METRIC_LABELS[researchFact.metric].toUpperCase()}</p>
+        <p className="cf-triage-values"><span><strong>Current</strong> {formatValue(researchFact.value, researchFact.unit)} <span className="cf-triage-date">({periodRange(researchFact)})</span></span>
+          {researchPriorFact && <span><strong>Matched prior</strong> {formatValue(researchPriorFact.value, researchPriorFact.unit)} <span className="cf-triage-date">({periodRange(researchPriorFact)})</span></span>}
+          {researchComparison?.delta !== null && researchComparison?.delta !== undefined && <span><strong>Arithmetic difference</strong> {formatValue(researchComparison.delta, researchFact.unit)}</span>}
+        </p>
+        {researchPeriodContext && <p><strong>Period match</strong><br />{researchPeriodContext}</p>}
+        <p><strong>Interpretation limit</strong><br />{filingFinding} This totals-only view does not assess cause, materiality, persistence, or narrative counterevidence.</p>
+        <p><strong>Next check</strong><br />{filingNextCheck}</p>
+        {researchUrl && <a href={researchUrl} target="_blank" rel="noreferrer">Open cited SEC filing · {researchFact.accession}</a>}
+        <dl className="cf-clocks cf-triage-clocks">
+          <div><dt>Filed</dt><dd>{filedDateLabel(researchFact.filedAt)}</dd></div>
+          <div><dt>Accepted</dt><dd>{clockLabelMs(researchFact.acceptedAt)}</dd></div>
+          <div><dt>Retrieved</dt><dd>{clockLabelMs(researchFact.retrievedAt)}</dd></div>
+        </dl>
+      </aside>}
+      {showData ? <details className="cf-evidence">
+        <summary>All reported metrics, precision, chart and source details</summary>
         <div className="cf-metric-grid">
           {METRICS.map((metric) => {
             const rows = factsByMetric.get(metric) ?? [];
@@ -299,10 +379,11 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
                     <div className="cf-fact" key={fact.id}>
                       <div className="cf-value-row"><strong>{formatValue(fact.value, fact.unit)}</strong></div>
                       <p className="cf-precision-note">{reportedPrecisionLabel(fact.reportedPrecisionStatus, fact.reportedDecimals, fact.unit)}</p>
-                      <p className="cf-period">{fact.startDate ? `${dateLabel(fact.startDate)} – ` : "As of "}{dateLabel(fact.endDate)} · {fact.form}</p>
+                      <p className="cf-period">{periodKindLabel(fact)} · {fact.startDate ? `${dateLabel(fact.startDate)} – ` : "as of "}{dateLabel(fact.endDate)} · {fact.form}</p>
                       {comparison?.state === "comparable" && comparison.delta !== null ? (
                         <>
-                          <p className="cf-comparison">{comparisonLabel(comparison.changeInterpretation, comparison.delta)} vs period ending {priorFact?.endDate || "a prior date"} in the same filing: {formatValue(comparison.delta, fact.unit)}{visiblePercentChange === null ? "" : ` (${visiblePercentChange}%)`}{comparison.changeInterpretation === "within_reported_precision" ? " · direction unresolved" : ""}</p>
+                          <p className="cf-comparison">{comparisonLabel(comparison.changeInterpretation, comparison.delta)} vs {priorFact ? periodRange(priorFact) : "the matched period"} in the same filing: {formatValue(comparison.delta, fact.unit)}{visiblePercentChange === null ? "" : ` (${visiblePercentChange}%)`}{comparison.changeInterpretation === "within_reported_precision" ? " · direction unresolved" : ""}</p>
+                          {priorFact && <p className="cf-precision-note">{comparisonPeriodContext(comparison.periodAlignment, fact, priorFact)}</p>}
                           {comparison.percentChange !== null && visiblePercentChange === null && <p className="cf-precision-note">Percentage change is withheld because both reported amounts are not declared exact in XBRL.</p>}
                           {comparison.reason && <p className="cf-precision-note">{comparison.reason}</p>}
                         </>
@@ -320,22 +401,13 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
             );
           })}
         </div>
-      ) : state !== "loading" && state !== "refreshing" && <p className="cf-empty">No saved values or chart are shown without persisted SEC facts.</p>}
-
-      {filingFinding && filingNextCheck && researchFact && <aside className="cf-next-question" aria-label="Filing triage">
-        <p className="micro">FILING TRIAGE</p>
-        <p><strong>Observed</strong><br />{filingFinding}</p>
-        <p><strong>Not established</strong><br />This totals-only view does not assess operating drivers, materiality, persistence, or narrative counterevidence.</p>
-        <p><strong>Next check</strong><br />{filingNextCheck}</p>
-        {researchUrl && <a href={researchUrl} target="_blank" rel="noreferrer">Open cited SEC filing · {researchFact.accession}</a>}
-      </aside>}
-
-      {chart}
-      <details className="cf-coverage">
-        <summary>SEC coverage and comparison limits</summary>
-        <p>CompanyFacts covers standard, whole-entity XBRL facts. It may omit custom tags and dimensional disclosures. SEC period comparisons do not establish cause, materiality, business quality, or investment merit.</p>
-        {coverage.length ? <ul>{coverage.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul> : <p>Coverage diagnostics have not been supplied for this saved view.</p>}
-      </details>
+        {chart}
+        <details className="cf-coverage">
+          <summary>SEC coverage and comparison limits</summary>
+          <p>CompanyFacts covers standard, whole-entity XBRL facts. It may omit custom tags and dimensional disclosures. SEC period comparisons do not establish cause, materiality, business quality, or investment merit.</p>
+          {coverage.length ? <ul>{coverage.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul> : <p>Coverage diagnostics have not been supplied for this saved view.</p>}
+        </details>
+      </details> : state !== "loading" && state !== "refreshing" && <p className="cf-empty">No saved values or chart are shown without persisted SEC facts.</p>}
     </section>
   );
 }

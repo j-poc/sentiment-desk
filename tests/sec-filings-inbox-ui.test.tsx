@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SecFilingsInbox, deskFallbackMessage, retainLastAcceptedFilings, shouldShowDeskFallback } from "../web/src/components/SecFilingsInbox.js";
+import { SecFilingsInbox, deskFallbackMessage, retainLastAcceptedFilings, secFreshnessLabel, secInboxStatusLabel, shouldShowDeskFallback } from "../web/src/components/SecFilingsInbox.js";
 import type { SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
 
 describe("first-run SEC filing browse surface", () => {
@@ -34,15 +34,16 @@ describe("first-run SEC filing browse surface", () => {
     expect(deskFallbackMessage("unsupported", false)).toContain("not supported by the current Hub configuration");
 
     const unavailable = deskFallbackMessage("unavailable", false);
-    expect(unavailable).toContain("cannot reach its local Public Data Hub");
+    expect(unavailable).toContain("cannot reach its registered local Public Data Hub");
+    expect(unavailable).toContain("Start that Hub service, then choose Check Hub again");
     expect(unavailable).toContain("search saved headlines and excerpts");
     expect(unavailable).toContain("historical evidence, not current market coverage");
-    expect(unavailable).not.toContain("Hub is online");
+    expect(unavailable).not.toContain("source allowlists");
   });
 
   it("keeps the exact last accepted filing receipt and clocks visible during transient refresh states", () => {
     const accepted: SecFilingsInboxView = {
-      state: "ready", rows: [{
+      state: "ready", freshness: "stale", rows: [{
         accession: "0000000320-25-000001", cik: "0000000320", issuer: "Issuer One", form: "8-K",
         filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
         filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
@@ -51,17 +52,31 @@ describe("first-run SEC filing browse surface", () => {
       jobStatus: "succeeded", canActivate: true, nextRefreshAt: null, message: null,
     };
     const pending: SecFilingsInboxView = {
-      state: "pending", rows: [], receiptId: null, retrievedAt: null, feedUpdatedAt: null,
+      state: "pending", freshness: "unknown", rows: [], receiptId: null, retrievedAt: null, feedUpdatedAt: null,
       jobStatus: "queued", canActivate: true, nextRefreshAt: null, message: "Refresh started.",
     };
 
     expect(retainLastAcceptedFilings(accepted, pending)).toMatchObject({
       state: "pending", rows: accepted.rows, receiptId: "receipt-1", retrievedAt: accepted.retrievedAt,
-      feedUpdatedAt: accepted.feedUpdatedAt, message: "Refresh started.",
+      feedUpdatedAt: accepted.feedUpdatedAt, freshness: "stale", message: "Refresh started.",
     });
     expect(retainLastAcceptedFilings(accepted, { ...pending, state: "rate_limited" }).rows).toEqual(accepted.rows);
     expect(retainLastAcceptedFilings(accepted, { ...pending, state: "failed" }).rows).toEqual(accepted.rows);
     expect(retainLastAcceptedFilings(accepted, { ...pending, state: "unsupported" }).rows).toEqual([]);
     expect(retainLastAcceptedFilings(accepted, { ...pending, state: "unavailable" }).rows).toEqual([]);
+  });
+
+  it("labels source observation freshness separately from saved receipt delivery", () => {
+    expect(secFreshnessLabel("current")).toBe("Source freshness current");
+    expect(secFreshnessLabel("stale")).toBe("Source update is stale");
+    expect(secFreshnessLabel("unknown")).toBe("Source freshness unknown");
+    const delivered: SecFilingsInboxView = {
+      state: "ready", freshness: "unknown", rows: [], receiptId: "receipt-1",
+      retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: null, jobStatus: "succeeded",
+      canActivate: true, nextRefreshAt: null, message: null,
+    };
+    expect(secInboxStatusLabel(delivered)).toBe("Saved feed available · Source freshness unknown");
+    expect(secInboxStatusLabel({ ...delivered, freshness: "stale" })).toBe("Saved feed available · Source update is stale");
+    expect(secInboxStatusLabel({ ...delivered, freshness: "current" })).toBe("Saved feed available · Source freshness current");
   });
 });

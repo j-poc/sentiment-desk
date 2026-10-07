@@ -59,10 +59,10 @@ function makeInbox(fetcher: typeof fetch, now = Date.parse("2026-10-05T12:05:00Z
 }
 
 describe("real SEC filings inbox Hub boundary", () => {
-  it("reads a current private-display-only Hub receipt and preserves source clocks", async () => {
+  it("reads a private-display-only Hub receipt and preserves source clocks", async () => {
     const fetcher = responseFor();
     const result = await makeInbox(fetcher).read();
-    expect(result).toMatchObject({ state: "ready", receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z" });
+    expect(result).toMatchObject({ state: "ready", freshness: "stale", receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z" });
     expect(result.rows).toEqual([{
       accession: "0000000320-25-000001", cik: "0000000320", accessionCik: "0000000320", filingCikPath: "320",
       issuer: "Example Issuer", form: "8-K",
@@ -70,6 +70,30 @@ describe("real SEC filings inbox Hub boundary", () => {
     }]);
     const receiptRequest = fetcher.mock.calls.find(([input]) => String(input).includes("/api/v1/receipts/"));
     expect(String(receiptRequest?.[0])).toBe(`${base}/api/v1/receipts/receipt-1?purpose=private_display`);
+  });
+
+  it("keeps fresh retrieval separate from an old SEC source observation", async () => {
+    const result = await makeInbox(responseFor(), Date.parse("2026-10-05T12:05:00Z")).read();
+    expect(result).toMatchObject({
+      state: "ready", freshness: "stale", retrievedAt: "2026-10-05T12:00:00.000Z",
+      feedUpdatedAt: "2026-10-04T15:21:00.000Z",
+    });
+    expect(result.rows).toHaveLength(1);
+  });
+
+  it("reports source freshness unknown when the recent saved receipt has no feed update clock", async () => {
+    const noClock = structuredClone(validRow);
+    delete noClock.attributes.feed_updated_at;
+    const result = await makeInbox(responseFor({ records: [noClock] })).read();
+    expect(result).toMatchObject({ state: "ready", freshness: "unknown", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: null });
+    expect(result.rows).toHaveLength(1);
+  });
+
+  it("marks the source current only when its own update clock is inside the freshness budget", async () => {
+    const observed = structuredClone(validRow);
+    observed.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
+    const result = await makeInbox(responseFor({ records: [observed] }), Date.parse("2026-10-05T12:05:00Z")).read();
+    expect(result).toMatchObject({ state: "ready", freshness: "current", feedUpdatedAt: "2026-10-05T12:04:00.000Z" });
   });
 
   it("keeps the issuer, EDGAR login CIK, and archive-path CIK distinct", async () => {

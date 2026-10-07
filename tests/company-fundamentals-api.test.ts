@@ -4,7 +4,8 @@ import type { MentionPage } from "../web/src/lib/api.js";
 import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../shared/company-fundamentals.js";
 
 const emptyView = (companyId: string): CompanyFundamentalsView => ({
-  companyId, state: "empty", snapshotId: null, facts: [], comparisons: [], points: [], coverage: [],
+  companyId, state: "empty", periodComparisonPolicyVersion: "sec-period-comparison/2",
+  snapshotId: null, facts: [], comparisons: [], points: [], coverage: [],
   refreshAllowed: false, refreshBlockedReason: "SEC refresh is not enabled.", lastRefreshError: null,
   staleReason: null, latestAttemptAt: null, retrievedAt: null,
 });

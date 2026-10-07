@@ -189,14 +189,18 @@ export class SecFilingsInbox {
       const retrievedAt = validTimestamp(receipt.retrieved_at);
       if (!rows || !retrievedAt || accepted.revision !== profile.revision) return this.empty("unsupported", "The saved Hub receipt did not match the current SEC feed profile.");
       const current = this.options.now?.() ?? Date.now();
-      const stale = current - Date.parse(retrievedAt) > STALE_AFTER_MS;
       const feedUpdatedAt = rows.reduce<string | null>((latest, row) =>
         row.feedUpdatedAt && (!latest || Date.parse(row.feedUpdatedAt) > Date.parse(latest)) ? row.feedUpdatedAt : latest, null);
+      const observedAtMs = feedUpdatedAt ? Date.parse(feedUpdatedAt) : NaN;
+      const freshness: SecFilingsInboxView["freshness"] = !Number.isFinite(observedAtMs) ? "unknown"
+        : current >= observedAtMs && current - observedAtMs <= STALE_AFTER_MS ? "current" : "stale";
+      const stale = current - Date.parse(retrievedAt) > STALE_AFTER_MS;
       const jobFailed = job?.status === "failed" || job?.status === "interrupted" || job?.status === "cancelled";
       const jobRunning = ["queued", "running", "cancelling"].includes(String(job?.status ?? ""));
       const latestUpdatedMs = typeof job?.updated_at === "string" ? Date.parse(job.updated_at) : NaN;
       return {
         state: jobFailed ? "failed" : jobRunning ? "pending" : rows.length === 0 ? "empty" : stale ? "stale" : "ready",
+        freshness,
         rows,
         receiptId,
         retrievedAt,
@@ -256,7 +260,7 @@ export class SecFilingsInbox {
   }
 
   private empty(state: SecFilingsInboxView["state"], message: string | null, canActivate = this.options.acquisitionEnabled): SecFilingsInboxView {
-    return { state, rows: [], receiptId: null, retrievedAt: null, feedUpdatedAt: null, jobStatus: null, canActivate, nextRefreshAt: null, message };
+    return { state, freshness: "unknown", rows: [], receiptId: null, retrievedAt: null, feedUpdatedAt: null, jobStatus: null, canActivate, nextRefreshAt: null, message };
   }
 
   private unavailable(): SecFilingsInboxView {

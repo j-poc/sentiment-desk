@@ -37,9 +37,10 @@ import { MentionFeed } from "./components/MentionFeed.js";
 import { EvidenceBreadth } from "./components/EvidenceBreadth.js";
 import { EvidenceQuickAccess } from "./components/EvidenceQuickAccess.js";
 import { SelectedCompanyResearchSections } from "./components/SelectedCompanyResearchSections.js";
+import { shouldLeadWithCurrentSourceEvidence } from "./lib/chart-view-preference.js";
 import { ScoreBucketEvidence } from "./components/ScoreBucketEvidence.js";
 import { OutcomeCheck } from "./components/OutcomeCheck.js";
-import { DeskConnectionState } from "./components/DeskConnectionState.js";
+import { CompanyInventoryState } from "./components/CompanyInventoryState.js";
 import { SecFilingsInbox } from "./components/SecFilingsInbox.js";
 import { recoverToSavedSources, SavedSourcesView, type SavedCompanyHistoryState, type SavedSourcesMode, type SavedSourcesState } from "./components/SavedSourcesView.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
@@ -54,6 +55,7 @@ import { FirstRunEvidenceBrief } from "./components/FirstRunEvidenceBrief.js";
 import { FollowedEvidenceBaseline } from "./components/FollowedEvidenceBaseline.js";
 import { CompanyFundamentals } from "./components/CompanyFundamentals.js";
 import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
+import { SelectedCompanyMarketPriceContext } from "./components/MarketPriceContextChart.js";
 import { AnalystResearchQueue } from "./components/AnalystResearchQueue.js";
 import { reconcileScoreBucketAgainstRollingSeries, scoreBucketEvidenceBaseline, scoreBucketSnapshotMatches, shouldRefreshScoreBucketFromRollingSeries } from "./lib/series-chart-state.js";
 import { scoreBucketRetryMode } from "./lib/score-bucket-retry.js";
@@ -68,7 +70,9 @@ import { historicalJevRevealTarget, revealScrollTarget } from "./lib/reveal-scro
 import { resetResearchScrollForSelection } from "./lib/research-scroll.js";
 import { INITIAL_SAVED_SOURCES_BROWSE_STATE, mergeSavedHistoryStreamEvent, readSavedSourcesBrowseState, shouldRestoreSavedHistoryPage, writeSavedSourcesBrowseState, type SavedSourcesBrowseState } from "./lib/saved-sources-browse-state.js";
 import { automaticHistoricalArchiveLookupAction, chartViewPreferenceAfterCompanySelection, deriveChartView, matchingCategoricalSnapshot, shouldLoadHistoricalJevForVisibleTab, shouldLookupHistoricalJev, shouldRefreshInactiveLunaSnapshot, type CategoricalChartSnapshot, type ChartViewPreference } from "./lib/chart-view-preference.js";
+import { categoricalChartStatusLabel } from "./lib/categorical-chart-status.js";
 import { mentionDrawerReturnTarget, researchViewAfterMentionClose, selectCompanyForResearch, type MentionDrawerReturnTarget, type ResearchView } from "./lib/research-navigation.js";
+import { marketPriceRefreshState, shouldLeadWithMarketPriceContext, shouldShowMarketPriceContext } from "./lib/market-price-context.js";
 import { readSessionPreference, writeSessionPreference } from "./lib/session-preferences.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
@@ -350,6 +354,7 @@ export default function App() {
   const [price, setPrice] = useState<PricePoint[]>([]);
   const [priceResultKey, setPriceResultKey] = useState<string | null>(null);
   const [priceLoadErrorKey, setPriceLoadErrorKey] = useState<string | null>(null);
+  const [priceRefreshingKey, setPriceRefreshingKey] = useState<string | null>(null);
   const [priceSource, setPriceSource] = useState<PriceSeriesDTO | null>(null);
   const [health, setHealth] = useState<HealthDTO | null>(null);
   const [healthLoadState, setHealthLoadState] = useState<"loading" | "ready" | "failed">("loading");
@@ -674,7 +679,32 @@ export default function App() {
       // retry cannot create a second provider attempt.
     }
   }, [selected, selectedFundamentals]);
+  const selectedCompanyFundamentalsPanel = selected ? (
+    <CompanyFundamentals
+      companyName={selected.name}
+      ticker={selected.ticker}
+      state={selectedFundamentals?.refreshing ? "refreshing"
+        : selectedFundamentals?.loading ? "loading"
+          : selectedFundamentals?.transportError && !(selectedFundamentals.view?.facts.length) ? "failed"
+            : selectedFundamentals?.view?.state ?? "loading"}
+      facts={selectedFundamentals?.view?.facts ?? []}
+      comparisons={selectedFundamentals?.view?.comparisons ?? []}
+      points={selectedFundamentals?.view?.points ?? []}
+      coverage={selectedFundamentals?.view?.coverage ?? []}
+      refreshAllowed={selectedFundamentals?.view?.refreshAllowed === true && !selectedFundamentals.refreshing}
+      refreshBlockedReason={selectedFundamentals?.view?.refreshBlockedReason}
+      lastRefreshError={selectedFundamentals?.transportError ?? selectedFundamentals?.view?.lastRefreshError}
+      staleReason={selectedFundamentals?.view?.staleReason}
+      onRefresh={() => void refreshSelectedFundamentals()}
+    />
+  ) : null;
   const selectedQuote = selected && market ? market.quotes[selected.ticker] ?? null : null;
+  const priceRefreshState = marketPriceRefreshState({
+    healthState: healthLoadState,
+    externalRequestsEnabled: health?.externalRequestsEnabled ?? null,
+    chartCollectorEnabled: health?.deliveryHealth.find((source) => source.collector === "yahoo_chart")?.enabled ?? null,
+    canStartExternalWork: health?.storage.canStartExternalWork ?? null,
+  });
   const selectedSeriesKey = selectedId == null ? null : `${selectedId}:${windowHours}`;
   const selectedJevArchive = selectedId != null && jevArchive?.companyId === selectedId ? jevArchive : null;
   const jevArchiveResult = selectedJevArchive?.result ?? null;
@@ -686,11 +716,8 @@ export default function App() {
         : selectedJevArchive?.notFound ? "no eligible saved Jev scores"
           : "saved archive not checked";
   const matchingCategoricalChartSnapshot = matchingCategoricalSnapshot(categoricalChartSnapshot, selectedId, windowHours);
-  const lunaWindowHeader = !matchingCategoricalChartSnapshot
-    ? `GPT-6 Luna ${windowLabel(windowHours)} snapshot not confirmed`
-    : matchingCategoricalChartSnapshot.status === "ready"
-      ? `GPT-6 Luna: ${matchingCategoricalChartSnapshot.eligibleObservationCount?.toLocaleString() ?? "unknown"} in ${windowLabel(windowHours)}`
-      : `${matchingCategoricalChartSnapshot.status === "loading" ? "GPT-6 Luna refresh in progress" : "GPT-6 Luna refresh failed"} · last confirmed ${matchingCategoricalChartSnapshot.eligibleObservationCount?.toLocaleString() ?? "unavailable"} in ${windowLabel(windowHours)}${matchingCategoricalChartSnapshot.observedAt == null ? "" : ` · last success ${timeAgo(matchingCategoricalChartSnapshot.observedAt, clock)} ago`}`;
+  const priceContextVisible = shouldShowMarketPriceContext(chartView, selectedId);
+  const lunaWindowHeader = categoricalChartStatusLabel(matchingCategoricalChartSnapshot, windowLabel(windowHours), clock);
   const resolvedChartView = deriveChartView(chartViewPreference);
   useEffect(() => {
     if (chartViewPreference.kind !== "automatic") return;
@@ -771,8 +798,12 @@ export default function App() {
   const selectedPriceRetrievedAt = selectedPrice.at(-1)?.retrievedAt ?? null;
   const selectedPriceSource = selectedPriceReady ? priceSource : null;
   const selectedPriceError = selectedSeriesKey != null && priceLoadErrorKey === selectedSeriesKey;
-  const selectedPricePending = chartMode === "comparison" && selectedSeriesKey != null && !selectedPriceReady && !selectedPriceError;
+  const priceRefreshRelevant = priceContextVisible || (chartView === "jev" && chartMode === "comparison");
+  const selectedPricePending = priceRefreshRelevant && selectedSeriesKey != null
+    && (priceRefreshingKey === selectedSeriesKey || (!selectedPriceReady && !selectedPriceError));
   const selectedPriceChartState = derivePriceChartState(selectedPriceSource, selectedPricePending, selectedPriceError);
+  const marketPriceContextFirst = priceContextVisible
+    && shouldLeadWithMarketPriceContext(matchingCategoricalChartSnapshot, selectedPrice);
   const selectedPriceRefreshLabels = derivePriceRefreshLabels(selectedPriceSource, selectedPriceReady, selectedPriceError, selectedPrice.length);
   const chartHasPrice = chartMode === "comparison" && selectedPrice.length >= 2;
   const chartLoading = selectedSeriesKey != null && (
@@ -830,12 +861,13 @@ export default function App() {
   }, []);
 
   const refreshPrice = useCallback(async () => {
-    if (chartViewRef.current !== "jev" || chartModeRef.current !== "comparison") return;
     const id = selectedIdRef.current;
     if (!id) return;
     const hours = windowRef.current;
     const requestKey = `${id}:${hours}`;
     const requestSeq = ++priceRequestSeq.current;
+    setPriceRefreshingKey(requestKey);
+    setPriceLoadErrorKey(null);
     if (priceKeyRef.current !== requestKey) {
       priceKeyRef.current = requestKey;
       setPrice([]);
@@ -861,6 +893,10 @@ export default function App() {
     } catch {
       if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) {
         setPriceLoadErrorKey(requestKey);
+      }
+    } finally {
+      if (priceKeyRef.current === requestKey && priceRequestSeq.current === requestSeq) {
+        setPriceRefreshingKey(null);
       }
     }
   }, []);
@@ -1062,8 +1098,8 @@ export default function App() {
   }, [firstRunEvidence, refreshBackendSnapshot]);
 
   useEffect(() => {
-    if (chartView === "jev" && chartMode === "comparison") void refreshPrice();
-  }, [chartMode, chartView, refreshPrice]);
+    if (priceContextVisible || (chartView === "jev" && chartMode === "comparison")) void refreshPrice();
+  }, [chartMode, chartView, priceContextVisible, refreshPrice, selectedId, windowHours]);
 
   // Initial load: refresh authoritative server snapshots.
   useEffect(() => {
@@ -1278,14 +1314,15 @@ export default function App() {
   useEffect(() => {
     if (!selectedId) return;
     void refreshSeries(selectedId);
-    if (chartView === "jev" && chartMode === "comparison") void refreshPrice();
-    if (chartView !== "jev") return;
+    const showHistoricalChart = chartView === "jev";
+    const pollPrice = priceRefreshState === "enabled";
+    if (!showHistoricalChart && !(pollPrice && priceContextVisible)) return;
     const t = setInterval(() => {
-      void refreshSeries(selectedId);
-      if (chartModeRef.current === "comparison") void refreshPrice();
+      if (showHistoricalChart) void refreshSeries(selectedId);
+      if (pollPrice && (priceContextVisible || (showHistoricalChart && chartModeRef.current === "comparison"))) void refreshPrice();
     }, 30_000);
     return () => clearInterval(t);
-  }, [selectedId, windowHours, chartView, chartMode, refreshSeries, refreshPrice]);
+  }, [selectedId, windowHours, chartView, priceContextVisible, priceRefreshState, refreshSeries, refreshPrice]);
 
   // Each Desk filter has its own server-side cursor. Unscored, History, and
   // held-identity recovery are unbounded by age; normal filters stay within
@@ -1511,12 +1548,6 @@ export default function App() {
     && firstRunEvidence.state === "ready"
     && firstRunEvidence.eligibleObservationCount === 0
     && !localObservationArrived;
-  useEffect(() => {
-    if (researchViewTouchedRef.current) return;
-    if (firstRunEvidence.state === "ready" && firstRunEvidence.eligibleObservationCount === 0 && !localObservationArrived) {
-      setResearchView("filings");
-    }
-  }, [firstRunEvidence, localObservationArrived]);
   const healthAttentionCount = health ? operationsAttentionCount(health) : 0;
   const webhookNotConfigured = health != null && !health.alertDelivery.configured;
   const selectedMentions = (activeMentionFeed?.items ?? []).filter((mention) =>
@@ -1907,6 +1938,7 @@ export default function App() {
           </div>
           <Watchlist
             companies={ordered}
+            companiesLoadState={companiesLoadState}
             selectedId={selectedId}
             sparks={sparks}
             quotes={market?.quotes ?? {}}
@@ -2169,6 +2201,16 @@ export default function App() {
               </div>
 
               <SelectedCompanyResearchSections
+                fundamentals={selectedCompanyFundamentalsPanel}
+                evidenceFirst={shouldLeadWithCurrentSourceEvidence({
+                  snapshot: matchingCategoricalChartSnapshot,
+                  companyId: selectedId,
+                  windowHours,
+                  chartView,
+                  historicalJevHasScores: selectedJevArchiveScoredRecordCount > 0,
+                  marketPriceChartAvailable: marketPriceContextFirst,
+                  evidence: { loaded: activeEvidenceBreadthPage?.loaded === true, recordCount: evidenceBreadthMentions.length },
+                })}
                 chart={
                   <>
               <div className="chart-view-tabs" role="tablist" aria-label={`${selected.name} sentiment chart`}>
@@ -2208,6 +2250,21 @@ export default function App() {
                 >Historical Jev</button>
               </div>
               <div id="chart-panel-luna" role="tabpanel" aria-labelledby="chart-tab-luna" hidden={chartView !== "luna"} className="mt-2">
+                <div className={priceContextVisible ? "luna-price-context-grid" : "contents"}>
+                {marketPriceContextFirst && <SelectedCompanyMarketPriceContext
+                  chartView={chartView}
+                  companyId={selected.id}
+                  companyName={selected.name}
+                  ticker={selected.ticker}
+                  hours={windowHours}
+                  points={selectedPrice}
+                  source={selectedPriceSource}
+                  loading={selectedPricePending}
+                  transportError={selectedPriceChartState.priceError}
+                  refreshState={priceRefreshState}
+                  onRefresh={() => void refreshPrice()}
+                  now={clock}
+                />}
                 <CategoricalTrendChart
                   key={`${selected.id}:${windowHours}:${streamRuntimeId ?? "unknown-runtime"}`}
                   companyId={selected.id}
@@ -2226,6 +2283,21 @@ export default function App() {
                   onReviewSourceRecords={() => showMentionFeed()}
                   onSnapshot={reportCategoricalChartSnapshot}
                 />
+                {!marketPriceContextFirst && <SelectedCompanyMarketPriceContext
+                  chartView={chartView}
+                  companyId={selected.id}
+                  companyName={selected.name}
+                  ticker={selected.ticker}
+                  hours={windowHours}
+                  points={selectedPrice}
+                  source={selectedPriceSource}
+                  loading={selectedPricePending}
+                  transportError={selectedPriceChartState.priceError}
+                  refreshState={priceRefreshState}
+                  onRefresh={() => void refreshPrice()}
+                  now={clock}
+                />}
+                </div>
               </div>
               <div id="chart-panel-jev" role="tabpanel" aria-labelledby="chart-tab-jev" hidden={chartView !== "jev"}>
                 {chartView === "jev" && <>
@@ -2374,24 +2446,6 @@ export default function App() {
                     onOpenMention={openDrawerMention}
                   />
                 }
-              />
-
-              <CompanyFundamentals
-                companyName={selected.name}
-                ticker={selected.ticker}
-                state={selectedFundamentals?.refreshing ? "refreshing"
-                  : selectedFundamentals?.loading ? "loading"
-                    : selectedFundamentals?.transportError && !(selectedFundamentals.view?.facts.length) ? "failed"
-                      : selectedFundamentals?.view?.state ?? "loading"}
-                facts={selectedFundamentals?.view?.facts ?? []}
-                comparisons={selectedFundamentals?.view?.comparisons ?? []}
-                points={selectedFundamentals?.view?.points ?? []}
-                coverage={selectedFundamentals?.view?.coverage ?? []}
-                refreshAllowed={selectedFundamentals?.view?.refreshAllowed === true && !selectedFundamentals.refreshing}
-                refreshBlockedReason={selectedFundamentals?.view?.refreshBlockedReason}
-                lastRefreshError={selectedFundamentals?.transportError ?? selectedFundamentals?.view?.lastRefreshError}
-                staleReason={selectedFundamentals?.view?.staleReason}
-                onRefresh={() => void refreshSelectedFundamentals()}
               />
 
               <FollowedEvidenceBaseline
@@ -2593,7 +2647,7 @@ export default function App() {
           ) : (
             <div className="flex h-full items-center justify-center text-[12px] text-white/35">
               {companies.length === 0 ? (
-                <DeskConnectionState state={companiesLoadState} onRetry={() => {
+                <CompanyInventoryState state={companiesLoadState} onRetry={() => {
                   setCompaniesLoadState("loading");
                   void refreshBackendSnapshot(true);
                 }} />

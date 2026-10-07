@@ -75,6 +75,26 @@ export function matchingCategoricalSnapshot(
     : null;
 }
 
+/** Lead with saved sources when the selected window has no usable Luna chart and records are ready to inspect. */
+export function shouldLeadWithCurrentSourceEvidence(input: {
+  snapshot: CategoricalChartSnapshot | null;
+  companyId: string | null;
+  windowHours: number;
+  chartView: ChartView;
+  historicalJevHasScores: boolean;
+  marketPriceChartAvailable: boolean;
+  evidence: { loaded: boolean; recordCount: number };
+}): boolean {
+  if (input.marketPriceChartAvailable) return false;
+  if (input.chartView === "jev" && input.historicalJevHasScores) return false;
+  const matching = matchingCategoricalSnapshot(input.snapshot, input.companyId, input.windowHours);
+  return input.companyId != null
+    && (matching == null || matching.status === "loading" || matching.status === "failed"
+      || (matching.status === "ready" && matching.eligibleObservationCount === 0))
+    && input.evidence.loaded
+    && input.evidence.recordCount > 0;
+}
+
 export function shouldLookupHistoricalJev(
   preference: ChartViewPreference,
   snapshot: CategoricalChartSnapshot | null,

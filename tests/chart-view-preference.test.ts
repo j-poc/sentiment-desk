@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { automaticHistoricalArchiveLookupAction, chartViewPreferenceAfterCompanySelection, deriveChartView, shouldLoadHistoricalJevForVisibleTab, shouldLookupHistoricalJev, shouldRefreshInactiveLunaSnapshot } from "../web/src/lib/chart-view-preference.js";
+import { automaticHistoricalArchiveLookupAction, chartViewPreferenceAfterCompanySelection, deriveChartView, shouldLeadWithCurrentSourceEvidence, shouldLoadHistoricalJevForVisibleTab, shouldLookupHistoricalJev, shouldRefreshInactiveLunaSnapshot } from "../web/src/lib/chart-view-preference.js";
 
 const matchingZero = {
   companyId: "adbe",
@@ -10,6 +10,30 @@ const matchingZero = {
 };
 
 describe("chart view preference", () => {
+  it("leads with saved evidence when the active chart lacks usable data, but preserves a populated selected Jev chart", () => {
+    const input = {
+      snapshot: matchingZero,
+      companyId: "adbe",
+      windowHours: 168,
+    chartView: "luna" as const,
+    historicalJevHasScores: false,
+    marketPriceChartAvailable: false,
+    evidence: { loaded: true, recordCount: 4 },
+    };
+    expect(shouldLeadWithCurrentSourceEvidence(input)).toBe(true);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, companyId: "aapl" })).toBe(true);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, windowHours: 24 })).toBe(true);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, snapshot: { ...matchingZero, status: "loading" } })).toBe(true);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, snapshot: null })).toBe(true);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, snapshot: { ...matchingZero, status: "failed", eligibleObservationCount: null } })).toBe(true);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, chartView: "jev", historicalJevHasScores: true })).toBe(false);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, chartView: "jev", historicalJevHasScores: false })).toBe(true);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, snapshot: { ...matchingZero, eligibleObservationCount: 1 } })).toBe(false);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, evidence: { loaded: false, recordCount: 4 } })).toBe(false);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, evidence: { loaded: true, recordCount: 0 } })).toBe(false);
+    expect(shouldLeadWithCurrentSourceEvidence({ ...input, marketPriceChartAvailable: true })).toBe(false);
+  });
+
   it("keeps current Luna primary by default and only looks up same-company history after a confirmed zero", () => {
     expect(deriveChartView({ kind: "automatic" })).toBe("luna");
     expect(shouldLookupHistoricalJev({ kind: "automatic" }, matchingZero, "adbe")).toBe(true);

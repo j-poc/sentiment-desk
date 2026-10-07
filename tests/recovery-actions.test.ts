@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { OutcomeCheckLoadState, OutcomeCheckRefreshNotice } from "../web/src/components/OutcomeCheck.js";
-import { DeskConnectionState } from "../web/src/components/DeskConnectionState.js";
+import { CompanyInventoryState } from "../web/src/components/CompanyInventoryState.js";
 
 describe("initial-load recovery controls", () => {
   it("offers a retry when the outcome summary fails before any data is available", () => {
@@ -25,13 +25,13 @@ describe("initial-load recovery controls", () => {
     expect(markup).toContain('aria-label="Retry refreshing outcome data"');
   });
 
-  it("offers a retry when company discovery fails before the desk can render a selection", () => {
-    const markup = renderToStaticMarkup(createElement(DeskConnectionState, {
+  it("offers a retry when the company inventory cannot load before the main pane can render a selection", () => {
+    const markup = renderToStaticMarkup(createElement(CompanyInventoryState, {
       state: "failed",
       onRetry: () => undefined,
     }));
 
     expect(markup).toContain('role="alert"');
-    expect(markup).toContain('aria-label="Retry connecting to the desk"');
+    expect(markup).toContain('aria-label="Retry loading company inventory"');
   });
 });

@@ -39,12 +39,14 @@ export function Sparkline({ points, width = 76, height = 24 }: { points?: Series
 
 export function Watchlist({
   companies,
+  companiesLoadState,
   selectedId,
   sparks,
   quotes,
   onSelect,
 }: {
   companies: CompanySnapshot[];
+  companiesLoadState: "loading" | "ready" | "failed";
   selectedId: string | null;
   sparks: Record<string, SeriesPoint[]>;
   quotes: Record<string, Quote>;
@@ -75,7 +77,7 @@ export function Watchlist({
           ? `cached ${timeAgo(q.retrievedAt)} · ${sourceTiming}`
           : sourceAge;
         const priceDescription = q == null
-          ? "Market price unavailable"
+          ? "Latest market quote unavailable"
           : `Market price ${q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)} ${q.currency}; ${sourceTiming}; ${q.delivery === "cache" ? "cached" : "network"} delivery retrieved ${timeAgo(q.retrievedAt)}; ${change == null ? "price change unavailable" : `price change ${fmtDelta(change)} percent`}`;
         const historyStatus = c.indexRecordCount > 0
           ? `${c.indexRecordCount} scored records${c.indexWindow ? ` in ${c.indexWindow}` : ""}`
@@ -114,7 +116,7 @@ export function Watchlist({
             <span className="min-w-0 flex-1 text-right">
               {q && (
                 <span className={`tabnum block truncate text-[11px] ${q.delivery === "cache" ? "text-amber-300/85" : "text-white/85"}`} title={priceDescription}>
-                  {q.currency} {q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)}{change == null ? "" : ` · ${change > 0 ? "+" : ""}${fmtDelta(change)}%`}
+                  {q.currency} {q.price >= 1000 ? q.price.toFixed(0) : q.price.toFixed(2)}{change == null ? "" : ` · ${fmtDelta(change)}%`}
                 </span>
               )}
               {c.index != null ? (
@@ -136,8 +138,16 @@ export function Watchlist({
           </button>
         );
       })}
-      <div className="px-3 py-2 text-[10.5px] text-white/55">
-        {companies.length} companies · {latestSourceCollectedAt == null ? "no saved history yet" : `latest source record collected ${timeAgo(latestSourceCollectedAt)}`}
+      <div className="px-3 py-2 text-[10.5px] text-white/55" role="status" aria-live="polite">
+        {companiesLoadState === "loading"
+          ? companies.length > 0
+            ? `Loading saved companies · ${companies.length} currently available`
+            : "Loading saved companies…"
+          : companiesLoadState === "failed"
+            ? companies.length > 0
+              ? `Company inventory unavailable · showing ${companies.length} saved companies`
+              : "Company inventory unavailable"
+            : `${companies.length} companies · ${latestSourceCollectedAt == null ? "no saved history yet" : `latest source record collected ${timeAgo(latestSourceCollectedAt)}`}`}
       </div>
     </div>
   );

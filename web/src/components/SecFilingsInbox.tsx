@@ -21,8 +21,8 @@ function age(value: string | null, now: number): string {
 function isFilingRow(value: SecFilingInboxRow): boolean { return value.form === "8-K" || value.form === "8-K/A"; }
 
 const stateLabel: Record<SecFilingsInboxView["state"], string> = {
-  ready: "Current saved feed",
-  stale: "Saved feed is stale",
+  ready: "Saved feed available",
+  stale: "Saved snapshot is old",
   empty: "Verified empty feed",
   pending: "Collection in progress",
   rate_limited: "Refresh is rate-limited",
@@ -31,6 +31,15 @@ const stateLabel: Record<SecFilingsInboxView["state"], string> = {
   unsupported: "Feed not supported by this Hub",
   unavailable: "Hub unavailable",
 };
+
+export function secFreshnessLabel(freshness: SecFilingsInboxView["freshness"]): string {
+  return freshness === "current" ? "Source freshness current"
+    : freshness === "stale" ? "Source update is stale" : "Source freshness unknown";
+}
+
+export function secInboxStatusLabel(view: SecFilingsInboxView): string {
+  return `${stateLabel[view.state]} · ${secFreshnessLabel(view.freshness)}`;
+}
 
 export function shouldShowDeskFallback(
   state: SecFilingsInboxView["state"] | null,
@@ -47,7 +56,7 @@ export function deskFallbackMessage(
   detail?: string | null,
 ): string {
   if (loadFailed || state === "unavailable") {
-    return "The Desk cannot reach its local Public Data Hub. Check the Hub connection again, or search saved headlines and excerpts. The saved archive is historical evidence, not current market coverage.";
+    return "The Desk cannot reach its registered local Public Data Hub. Start that Hub service, then choose Check Hub again; meanwhile, search saved headlines and excerpts. The saved archive is historical evidence, not current market coverage.";
   }
   if (state === "unsupported") {
     return `${detail || "The filing feed is not supported by the current Hub configuration."} Configure the SEC 8-K feed in the Hub, then check again. Meanwhile, search saved headlines and excerpts; archive matches are historical leads, not current coverage.`;
@@ -73,6 +82,7 @@ export function retainLastAcceptedFilings(
     receiptId: current.receiptId,
     retrievedAt: current.retrievedAt,
     feedUpdatedAt: current.feedUpdatedAt,
+    freshness: current.freshness,
   };
 }
 
@@ -157,7 +167,7 @@ export function SecFilingsInbox({ onBrowseSavedSources }: { onBrowseSavedSources
             </button>
           )}
           <span className="text-xs text-white/45" role="status" aria-live="polite">
-            {loading ? "Checking saved feed…" : loadFailed ? "Desk could not read the feed status" : view ? stateLabel[view.state] : "Feed status unavailable"}
+            {loading ? "Checking saved feed…" : loadFailed ? "Desk could not read the feed status" : view ? secInboxStatusLabel(view) : "Feed status unavailable"}
           </span>
         </div>
       </header>
@@ -173,16 +183,11 @@ export function SecFilingsInbox({ onBrowseSavedSources }: { onBrowseSavedSources
           </button>
         </div>
       )}
-      {view?.state === "unavailable" && !view.canActivate && (
-        <p className="rounded-md border border-white/10 bg-white/[0.025] px-4 py-3 text-xs leading-5 text-white/50">
-          To enable this source, configure <code>EXTERNAL_REQUESTS_ENABLED=true</code> and add <code>sec_latest_filings_8k</code> to both source allowlists. Collection starts only after you activate it here.
-        </p>
-      )}
-
       {view && (view.retrievedAt || view.nextRefreshAt) && (
         <div className="flex flex-wrap gap-x-5 gap-y-1 px-1 text-xs text-white/45">
-          {view.retrievedAt && <span>Hub retrieved this snapshot {age(view.retrievedAt, now)} · {utc(view.retrievedAt)}</span>}
-          <span>Latest SEC Atom entry update: {view.feedUpdatedAt ? utc(view.feedUpdatedAt) : "not supplied"} · not a filing time</span>
+          {view.feedUpdatedAt && <span>SEC source updated {age(view.feedUpdatedAt, now)} · {utc(view.feedUpdatedAt)} · not a filing time</span>}
+          {!view.feedUpdatedAt && <span>SEC source update time: not supplied</span>}
+          {view.retrievedAt && <span>Hub retrieved this saved snapshot {age(view.retrievedAt, now)} · {utc(view.retrievedAt)}</span>}
           {view.nextRefreshAt && Date.parse(view.nextRefreshAt) > now && <span>Next manual refresh after {utc(view.nextRefreshAt)}</span>}
         </div>
       )}

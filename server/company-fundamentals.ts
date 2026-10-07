@@ -8,6 +8,7 @@ import type {
   CompanyFundamentalsView,
   FundamentalComparison,
   FundamentalMetricKey,
+  FundamentalPeriodAlignment,
   FundamentalRefreshResult,
   PersistedFundamentalFact,
   PersistedFundamentalPoint,
@@ -24,6 +25,8 @@ const COMPANYFACTS_MAX_BYTES = 32 * 1024 * 1024;
 const SEC_TIMEOUT_MS = 15_000;
 const FACTS_PER_METRIC_LIMIT = 48;
 const FACT_VINTAGES_PER_PERIOD_LIMIT = 10;
+const PERIOD_COMPARISON_POLICY_VERSION = "sec-period-comparison/2";
+const DAY_MS = 86_400_000;
 
 export interface CompanyFundamentalsOptions {
   db: Desk;
@@ -434,6 +437,46 @@ export function companyFactsPeriodIdentity(fact: Pick<PersistedFundamentalFact, 
 
 const comparisonKey = companyFactsPeriodIdentity;
 
+export type FundamentalPeriodFact = Pick<PersistedFundamentalFact,
+  "companyId" | "cik" | "metric" | "taxonomy" | "concept" | "unit" | "startDate" | "endDate"
+  | "durationClass" | "form" | "accession" | "acceptedAt" | "amended">;
+
+function utcDay(date: string | null): number | null {
+  if (date == null || isoDate(date) == null) return null;
+  return Date.parse(`${date}T00:00:00.000Z`);
+}
+
+export function classifyPeriodAlignment(
+  prior: FundamentalPeriodFact,
+  current: FundamentalPeriodFact,
+): FundamentalPeriodAlignment | null {
+  if (prior.companyId !== current.companyId || prior.cik !== current.cik
+    || prior.metric !== current.metric || prior.taxonomy !== current.taxonomy
+    || prior.concept !== current.concept || prior.unit !== current.unit
+    || prior.durationClass === "unknown" || prior.durationClass !== current.durationClass
+    || prior.form !== current.form || !prior.accession || prior.accession !== current.accession
+    || prior.acceptedAt == null || prior.acceptedAt !== current.acceptedAt
+    || prior.amended || current.amended) return null;
+
+  const priorStart = utcDay(prior.startDate);
+  const priorEnd = utcDay(prior.endDate);
+  const currentStart = utcDay(current.startDate);
+  const currentEnd = utcDay(current.endDate);
+  if (priorStart == null || priorEnd == null || currentStart == null || currentEnd == null
+    || priorEnd < priorStart || currentEnd < currentStart
+    || currentStart <= priorStart || currentEnd <= priorEnd) return null;
+
+  if (addOneCalendarYear(prior.startDate) === current.startDate
+    && addOneCalendarYear(prior.endDate) === current.endDate) return "calendar_anniversary";
+
+  const startShift = (currentStart - priorStart) / DAY_MS;
+  const endShift = (currentEnd - priorEnd) / DAY_MS;
+  if (startShift !== endShift || ![364, 371].includes(startShift)
+    || currentEnd - currentStart !== priorEnd - priorStart) return null;
+  if (current.durationClass === "annual" && currentStart - priorEnd !== DAY_MS) return null;
+  return startShift === 364 ? "same_filing_52_week" : "same_filing_53_week";
+}
+
 function resolvedFacts(facts: readonly PersistedFundamentalFact[], coverage: string[]): PersistedFundamentalFact[] {
   const groups = new Map<string, PersistedFundamentalFact[]>();
   for (const fact of facts) {
@@ -470,47 +513,43 @@ export function addOneCalendarYear(date: string | null): string | null {
   return `${targetYear}-${String(month).padStart(2, "0")}-${String(Math.min(day!, finalDay)).padStart(2, "0")}`;
 }
 
-function adjacentYearPeriod(prior: PersistedFundamentalFact, current: PersistedFundamentalFact): boolean {
-  return prior.startDate != null && current.startDate != null
-    && addOneCalendarYear(prior.startDate) === current.startDate
-    && addOneCalendarYear(prior.endDate) === current.endDate;
-}
-
 function comparisonFor(fact: PersistedFundamentalFact, facts: readonly PersistedFundamentalFact[]): FundamentalComparison {
-  if (fact.amended) return { metric: fact.metric, state: "not_comparable", currentFactId: fact.id, priorFactId: null, delta: null, percentChange: null, changeInterpretation: "withheld", reason: "The current fact comes from an amended filing; review the filing before comparing." };
+  if (fact.amended) return { metric: fact.metric, state: "not_comparable", periodAlignment: null, currentFactId: fact.id, priorFactId: null, delta: null, percentChange: null, changeInterpretation: "withheld", reason: "The current fact comes from an amended filing; review the filing before comparing." };
   if (fact.durationClass === "unknown" || fact.startDate == null || fact.acceptedAt == null) {
-    return { metric: fact.metric, state: "not_comparable", currentFactId: fact.id, priorFactId: null, delta: null, percentChange: null, changeInterpretation: "withheld", reason: "The reported period duration could not be assigned from its start and end dates." };
+    return { metric: fact.metric, state: "not_comparable", periodAlignment: null, currentFactId: fact.id, priorFactId: null, delta: null, percentChange: null, changeInterpretation: "withheld", reason: "The reported period duration could not be assigned from its start and end dates." };
   }
   const sameMetric = facts.filter((prior) => prior.id !== fact.id && prior.metric === fact.metric
+    && prior.companyId === fact.companyId && prior.cik === fact.cik && prior.form === fact.form
     && prior.taxonomy === fact.taxonomy && prior.concept === fact.concept && prior.unit === fact.unit
     && prior.durationClass === fact.durationClass && prior.endDate < fact.endDate && prior.amended === false
     && prior.acceptedAt != null && prior.accession === fact.accession);
-  const priorCandidates = sameMetric.filter((prior) => adjacentYearPeriod(prior, fact));
+  const priorCandidates = sameMetric.map((prior) => ({ prior, alignment: classifyPeriodAlignment(prior, fact) }))
+    .filter((candidate): candidate is { prior: PersistedFundamentalFact; alignment: FundamentalPeriodAlignment } => candidate.alignment != null);
   if (priorCandidates.length !== 1) {
     const similar = sameMetric.length > 0;
-    return { metric: fact.metric, state: similar ? "not_comparable" : "insufficient", currentFactId: fact.id, priorFactId: null,
+    return { metric: fact.metric, state: similar ? "not_comparable" : "insufficient", periodAlignment: null, currentFactId: fact.id, priorFactId: null,
       delta: null, percentChange: null, changeInterpretation: "withheld",
       reason: priorCandidates.length > 1 ? "More than one earlier reported period in this filing matches the date window." : similar
-        ? "An earlier reported period exists, but this filing does not provide an exact one-calendar-year date match." : "No same-filing earlier period with the same concept, unit, and exact calendar-aligned window was saved." };
+        ? "An earlier reported period exists, but this filing does not provide an exact calendar-anniversary or 52/53-week same-filing date match." : "No same-filing earlier period with the same metric, concept, unit, and reported duration class was saved." };
   }
-  const prior = priorCandidates[0]!;
+  const { prior, alignment: periodAlignment } = priorCandidates[0]!;
   const precisionMetadataValid = (candidate: PersistedFundamentalFact): boolean => candidate.reportedPrecisionStatus === "declared"
     ? candidate.reportedDecimals != null && validReportedDecimals(candidate.reportedDecimals)
     : candidate.reportedDecimals === null && (candidate.reportedPrecisionStatus === "missing" || candidate.reportedPrecisionStatus === "invalid");
   if (!precisionMetadataValid(fact) || !precisionMetadataValid(prior)
     || fact.reportedPrecisionStatus === "invalid" || prior.reportedPrecisionStatus === "invalid") {
-    return { metric: fact.metric, state: "not_comparable", currentFactId: fact.id, priorFactId: prior.id,
+    return { metric: fact.metric, state: "not_comparable", periodAlignment: null, currentFactId: fact.id, priorFactId: prior.id,
       delta: null, percentChange: null, changeInterpretation: "withheld",
       reason: "SEC reported precision metadata is malformed or outside supported bounds; comparison is withheld." };
   }
   const calculation = decimalComparison(fact.value, prior.value);
-  if (!calculation) return { metric: fact.metric, state: "not_comparable", currentFactId: fact.id, priorFactId: prior.id, delta: null, percentChange: null, changeInterpretation: "withheld", reason: "The SEC value could not be parsed as a decimal." };
+  if (!calculation) return { metric: fact.metric, state: "not_comparable", periodAlignment: null, currentFactId: fact.id, priorFactId: prior.id, delta: null, percentChange: null, changeInterpretation: "withheld", reason: "The SEC value could not be parsed as a decimal." };
   const precisionKnown = fact.reportedPrecisionStatus === "declared" && prior.reportedPrecisionStatus === "declared";
   const precisionInterpretation = precisionKnown
     ? interpretReportedDifference(calculation.delta, fact.reportedDecimals!, prior.reportedDecimals!)
     : null;
   if (precisionKnown && precisionInterpretation === null) {
-    return { metric: fact.metric, state: "not_comparable", currentFactId: fact.id, priorFactId: prior.id,
+    return { metric: fact.metric, state: "not_comparable", periodAlignment: null, currentFactId: fact.id, priorFactId: prior.id,
       delta: null, percentChange: null, changeInterpretation: "withheld",
       reason: "SEC reported precision metadata could not be interpreted; comparison is withheld." };
   }
@@ -527,7 +566,7 @@ function comparisonFor(fact: PersistedFundamentalFact, facts: readonly Persisted
   if (!precisionKnown) reasonParts.push("Percentage change is withheld because the SEC source precision metadata is unavailable.");
   else if (!bothInputsDeclaredExact && !precisionWithinBound) reasonParts.push("Percentage change is withheld because one or both SEC amounts have finite reported precision.");
   else if (percentChange === null && !precisionWithinBound && decimalParts(prior.value)!.units <= 0n) reasonParts.push("Percentage change is withheld because the prior value is zero or negative.");
-  return { metric: fact.metric, state: "comparable", currentFactId: fact.id, priorFactId: prior.id,
+  return { metric: fact.metric, state: "comparable", periodAlignment, currentFactId: fact.id, priorFactId: prior.id,
     delta: calculation.delta, percentChange, changeInterpretation, reason: reasonParts.length ? reasonParts.join(" ") : null };
 }
 
@@ -578,8 +617,10 @@ export class CompanyFundamentals {
     return this.db.companies().find((candidate) => candidate.id === companyId) ?? null;
   }
 
-  private blockedReason(companyId: string): string | null {
-    if (!this.externalRequestsEnabled) return "External requests are disabled; saved SEC facts remain available.";
+  private blockedReason(companyId: string, hasSavedFacts = this.hasSavedFacts(companyId)): string | null {
+    if (!this.externalRequestsEnabled) return hasSavedFacts
+      ? "External requests are disabled; saved SEC facts remain available."
+      : "No SEC facts are saved for this company; external requests are disabled.";
     if (!this.secCompanyFactsEnabled) return "Selected-company facts need the separate sec_company_facts request scope and matching source-use approval.";
     if (!this.userAgent) return "The SEC request identity is not configured for this Sentiment Desk process.";
     if (providerCoolingDown(this.db, "sec", this.now())) return "The SEC provider cooldown is active.";
@@ -590,14 +631,19 @@ export class CompanyFundamentals {
     return null;
   }
 
+  private hasSavedFacts(companyId: string): boolean {
+    const snapshot = this.db.latestCompanyFundamentals(companyId);
+    return snapshot != null && resolvedFacts(snapshot.facts, snapshot.coverage).length > 0;
+  }
+
   read(companyId: string): CompanyFundamentalsView {
     const company = this.company(companyId);
     if (!company) throw new Error("unknown_company");
     const snapshot = this.db.latestCompanyFundamentals(companyId);
     const latestAttempt = this.db.latestFundamentalAttempt(companyId);
-    const blocked = this.blockedReason(companyId);
     const coverage = snapshot?.coverage.slice() ?? [];
     const facts = snapshot ? resolvedFacts(snapshot.facts, coverage) : [];
+    const blocked = this.blockedReason(companyId, facts.length > 0);
     const retrievedAt = snapshot?.createdAt ?? null;
     const checkedAt = this.now();
     const staleDelivery = retrievedAt != null && checkedAt - retrievedAt > FRESH_FOR_MS;
@@ -615,7 +661,8 @@ export class CompanyFundamentals {
       ? latestAttempt && ["failed", "interrupted", "blocked"].includes(latestAttempt.status) ? "failed" : blocked ? "blocked" : "idle"
       : stale ? "stale" : facts.length === 0 && snapshot.state === "empty" ? "empty" : snapshot.state;
     return {
-      companyId, state, snapshotId: snapshot?.snapshotId ?? null, facts,
+      companyId, state, periodComparisonPolicyVersion: PERIOD_COMPARISON_POLICY_VERSION,
+      snapshotId: snapshot?.snapshotId ?? null, facts,
       comparisons: facts.map((fact) => comparisonFor(fact, facts)), points: derivePoints(facts), coverage,
       refreshAllowed: blocked == null,
       refreshBlockedReason: blocked,
