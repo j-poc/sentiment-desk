@@ -55,8 +55,17 @@ This follow-up supersedes the earlier local-verification counts and cache-contra
 
 The classification-evaluation conclusion remains **FAIL / NOT VERIFIED**: there is no Luna prediction run, resolved provider model identity, usage/cost/latency receipt, balanced held-out reference set, validated evaluator error rates, or investor-outcome result. The 30-case reference cohort remains 29 neutral, 1 positive, 0 negative; the agent reviewers share configured GPT-6 Luna labels with unverified resolved model lineage, and `humanGroundTruth` remains `NOT_PROVIDED`. No model-provider call or new evaluation was made for this audit.
 
-## Independent review additions
+## Independent review before final checkpoint
 
-The current independent acceptance review reports **11 PASS, 9 UNVERIFIED, 5 BLOCKED, and 1 FAIL** across the 26 declared criteria. It independently verified the exact one-to-one map and current hashes, but cannot create a passing engineering receipt: the review file is stale, and the gate accepts only passing findings. Do not treat the structural map result as release acceptance.
+Before the final checkpoint was pushed, the independent acceptance review reported **11 PASS, 9 UNVERIFIED, 5 BLOCKED, and 1 FAIL** across the 26 declared criteria. It verified the exact one-to-one map, but the saved review file was stale and the candidate had not yet been pushed. These historical findings were refreshed below; they are not the final checkpoint verdict.
 
 Two scope gaps remain visible in the audit. First, finance-build policy requires a task-matched public benchmark, but no current acceptance item or check maps that requirement. The benchmark is missing, and the current contract does not make that requirement auditable. Second, the ETL checks `sec_filings_inbox_protocol` and `sec_filings_inbox_failures` describe filing-detail API coverage although their command lists omit `tests/sec-filing-detail.test.ts` and `tests/app-sec-filing-detail.test.ts`. The separate engineering detail check does cover those tests; the ETL check descriptions should not be used as proof of them.
+
+## Final checkpoint reconciliation
+
+- The implementation checkpoint is pushed to `codex/real-data-rebuild` at `4f393325e82c4b9d57d137070443a0811d1dc9f2`; local and remote SHAs match and the worktree is clean. Generated local verifier receipts are excluded by the repository's narrow ignore rule and were not committed.
+- The fresh independent review is bound to the current source, contract, and artifact hashes. Its findings are **12 PASS, 9 UNVERIFIED, 4 BLOCKED, and 1 FAIL** across all 26 mapped criteria. It verifies the GitHub checkpoint criterion, but sets `request_coverage` to **fail** because the required task-matched public finance benchmark has no acceptance/check mapping.
+- The native engineering gate therefore remains **FAIL** with `alignment review request_coverage must be pass`; its check reports `invalid receipt status`. The gate stopped before executing the declared check list. The registered whole-suite checks independently pass on current inputs (106 files, 828 tests), while the task outcome remains UNVERIFIED.
+- The live-data ETL gate remains **FAIL** solely on `sec_filings_current_hub_receipt`; the connected Hub is unavailable or its required feed is not supplying rows. No real filing-detail interaction can yet be observed in the running product.
+
+This reconciles the earlier stale-review and unpushed-checkpoint notes above. The audit still made no application-code, acceptance-criteria, or evaluator-definition changes and no model-provider calls. Classifier qualification and Sentiment Desk operational completion remain open.
