@@ -286,8 +286,8 @@
       "exit_code": 0,
       "id": "fixture_suite",
       "kind": "fixture",
-      "output_bytes": 1801,
-      "output_digest": "40a417e7ca08fa386af82078d96ca73e028b989711b0614ad0973f525e480818",
+      "output_bytes": 652,
+      "output_digest": "a1f2453714438069762195cfbd654033191b262a67220d11b083f88598d4481e",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -302,15 +302,15 @@
         "typesafe_jev",
         "openai_luna"
       ],
-      "started_at": "2026-10-08T08:09:04Z",
+      "started_at": "2026-10-08T08:35:19Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "failure_recovery_regressions",
       "kind": "failure",
-      "output_bytes": 7925,
-      "output_digest": "f84603accc9add01ad7c8c1b0ce5ad77620ea630122e1eb228f2beae19040711",
+      "output_bytes": 1636,
+      "output_digest": "efcfc4e81c200a24c2c7b92e271596fd40efb8492464f255a7e6487f09542c8e",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -325,15 +325,15 @@
         "typesafe_jev",
         "openai_luna"
       ],
-      "started_at": "2026-10-08T08:09:08Z",
+      "started_at": "2026-10-08T08:35:22Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "pipeline_replay_regressions",
       "kind": "replay",
-      "output_bytes": 5789,
-      "output_digest": "2cbb78dc17749b911889f831501eb3bb188be2659968f2fd1d4f2a52db18453a",
+      "output_bytes": 1220,
+      "output_digest": "3ff60fccd2b7fd843ee9457256ccff67a85874b4938da42d8865eabdba9cfb2a",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -348,7 +348,7 @@
         "typesafe_jev",
         "openai_luna"
       ],
-      "started_at": "2026-10-08T08:10:05Z",
+      "started_at": "2026-10-08T08:36:18Z",
       "status": "PASS"
     },
     {
@@ -356,7 +356,7 @@
       "id": "offline_source_request_gates",
       "kind": "failure",
       "output_bytes": 8473,
-      "output_digest": "39f8570b852124c8705867848380686e22ca6ea296f97291f3a011ca6b9f1e2d",
+      "output_digest": "d7d90be63f233703ff7d06b6b6af57775ac86093daa4cc7cf0a1e76609237ccb",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -371,15 +371,15 @@
         "typesafe_jev",
         "openai_luna"
       ],
-      "started_at": "2026-10-08T08:10:56Z",
+      "started_at": "2026-10-08T08:37:01Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "authorized_keyless_live_smoke",
       "kind": "live_smoke",
-      "output_bytes": 14609,
-      "output_digest": "7909a05b67fdc17f33d684be1c3c653346d71bbd5099681f95b10c36ef510a8a",
+      "output_bytes": 13026,
+      "output_digest": "d505da29cafa2813ea5f9fbb65f781a0c8039b522b6152e090cd63f3b71780f7",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -387,15 +387,15 @@
         "yahoo_quote",
         "yahoo_chart"
       ],
-      "started_at": "2026-10-08T08:11:15Z",
+      "started_at": "2026-10-08T08:37:21Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "storage_capacity",
       "kind": "failure",
-      "output_bytes": 1186,
-      "output_digest": "1bdc5b51eacad1cd9fc31afb81bc0a13b1c125c4e72260f10c74bedd10ad95da",
+      "output_bytes": 497,
+      "output_digest": "18645d5f4d967b2fe7ec8d2e32dbfbf915e4045fba9a17d6e18d73026c3d6cdb",
       "source_ids": [
         "google_news_rss",
         "yahoo_finance_rss",
@@ -410,19 +410,19 @@
         "typesafe_jev",
         "openai_luna"
       ],
-      "started_at": "2026-10-08T08:12:53Z",
+      "started_at": "2026-10-08T08:38:44Z",
       "status": "PASS"
     },
     {
       "exit_code": 0,
       "id": "sec_filings_inbox_protocol",
       "kind": "fixture",
-      "output_bytes": 1172,
-      "output_digest": "a6cac80f30834dc6aadf5dabe195554a451a72394751b91a71a2263c718d9ecc",
+      "output_bytes": 485,
+      "output_digest": "7cbfe55a00c9e45f8441518539a515ee7242eb81213466fcdc574ad904c819bc",
       "source_ids": [
         "sec_latest_filings_8k"
       ],
-      "started_at": "2026-10-08T08:12:56Z",
+      "started_at": "2026-10-08T08:38:47Z",
       "status": "PASS"
     },
     {
@@ -434,26 +434,26 @@
       "source_ids": [
         "sec_latest_filings_8k"
       ],
-      "started_at": "2026-10-08T08:12:57Z",
+      "started_at": "2026-10-08T08:38:49Z",
       "status": "FAIL"
     },
     {
       "exit_code": 0,
       "id": "sec_filings_inbox_failures",
       "kind": "failure",
-      "output_bytes": 894,
-      "output_digest": "679d2355a3f19cef3b67ea91fa578581f3c1d2a402a2578fb314276a74e08473",
+      "output_bytes": 425,
+      "output_digest": "819ec714a502b628c1871be4f7a2c0e1f83a0d6651bd9e05c5e0b98c1169195e",
       "source_ids": [
         "sec_latest_filings_8k"
       ],
-      "started_at": "2026-10-08T08:12:58Z",
+      "started_at": "2026-10-08T08:38:49Z",
       "status": "PASS"
     }
   ],
-  "code_fingerprint": "e7325bde1ce206e1f1d027bfb0c49229cab626916f4d9483b6c85e5658f818c5",
+  "code_fingerprint": "ef6ccee0c8c9da2dda9bd540cebbe226f74f1ed9bae4210f9c1f07ad0e57e92b",
   "contract_digest": "f1dc61c87a3459e2e21240645427a25526da18003d5e7678ff0015b1b0c4c88e",
   "schema_version": 1,
   "standard_digest": "28d89b227df1efa87b63c8556f80a48f1f3136a1be59b6d116098a3bbea2b459",
   "status": "FAIL",
-  "verified_at": "2026-10-08T08:12:58Z"
+  "verified_at": "2026-10-08T08:38:50Z"
 }
