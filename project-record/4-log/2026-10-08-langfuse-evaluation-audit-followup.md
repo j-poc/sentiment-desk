@@ -226,3 +226,54 @@ Hub. An independent review found no concrete code defect. One-shot timer
 behavior and poll suppression are covered at helper level but lack a mounted
 fake-timer journey; that detail remains unverified. These changes do not close
 the live Hub, Luna, benchmark, discovery, or investor-outcome gates.
+
+## Oct 8 blinded subagent-reference refresh
+
+The requested Langfuse-principles reassessment compared two new independent
+subagent label sets against the unchanged frozen packet of 30 real SEC excerpts
+(packet SHA-256 `9cea2750644cd3522493f7128209596fe1095e56e72a61fadcfbb41cdaf4b75c`).
+The outputs bind the same 30 accession IDs and contain all seven required label
+fields with rationales. Their artifact hashes and per-field comparison are in
+`.engineering-evidence/luna-real-source/luna-reference-relabel-agreement-20261008.json`;
+that generated local artifact remains excluded by the repository's evidence
+ignore rule. No product records were written, no synthetic examples were used
+in this cohort, and no model-provider request was made.
+
+| Field | Exact agreements | Both reviewers labeled | Agreements when both labeled |
+|---|---:|---:|---:|
+| Sentiment | 18/30 | 22/30 | 18/22 |
+| Event type | 26/30 | 30/30 | 26/30 |
+| Takeaway | 28/30 | 30/30 | 28/30 |
+| About the company | 30/30 | 30/30 | 30/30 |
+| Materiality | 19/30 | 23/30 | 19/23 |
+| Investor relevance | 30/30 | 30/30 | 30/30 |
+| Evidence sufficiency | 22/30 | 30/30 | 22/30 |
+
+Only 13/30 complete records match across all seven fields; 37 field values
+disagree. Perfect agreement on the two constant-true fields does not establish
+useful discrimination. Both reviewers report start and completion in the same
+second, so these timestamps do not establish review duration or model-serving
+lineage. The comparison is supplemental reviewer-reliability evidence, not
+ground truth, and does not replace or rewrite the frozen prior reference set.
+The existing evaluator already treats unresolved references as `UNVERIFIED`;
+the new comparison therefore changes the observed evidence, not the grader or
+its acceptance threshold. No Luna classifier result exists to score.
+
+Current checks after this comparison: the full suite passes **109 files / 890
+tests**, `npm run typecheck` passes, and `npm run build` passes with the existing
+826.46 kB web-chunk advisory. The native live-data ETL gate passes all **9/9**
+checks. The independent review maps all 27 acceptance criteria exactly once and
+sets `request_coverage: pass`, but its whole-build verdict remains **FAIL**:
+13 scoped passes, 11 unverified, two blocked, and one fail. The 38-row real SEC
+8-K inbox and selected-company chart render in the local browser; expanded
+filing text still cannot be verified in the saved-data preview because direct
+SEC document requests are disabled there.
+
+The remaining evaluation and product gates are unchanged: no GPT-6 Luna API
+credential or persisted classifier run; no rights-qualified public finance
+benchmark run; no 30-task AlphaSense comparison or observed investor outcomes;
+no completed zero-ticker small-cap discovery workflow; and no reconciliation
+for 4,700 `legacy_unknown` records. Opportunity Radar remains disabled. The
+active native goal still says Jev is the new-record classifier while the
+authoritative project contract selects GPT-6 Luna; the available goal control
+can update status but not its objective, so this mismatch remains recorded.
