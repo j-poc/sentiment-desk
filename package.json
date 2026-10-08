@@ -24,7 +24,8 @@
     "evaluate:jev-labels": "tsx scripts/evaluate-jev-labels.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "evaluate:luna-labels": "tsx scripts/evaluate-luna-labels.ts"
+    "evaluate:luna-labels": "tsx scripts/evaluate-luna-labels.ts",
+    "evaluate:luna-public-benchmark": "tsx scripts/luna-public-benchmark.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

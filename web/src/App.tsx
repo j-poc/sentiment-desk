@@ -122,6 +122,19 @@ export function derivePriceRefreshLabels(
     : { label: "refresh failed · no verified points in this window", titleDetail: "refresh failed; no verified price points are available in this window" };
 }
 
+export function shouldAutoRouteFirstRunToFilings(input: {
+  evidence: { state: "loading" | "error" } | { state: "ready"; eligibleObservationCount: number };
+  hasExplicitViewChoice: boolean;
+  currentView: ResearchView;
+  localObservationArrived: boolean;
+}): boolean {
+  return !input.hasExplicitViewChoice
+    && input.currentView === "desk"
+    && input.evidence.state === "ready"
+    && input.evidence.eligibleObservationCount === 0
+    && !input.localObservationArrived;
+}
+
 function windowLabel(hours: number): string {
   return WINDOWS.find((window) => window.h === hours)?.label ?? `${hours}H`;
 }
@@ -1586,6 +1599,15 @@ export default function App() {
     || companies.some((company) => company.latestSourceCollectedAt != null)
     || tape.some(isApplicationMention)
     || Boolean(activeMentionFeed?.loaded && activeMentionFeed.items.some(isApplicationMention));
+  useEffect(() => {
+    if (!shouldAutoRouteFirstRunToFilings({
+      evidence: firstRunEvidence,
+      hasExplicitViewChoice: researchViewTouchedRef.current,
+      currentView: researchView,
+      localObservationArrived,
+    })) return;
+    setResearchView("filings");
+  }, [firstRunEvidence, localObservationArrived, researchView]);
   const firstRunActive = researchView === "desk"
     && firstRunEvidence.state === "ready"
     && firstRunEvidence.eligibleObservationCount === 0
