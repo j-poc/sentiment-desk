@@ -277,3 +277,36 @@ for 4,700 `legacy_unknown` records. Opportunity Radar remains disabled. The
 active native goal still says Jev is the new-record classifier while the
 authoritative project contract selects GPT-6 Luna; the available goal control
 can update status but not its objective, so this mismatch remains recorded.
+
+## Oct 8 third-model disagreement adjudication
+
+A third blinded subagent using configured model `gpt-6-sol` adjudicated only
+the 37 disputed fields between the unchanged Astra and Sol reference relabels.
+The adjudication is bound to the same 30-item packet
+(`9cea2750644cd3522493f7128209596fe1095e56e72a61fadcfbb41cdaf4b75c`) and to
+both input label digests. The generated local artifact is
+`.engineering-evidence/luna-real-source/adjudication-relabel-20261008.json`
+(SHA-256 `94307759cfa1847d2223dee95986183252fa2ba4743c16b14aa82fa3b8e48602`).
+An independent structural check matched all 30 packet IDs, both input digests,
+the two original reviewer labels on each disputed field, and all 37 quoted
+source offsets. It found 19 adjudicated values and left 18 null because the
+packet excerpt did not support a defensible resolution.
+
+| Field | Resolved | Left unresolved |
+|---|---:|---:|
+| Sentiment | 4 | 8 |
+| Event type | 3 | 1 |
+| Takeaway | 1 | 1 |
+| Materiality | 3 | 8 |
+| Evidence sufficiency | 8 | 0 |
+| About / investor relevance | 0 | 0 |
+
+The adjudicator specifically lacked the referenced exhibits for many results;
+one appointment excerpt ended mid-sentence. This is a third model review, not
+expert ground truth, independent model-family evidence, a majority vote, or a
+Luna classifier result. It does not change the evaluator or qualification
+verdict. Luna quality, source-grounded summaries, benchmark quality, and
+investor outcomes remain **UNVERIFIED/BLOCKED**. The generated adjudication JSON
+is ignored local evidence and is not included in the Git checkpoint; this log
+records its digest and aggregate result. No model-provider request or product
+write occurred.
