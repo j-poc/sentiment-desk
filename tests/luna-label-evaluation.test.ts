@@ -201,6 +201,64 @@ describe("offline categorical Luna evaluation", () => {
   });
 
   it.each([
+    ["model", "gpt-6-astra", "default", "FAIL", "PASS"],
+    ["service tier", model, "priority", "PASS", "FAIL"],
+  ] as const)("fails execution when the returned %s differs from the frozen request", (_name, returnedModel, serviceTier, modelStatus, tierStatus) => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest(`wrong returned ${_name}`);
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      for (const item of value.items) {
+        const attempt = item.attempts[0];
+        attempt.modelReturned = returnedModel;
+        attempt.serviceTier = serviceTier;
+        attempt.usage.estimatedCostUsd = null;
+      }
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.execution).toMatchObject({ status: "FAIL", requestedModel: model, requestedServiceTier: "default", returnedModelStatus: modelStatus, returnedTierStatus: tierStatus });
+    expect(report.status).toBe("FAIL");
+  });
+
+  it("fails execution when completed cases return mixed model identities", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest("mixed returned model identities");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      value.items[0].attempts[0].modelReturned = "gpt-6-astra";
+      value.items[0].attempts[0].usage.estimatedCostUsd = null;
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.execution).toMatchObject({ status: "FAIL", returnedModelStatus: "FAIL" });
+    expect(report.execution.returnedModels).toContain("gpt-6-luna");
+    expect(report.execution.returnedModels).toContain("gpt-6-astra");
+  });
+
+  it("fails execution when completed cases return mixed service tiers", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest("mixed returned service tiers");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      value.items[0].attempts[0].serviceTier = "priority";
+      value.items[0].attempts[0].usage.estimatedCostUsd = null;
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.execution).toMatchObject({ status: "FAIL", returnedTierStatus: "FAIL" });
+    expect(report.execution.returnedTiers).toContain("default");
+    expect(report.execution.returnedTiers).toContain("priority");
+  });
+
+  it("keeps a missing returned service tier unverified instead of reporting a match", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest("missing returned tier evidence");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      value.items[0].attempts[0].serviceTier = null;
+      value.items[0].attempts[0].usage.estimatedCostUsd = null;
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.execution).toMatchObject({ status: "UNVERIFIED", missingReturnedTierCount: 1, returnedTierStatus: "UNVERIFIED" });
+    expect(report.execution.returnedTiers).toEqual(["default"]);
+    expect(report.status).toBe("UNVERIFIED");
+  });
+
+  it.each([
     ["eventType", "eventTypeReference", "product"],
     ["takeaway", "takeawayReference", "results_beat"],
     ["material", "materialReference", true],
