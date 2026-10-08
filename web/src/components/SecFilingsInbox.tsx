@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { activateSecFilingsInbox, getSecFilingsInbox, getSecIssuerFollowups, inspectSecFiling, removeSecIssuerFollowup, saveSecIssuerFollowup } from "../lib/api.js";
-import { secFilingIdentity, secIssuerDisplayName, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecIssuerFollowup } from "../../../shared/sec-filings-inbox.js";
+import { secFilingIdentity, secFilingsFreshnessNextCheckMs, secFilingsSourceFreshness, secIssuerDisplayName, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecIssuerFollowup } from "../../../shared/sec-filings-inbox.js";
 
 function utc(value: string | null, dateOnly = false): string {
   if (!value) return dateOnly ? "Filing date not supplied" : "Not supplied";
@@ -37,8 +37,8 @@ export function secFreshnessLabel(freshness: SecFilingsInboxView["freshness"]): 
     : freshness === "stale" ? "Source update is stale" : "Source freshness unknown";
 }
 
-export function secInboxStatusLabel(view: SecFilingsInboxView): string {
-  return `${stateLabel[view.state]} · ${secFreshnessLabel(view.freshness)}`;
+export function secInboxStatusLabel(view: SecFilingsInboxView, now = Date.now()): string {
+  return `${stateLabel[view.state]} · ${secFreshnessLabel(secFilingsSourceFreshness(view.feedUpdatedAt, now))}`;
 }
 
 export function shouldShowDeskFallback(
@@ -49,7 +49,7 @@ export function shouldShowDeskFallback(
 ): boolean {
   return loadFailed
     || (rowCount === 0 && (state === "not_configured" || state === "unsupported" || state === "unavailable" || state === "failed"))
-    || (rowCount > 0 && (state === "unavailable" || state === "unsupported" || (refreshPaused && (state === "stale" || state === "failed"))));
+    || (rowCount > 0 && (state === "unavailable" || state === "unsupported" || state === "not_configured" || (refreshPaused && (state === "stale" || state === "failed"))));
 }
 
 export function secInboxEmptyMessage(query: string, state: SecFilingsInboxView["state"] | undefined, savedRowCount: number): string {
@@ -76,7 +76,7 @@ export function deskFallbackMessage(
       ? "This Desk has no eligible saved evidence to search yet."
       : "Saved archive availability has not been confirmed, so no archive search is offered.";
   if (loadFailed || (state === "unavailable" && !detail)) {
-    return `The Desk cannot reach its registered local Public Data Hub. Start that Hub service, then choose Check Hub again. ${archiveNextStep}`;
+    return `${loadFailed ? "The Desk could not confirm" : "The Desk cannot reach"} its registered local Public Data Hub status. Check that Hub service, then choose Check Hub again. ${archiveNextStep}`;
   }
   if (state === "unsupported") {
     return `${detail || "The filing feed is not supported by the current Hub configuration."} Configure the SEC 8-K feed in the Hub, then check again. ${archiveNextStep}`;
@@ -94,6 +94,10 @@ export function deskFallbackMessage(
     return `${detail} ${archiveNextStep}`;
   }
   return `The no-ticker filing feed is unavailable. ${archiveNextStep}`;
+}
+
+export function shouldStartSecFilingsPoll(activationInFlight: boolean): boolean {
+  return !activationInFlight;
 }
 
 export function shouldOfferSavedArchiveSearch(archiveStatus: "available" | "empty" | "unknown", hasAction: boolean): boolean {
@@ -123,6 +127,7 @@ export function SecFilingsRecoveryActions({ archiveStatus, onBrowseSavedSources,
 export function retainLastAcceptedFilings(
   current: SecFilingsInboxView | null,
   next: SecFilingsInboxView,
+  now = Date.now(),
 ): SecFilingsInboxView {
   if (!current?.rows.length || next.rows.length > 0
     || !["pending", "rate_limited", "failed", "unavailable", "unsupported", "not_configured"].includes(next.state)) return next;
@@ -132,8 +137,52 @@ export function retainLastAcceptedFilings(
     receiptId: current.receiptId,
     retrievedAt: current.retrievedAt,
     feedUpdatedAt: current.feedUpdatedAt,
-    freshness: current.freshness,
+    freshness: secFilingsSourceFreshness(current.feedUpdatedAt, now),
   };
+}
+
+export function markSecFilingsRequestFailure(
+  current: SecFilingsInboxView | null,
+  message: string,
+  now = Date.now(),
+): SecFilingsInboxView | null {
+  if (!current) return current;
+  return {
+    ...current,
+    state: "failed",
+    freshness: secFilingsSourceFreshness(current.feedUpdatedAt, now),
+    message,
+  };
+}
+
+type InboxViewUpdate = (
+  value: SecFilingsInboxView | null | ((current: SecFilingsInboxView | null) => SecFilingsInboxView | null),
+) => void;
+type InboxBooleanUpdate = (value: boolean | ((current: boolean) => boolean)) => void;
+
+export async function reloadSecFilingsInbox(
+  fetch: (signal?: AbortSignal) => Promise<SecFilingsInboxView>,
+  setView: InboxViewUpdate,
+  setLoadFailed: InboxBooleanUpdate,
+  setLoading: InboxBooleanUpdate,
+  signal?: AbortSignal,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  try {
+    const result = await fetch(signal);
+    if (!isCurrent()) return;
+    setView((current) => isCurrent() ? retainLastAcceptedFilings(current, result) : current);
+    setLoadFailed((current) => isCurrent() ? false : current);
+  } catch {
+    if (!isCurrent()) return;
+    setView((current) => {
+      return isCurrent() ? markSecFilingsRequestFailure(current,
+        "Could not confirm the latest saved SEC feed status. Showing the last accepted snapshot, if available.") : current;
+    });
+    setLoadFailed((current) => isCurrent() ? true : current);
+  } finally {
+    setLoading((current) => isCurrent() ? false : current);
+  }
 }
 
 export function secIssuerRowAction(row: SecFilingInboxRow, saved: SecIssuerFollowup | undefined): "save" | "update" | "remove" {
@@ -168,17 +217,14 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const [detail, setDetail] = useState<SecFilingDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailLoadFailed, setDetailLoadFailed] = useState(false);
+  const latestInboxRequest = useRef(0);
+  const activationInFlight = useRef(false);
+  const mounted = useRef(true);
 
   const reload = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const result = await getSecFilingsInbox(signal);
-      setView(result);
-      setLoadFailed(false);
-    } catch {
-      setLoadFailed(true);
-    } finally {
-      setLoading(false);
-    }
+    const request = ++latestInboxRequest.current;
+    await reloadSecFilingsInbox(getSecFilingsInbox, setView, setLoadFailed, setLoading, signal,
+      () => request === latestInboxRequest.current);
   }, []);
 
   const reloadFollowups = useCallback(async (signal?: AbortSignal) => {
@@ -195,13 +241,23 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
     const controller = new AbortController();
     void reload(controller.signal);
     void reloadFollowups(controller.signal);
-    const poll = window.setInterval(() => { void reload(); }, 30_000);
+    const poll = window.setInterval(() => {
+      if (shouldStartSecFilingsPoll(activationInFlight.current)) void reload();
+    }, 30_000);
     const clock = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => { controller.abort(); window.clearInterval(poll); window.clearInterval(clock); };
+    return () => { mounted.current = false; latestInboxRequest.current += 1; controller.abort(); window.clearInterval(poll); window.clearInterval(clock); };
   }, [reload, reloadFollowups]);
+
+  useEffect(() => {
+    const delay = secFilingsFreshnessNextCheckMs(view?.feedUpdatedAt ?? null, now);
+    if (delay === null) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), delay);
+    return () => window.clearTimeout(timer);
+  }, [now, view?.feedUpdatedAt]);
 
   const saveIssuer = async (row: SecFilingInboxRow) => {
     setFollowupWorking(row.cik); setFollowupError(null);
@@ -251,16 +307,23 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   }, [query, view?.rows]);
 
   const activate = async () => {
+    const request = ++latestInboxRequest.current;
+    const isCurrent = () => request === latestInboxRequest.current;
+    activationInFlight.current = true;
     setWorking(true);
     try {
       const result = await activateSecFilingsInbox();
-      setView((current) => retainLastAcceptedFilings(current, result));
-      setLoadFailed(false);
-      if (result.state === "pending") window.setTimeout(() => { void reload(); }, 3000);
+      if (!isCurrent()) return;
+      setView((current) => isCurrent() ? retainLastAcceptedFilings(current, result) : current);
+      setLoadFailed((current) => isCurrent() ? false : current);
+      if (result.state === "pending") window.setTimeout(() => { if (isCurrent()) void reload(); }, 3000);
     } catch {
-      setLoadFailed(true);
+      setView((current) => isCurrent() ? markSecFilingsRequestFailure(current,
+        "Could not start SEC filing refresh. Showing the last accepted snapshot, if available.") : current);
+      setLoadFailed((current) => isCurrent() ? true : current);
     } finally {
-      setWorking(false);
+      activationInFlight.current = false;
+      if (mounted.current) setWorking(false);
     }
   };
 
@@ -325,7 +388,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
             ? deskFallbackMessage(view.state, false, null, archiveStatus)
             : deskFallbackMessage(view?.state ?? null, loadFailed, view?.message, archiveStatus)}</p>
           <SecFilingsRecoveryActions archiveStatus={archiveStatus} onBrowseSavedSources={onBrowseSavedSources} onOpenOperations={onOpenOperations}
-            showOperations={view?.state === "stale" || view?.state === "unavailable" || view?.state === "unsupported"} />
+            showOperations={view?.state === "stale" || view?.state === "unavailable" || view?.state === "unsupported" || view?.state === "not_configured"} />
         </div>
       )}
       {view && (view.retrievedAt || view.nextRefreshAt) && (

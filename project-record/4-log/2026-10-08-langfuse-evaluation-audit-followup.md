@@ -156,3 +156,73 @@ verified no-ticker small-cap/discovery workflow, resolved real-source Luna
 quality, the rights-cleared public finance benchmark, reconciled legacy rows,
 paired competitive results, and intended-investor task outcomes. Opportunity
 Radar remains gated off.
+
+## Current whole-build and Langfuse-principles audit — 2026-10-08
+
+This refresh followed the repository's Langfuse-principles audit workflow. The
+project uses deterministic local evaluators and JSON evidence rather than a
+Langfuse service. No evaluation definition, acceptance criterion, or model
+request changed in this audit. I also completed the already-authorized SEC
+inbox recovery repair; its code and regression tests are separate from Luna
+qualification.
+
+- **Evaluation harness: PASS, narrow scope.** The current full repository suite
+  passed **109 files / 885 tests**, `npm run typecheck` passed, and
+  `npm run build` passed. The production web bundle remains 826.46 kB and Vite
+  reports its existing 500 kB advisory. The retained investor recovery
+  regression passed **21 tests across two files**; its changed SEC test source
+  was reviewed against the exact retained source and reconciliation was
+  recorded in the local quality-loop archive. This proves test behavior only.
+- **Real-source Luna quality: BLOCKED / UNVERIFIED.** The 30-case agent
+  reference artifact is explicitly a pilot and its report says
+  `humanGroundTruth=NOT_PROVIDED`. The required final-label file and persisted
+  Luna model run are absent. No serving-model identity, request-linked output,
+  token usage, cost, latency, abstention quality, or summary entailment result
+  is established. No OpenAI Luna classification request was made.
+- **Reference reliability: UNVERIFIED.** Separate blinded agent contexts were
+  used, but the saved reviewer lineage does not establish distinct model-family
+  independence. Their agreement is diagnostic reviewer evidence, not truth or
+  investor value.
+- **Public finance benchmark: BLOCKED.** No saved rights-qualified benchmark
+  run exists. The sentiment-only FinEntity adaptation would not cover Desk
+  event types, source entailment, or investor usefulness even if run.
+- **Investor outcomes: BLOCKED.** The paired AlphaSense report and three
+  prospective investor-workflow outcome reports are absent. No task evidence
+  establishes small-cap discovery, research-worthiness, or followed-company
+  change quality.
+- **Current local runtime: FAIL for live coverage, with bounded saved data.**
+  The read-only API reports 38 saved SEC 8-K rows, but both receipt and source
+  freshness are stale (feed clock `2026-10-08T07:14:41Z`) and activation is
+  unavailable. External requests are disabled, Luna is unconfigured, and the
+  runtime has recorded zero classifier requests. The first-run API's 11,825
+  locally eligible observations are saved history, not a current discovery
+  universe; coverage is bounded to 24 configured companies. No rendered
+  browser journey was observed.
+- **Whole-build acceptance: FAIL.** The independent review found 10 scoped
+  passes, 10 unverified criteria, 3 blocked criteria, and 3 failures before a
+  new GitHub checkpoint. No-ticker small-cap discovery is a product-scope
+  failure: the recent 8-K feed is explicitly unranked and not a small-cap
+  screen. The current ETL evidence has 8/9 checks passing; the sole failed
+  check is `sec_filings_current_hub_receipt`.
+- **Evaluation principles audit: PARTIAL.** The native runner has useful
+  deterministic source/profile binding, fail-closed missing-run behavior,
+  preserved denominators, and a narrow offline suite. There are no Langfuse
+  traces, because no real Luna serving run exists to trace. Adding observability
+  infrastructure now would not resolve missing model outcomes, benchmark
+  rights/run, or investor tasks.
+
+The full test run emitted one expected `INVALID_OR_UNVERIFIED_INPUT` diagnostic
+from a negative test that confirms the evaluator refuses to overwrite a
+changed saved report; the suite still completed successfully. The active
+native goal text still says Jev is the core classifier while the accepted
+project contract selects GPT-6 Luna for new classifications. The available goal
+control can change status but not objective, so the goal remains active and
+this mismatch is explicit rather than silently rewritten.
+
+The SEC inbox repair makes source freshness age from the SEC feed clock, keeps
+the last accepted snapshot through request failures, prevents older responses
+from replacing newer ones, and exposes a recovery action for an unconfigured
+Hub. An independent review found no concrete code defect. One-shot timer
+behavior and poll suppression are covered at helper level but lack a mounted
+fake-timer journey; that detail remains unverified. These changes do not close
+the live Hub, Luna, benchmark, discovery, or investor-outcome gates.

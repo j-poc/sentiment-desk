@@ -1,11 +1,10 @@
 import { config } from "./config.js";
 import { loadSecFilingsHubInstallation, type SecFilingsHubInstallation } from "./sec-filings-hub-installation.js";
-import { secFilingIdentity, secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
+import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingIdentity, secFilingsSourceFreshness, secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
 
 const DATASET = "sec.latest_filings_8k";
 const CONSUMER = "sentiment-desk";
 const MAX_HUB_BYTES = 2_000_000;
-const STALE_AFTER_MS = 30 * 60 * 1000;
 
 interface HubConnection extends SecFilingsHubInstallation {}
 
@@ -172,10 +171,8 @@ export class SecFilingsInbox {
       const current = this.options.now?.() ?? Date.now();
       const feedUpdatedAt = rows.reduce<string | null>((latest, row) =>
         row.feedUpdatedAt && (!latest || Date.parse(row.feedUpdatedAt) > Date.parse(latest)) ? row.feedUpdatedAt : latest, null);
-      const observedAtMs = feedUpdatedAt ? Date.parse(feedUpdatedAt) : NaN;
-      const freshness: SecFilingsInboxView["freshness"] = !Number.isFinite(observedAtMs) ? "unknown"
-        : current >= observedAtMs && current - observedAtMs <= STALE_AFTER_MS ? "current" : "stale";
-      const stale = current - Date.parse(retrievedAt) > STALE_AFTER_MS;
+      const freshness = secFilingsSourceFreshness(feedUpdatedAt, current);
+      const stale = current - Date.parse(retrievedAt) > SEC_FILINGS_FRESHNESS_BUDGET_MS;
       const jobFailed = job?.status === "failed" || job?.status === "interrupted" || job?.status === "cancelled";
       const jobRunning = ["queued", "running", "cancelling"].includes(String(job?.status ?? ""));
       const latestUpdatedMs = typeof job?.updated_at === "string" ? Date.parse(job.updated_at) : NaN;

@@ -35,6 +35,25 @@ export interface SecFilingsInboxView {
   message: string | null;
 }
 
+export const SEC_FILINGS_FRESHNESS_BUDGET_MS = 30 * 60 * 1000;
+
+/** Derives observation freshness from the SEC source clock, never from retrieval time. */
+export function secFilingsSourceFreshness(feedUpdatedAt: string | null, now = Date.now()): SecFilingsInboxView["freshness"] {
+  if (!feedUpdatedAt) return "unknown";
+  const observedAt = Date.parse(feedUpdatedAt);
+  if (!Number.isFinite(observedAt)) return "unknown";
+  return now >= observedAt && now - observedAt <= SEC_FILINGS_FRESHNESS_BUDGET_MS ? "current" : "stale";
+}
+
+/** Time until the next source-freshness transition, or null when no future transition is known. */
+export function secFilingsFreshnessNextCheckMs(feedUpdatedAt: string | null, now = Date.now()): number | null {
+  if (!feedUpdatedAt) return null;
+  const observedAt = Date.parse(feedUpdatedAt);
+  if (!Number.isFinite(observedAt)) return null;
+  const transitionAt = now < observedAt ? observedAt : observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS + 1;
+  return transitionAt > now ? transitionAt - now : null;
+}
+
 /** A saved issuer research lead anchored to the exact SEC filing that prompted it. */
 export interface SecIssuerFollowup {
   cik: string;
