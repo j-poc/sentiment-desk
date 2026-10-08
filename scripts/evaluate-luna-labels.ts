@@ -9,7 +9,7 @@ import {
   parseLunaModelRun,
   sha256Bytes,
   type LunaClassifierContract,
-  type LunaLabelSetV1,
+  type LunaLabelSetV2,
 } from "./luna-label-evaluation.js";
 
 type OpenAIClassifierModule = {
@@ -21,7 +21,7 @@ type OpenAIClassifierModule = {
   OPENAI_SCHEMA_SHA256: string;
   OPENAI_PROFILE_SHA256: string;
   OPENAI_PRICING: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; cacheWritePerMillionUsd: number; outputPerMillionUsd: number };
-  prepareOpenAIRequest(input: LunaLabelSetV1["items"][number]["input"], model?: string): ReturnType<LunaClassifierContract["prepareRequest"]>;
+  prepareOpenAIRequest(input: LunaLabelSetV2["items"][number]["input"], model?: string): ReturnType<LunaClassifierContract["prepareRequest"]>;
   estimateOpenAICostUsd(inputTokens: number, cachedInputTokens: number | null, cacheWriteInputTokens: number | null, outputTokens: number, modelReturned: string | null, serviceTier: string | null): number | null;
 };
 
@@ -63,7 +63,7 @@ function readJson(filePath: string): { bytes: Buffer; value: unknown } {
   return { bytes, value: JSON.parse(bytes.toString("utf8")) as unknown };
 }
 
-function verifyFrozenLunaCode(labels: LunaLabelSetV1, cwd = process.cwd()): void {
+function verifyFrozenLunaCode(labels: LunaLabelSetV2, cwd = process.cwd()): void {
   const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
   if (revision !== labels.analysisCodeRevision) throw new Error("current HEAD differs from the code revision frozen with Luna labels");
   const trackedChanges = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd, encoding: "utf8" }).trim();

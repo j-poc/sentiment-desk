@@ -7,14 +7,14 @@ import {
   PRODUCT_COMPANY_UNIVERSE_SHA256,
   analyzeLunaFinal,
   analyzeLunaPilot,
-  lunaLabelSetV1Schema,
+  lunaLabelSetV2Schema,
   parseLunaLabelSet,
   parseLunaModelRun,
   sampleManifestSha256,
   selectLunaSample,
   sha256Bytes,
   type LunaClassifierContract,
-  type LunaLabelSetV1,
+  type LunaLabelSetV2,
   type LunaModelRunV1,
 } from "../scripts/luna-label-evaluation.js";
 
@@ -69,7 +69,7 @@ function planFor(frame: ReturnType<typeof makeRow>[], items: Array<{ cik: string
   return [...eligible.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([cik, eligibleCount]) => ({ cik, eligibleCount, selectedCount: selected.get(cik) ?? 0 })).filter(({ selectedCount }) => selectedCount > 0);
 }
 
-function labelsFixture(stage: "pilot" | "final" = "pilot", tweak?: (labels: any) => void): LunaLabelSetV1 {
+function labelsFixture(stage: "pilot" | "final" = "pilot", tweak?: (labels: any) => void): LunaLabelSetV2 {
   const classifier = makeContract();
   const counts = [1, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3];
   const frame = counts.flatMap((count, issuer) => Array.from({ length: count }, (_, index) => makeRow(issuer * 10 + index, issuer)));
@@ -87,13 +87,14 @@ function labelsFixture(stage: "pilot" | "final" = "pilot", tweak?: (labels: any)
     return {
       ...source, input,
       requestBinding: { requestedModel: model, requestedServiceTier: "default", payloadSha256: prepared.payloadSha256, requestBytes: prepared.requestBytes, promptSha256: promptSha, schemaSha256: schemaSha, profileSha256: profileSha },
+      expectedAbstentions: [],
       reviews: primary.map((reviewerId) => ({ reviewerId, labels: { ...labels }, rationales })),
     };
   });
   const frozenAt = "2026-10-01T20:30:00Z";
   const timestamp = "2026-10-01T21:00:00Z";
   const labels: any = {
-    schemaVersion: 1, stage, studyId: "luna-study-2026-10", source: "sec_edgar", evaluationProfile: LUNA_DIAGNOSTIC_PROFILE, profileVersion: LUNA_PROFILE_VERSION,
+    schemaVersion: 2, stage, studyId: "luna-study-2026-10", source: "sec_edgar", evaluationProfile: LUNA_DIAGNOSTIC_PROFILE, profileVersion: LUNA_PROFILE_VERSION,
     sampleSeed: 20261001, samplingWindowStart: "2026-06-01T00:00:00Z", samplingWindowEnd: "2026-09-30T23:59:59Z", sampledAt: "2026-10-01T20:20:00Z", frozenAt,
     analysisCodeRevision: "a".repeat(40), analysisCodeDirty: false, requestedModel: model, requestedServiceTier: "default", promptVersion, schemaVersionName: schemaVersion,
     promptSha256: promptSha, schemaSha256: schemaSha, profileSha256: profileSha, productCompanyUniverseSha256: PRODUCT_COMPANY_UNIVERSE_SHA256,
@@ -105,10 +106,10 @@ function labelsFixture(stage: "pilot" | "final" = "pilot", tweak?: (labels: any)
     items: allRows,
   };
   tweak?.(labels);
-  return labels as LunaLabelSetV1;
+  return labels as LunaLabelSetV2;
 }
 
-function runFixture(labels: LunaLabelSetV1, labelsSha256: string, mutate?: (run: any) => void): LunaModelRunV1 {
+function runFixture(labels: LunaLabelSetV2, labelsSha256: string, mutate?: (run: any) => void): LunaModelRunV1 {
   const items = labels.items.map((item) => {
     const refs = item.reviews[0]!.labels;
     const prepared = makeContract().prepareRequest(item.input, model);
@@ -140,8 +141,11 @@ function runFixture(labels: LunaLabelSetV1, labelsSha256: string, mutate?: (run:
 describe("offline categorical Luna evaluation", () => {
   it("rejects human or probability-shaped schema fields and binds the configured company universe", () => {
     const labels = labelsFixture();
-    expect(lunaLabelSetV1Schema.safeParse({ ...labels, reviewers: [{ id: "human", qualifiedHumanAttested: true }] }).success).toBe(false);
-    expect(lunaLabelSetV1Schema.safeParse({ ...labels, pPos: 0.9 }).success).toBe(false);
+    expect(lunaLabelSetV2Schema.safeParse({ ...labels, reviewers: [{ id: "human", qualifiedHumanAttested: true }] }).success).toBe(false);
+    expect(lunaLabelSetV2Schema.safeParse({ ...labels, pPos: 0.9 }).success).toBe(false);
+    expect(lunaLabelSetV2Schema.safeParse({ ...labels, schemaVersion: 1 }).success).toBe(false);
+    expect(lunaLabelSetV2Schema.safeParse(labels).success).toBe(true);
+    expect(lunaLabelSetV2Schema.safeParse({ ...labels, items: labels.items.map((item, index) => index === 0 ? { ...item, expectedAbstentions: ["evidenceSufficient"] } : item) }).success).toBe(false);
     expect(parseLunaLabelSet(labels, makeContract()).items).toHaveLength(30);
     const mismatchedIdentity = structuredClone(labels) as any;
     const selected = mismatchedIdentity.items[0];
@@ -320,6 +324,99 @@ describe("offline categorical Luna evaluation", () => {
     expect(report.status).toBe("UNVERIFIED");
   });
 
+  it("scores explicit reference abstentions separately from unresolved reviewer nulls", () => {
+    const raw = labelsFixture("final", (value) => {
+      const expectedAbstention = value.items[0];
+      expectedAbstention.reviews[0].labels.eventType = null;
+      expectedAbstention.reviews[1].labels.eventType = null;
+      expectedAbstention.expectedAbstentions = ["eventType"];
+      const unresolved = value.items[1];
+      unresolved.reviews[0].labels.takeaway = null;
+      unresolved.reviews[1].labels.takeaway = null;
+      value.sampleManifestSha256 = sampleManifestSha256(value.items);
+    });
+    const labels = parseLunaLabelSet(raw, makeContract());
+    const labelsSha256 = digest("abstention distinction controls");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.quality.eventTypeReference).toMatchObject({ selectedCases: 30, resolvedReferenceCases: 29, expectedAbstentionCases: 1, unresolvedReferenceCases: 0, correctAbstentionCases: 1, mismatchCount: 0 });
+    expect(report.quality.takeawayReference).toMatchObject({ selectedCases: 30, resolvedReferenceCases: 29, expectedAbstentionCases: 0, unresolvedReferenceCases: 1 });
+    expect(report.referenceEligibility.fields.eventType).toMatchObject({ selectedCases: 30, resolvedCases: 29, abstentionCases: 1, unresolvedCases: 0 });
+    expect(report.status).toBe("UNVERIFIED");
+  });
+
+  it("lets a frozen third-reviewer null override agreeing primary labels for an expected abstention", () => {
+    const raw = labelsFixture("final", (value) => {
+      const item = value.items[0];
+      item.expectedAbstentions = ["sentiment"];
+      value.reviewers.push({ ...value.reviewers[0], id: "agent-c", agentThreadId: "thread-agent-c", modelSettingsSha256: digest("agent-c settings") });
+      item.adjudication = {
+        reviewerId: "agent-c",
+        labels: { ...item.reviews[0].labels, sentiment: null },
+        rationales: { ...item.reviews[0].rationales },
+      };
+      value.sampleManifestSha256 = sampleManifestSha256(value.items);
+    });
+    const labels = parseLunaLabelSet(raw, makeContract());
+    const resolvedReference = labels.items[0]!.adjudication!.labels.sentiment;
+    expect(resolvedReference).toBeNull();
+
+    const labelsSha256 = digest("adjudicated expected sentiment abstention");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => { value.items[0].attempts[0].classification.sentiment = null; }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.quality.sentiment.metrics.total).toBe(29);
+    expect(report.quality.sentiment).toMatchObject({ abstentionMismatchCount: 0 });
+    expect(report.expectedAbstentionDenominators.sentiment).toBe(1);
+  });
+
+  it("treats unsupported concrete output and null on resolved references as mismatches", () => {
+    const raw = labelsFixture("final", (value) => {
+      value.items[0].reviews[0].labels.material = null;
+      value.items[0].reviews[1].labels.material = null;
+      value.items[0].expectedAbstentions = ["material"];
+      value.sampleManifestSha256 = sampleManifestSha256(value.items);
+    });
+    const labels = parseLunaLabelSet(raw, makeContract());
+    const labelsSha256 = digest("concrete output abstention mismatch control");
+    const concrete = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => { value.items[0].attempts[0].classification.material = true; }), labels, makeContract());
+    const concreteReport = analyzeLunaFinal({ labels, labelsSha256, run: concrete }) as any;
+    expect(concreteReport.quality.materialReference).toMatchObject({ expectedAbstentionCases: 1, correctAbstentionCases: 0, mismatchCount: 1 });
+    expect(concreteReport.quality.materialReference.mismatches[0]).toMatchObject({ reference: null, prediction: true });
+
+    const nullOnResolved = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => { value.items[1].attempts[0].classification.material = null; }), labels, makeContract());
+    const nullReport = analyzeLunaFinal({ labels, labelsSha256, run: nullOnResolved }) as any;
+    expect(nullReport.quality.materialReference.mismatches).toContainEqual(expect.objectContaining({ observationId: labels.items[1]!.observationId, prediction: null }));
+  });
+
+  it("does not score invalid output as a correct abstention", () => {
+    const raw = labelsFixture("final", (value) => {
+      value.items[0].reviews[0].labels.eventType = null;
+      value.items[0].reviews[1].labels.eventType = null;
+      value.items[0].expectedAbstentions = ["eventType"];
+      value.sampleManifestSha256 = sampleManifestSha256(value.items);
+    });
+    const labels = parseLunaLabelSet(raw, makeContract());
+    const labelsSha256 = digest("invalid abstention output control");
+    const invalid = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      const attempt = value.items[0].attempts[0];
+      attempt.outcome = "invalid_output"; attempt.classification = null; attempt.usage = null;
+      value.items[0].terminalStatus = "invalid_output";
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run: invalid }) as any;
+    expect(report.quality.eventTypeReference).toMatchObject({ expectedAbstentionCases: 1, correctAbstentionCases: 0, mismatchCount: 1 });
+    expect(report.quality.eventTypeReference.mismatches[0]).toMatchObject({ outputStatus: "invalid_output", prediction: null });
+    expect(report.status).toBe("FAIL");
+  });
+
+  it("keeps production evidenceSufficient boolean and rejects schema V1 label sets", () => {
+    const rawLabels = labelsFixture("final");
+    expect(lunaLabelSetV2Schema.safeParse({ ...rawLabels, schemaVersion: 1 }).success).toBe(false);
+    const labels = parseLunaLabelSet(rawLabels, makeContract());
+    const labelsSha256 = digest("required boolean evidence control");
+    const invalidRun = runFixture(labels, labelsSha256, (value) => { value.items[0].attempts[0].classification.evidenceSufficient = null; });
+    expect(() => parseLunaModelRun(invalidRun, labels, makeContract())).toThrow();
+  });
+
   it("counts classifier abstentions as missing predictions and keeps unresolved references in total N", () => {
     const raw = labelsFixture("final", (value) => {
       value.items[0].reviews[0].labels.sentiment = null;
@@ -330,6 +427,7 @@ describe("offline categorical Luna evaluation", () => {
     const labelsSha256 = digest("labels with one unresolved sentiment");
     const runRaw: any = runFixture(labels, labelsSha256);
     runRaw.items[1].attempts[0].classification.sentiment = null;
+    runRaw.items[1].attempts[0].classification.about = null;
     const run = parseLunaModelRun(runRaw, labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.selectedCaseDenominator).toBe(30);
@@ -338,6 +436,7 @@ describe("offline categorical Luna evaluation", () => {
     expect(report.unresolvedReferenceFieldDenominator).toBe(210);
     expect(report.quality.sentiment.metrics.total).toBe(29);
     expect(report.quality.sentiment.metrics.matrix.negative.missing).toBe(1);
+    expect(report.quality.inclusionPrecision.about).toMatchObject({ precision: 1, inclusionRecall: 23 / 24, actualPositive: 24, inclusionRecallDenominator: 24, missedResolvedInclusions: [labels.items[1]!.observationId] });
     expect(report.referenceEligibility).toMatchObject({ status: "UNVERIFIED", selectedCaseDenominator: 30, fields: { sentiment: { resolvedCases: 29, unresolvedCases: 1, coverage: 29 / 30 } } });
     expect(report.qualityStatus).toBe("UNVERIFIED");
     expect(report.status).toBe("UNVERIFIED");
@@ -351,7 +450,7 @@ describe("offline categorical Luna evaluation", () => {
     const run = parseLunaModelRun(runFixture(labels, labelsSha256), labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.quality.inclusionPrecision[field].status).toBe("PASS");
-    expect(report.referenceEligibility.fields[field]).toEqual({ selectedCases: 30, resolvedCases: 29, unresolvedCases: 1, coverage: 29 / 30 });
+    expect(report.referenceEligibility.fields[field]).toEqual({ selectedCases: 30, resolvedCases: 29, abstentionCases: 0, unresolvedCases: 1, coverage: 29 / 30 });
     expect(report.qualityStatus).toBe("UNVERIFIED");
     expect(report.status).toBe("UNVERIFIED");
   });

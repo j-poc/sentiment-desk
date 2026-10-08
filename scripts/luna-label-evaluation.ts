@@ -41,6 +41,7 @@ const labelValuesSchema = z.object({
   sentiment: sentimentSchema.nullable(), eventType: eventTypeSchema.nullable(), takeaway: takeawaySchema.nullable(),
   about: z.boolean().nullable(), material: z.boolean().nullable(), investorRelevant: z.boolean().nullable(), evidenceSufficient: z.boolean().nullable(),
 }).strict();
+const labelFieldSchema = z.enum(["sentiment", "eventType", "takeaway", "about", "material", "investorRelevant"]);
 const labelFieldRationalesSchema = z.object({
   sentiment: z.string().trim().min(8).max(1_000), eventType: z.string().trim().min(8).max(1_000), takeaway: z.string().trim().min(8).max(1_000),
   about: z.string().trim().min(8).max(1_000), material: z.string().trim().min(8).max(1_000), investorRelevant: z.string().trim().min(8).max(1_000), evidenceSufficient: z.string().trim().min(8).max(1_000),
@@ -53,6 +54,7 @@ const reviewerSchema = z.object({
 const reviewerLabelsSchema = z.object({ reviewerId: z.string().min(1).max(200), labels: labelValuesSchema, rationales: labelFieldRationalesSchema }).strict();
 const lunaCaseSchema = secCaseProvenanceSchema.extend({
   input: sourceInputSchema, requestBinding: requestBindingSchema, reviews: z.array(reviewerLabelsSchema).length(2), adjudication: reviewerLabelsSchema.optional(),
+  expectedAbstentions: z.array(labelFieldSchema),
 }).strict();
 const budgetSchema = z.object({
   maxRequests: z.number().int().positive(), maxEstimatedCostUsd: z.number().finite().positive(),
@@ -64,8 +66,8 @@ const budgetSchema = z.object({
 }).strict();
 const sampleStratumSchema = z.object({ cik: z.string().regex(/^\d{10}$/), eligibleCount: z.number().int().positive(), selectedCount: z.number().int().positive() }).strict();
 
-export const lunaLabelSetV1Schema = z.object({
-  schemaVersion: z.literal(1), stage: z.enum(["pilot", "final"]), studyId: z.string().min(1).max(200), source: z.literal("sec_edgar"),
+export const lunaLabelSetV2Schema = z.object({
+  schemaVersion: z.literal(2), stage: z.enum(["pilot", "final"]), studyId: z.string().min(1).max(200), source: z.literal("sec_edgar"),
   evaluationProfile: z.literal(LUNA_DIAGNOSTIC_PROFILE), profileVersion: z.literal(LUNA_PROFILE_VERSION),
   sampleSeed: z.number().int().safe(), samplingWindowStart: ISO_TIME, samplingWindowEnd: ISO_TIME, sampledAt: ISO_TIME, frozenAt: ISO_TIME,
   analysisCodeRevision: z.string().regex(COMMIT_SHA), analysisCodeDirty: z.literal(false),
@@ -113,7 +115,7 @@ export const lunaModelRunV1Schema = z.object({
   items: z.array(runItemSchema),
 }).strict();
 
-export type LunaLabelSetV1 = z.infer<typeof lunaLabelSetV1Schema>;
+export type LunaLabelSetV2 = z.infer<typeof lunaLabelSetV2Schema>;
 export type LunaModelRunV1 = z.infer<typeof lunaModelRunV1Schema>;
 export type LunaClassification = z.infer<typeof classificationSchema>;
 export type LunaUsage = z.infer<typeof usageSchema>;
@@ -127,7 +129,7 @@ export interface LunaClassifierContract {
   promptSha256: string;
   schemaSha256: string;
   pricing: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; cacheWritePerMillionUsd: number; outputPerMillionUsd: number };
-  prepareRequest(input: LunaLabelSetV1["items"][number]["input"], model?: string): { body: string; payloadSha256: string; requestBytes: number; requestedModel: string; promptSha256: string; schemaSha256: string; profileSha256: string };
+  prepareRequest(input: LunaLabelSetV2["items"][number]["input"], model?: string): { body: string; payloadSha256: string; requestBytes: number; requestedModel: string; promptSha256: string; schemaSha256: string; profileSha256: string };
   estimateCost(inputTokens: number, cachedInputTokens: number | null, cacheWriteInputTokens: number | null, outputTokens: number, modelReturned: string | null, serviceTier: string | null): number | null;
 }
 
@@ -163,7 +165,8 @@ export function selectLunaSample<T extends { observationId: string; cik: string 
   return selected.sort((a, b) => a.observationId.localeCompare(b.observationId));
 }
 
-function resolveLabels(item: LunaLabelSetV1["items"][number]): LunaLabelSetV1["items"][number]["reviews"][number]["labels"] {
+function resolveLabels(item: LunaLabelSetV2["items"][number]): LunaLabelSetV2["items"][number]["reviews"][number]["labels"] {
+  if (new Set(item.expectedAbstentions).size !== item.expectedAbstentions.length) throw new Error(`case ${item.observationId} repeats an expected abstention field`);
   const fields = Object.keys(item.reviews[0]!.labels) as Array<keyof typeof item.reviews[number]["labels"]>;
   const result = {} as Record<keyof typeof item.reviews[number]["labels"], string | boolean | null>;
   for (const field of fields) {
@@ -171,10 +174,16 @@ function resolveLabels(item: LunaLabelSetV1["items"][number]): LunaLabelSetV1["i
     const left = item.reviews[0]!.labels[field]; const right = item.reviews[1]!.labels[field];
     result[field] = adjudicated !== undefined && adjudicated !== null ? adjudicated : left === right ? left : null;
   }
-  return result as LunaLabelSetV1["items"][number]["reviews"][number]["labels"];
+  for (const field of item.expectedAbstentions) {
+    const adjudicated = item.adjudication?.labels[field];
+    const left = item.reviews[0]!.labels[field]; const right = item.reviews[1]!.labels[field];
+    if (adjudicated !== null && adjudicated !== undefined || !item.adjudication && (left !== null || right !== null)) throw new Error(`case ${item.observationId} marks ${field} as abstain without a frozen null reference`);
+    result[field] = null;
+  }
+  return result as LunaLabelSetV2["items"][number]["reviews"][number]["labels"];
 }
 
-function rawAgreement(labels: LunaLabelSetV1) {
+function rawAgreement(labels: LunaLabelSetV2) {
   const fields = Object.keys(labels.items[0]!.reviews[0]!.labels) as Array<keyof typeof labels.items[number]["reviews"][number]["labels"]>;
   return Object.fromEntries(fields.map((field) => {
     const left = labels.items.map((item) => item.reviews[0]!.labels[field]); const right = labels.items.map((item) => item.reviews[1]!.labels[field]);
@@ -185,8 +194,8 @@ function rawAgreement(labels: LunaLabelSetV1) {
   }));
 }
 
-export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierContract): LunaLabelSetV1 {
-  const labels = lunaLabelSetV1Schema.parse(value);
+export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierContract): LunaLabelSetV2 {
+  const labels = lunaLabelSetV2Schema.parse(value);
   if (labels.evaluationProfile !== LUNA_DIAGNOSTIC_PROFILE || labels.profileVersion !== LUNA_PROFILE_VERSION) throw new Error("unsupported categorical Luna evaluation profile");
   if (labels.requestedModel !== classifier.model || labels.requestedServiceTier !== classifier.serviceTier || labels.promptVersion !== classifier.promptVersion || labels.schemaVersionName !== classifier.schemaVersion || labels.promptSha256 !== classifier.promptSha256 || labels.schemaSha256 !== classifier.schemaSha256 || labels.profileSha256 !== classifier.profileSha256) throw new Error("frozen Luna classifier model, service tier, prompt, schema or profile identity differs from the loaded production classifier");
   if (labels.productCompanyUniverseSha256 !== PRODUCT_COMPANY_UNIVERSE_SHA256) throw new Error("Luna diagnostic does not bind the current configured product company universe");
@@ -216,6 +225,7 @@ export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierCont
     if (requestBody.service_tier !== labels.requestedServiceTier || binding.requestedServiceTier !== labels.requestedServiceTier || prepared.payloadSha256 !== binding.payloadSha256 || prepared.requestBytes !== binding.requestBytes || prepared.requestedModel !== binding.requestedModel || prepared.promptSha256 !== binding.promptSha256 || prepared.schemaSha256 !== binding.schemaSha256 || prepared.profileSha256 !== binding.profileSha256 || binding.promptSha256 !== labels.promptSha256 || binding.schemaSha256 !== labels.schemaSha256 || binding.profileSha256 !== labels.profileSha256) throw new Error(`case ${item.observationId} request does not bind the frozen source, prompt, schema, model, service tier and profile`);
     if (item.reviews[0]!.reviewerId !== reviewerIds[0] || item.reviews[1]!.reviewerId !== reviewerIds[1]) throw new Error(`case ${item.observationId} reviewer identities do not bind the frozen primary-reviewer roster`);
     if (item.adjudication && (reviewerIds.length !== 3 || item.adjudication.reviewerId !== reviewerIds[2])) throw new Error(`case ${item.observationId} adjudicator must be the separately declared third independent reviewer`);
+    resolveLabels(item);
   }
   if (sampleManifestSha256(labels.populationFrame) !== labels.populationFrameSha256 || sampleManifestSha256(labels.items) !== labels.sampleManifestSha256) throw new Error("Luna source-frame or selected-case digest does not match its rows");
   const expectedSample = selectLunaSample(labels.populationFrame, labels.sampleSeed, labels.items.length);
@@ -229,7 +239,7 @@ export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierCont
   return labels;
 }
 
-export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV1, classifier: LunaClassifierContract): LunaModelRunV1 {
+export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV2, classifier: LunaClassifierContract): LunaModelRunV1 {
   const run = lunaModelRunV1Schema.parse(value);
   if (labels.stage !== "final") throw new Error("a Luna model run is only valid for a frozen final label set");
   if (!labels.evaluationBudget) throw new Error("a final Luna run requires pre-frozen account-approved spend controls");
@@ -273,7 +283,11 @@ export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV1, classi
   return run;
 }
 
-function resolveCaseLabels(item: LunaLabelSetV1["items"][number]) { return resolveLabels(item); }
+function resolveCaseLabels(item: LunaLabelSetV2["items"][number]) { return resolveLabels(item); }
+function referenceState(item: LunaLabelSetV2["items"][number], field: keyof LunaLabelSetV2["items"][number]["reviews"][number]["labels"]) {
+  if (field !== "evidenceSufficient" && item.expectedAbstentions.includes(field)) return "abstention" as const;
+  return resolveCaseLabels(item)[field] === null ? "unresolved" as const : "resolved" as const;
+}
 function acceptedClassification(item: LunaModelRunV1["items"][number] | null | undefined): LunaClassification | null {
   if (!item || item.terminalStatus !== "completed") return null;
   return item.attempts[item.attempts.length - 1]?.classification ?? null;
@@ -281,7 +295,8 @@ function acceptedClassification(item: LunaModelRunV1["items"][number] | null | u
 function precisionForInclusion(labels: readonly boolean[], predictions: readonly (boolean | null)[]) {
   const predictedPositive = predictions.reduce((count, value) => count + Number(value === true), 0);
   const truePositive = labels.reduce((count, value, index) => count + Number(value && predictions[index] === true), 0);
-  return { precision: predictedPositive ? truePositive / predictedPositive : null, predictedPositive, truePositive, denominator: labels.length };
+  const actualPositive = labels.filter(Boolean).length;
+  return { precision: predictedPositive ? truePositive / predictedPositive : null, predictedPositive, truePositive, denominator: labels.length, inclusionRecall: actualPositive ? truePositive / actualPositive : null, actualPositive, inclusionRecallDenominator: actualPositive };
 }
 function gateStatus(metric: ReturnType<typeof classificationMetrics>, allClasses: readonly string[]) {
   const missing = allClasses.filter((name) => metric.perClass[name]!.support === 0);
@@ -291,33 +306,39 @@ function gateStatus(metric: ReturnType<typeof classificationMetrics>, allClasses
 }
 
 function exactReferenceStatus(
-  cases: Array<{ item: LunaLabelSetV1["items"][number]; reference: ReturnType<typeof resolveCaseLabels>; run: LunaModelRunV1["items"][number] | null }>,
+  cases: Array<{ item: LunaLabelSetV2["items"][number]; reference: ReturnType<typeof resolveCaseLabels>; run: LunaModelRunV1["items"][number] | null }>,
   field: "eventType" | "takeaway" | "material" | "evidenceSufficient",
 ) {
-  const resolved = cases.filter(({ reference }) => reference[field] !== null);
-  const mismatches = resolved.flatMap(({ item, reference, run }) => {
-    const prediction = acceptedClassification(run)?.[field] ?? null;
-    return prediction === reference[field] ? [] : [{ observationId: item.observationId, reference: reference[field], prediction }];
+  const resolved = cases.filter(({ item }) => referenceState(item, field) === "resolved");
+  const abstentions = cases.filter(({ item }) => referenceState(item, field) === "abstention");
+  const unresolved = cases.filter(({ item }) => referenceState(item, field) === "unresolved");
+  const mismatches = [...resolved, ...abstentions].flatMap(({ item, reference, run }) => {
+    const classification = acceptedClassification(run);
+    const prediction = classification?.[field] ?? null;
+    const expected = referenceState(item, field) === "abstention" ? null : reference[field];
+    return classification && prediction === expected ? [] : [{ observationId: item.observationId, reference: expected, prediction, outputStatus: run?.terminalStatus ?? "missing" }];
   });
-  const status = mismatches.length > 0 || resolved.length === 0 || resolved.length < cases.length ? "UNVERIFIED" : "PASS";
+  const status = mismatches.length > 0 || resolved.length === 0 && abstentions.length === 0 || unresolved.length > 0 ? "UNVERIFIED" : "PASS";
   return {
     status,
     rule: "exact agreement with resolved blinded subagent references; references are not ground truth or a calibrated quality threshold",
     selectedCases: cases.length,
     resolvedReferenceCases: resolved.length,
-    unresolvedReferenceCases: cases.length - resolved.length,
+    unresolvedReferenceCases: unresolved.length,
+    expectedAbstentionCases: abstentions.length,
+    correctAbstentionCases: abstentions.filter(({ run }) => acceptedClassification(run)?.[field] === null && acceptedClassification(run) !== null).length,
     mismatchCount: mismatches.length,
     requiresIndependentReview: mismatches.length > 0,
     mismatches,
   };
 }
 
-export function analyzeLunaPilot(labels: LunaLabelSetV1): Record<string, unknown> {
-  const unresolved = labels.items.flatMap((item) => Object.entries(resolveLabels(item)).filter(([, value]) => value === null).map(([field]) => ({ observationId: item.observationId, field })));
+export function analyzeLunaPilot(labels: LunaLabelSetV2): Record<string, unknown> {
+  const unresolved = labels.items.flatMap((item) => Object.keys(item.reviews[0]!.labels).filter((field) => referenceState(item, field as keyof typeof item.reviews[number]["labels"]) === "unresolved").map((field) => ({ observationId: item.observationId, field })));
   return { mode: "luna-agent-reference-pilot", status: "UNVERIFIED", statusScope: "agent-reference agreement only; no classifier run is present", evaluationProfile: labels.evaluationProfile, labelAuthority: "independent_subagents", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED", selectedCaseDenominator: labels.items.length, issuerCount: new Set(labels.items.map(({ cik }) => cik)).size, companyCount: new Set(labels.items.map(({ company }) => company.id)).size, rawAgentAgreement: rawAgreement(labels), unresolvedReferences: unresolved, unresolvedReferenceFieldCount: unresolved.length, unresolvedReferenceFieldRate: unresolved.length / (labels.items.length * 7), caseBindings: labels.items.map((item) => ({ observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding })), blindedProtocol: labels.agentLabelProtocol, limitations: ["Independent agents are references, not human ground truth.", "No Luna classifier run is present; classifier quality and execution remain UNVERIFIED.", "Source rights and receipt authenticity require the separately bound evidence package."] };
 }
 
-export function analyzeLunaFinal(input: { labels: LunaLabelSetV1; labelsSha256: string; run: LunaModelRunV1 | null }): Record<string, any> {
+export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: string; run: LunaModelRunV1 | null }): Record<string, any> {
   const { labels, run } = input;
   if (!run) return { ...analyzeLunaPilot(labels), mode: "luna-final-diagnostic", runId: null, provenanceExecutionStatus: "UNVERIFIED", qualityStatus: "UNVERIFIED", reason: "no saved Luna model run was provided", labelsSha256: input.labelsSha256 };
   if (run.labelsSha256 !== input.labelsSha256) throw new Error("Luna run label digest does not bind the exact frozen label bytes");
@@ -325,24 +346,41 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV1; labelsSha256: 
   const unresolvedReferences: Array<{ observationId: string; field: string }> = [];
   const cases = labels.items.map((item) => ({ item, reference: resolveCaseLabels(item), run: byRunId.get(item.observationId) ?? null }));
   const fields = ["sentiment", "eventType", "takeaway", "about", "material", "investorRelevant", "evidenceSufficient"] as const;
-  for (const row of cases) for (const field of fields) if (row.reference[field] === null) unresolvedReferences.push({ observationId: row.item.observationId, field });
+  for (const row of cases) for (const field of fields) if (referenceState(row.item, field) === "unresolved") unresolvedReferences.push({ observationId: row.item.observationId, field });
   const sentimentCases = cases.filter(({ reference }) => reference.sentiment !== null);
   const sentimentMetrics = classificationMetrics({ labels: sentimentCases.map(({ reference }) => reference.sentiment!), predictions: sentimentCases.map(({ run: result }) => acceptedClassification(result)?.sentiment ?? null), classes: sentimentClasses });
-  const sentimentGate = gateStatus(sentimentMetrics, sentimentClasses);
+  const sentimentAbstentions = cases.filter(({ item }) => referenceState(item, "sentiment") === "abstention");
+  const sentimentAbstentionMismatches = sentimentAbstentions.filter(({ run: result }) => {
+    const classification = acceptedClassification(result);
+    return !classification || classification.sentiment !== null;
+  }).map(({ item }) => item.observationId);
+  const rawSentimentGate = gateStatus(sentimentMetrics, sentimentClasses);
+  const sentimentGate = sentimentAbstentionMismatches.length && rawSentimentGate.status === "PASS" ? { ...rawSentimentGate, status: "UNVERIFIED", abstentionMismatchCount: sentimentAbstentionMismatches.length, abstentionMismatches: sentimentAbstentionMismatches } : { ...rawSentimentGate, abstentionMismatchCount: sentimentAbstentionMismatches.length, abstentionMismatches: sentimentAbstentionMismatches };
   const inclusion = (field: "about" | "investorRelevant") => {
-    const rows = cases.filter(({ reference }) => reference[field] !== null);
+    const rows = cases.filter(({ item }) => referenceState(item, field) === "resolved");
     const metric = precisionForInclusion(rows.map(({ reference }) => reference[field]!), rows.map(({ run: result }) => acceptedClassification(result)?.[field] ?? null));
-    return { status: metric.precision === null ? "UNVERIFIED" : metric.precision < 0.9 ? "FAIL" : "PASS", targetPrecision: 0.9, ...metric, resolvedReferenceCases: rows.length, selectedCases: labels.items.length, unresolvedReferenceCases: labels.items.length - rows.length };
+    const abstentionRows = cases.filter(({ item }) => referenceState(item, field) === "abstention");
+    const abstentionMismatches = abstentionRows.filter(({ run: result }) => {
+      const classification = acceptedClassification(result);
+      return !classification || classification[field] !== null;
+    }).map(({ item, run: result }) => ({ observationId: item.observationId, prediction: acceptedClassification(result)?.[field] ?? null, outputStatus: result?.terminalStatus ?? "missing" }));
+    const unresolvedReferenceCases = cases.filter(({ item }) => referenceState(item, field) === "unresolved").length;
+    const missedResolvedInclusions = rows.filter(({ reference, run: result }) => reference[field] === true && acceptedClassification(result)?.[field] !== true).map(({ item }) => item.observationId);
+    const metricStatus = metric.precision === null ? "UNVERIFIED" : metric.precision < 0.9 ? "FAIL" : "PASS";
+    const status = abstentionMismatches.length && metricStatus === "PASS" ? "UNVERIFIED" : metricStatus;
+    return { status, targetPrecision: 0.9, ...metric, resolvedReferenceCases: rows.length, selectedCases: labels.items.length, expectedAbstentionCases: abstentionRows.length, correctAbstentionCases: abstentionRows.length - abstentionMismatches.length, abstentionMismatchCount: abstentionMismatches.length, abstentionMismatches, missedResolvedInclusions, unresolvedReferenceCases };
   };
   const inclusionMetrics = { about: inclusion("about"), investorRelevant: inclusion("investorRelevant") };
   const gatedFields = fields;
   const referenceEligibility = {
-    status: cases.some(({ reference }) => gatedFields.some((field) => reference[field] === null)) ? "UNVERIFIED" : "PASS",
+    status: cases.some(({ item }) => gatedFields.some((field) => referenceState(item, field) === "unresolved")) ? "UNVERIFIED" : "PASS",
     selectedCaseDenominator: cases.length,
     requiredResolvedFields: gatedFields,
     fields: Object.fromEntries(gatedFields.map((field) => {
-      const resolvedCases = cases.filter(({ reference }) => reference[field] !== null).length;
-      return [field, { selectedCases: cases.length, resolvedCases, unresolvedCases: cases.length - resolvedCases, coverage: cases.length ? resolvedCases / cases.length : null }];
+      const resolvedCases = cases.filter(({ item }) => referenceState(item, field) === "resolved").length;
+      const abstentionCases = cases.filter(({ item }) => referenceState(item, field) === "abstention").length;
+      const unresolvedCases = cases.filter(({ item }) => referenceState(item, field) === "unresolved").length;
+      return [field, { selectedCases: cases.length, resolvedCases, abstentionCases, unresolvedCases, coverage: cases.length ? (resolvedCases + abstentionCases) / cases.length : null }];
     })),
     metricScope: "Resolved-reference subset scores are diagnostic; unresolved required references prevent full-cohort qualification.",
   };
@@ -417,6 +455,7 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV1; labelsSha256: 
     selectedCaseDenominator: labels.items.length, issuerCount: new Set(labels.items.map(({ cik }) => cik)).size, companyCount: new Set(labels.items.map(({ company }) => company.id)).size,
     rawAgentAgreement: rawAgreement(labels), unresolvedReferences, unresolvedReferenceFieldCount: unresolvedReferences.length, unresolvedReferenceFieldDenominator: labels.items.length * fields.length, unresolvedReferenceFieldRate: unresolvedReferences.length / (labels.items.length * fields.length),
     resolvedReferenceDenominators: { sentiment: sentimentCases.length, about: inclusionMetrics.about.resolvedReferenceCases, investorRelevant: inclusionMetrics.investorRelevant.resolvedReferenceCases, eventType: eventTypeCases.length, takeaway: takeawayCases.length, material: materialCases.length, evidenceSufficient: evidenceCases.length },
+    expectedAbstentionDenominators: Object.fromEntries(fields.map((field) => [field, cases.filter(({ item }) => referenceState(item, field) === "abstention").length])),
     qualityStatus, structuredClassificationStatus, narrativeAssessment, referenceEligibility, provenanceExecutionStatus: executionStatus,
     quality: { sentiment: sentimentGate, inclusionPrecision: inclusionMetrics, eventTypeReference, eventTypeDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: eventTypeCases.length, missingClasses: EVENT_TYPES.filter((name) => eventTypeMetrics.perClass[name]!.support === 0), metrics: eventTypeMetrics }, takeawayReference, takeawayDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: takeawayCases.length, missingClasses: TAKEAWAY_KEYS.filter((name) => takeawayMetrics.perClass[name]!.support === 0), metrics: takeawayMetrics }, materialReference, materialDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: materialCases.length, metrics: materialMetrics }, evidenceSufficiencyReference, evidenceSufficiencyDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: evidenceCases.length, metrics: evidenceMetrics }, modelCompletionCoverage: { selectedCases: labels.items.length, completedCases: completed.length, rate: completed.length / labels.items.length } },
     execution: { status: executionStatus, requestedModel: run.requestedModel, requestedServiceTier: labels.requestedServiceTier, selectedCases: labels.items.length, runCases: run.items.length, missingIds, unexpectedIds, failedCases: failed.map(({ observationId, terminalStatus }) => ({ observationId, terminalStatus })), unknownCases: unknown.map(({ observationId }) => observationId), requestCount: run.requestCount, maxRequests: run.maxRequests, totalEstimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, maxEstimatedCostUsd: run.maxEstimatedCostUsd, usageMissingAttempts: missingUsage, incompleteUsageBreakdownAttempts: incompleteUsage, unpricedAttempts, retryableRateLimitAttempts, returnedModels, returnedTiers, missingReturnedModelCount, missingReturnedTierCount, returnedModelStatus, returnedTierStatus, latencyMs: { mean: completedAttempts.length ? completedAttempts.reduce((sum, attempt) => sum + attempt.latencyMs!, 0) / completedAttempts.length : null, max: completedAttempts.length ? Math.max(...completedAttempts.map((attempt) => attempt.latencyMs!)) : null } },
