@@ -181,19 +181,85 @@ describe("offline categorical Luna evaluation", () => {
     expect(report).toMatchObject({ status: "UNVERIFIED", provenanceExecutionStatus: "UNVERIFIED", qualityStatus: "UNVERIFIED", humanGroundTruth: "NOT_PROVIDED" });
   });
 
-  it("passes only the bounded categorical gates on a complete correctly bound synthetic run", () => {
+  it("keeps narrative interpretation unverified even when every structured field matches", () => {
     const raw = labelsFixture("final");
     const labels = parseLunaLabelSet(raw, makeContract());
     const labelsSha256 = digest("frozen labels bytes");
     const run = parseLunaModelRun(runFixture(labels, labelsSha256), labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
-    expect(report).toMatchObject({ status: "PASS", qualityStatus: "PASS", provenanceExecutionStatus: "PASS", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED" });
+    expect(report).toMatchObject({ status: "UNVERIFIED", qualityStatus: "UNVERIFIED", structuredClassificationStatus: "PASS", narrativeAssessment: { status: "UNVERIFIED" }, provenanceExecutionStatus: "PASS", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED" });
     expect(report.quality.sentiment.metrics.macroF1).toBe(1);
     expect(report.quality.sentiment.metrics.majorityBaseline).toBeGreaterThan(0.3);
     expect(report.quality.sentiment.metrics.total).toBe(30);
+    expect(report.quality.eventTypeReference.status).toBe("PASS");
+    expect(report.quality.takeawayReference.status).toBe("PASS");
+    expect(report.quality.materialReference.status).toBe("PASS");
+    expect(report.quality.evidenceSufficiencyReference.status).toBe("PASS");
     expect(report.rawAgentAgreement.sentiment.rawAgreementIncludingAbstentions).toBe(1);
     expect(report.usage).toMatchObject({ cachedInputTokensKnownSubtotal: 300, cacheWriteInputTokensKnownSubtotal: 150, reasoningTokensAreIncludedInOutput: true });
     expect(report.usage.estimatedCostUsd).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["eventType", "eventTypeReference", "product"],
+    ["takeaway", "takeawayReference", "results_beat"],
+    ["material", "materialReference", true],
+    ["evidenceSufficient", "evidenceSufficiencyReference", false],
+  ] as const)("routes a %s interpretation that differs from its frozen reference to review", (field, referenceKey, wrongValue) => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest(`wrong ${field} interpretation`);
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      value.items[0].attempts[0].classification[field] = wrongValue;
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.structuredClassificationStatus).toBe("UNVERIFIED");
+    expect(report.status).toBe("UNVERIFIED");
+    expect(report.quality[referenceKey].status).toBe("UNVERIFIED");
+    expect(report.quality[referenceKey].mismatchCount).toBe(1);
+    expect(report.quality[referenceKey].requiresIndependentReview).toBe(true);
+  });
+
+  it("accepts a different category only after the frozen third-agent adjudication resolves the disagreement", () => {
+    const raw = labelsFixture("final", (value) => {
+      const item = value.items[0];
+      item.reviews[1].labels.eventType = "product";
+      const adjudicator = { id: "agent-adjudicator", kind: "independent_subagent", agentThreadId: "thread-agent-adjudicator", configuredModel: "gpt-6-luna", resolvedModel: null, modelSettingsSha256: digest("adjudicator settings"), modelResolutionEvidenceSha256: null, independenceAttested: true, blindedToLunaOutputsAttested: true };
+      value.reviewers.push(adjudicator);
+      item.adjudication = { reviewerId: adjudicator.id, labels: { ...item.reviews[1].labels }, rationales: { ...item.reviews[1].rationales } };
+      value.sampleManifestSha256 = sampleManifestSha256(value.items);
+    });
+    const labels = parseLunaLabelSet(raw, makeContract());
+    const labelsSha256 = digest("adjudicated alternate event type");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      value.items[0].attempts[0].classification.eventType = "product";
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.quality.eventTypeReference).toMatchObject({ status: "PASS", mismatchCount: 0, resolvedReferenceCases: 30 });
+    expect(report.structuredClassificationStatus).toBe("PASS");
+    expect(report.status).toBe("UNVERIFIED");
+  });
+
+  it.each([
+    ["eventType", "eventTypeReference"],
+    ["takeaway", "takeawayReference"],
+    ["material", "materialReference"],
+    ["evidenceSufficient", "evidenceSufficiencyReference"],
+  ] as const)("keeps unresolved %s references in the selected denominator", (field, referenceKey) => {
+    const raw = labelsFixture("final", (value) => {
+      value.items[0].reviews[0].labels[field] = null;
+      value.items[0].reviews[1].labels[field] = null;
+      value.sampleManifestSha256 = sampleManifestSha256(value.items);
+    });
+    const labels = parseLunaLabelSet(raw, makeContract());
+    const labelsSha256 = digest(`unresolved ${field} reference`);
+    const runRaw: any = runFixture(labels, labelsSha256);
+    if (field === "evidenceSufficient") runRaw.items[0].attempts[0].classification.evidenceSufficient = true;
+    const run = parseLunaModelRun(runRaw, labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.referenceEligibility).toMatchObject({ status: "UNVERIFIED", selectedCaseDenominator: 30 });
+    expect(report.quality[referenceKey]).toMatchObject({ status: "UNVERIFIED", selectedCases: 30, resolvedReferenceCases: 29, unresolvedReferenceCases: 1 });
+    expect(report.structuredClassificationStatus).toBe("UNVERIFIED");
+    expect(report.status).toBe("UNVERIFIED");
   });
 
   it("counts classifier abstentions as missing predictions and keeps unresolved references in total N", () => {

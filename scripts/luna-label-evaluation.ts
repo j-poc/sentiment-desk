@@ -290,6 +290,28 @@ function gateStatus(metric: ReturnType<typeof classificationMetrics>, allClasses
   return { status, macroF1: metric.macroF1, targetMacroF1: 0.8, representedClasses: allClasses.filter((name) => metric.perClass[name]!.support > 0), requiredClasses: allClasses, missingClasses: missing, representedClassTarget: { precision: 0.7, recall: 0.7 }, classFailures: weak, metrics: metric };
 }
 
+function exactReferenceStatus(
+  cases: Array<{ item: LunaLabelSetV1["items"][number]; reference: ReturnType<typeof resolveCaseLabels>; run: LunaModelRunV1["items"][number] | null }>,
+  field: "eventType" | "takeaway" | "material" | "evidenceSufficient",
+) {
+  const resolved = cases.filter(({ reference }) => reference[field] !== null);
+  const mismatches = resolved.flatMap(({ item, reference, run }) => {
+    const prediction = acceptedClassification(run)?.[field] ?? null;
+    return prediction === reference[field] ? [] : [{ observationId: item.observationId, reference: reference[field], prediction }];
+  });
+  const status = mismatches.length > 0 || resolved.length === 0 || resolved.length < cases.length ? "UNVERIFIED" : "PASS";
+  return {
+    status,
+    rule: "exact agreement with resolved blinded subagent references; references are not ground truth or a calibrated quality threshold",
+    selectedCases: cases.length,
+    resolvedReferenceCases: resolved.length,
+    unresolvedReferenceCases: cases.length - resolved.length,
+    mismatchCount: mismatches.length,
+    requiresIndependentReview: mismatches.length > 0,
+    mismatches,
+  };
+}
+
 export function analyzeLunaPilot(labels: LunaLabelSetV1): Record<string, unknown> {
   const unresolved = labels.items.flatMap((item) => Object.entries(resolveLabels(item)).filter(([, value]) => value === null).map(([field]) => ({ observationId: item.observationId, field })));
   return { mode: "luna-agent-reference-pilot", status: "UNVERIFIED", statusScope: "agent-reference agreement only; no classifier run is present", evaluationProfile: labels.evaluationProfile, labelAuthority: "independent_subagents", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED", selectedCaseDenominator: labels.items.length, issuerCount: new Set(labels.items.map(({ cik }) => cik)).size, companyCount: new Set(labels.items.map(({ company }) => company.id)).size, rawAgentAgreement: rawAgreement(labels), unresolvedReferences: unresolved, unresolvedReferenceFieldCount: unresolved.length, unresolvedReferenceFieldRate: unresolved.length / (labels.items.length * 7), caseBindings: labels.items.map((item) => ({ observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding })), blindedProtocol: labels.agentLabelProtocol, limitations: ["Independent agents are references, not human ground truth.", "No Luna classifier run is present; classifier quality and execution remain UNVERIFIED.", "Source rights and receipt authenticity require the separately bound evidence package."] };
@@ -313,7 +335,7 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV1; labelsSha256: 
     return { status: metric.precision === null ? "UNVERIFIED" : metric.precision < 0.9 ? "FAIL" : "PASS", targetPrecision: 0.9, ...metric, resolvedReferenceCases: rows.length, selectedCases: labels.items.length, unresolvedReferenceCases: labels.items.length - rows.length };
   };
   const inclusionMetrics = { about: inclusion("about"), investorRelevant: inclusion("investorRelevant") };
-  const gatedFields = ["sentiment", "about", "investorRelevant"] as const;
+  const gatedFields = fields;
   const referenceEligibility = {
     status: cases.some(({ reference }) => gatedFields.some((field) => reference[field] === null)) ? "UNVERIFIED" : "PASS",
     selectedCaseDenominator: cases.length,
@@ -325,7 +347,6 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV1; labelsSha256: 
     metricScope: "Resolved-reference subset scores are diagnostic; unresolved required references prevent full-cohort qualification.",
   };
   const qualityGateStatuses = [sentimentGate.status, inclusionMetrics.about.status, inclusionMetrics.investorRelevant.status, referenceEligibility.status];
-  const referenceStatus = qualityGateStatuses.includes("FAIL") ? "FAIL" : qualityGateStatuses.includes("UNVERIFIED") ? "UNVERIFIED" : "PASS";
   const expectedIds = new Set(labels.items.map(({ observationId }) => observationId));
   const missingIds = [...expectedIds].filter((id) => !byRunId.has(id)); const unexpectedIds = [...byRunId.keys()].filter((id) => !expectedIds.has(id));
   const failed = run.items.filter(({ terminalStatus }) => ["refused", "incomplete", "invalid_output", "rejected", "not_sent", "not_attempted"].includes(terminalStatus));
@@ -345,31 +366,52 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV1; labelsSha256: 
   const retryableRateLimitAttempts = submittedAttempts.filter(({ outcome, httpStatus }) => outcome === "rejected" && httpStatus === 429).length;
   const requestMismatch = run.requestCount !== submittedAttempts.length;
   const executionStatus = missingIds.length || unexpectedIds.length || run.items.length !== labels.items.length || requestMismatch || failed.length || run.requestCount > run.maxRequests || knownCostSubtotal > run.maxEstimatedCostUsd ? "FAIL" : unknown.length || missingUsage || incompleteUsage || unpricedAttempts || run.requestCount < labels.items.length || returnedModels.length !== 1 || returnedTiers.length !== 1 || returnedTiers[0] !== labels.requestedServiceTier ? "UNVERIFIED" : "PASS";
-  const status = executionStatus === "FAIL" || referenceStatus === "FAIL" ? "FAIL" : executionStatus === "UNVERIFIED" || referenceStatus === "UNVERIFIED" ? "UNVERIFIED" : "PASS";
   const eventTypeCases = cases.filter(({ reference }) => reference.eventType !== null);
   const eventTypeMetrics = classificationMetrics({ labels: eventTypeCases.map(({ reference }) => reference.eventType!), predictions: eventTypeCases.map(({ run: result }) => acceptedClassification(result)?.eventType ?? null), classes: EVENT_TYPES });
+  const eventTypeReference = exactReferenceStatus(cases, "eventType");
   const takeawayCases = cases.filter(({ reference }) => reference.takeaway !== null);
   const takeawayMetrics = classificationMetrics({ labels: takeawayCases.map(({ reference }) => reference.takeaway!), predictions: takeawayCases.map(({ run: result }) => acceptedClassification(result)?.takeaway ?? null), classes: TAKEAWAY_KEYS });
+  const takeawayReference = exactReferenceStatus(cases, "takeaway");
   const materialCases = cases.filter(({ reference }) => reference.material !== null);
   const materialMetrics = classificationMetrics({ labels: materialCases.map(({ reference }) => String(reference.material)), predictions: materialCases.map(({ run: result }) => { const prediction = acceptedClassification(result)?.material; return prediction === null || prediction === undefined ? null : String(prediction); }), classes: ["false", "true"] });
+  const materialReference = exactReferenceStatus(cases, "material");
   const evidenceCases = cases.filter(({ reference }) => reference.evidenceSufficient !== null);
   const evidenceMetrics = classificationMetrics({ labels: evidenceCases.map(({ reference }) => String(reference.evidenceSufficient)), predictions: evidenceCases.map(({ run: result }) => { const prediction = acceptedClassification(result)?.evidenceSufficient; return prediction === null || prediction === undefined ? null : String(prediction); }), classes: ["false", "true"] });
+  const evidenceSufficiencyReference = exactReferenceStatus(cases, "evidenceSufficient");
+  const structuredStatuses = [qualityGateStatuses[0]!, qualityGateStatuses[1]!, qualityGateStatuses[2]!, qualityGateStatuses[3]!, eventTypeReference.status, takeawayReference.status, materialReference.status, evidenceSufficiencyReference.status];
+  const structuredClassificationStatus = structuredStatuses.includes("FAIL") ? "FAIL" : structuredStatuses.includes("UNVERIFIED") ? "UNVERIFIED" : "PASS";
   const rawTotal = usageRows.reduce((sum, row) => sum + row.totalTokens, 0);
   const totalInput = usageRows.reduce((sum, row) => sum + row.inputTokens, 0); const cachedInputKnown = usageRows.filter((row) => row.cachedInputTokens !== null).reduce((sum, row) => sum + row.cachedInputTokens!, 0); const cacheWriteKnown = usageRows.filter((row) => row.cacheWriteInputTokens !== null).reduce((sum, row) => sum + row.cacheWriteInputTokens!, 0); const totalOutput = usageRows.reduce((sum, row) => sum + row.outputTokens, 0); const reasoningKnown = usageRows.filter((row) => row.reasoningTokens !== null).reduce((sum, row) => sum + row.reasoningTokens!, 0);
   const completedAttempts = completed.flatMap((item) => item.attempts.filter(({ outcome }) => outcome === "completed"));
+  const generatedSummaryCases = cases.filter(({ run: result }) => Boolean(acceptedClassification(result)?.summary?.trim())).length;
+  const narrativeAssessment = {
+    status: generatedSummaryCases > 0 ? "UNVERIFIED" : "NOT_APPLICABLE",
+    selectedCases: cases.length,
+    generatedSummaryCases,
+    assessedSummaryCases: 0,
+    reason: generatedSummaryCases > 0
+      ? "No frozen narrative references or validated judge assess summary claim support and usefulness; exact quote presence does not establish entailment."
+      : "No generated summaries were available to assess.",
+  };
+  const qualityStatus = structuredClassificationStatus === "FAIL"
+    ? "FAIL"
+    : structuredClassificationStatus === "UNVERIFIED" || narrativeAssessment.status === "UNVERIFIED" ? "UNVERIFIED" : "PASS";
+  const status = executionStatus === "FAIL" || qualityStatus === "FAIL"
+    ? "FAIL"
+    : executionStatus === "UNVERIFIED" || qualityStatus === "UNVERIFIED" ? "UNVERIFIED" : "PASS";
   return {
-    mode: "luna-final-categorical-evaluation", status, statusScope: "bounded product24 categorical diagnostic only; not human-ground-truth accuracy, statistical certification, or investment value",
+    mode: "luna-final-categorical-evaluation", status, statusScope: "bounded product24 structured-field diagnostic; generated narrative support/usefulness remains unverified; not human-ground-truth accuracy, statistical certification, or investment value",
     evaluationProfile: labels.evaluationProfile, labelAuthority: "independent_subagents", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED",
     studyId: labels.studyId, runId: run.runId, labelsSha256: input.labelsSha256, sampleManifestSha256: labels.sampleManifestSha256,
     selectedCaseDenominator: labels.items.length, issuerCount: new Set(labels.items.map(({ cik }) => cik)).size, companyCount: new Set(labels.items.map(({ company }) => company.id)).size,
     rawAgentAgreement: rawAgreement(labels), unresolvedReferences, unresolvedReferenceFieldCount: unresolvedReferences.length, unresolvedReferenceFieldDenominator: labels.items.length * fields.length, unresolvedReferenceFieldRate: unresolvedReferences.length / (labels.items.length * fields.length),
-    resolvedReferenceDenominators: { sentiment: sentimentCases.length, about: inclusionMetrics.about.resolvedReferenceCases, investorRelevant: inclusionMetrics.investorRelevant.resolvedReferenceCases, eventType: eventTypeCases.length, takeaway: takeawayCases.length },
-    qualityStatus: referenceStatus, referenceEligibility, provenanceExecutionStatus: executionStatus,
-    quality: { sentiment: sentimentGate, inclusionPrecision: inclusionMetrics, eventTypeDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: eventTypeCases.length, missingClasses: EVENT_TYPES.filter((name) => eventTypeMetrics.perClass[name]!.support === 0), metrics: eventTypeMetrics }, takeawayDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: takeawayCases.length, missingClasses: TAKEAWAY_KEYS.filter((name) => takeawayMetrics.perClass[name]!.support === 0), metrics: takeawayMetrics }, materialDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: materialCases.length, metrics: materialMetrics }, evidenceSufficiencyDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: evidenceCases.length, metrics: evidenceMetrics }, modelCompletionCoverage: { selectedCases: labels.items.length, completedCases: completed.length, rate: completed.length / labels.items.length } },
+    resolvedReferenceDenominators: { sentiment: sentimentCases.length, about: inclusionMetrics.about.resolvedReferenceCases, investorRelevant: inclusionMetrics.investorRelevant.resolvedReferenceCases, eventType: eventTypeCases.length, takeaway: takeawayCases.length, material: materialCases.length, evidenceSufficient: evidenceCases.length },
+    qualityStatus, structuredClassificationStatus, narrativeAssessment, referenceEligibility, provenanceExecutionStatus: executionStatus,
+    quality: { sentiment: sentimentGate, inclusionPrecision: inclusionMetrics, eventTypeReference, eventTypeDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: eventTypeCases.length, missingClasses: EVENT_TYPES.filter((name) => eventTypeMetrics.perClass[name]!.support === 0), metrics: eventTypeMetrics }, takeawayReference, takeawayDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: takeawayCases.length, missingClasses: TAKEAWAY_KEYS.filter((name) => takeawayMetrics.perClass[name]!.support === 0), metrics: takeawayMetrics }, materialReference, materialDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: materialCases.length, metrics: materialMetrics }, evidenceSufficiencyReference, evidenceSufficiencyDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: evidenceCases.length, metrics: evidenceMetrics }, modelCompletionCoverage: { selectedCases: labels.items.length, completedCases: completed.length, rate: completed.length / labels.items.length } },
     execution: { status: executionStatus, selectedCases: labels.items.length, runCases: run.items.length, missingIds, unexpectedIds, failedCases: failed.map(({ observationId, terminalStatus }) => ({ observationId, terminalStatus })), unknownCases: unknown.map(({ observationId }) => observationId), requestCount: run.requestCount, maxRequests: run.maxRequests, totalEstimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, maxEstimatedCostUsd: run.maxEstimatedCostUsd, usageMissingAttempts: missingUsage, incompleteUsageBreakdownAttempts: incompleteUsage, unpricedAttempts, retryableRateLimitAttempts, returnedModels, returnedTiers, returnedModelStatus: returnedModels.length === 1 ? "PASS" : "UNVERIFIED", latencyMs: { mean: completedAttempts.length ? completedAttempts.reduce((sum, attempt) => sum + attempt.latencyMs!, 0) / completedAttempts.length : null, max: completedAttempts.length ? Math.max(...completedAttempts.map((attempt) => attempt.latencyMs!)) : null } },
     usage: { inputTokens: totalInput, cachedInputTokensKnownSubtotal: cachedInputKnown, cachedInputTokensUnknownAttempts: usageRows.filter((row) => row.cachedInputTokens === null).length, cacheWriteInputTokensKnownSubtotal: cacheWriteKnown, cacheWriteInputTokensUnknownAttempts: usageRows.filter((row) => row.cacheWriteInputTokens === null).length, uncachedInputTokens: usageRows.filter((row) => row.cachedInputTokens !== null && row.cacheWriteInputTokens !== null).reduce((sum, row) => sum + row.inputTokens - row.cachedInputTokens! - row.cacheWriteInputTokens!, 0), outputTokens: totalOutput, reasoningTokensKnownSubtotal: reasoningKnown, reasoningTokensUnknownAttempts: usageRows.filter((row) => row.reasoningTokens === null).length, reasoningTokensAreIncludedInOutput: true, totalTokens: rawTotal, estimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, ratesPerMillionUsd: { input: run.inputPerMillionUsd, cachedInput: run.cachedInputPerMillionUsd, cacheWrite: run.cacheWritePerMillionUsd, output: run.outputPerMillionUsd } },
     perCase: labels.items.map((item) => { const result = byRunId.get(item.observationId); return { observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, source: { collector: item.collector, publisher: item.publisher }, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding, reference: resolveCaseLabels(item), modelStatus: result?.terminalStatus ?? "missing", prediction: acceptedClassification(result), attempts: result?.attempts ?? [] }; }),
     blindedProtocol: labels.agentLabelProtocol,
-    limitations: ["Independent agent labels are references, not human ground truth.", "All selected cases remain in referenceEligibility; unresolved sentiment or inclusion references prevent qualification. Resolved-subset scores are diagnostic and do not assign a true class to unresolved references.", "Event type, takeaway, materiality, evidence sufficiency and summary are descriptive; frozen acceptance gates cover sentiment and inclusion precision only.", "All intervals/population claims and investment value remain unverified; the 30-case issuer sample is a bounded diagnostic.", "Source-rights and SEC receipt authenticity are established by the separately bound evidence package, not model agreement."],
+    limitations: ["Independent agent labels are references, not human ground truth.", "All selected cases remain in referenceEligibility; unresolved required references keep structured classification unverified. Resolved-subset scores do not assign a true class to unresolved references.", "Event type, takeaway, materiality and evidence sufficiency disagreements are routed to independent review because the references are not ground truth; they cannot produce a pass or an automatic model-error claim.", "Generated summary support and usefulness are not evaluated by a frozen reference set or validated judge; substring quote presence does not establish entailment, so any run containing summaries stays unverified.", "All intervals/population claims and investment value remain unverified; the 30-case issuer sample is a bounded diagnostic.", "Source-rights and SEC receipt authenticity are established by the separately bound evidence package, not model agreement."],
   };
 }
