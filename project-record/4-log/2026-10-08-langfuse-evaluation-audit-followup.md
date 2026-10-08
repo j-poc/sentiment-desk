@@ -341,3 +341,8 @@ non-passing on whole-build findings, including stale/paused live SEC coverage
 and missing real Luna, benchmark, and investor-outcome evidence. These offline
 regressions establish software invariants only; no Luna request or
 classifier-quality conclusion was made.
+
+Checkpoint: commit `7f4412d5d1153f921aca5c91164e31c8f34ea69e` is pushed to
+`https://github.com/j-poc/sentiment-desk/tree/codex/real-data-rebuild` and the
+remote branch SHA was read back as an exact match. The working tree was clean
+after the code checkpoint.
