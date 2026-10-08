@@ -97,8 +97,8 @@ const mentionLookupSchema = z.object({
 });
 const fundamentalRefreshSchema = z.object({ requestKey: z.string().uuid() }).strict();
 const secFilingsInboxActivationSchema = z.object({ confirmUse: z.literal(true) }).strict();
-const secIssuerFollowupSchema = z.object({ accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/) }).strict();
-const secFilingDetailSchema = z.object({ accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/), confirmUse: z.literal(true) }).strict();
+const secIssuerFollowupSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/) }).strict();
+const secFilingDetailSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/), confirmUse: z.literal(true) }).strict();
 const analystResearchReviewSchema = z.object({
   disposition: z.enum(["investigate", "dismissed"]),
   nextQuestion: z.string().max(MAX_ANALYST_RESEARCH_QUESTION_CHARS),
@@ -291,7 +291,7 @@ export function createApp(deps: AppDeps): Hono {
     const input = secFilingDetailSchema.safeParse(await c.req.json().catch(() => null));
     if (!input.success) return c.json({ error: "invalid_sec_filing_detail_request" }, 400);
     const current = await deps.secFilingsInbox.read();
-    const row = current.rows.find((item) => item.accession === input.data.accession && item.form === "8-K");
+    const row = current.rows.find((item) => item.cik === input.data.cik && item.accession === input.data.accession && item.form === "8-K");
     if (!row || !/^\d{10}$/.test(row.cik) || row.filingUrl == null) return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
     return c.json(await deps.secFilingDetail.inspect(row));
   });
@@ -311,7 +311,7 @@ export function createApp(deps: AppDeps): Hono {
     if (!deps.secFilingsInbox) return c.json({ error: "sec_filings_inbox_unavailable" }, 503);
     const input = secIssuerFollowupSchema.safeParse(await c.req.json().catch(() => null));
     if (!input.success) return c.json({ error: "invalid_sec_issuer_followup" }, 400);
-    const source = (await deps.secFilingsInbox.read()).rows.find((row) => row.accession === input.data.accession && row.form === "8-K");
+    const source = (await deps.secFilingsInbox.read()).rows.find((row) => row.cik === input.data.cik && row.accession === input.data.accession && row.form === "8-K");
     if (!source || !/^\d{10}$/.test(source.cik) || source.filingUrl == null) return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
     deps.db.saveSecIssuerFollowup({ cik: source.cik, issuer: source.issuer, triggeringAccession: source.accession, filingUrl: source.filingUrl });
     const saved = deps.db.secIssuerFollowups().find((item) => item.cik === source.cik);

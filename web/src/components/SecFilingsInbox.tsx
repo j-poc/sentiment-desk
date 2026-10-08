@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { activateSecFilingsInbox, getSecFilingsInbox, getSecIssuerFollowups, inspectSecFiling, removeSecIssuerFollowup, saveSecIssuerFollowup } from "../lib/api.js";
-import { secIssuerDisplayName, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecIssuerFollowup } from "../../../shared/sec-filings-inbox.js";
+import { secFilingIdentity, secIssuerDisplayName, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecIssuerFollowup } from "../../../shared/sec-filings-inbox.js";
 
 function utc(value: string | null, dateOnly = false): string {
   if (!value) return dateOnly ? "Filing date not supplied" : "Not supplied";
@@ -155,7 +155,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const [followupError, setFollowupError] = useState<string | null>(null);
   const [followupsLoadFailed, setFollowupsLoadFailed] = useState(false);
   const [followupsLoading, setFollowupsLoading] = useState(false);
-  const [expandedAccession, setExpandedAccession] = useState<string | null>(null);
+  const [expandedFiling, setExpandedFiling] = useState<string | null>(null);
   const [detail, setDetail] = useState<SecFilingDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailLoadFailed, setDetailLoadFailed] = useState(false);
@@ -197,7 +197,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const saveIssuer = async (row: SecFilingInboxRow) => {
     setFollowupWorking(row.cik); setFollowupError(null);
     try {
-      const saved = await saveSecIssuerFollowup(row.accession);
+      const saved = await saveSecIssuerFollowup(row.cik, row.accession);
       setFollowups((current) => [saved, ...current.filter((item) => item.cik !== saved.cik)]);
     } catch { setFollowupError(`Could not save ${row.issuer}. Confirm the filing is still in the current SEC inbox, then retry.`); }
     finally { setFollowupWorking(null); }
@@ -214,7 +214,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
     setDetailLoading(true);
     setDetailLoadFailed(false);
     try {
-      setDetail(await inspectSecFiling(row.accession));
+      setDetail(await inspectSecFiling(row.cik, row.accession));
     } catch {
       setDetail(null);
       setDetailLoadFailed(true);
@@ -224,12 +224,13 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   };
 
   const toggleDetail = (row: SecFilingInboxRow) => {
-    if (expandedAccession === row.accession) {
-      setExpandedAccession(null);
+    const identity = secFilingIdentity(row);
+    if (expandedFiling === identity) {
+      setExpandedFiling(null);
       return;
     }
-    setExpandedAccession(row.accession);
-    if (detail?.accession !== row.accession) void loadDetail(row);
+    setExpandedFiling(identity);
+    if (detail?.accession !== row.accession || detail.cik !== row.cik) void loadDetail(row);
   };
 
   const rows = useMemo(() => {
@@ -348,7 +349,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
           ) : (
             <ol className="divide-y divide-white/[0.055]" aria-label="Recent SEC filings">
               {rows.map((row) => (
-                <li key={row.accession} className="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5">
+                <li key={secFilingIdentity(row)} className="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-medium text-white/85">{secIssuerDisplayName(row.issuer)}</h3>
@@ -361,11 +362,11 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
                     <p className="mt-1 text-xs text-white/50">{row.filedOn ? `Filed ${utc(row.filedOn, true)}` : "Filing date not in feed"} · {row.acceptedAt ? `Accepted ${utc(row.acceptedAt)}` : "Acceptance time not in feed"}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <button type="button" aria-expanded={expandedAccession === row.accession}
-                      aria-controls={`sec-filing-detail-${row.accession}`} onClick={() => toggleDetail(row)}
-                      disabled={detailLoading && expandedAccession !== row.accession}
+                    <button type="button" aria-expanded={expandedFiling === secFilingIdentity(row)}
+                      aria-controls={`sec-filing-detail-${secFilingIdentity(row)}`} onClick={() => toggleDetail(row)}
+                      disabled={detailLoading && expandedFiling !== secFilingIdentity(row)}
                       className="inline-flex w-fit items-center rounded-md border border-emerald-300/25 bg-emerald-300/[0.055] px-3 py-2 text-xs font-medium text-emerald-100/85 hover:bg-emerald-300/[0.11] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-50">
-                      {detailLoading && expandedAccession === row.accession ? "Loading SEC evidence…" : expandedAccession === row.accession ? "Hide disclosure" : "Inspect in Desk"}
+                      {detailLoading && expandedFiling === secFilingIdentity(row) ? "Loading SEC evidence…" : expandedFiling === secFilingIdentity(row) ? "Hide disclosure" : "Inspect in Desk"}
                     </button>
                     {secIssuerRowAction(row, followups.find((item) => item.cik === row.cik)) === "remove"
                       ? <button type="button" onClick={() => void removeIssuer(row.cik)} disabled={followupWorking === row.cik} className="inline-flex w-fit items-center rounded-md border border-emerald-300/25 px-3 py-2 text-xs font-medium text-emerald-100/80 hover:bg-emerald-300/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:opacity-40">{followupWorking === row.cik ? "Removing issuer…" : "Remove saved lead"}</button>
@@ -374,10 +375,10 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
                       : <button type="button" onClick={() => void saveIssuer(row)} disabled={followupWorking !== null} className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-40">{followupWorking === row.cik ? "Saving issuer…" : "Save issuer lead"}<span className="sr-only"> {secIssuerDisplayName(row.issuer)}, CIK {row.cik}</span></button>}
                     <a href={row.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Open SEC filing page <span className="sr-only"> for {row.issuer}, accession {row.accession}</span></a>
                   </div>
-                  {expandedAccession === row.accession && <div id={`sec-filing-detail-${row.accession}`} className="min-w-0 rounded-md border border-white/10 bg-black/20 px-3 py-4 sm:col-span-2 sm:px-4" aria-live="polite">
+                  {expandedFiling === secFilingIdentity(row) && <div id={`sec-filing-detail-${secFilingIdentity(row)}`} className="min-w-0 rounded-md border border-white/10 bg-black/20 px-3 py-4 sm:col-span-2 sm:px-4" aria-live="polite">
                     {detailLoading && <p className="text-sm text-white/60" role="status">Checking this exact accession with SEC EDGAR…</p>}
                     {detailLoadFailed && <div className="flex flex-wrap items-center justify-between gap-3" role="alert"><p className="text-sm text-amber-100/80">The Desk could not load SEC evidence. Retry or open the SEC filing page.</p><button type="button" onClick={() => void loadDetail(row)} className="rounded border border-white/15 px-3 py-2 text-xs text-white/75 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Retry SEC evidence</button></div>}
-                    {!detailLoading && !detailLoadFailed && detail?.accession === row.accession && <SecFilingDetailPanel detail={detail} onRetry={() => void loadDetail(row)} />}
+                    {!detailLoading && !detailLoadFailed && detail?.accession === row.accession && detail.cik === row.cik && <SecFilingDetailPanel detail={detail} onRetry={() => void loadDetail(row)} />}
                   </div>}
                 </li>
               ))}

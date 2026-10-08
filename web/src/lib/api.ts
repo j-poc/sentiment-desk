@@ -41,9 +41,9 @@ export function activateSecFilingsInbox(): Promise<SecFilingsInboxView> {
   });
 }
 
-export function inspectSecFiling(accession: string): Promise<SecFilingDetail> {
+export function inspectSecFiling(cik: string, accession: string): Promise<SecFilingDetail> {
   return requestJSON<SecFilingDetail>("/api/sec-filings-inbox/evidence", {
-    method: "POST", body: JSON.stringify({ accession, confirmUse: true }),
+    method: "POST", body: JSON.stringify({ cik, accession, confirmUse: true }),
   });
 }
 
@@ -51,9 +51,9 @@ export async function getSecIssuerFollowups(signal?: AbortSignal): Promise<SecIs
   return (await getJSON<{ items: SecIssuerFollowup[] }>("/api/sec-issuer-followups", signal)).items;
 }
 
-export function saveSecIssuerFollowup(accession: string): Promise<SecIssuerFollowup> {
+export function saveSecIssuerFollowup(cik: string, accession: string): Promise<SecIssuerFollowup> {
   return requestJSON<SecIssuerFollowup>("/api/sec-issuer-followups", {
-    method: "POST", body: JSON.stringify({ accession }),
+    method: "POST", body: JSON.stringify({ cik, accession }),
   });
 }
 

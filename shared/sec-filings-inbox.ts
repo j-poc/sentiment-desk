@@ -16,6 +16,11 @@ export interface SecFilingInboxRow {
   filingUrl: string;
 }
 
+/** Stable identity for an SEC filing as surfaced for a specific issuer. Joint filings may share an accession. */
+export function secFilingIdentity(row: Pick<SecFilingInboxRow, "cik" | "accession">): string {
+  return `${row.cik}:${row.accession}`;
+}
+
 export interface SecFilingsInboxView {
   state: "ready" | "stale" | "empty" | "pending" | "rate_limited" | "failed" | "not_configured" | "unsupported" | "unavailable";
   /** Freshness of the SEC source observation, independent of when the Hub retrieved the saved receipt. */

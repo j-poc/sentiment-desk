@@ -1,4 +1,4 @@
-import type { SecFilingDetail, SecFilingInboxRow } from "../shared/sec-filings-inbox.js";
+import { secFilingIdentity, type SecFilingDetail, type SecFilingInboxRow } from "../shared/sec-filings-inbox.js";
 import { ExternalRequestPausedError } from "./external-request-gate.js";
 import { ProviderRateLimitError } from "./provider-cooldown.js";
 import { fetchFilingByAccession, fetchFilingEvidence, ITEM_LABELS, type SecFiling } from "./sources/sec.js";
@@ -37,10 +37,11 @@ export class SecFilingDetailService {
   }
 
   inspect(row: SecFilingInboxRow): Promise<SecFilingDetail> {
-    const existing = this.inFlight.get(row.accession);
+    const identity = secFilingIdentity(row);
+    const existing = this.inFlight.get(identity);
     if (existing) return existing;
-    const pending = this.load(row).finally(() => this.inFlight.delete(row.accession));
-    this.inFlight.set(row.accession, pending);
+    const pending = this.load(row).finally(() => this.inFlight.delete(identity));
+    this.inFlight.set(identity, pending);
     return pending;
   }
 

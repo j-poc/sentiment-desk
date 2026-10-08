@@ -151,6 +151,41 @@ describe("real SEC filings inbox Hub boundary", () => {
     }]);
   });
 
+  it("preserves distinct issuers sharing a real joint-filing accession and rejects a duplicate issuer/accession pair", async () => {
+    // SEC Atom can publish one joint filing under multiple issuer CIKs. This accession
+    // was observed twice in the live 40-entry feed, for Corteva and EIDP.
+    const jointAccession = "0001193125-26-417064";
+    const first = structuredClone(validRow);
+    const second = structuredClone(validRow);
+    for (const [record, cik, issuer] of [
+      [first, "0001755672", "Corteva, Inc."],
+      [second, "0000030554", "EIDP, Inc."],
+    ] as const) {
+      record.entity = cik;
+      const url = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/000119312526417064/${jointAccession}-index.htm`;
+      record.source_address = url;
+      record.attributes.accession = jointAccession;
+      record.attributes.accession_cik = "0001193125";
+      record.attributes.filing_cik_path = String(Number(cik));
+      record.attributes.filing_url = url;
+      record.attributes.issuer_label = issuer;
+      delete record.attributes.filed_at;
+      delete record.attributes.accepted_at;
+      delete record.attributes.published_source_timestamp;
+      delete record.attributes.feed_updated_at;
+    }
+    const result = await makeInbox(responseFor({ records: [first, second] })).read();
+    expect(result.state).toBe("ready");
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows.map(({ cik, accession }) => [cik, accession])).toEqual([
+      ["0001755672", jointAccession], ["0000030554", jointAccession],
+    ]);
+
+    const duplicate = await makeInbox(responseFor({ records: [first, structuredClone(first)] })).read();
+    expect(duplicate.state).toBe("unsupported");
+    expect(duplicate.rows).toEqual([]);
+  });
+
   it("rejects forms outside the exact 8-K Hub profile and keeps Atom publication separate from filing time", async () => {
     const amendment = structuredClone(validRow);
     amendment.attributes.form = "8-K/A";

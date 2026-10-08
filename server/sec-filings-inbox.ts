@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
+import { secFilingIdentity, secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
 
 const DATASET = "sec.latest_filings_8k";
 const CONSUMER = "sentiment-desk";
@@ -63,7 +63,7 @@ function normalizeRows(value: unknown): SecFilingInboxRow[] | null {
     if (!/^[0-9]{10}-[0-9]{2}-[0-9]{6}$/.test(accession) || !/^\d{10}$/.test(cik)
       || !/^\d{10}$/.test(declaredAccessionCik) || accession.slice(0, 10) !== declaredAccessionCik
       || form !== "8-K"
-      || issuer.length < 1 || issuer.length > 200 || seen.has(accession)) return null;
+      || issuer.length < 1 || issuer.length > 200 || seen.has(secFilingIdentity({ cik, accession }))) return null;
     const filing = validateFilingUrl(row?.source_address, accession, declaredFilingCikPath);
     if (!filing || attributes?.filing_url !== filing.url) return null;
     const filedOn = validDate(attributes?.filed_at);
@@ -77,7 +77,7 @@ function normalizeRows(value: unknown): SecFilingInboxRow[] | null {
     if (attributes?.feed_updated_at != null && !feedUpdatedAt) return null;
     rows.push({ accession, cik, accessionCik: declaredAccessionCik, filingCikPath: filing.filingCikPath,
       issuer, form, filedOn, acceptedAt, feedPublishedAt, feedUpdatedAt, filingUrl: filing.url });
-    seen.add(accession);
+    seen.add(secFilingIdentity({ cik, accession }));
   }
   return rows;
 }

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SecFilingDetailService } from "../server/sec-filing-detail.js";
 import { ProviderRateLimitError } from "../server/provider-cooldown.js";
 import type { SecFilingInboxRow } from "../shared/sec-filings-inbox.js";
-import type { SecFilingEvidence } from "../server/sources/sec.js";
+import type { SecFiling, SecFilingEvidence } from "../server/sources/sec.js";
 
 const row: SecFilingInboxRow = {
   accession: "0001091818-26-000108", cik: "0001310488", accessionCik: "0001091818", filingCikPath: "0001310488",
@@ -125,7 +125,7 @@ describe("on-demand SEC filing detail", () => {
     expect(fetchMetadata).toHaveBeenCalledTimes(1);
   });
 
-  it("coalesces simultaneous requests for the same accession", async () => {
+  it("coalesces simultaneous requests for the same issuer and accession", async () => {
     let complete!: (value: typeof filing) => void;
     const fetchMetadata = vi.fn(() => new Promise<typeof filing>((resolve) => { complete = resolve; }));
     const fetchEvidence = vi.fn(async () => evidence());
@@ -136,5 +136,27 @@ describe("on-demand SEC filing detail", () => {
     complete(filing);
     await expect(Promise.all([first, second])).resolves.toMatchObject([{ state: "ready" }, { state: "ready" }]);
     expect(fetchEvidence).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not coalesce a joint filing across distinct issuers sharing one accession", async () => {
+    const jointRow: SecFilingInboxRow = { ...row, cik: "0000751978", issuer: "VICOR CORP" };
+    const requests: Array<{ cik: string; accessionNo: string }> = [];
+    const fetchMetadata = vi.fn(async (input) => {
+      requests.push({ cik: input.cik, accessionNo: input.accessionNo });
+      return { ...filing, cik: input.cik };
+    });
+    const fetchEvidence = vi.fn(async (value: SecFiling) => {
+      const subjectRow = value.cik === row.cik ? row : jointRow;
+      return evidence({}, { row: subjectRow, filing: { ...filing, cik: subjectRow.cik } });
+    });
+    const service = new SecFilingDetailService({ enabled: true, userAgent: "Desk contact", fetchMetadata, fetchEvidence });
+    const [first, second] = await Promise.all([service.inspect(row), service.inspect(jointRow)]);
+    expect(requests).toEqual([
+      { cik: row.cik, accessionNo: row.accession },
+      { cik: jointRow.cik, accessionNo: jointRow.accession },
+    ]);
+    expect(first.cik).toBe(row.cik);
+    expect(second.cik).toBe(jointRow.cik);
+    expect(fetchMetadata).toHaveBeenCalledTimes(2);
   });
 });

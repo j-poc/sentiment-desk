@@ -43,24 +43,25 @@ function appAt(path: string) {
 }
 
 describe("saved SEC issuer research leads", () => {
-  it("is idempotent for one accession, refreshes the lead for a different current filing, survives reopen, and removes durably", async () => {
+  it("requires issuer plus accession, refreshes the lead for a different current filing, survives reopen, and removes durably", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sec-issuer-followup-")); directories.push(directory);
     const dbPath = join(directory, "desk.sqlite");
     let app = appAt(dbPath);
 
     expect((await app.request("/api/sec-issuer-followups")).status).toBe(200);
-    expect((await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accession }) })).status).toBe(201);
+    expect((await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accession }) })).status).toBe(400);
+    expect((await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cik: "0000000320", accession }) })).status).toBe(201);
     const savedResponse = await app.request("/api/sec-issuer-followups");
     const firstSaved = await savedResponse.json() as { items: Array<{ savedAt: string; cik: string; issuer: string; triggeringAccession: string; filingUrl: string }> };
     expect(firstSaved).toMatchObject({ items: [{ cik: "0000000320", issuer: "Apple Inc.", triggeringAccession: accession, filingUrl }] });
 
-    await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accession }) });
+    await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cik: "0000000320", accession }) });
     const repeatedSave = await (await app.request("/api/sec-issuer-followups")).json() as { items: Array<{ savedAt: string; triggeringAccession: string; filingUrl: string }> };
     expect(repeatedSave.items).toHaveLength(1);
     expect(repeatedSave.items[0]).toMatchObject({ savedAt: firstSaved.items[0]?.savedAt, triggeringAccession: accession, filingUrl });
-    expect((await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accession: "0000000320-25-000003" }) })).status).toBe(404);
+    expect((await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cik: "0000000320", accession: "0000000320-25-000003" }) })).status).toBe(404);
 
-    await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accession: nextAccession }) });
+    await app.request("/api/sec-issuer-followups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cik: "0000000320", accession: nextAccession }) });
     const changedLead = await (await app.request("/api/sec-issuer-followups")).json() as { items: Array<{ cik: string; savedAt: string; triggeringAccession: string; filingUrl: string }> };
     expect(changedLead.items).toHaveLength(1);
     expect(changedLead.items[0]).toMatchObject({ cik: "0000000320", triggeringAccession: nextAccession, filingUrl: nextFilingUrl });
