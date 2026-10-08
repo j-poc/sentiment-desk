@@ -135,6 +135,51 @@ describe("OpenAI Luna categorical classifier", () => {
     expect(db.categoricalTrendSnapshot("acme", 24, now).counts.total).toBe(0);
   });
 
+  it.each([
+    ["excluded", { about: false }, "excluded"],
+    ["insufficient evidence", { evidence_sufficient: false }, "review_required"],
+  ] as const)("derives the persisted disposition for %s output through the real classification path", async (_label, classificationOverrides, expectedDisposition) => {
+    const db = new Desk(":memory:");
+    openDbs.push(db);
+    db.seedCompanies([company]);
+    const now = Date.now();
+    const adapterVersion = "google_news_rss/1";
+    const deliveryId = db.recordDelivery({
+      collector: "google_news_rss", companyId: "acme", requestKey: `request-${expectedDisposition}`,
+      startedAt: now - 2_000, completedAt: now - 1_000, result: "success", parsedItemCount: 1, adapterVersion,
+    });
+    const source: RawMention = {
+      companyId: "acme", kind: "rss", sourceName: "Reuters", sourceUrl: `https://reuters.example/${expectedDisposition}`,
+      tier: "wire", title: input.source.title, snippet: input.source.excerpt, publishedAt: now - 3_000,
+      retrievedAt: now, collector: "google_news_rss", sourceItemId: `disposition-${expectedDisposition}`, adapterVersion, deliveryId,
+    };
+    const model = classifier((async () => new Response(JSON.stringify(responseBody({
+      output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output(classificationOverrides)) }] }],
+    })), { status: 200 })) as typeof fetch);
+    const health = new HealthTracker(false, false, OPENAI_MODEL, false, false, false, true, new Set(["google_news_rss"]), undefined, {
+      provider: "openai_luna", model: OPENAI_MODEL, configured: true, enabled: true, blockedReason: null,
+    });
+    const pipeline = new Pipeline({
+      db, judge: null, classifier: (prepared) => model.classifyPrepared(prepared), provider: "openai_luna",
+      hub: new Hub(), health, engineLabel: OPENAI_MODEL, inputPricePerMTok: 0, concurrency: 1,
+      allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-04", maxRequests: 1, maxRequestBytes: 100_000, maxDailyCostMicros: 10_000 },
+    });
+    pipelines.push(pipeline);
+
+    pipeline.ingest(source);
+    await pipeline.waitForIdle();
+
+    const saved = db.mentionsForCompany("acme", 0, 10)[0]!;
+    expect(saved.classification?.disposition).toBe(expectedDisposition);
+    const counts = db.categoricalTrendSnapshot("acme", 24, Date.now()).counts;
+    expect(counts.total).toBe(1);
+    expect(expectedDisposition === "review_required" ? counts.reviewRequired : counts.excluded).toBe(1);
+    expect(counts.positive).toBe(0);
+    expect(counts.neutral).toBe(0);
+    expect(counts.negative).toBe(0);
+  });
+
   it("keeps a completed-status unreadable response outcome unknown", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) { controller.error(new Error("connection ended while reading")); },

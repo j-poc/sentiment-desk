@@ -69,10 +69,10 @@ function verifyFrozenLunaCode(labels: LunaLabelSetV2, cwd = process.cwd()): void
   const trackedChanges = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd, encoding: "utf8" }).trim();
   if (trackedChanges) throw new Error("tracked source tree is dirty; frozen Luna evaluation must run from a clean checkout");
   const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" }).split("\n")
-    .filter((file) => /^(server|scripts|tests|web\/src)\//.test(file) || ["package.json", "tsconfig.json"].includes(file));
+    .filter((file) => /^(server|shared|scripts|tests|web\/src)\//.test(file) || ["package.json", "tsconfig.json"].includes(file));
   if (untracked.length) throw new Error("untracked executable or test source exists; frozen Luna evaluation code must be committed first");
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const sources = ["scripts/evaluate-luna-labels.ts", "scripts/luna-label-evaluation.ts", "server/openai-classifier.ts", "server/rubric.ts", "config/companies.json"];
+  const sources = ["scripts/evaluate-luna-labels.ts", "scripts/luna-label-evaluation.ts", "server/openai-classifier.ts", "server/pipeline.ts", "server/rubric.ts", "shared/categorical-disposition.ts", "config/companies.json"];
   for (const relative of sources) {
     const sourceFile = path.resolve(sourceRoot, relative); const frozenFile = path.resolve(cwd, relative);
     if (!frozenFile.startsWith(`${path.resolve(cwd)}${path.sep}`)) throw new Error("frozen Luna source path escapes its checkout");

@@ -11,6 +11,7 @@ import { researchPublisherDomain } from "./publisher-domain.js";
 import { StorageCapacityError } from "./storage-capacity.js";
 import { ExternalRequestPausedError } from "./external-request-gate.js";
 import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js";
+import { deriveCategoricalDisposition } from "../shared/categorical-disposition.js";
 import {
   applyPostRules,
   bucketMsFor,
@@ -535,12 +536,7 @@ export class Pipeline {
       intentRecorded = true;
       result = await classifier(prepared);
       const { classification: raw, usage } = result;
-      const disposition: CategoricalClassification["disposition"] = raw.about === false || raw.investorRelevant === false
-        ? "excluded"
-        : !strongIdentity || !raw.evidenceSufficient || raw.about == null || raw.material == null || raw.investorRelevant == null ||
-          raw.sentiment == null || raw.eventType == null || raw.takeaway == null
-          ? "review_required"
-          : "classified";
+      const disposition: CategoricalClassification["disposition"] = deriveCategoricalDisposition(raw, strongIdentity);
       const classification: CategoricalClassification = {
         provider: "openai_luna", modelRequested: prepared.requestedModel, modelReturned: result.modelReturned,
         serviceTierRequested: prepared.requestedServiceTier, serviceTier: result.serviceTier,

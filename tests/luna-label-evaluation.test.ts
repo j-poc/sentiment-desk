@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { deriveCategoricalDisposition } from "../shared/categorical-disposition.js";
 import {
   LUNA_DIAGNOSTIC_PROFILE,
   LUNA_PROFILE_VERSION,
@@ -115,10 +116,11 @@ function runFixture(labels: LunaLabelSetV2, labelsSha256: string, mutate?: (run:
     const prepared = makeContract().prepareRequest(item.input, model);
     const usage = { inputTokens: 100, cachedInputTokens: 10, cacheWriteInputTokens: 5, outputTokens: 50, reasoningTokens: 10, totalTokens: 150 };
     const estimatedCostUsd = makeContract().estimateCost(usage.inputTokens, usage.cachedInputTokens, usage.cacheWriteInputTokens, usage.outputTokens, model, "default")!;
-    const classification = {
+    const classificationFields = {
       sentiment: refs.sentiment, eventType: refs.eventType, takeaway: refs.takeaway, about: refs.about, material: refs.material, investorRelevant: refs.investorRelevant,
-      evidenceSufficient: refs.evidenceSufficient, summary: "The SEC excerpt reports the stated company result.", supportingExcerpt: item.excerpt.slice(0, 50), disposition: refs.about && refs.investorRelevant ? "classified" : "excluded",
+      evidenceSufficient: refs.evidenceSufficient === true, summary: "The SEC excerpt reports the stated company result.", supportingExcerpt: item.excerpt.slice(0, 50),
     };
+    const classification = { ...classificationFields, disposition: deriveCategoricalDisposition(classificationFields, true) };
     return {
       observationId: item.observationId, requestPayloadSha256: prepared.payloadSha256, terminalStatus: "completed",
       attempts: [{ attemptNumber: 1, requestPayloadSha256: prepared.payloadSha256, outcome: "completed", submitted: true, httpStatus: 200, responseId: `resp-${item.observationId}`, responseSha256: digest(`response ${item.observationId}`), modelReturned: model, serviceTier: "default", latencyMs: 10 + labels.items.indexOf(item), classification, usage: { ...usage, estimatedCostUsd } }],
@@ -191,7 +193,7 @@ describe("offline categorical Luna evaluation", () => {
     const labelsSha256 = digest("frozen labels bytes");
     const run = parseLunaModelRun(runFixture(labels, labelsSha256), labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
-    expect(report).toMatchObject({ status: "UNVERIFIED", qualityStatus: "UNVERIFIED", structuredClassificationStatus: "PASS", narrativeAssessment: { status: "UNVERIFIED" }, provenanceExecutionStatus: "PASS", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED" });
+    expect(report).toMatchObject({ status: "UNVERIFIED", qualityStatus: "UNVERIFIED", structuredClassificationStatus: "UNVERIFIED", narrativeAssessment: { status: "UNVERIFIED" }, provenanceExecutionStatus: "PASS", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED" });
     expect(report.quality.sentiment.metrics.macroF1).toBe(1);
     expect(report.quality.sentiment.metrics.majorityBaseline).toBeGreaterThan(0.3);
     expect(report.quality.sentiment.metrics.total).toBe(30);
@@ -202,6 +204,38 @@ describe("offline categorical Luna evaluation", () => {
     expect(report.rawAgentAgreement.sentiment.rawAgreementIncludingAbstentions).toBe(1);
     expect(report.usage).toMatchObject({ cachedInputTokensKnownSubtotal: 300, cacheWriteInputTokensKnownSubtotal: 150, reasoningTokensAreIncludedInOutput: true });
     expect(report.usage.estimatedCostUsd).toBeGreaterThan(0);
+  });
+
+  it("fails when dispositions contradict the inclusion fields that control categorical visibility", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest("inconsistent dispositions");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      for (const item of value.items) {
+        const classification = item.attempts[0].classification;
+        classification.disposition = classification.about && classification.investorRelevant ? "excluded" : "classified";
+      }
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.quality.inclusionPrecision.about.precision).toBe(1);
+    expect(report.quality.inclusionPrecision.investorRelevant.precision).toBe(1);
+    expect(report.quality.classificationDisposition).toMatchObject({ status: "FAIL", selectedCases: 30, assessedCases: 30, mismatchCount: 30 });
+    expect(report.structuredClassificationStatus).toBe("FAIL");
+    expect(report.qualityStatus).toBe("FAIL");
+    expect(report.status).toBe("FAIL");
+  });
+
+  it("keeps identity-dependent disposition quality unverified when strong source identity is absent", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest("identity-unknown review disposition");
+    const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
+      value.items[0].attempts[0].classification.disposition = "review_required";
+    }), labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
+    expect(report.quality.classificationDisposition).toMatchObject({ status: "UNVERIFIED", selectedCases: 30, assessedCases: 30, mismatchCount: 0 });
+    expect(report.quality.classificationDisposition.identityDependentCount).toBe(24);
+    expect(report.structuredClassificationStatus).toBe("UNVERIFIED");
+    expect(report.qualityStatus).toBe("UNVERIFIED");
+    expect(report.status).toBe("UNVERIFIED");
   });
 
   it.each([
@@ -271,7 +305,9 @@ describe("offline categorical Luna evaluation", () => {
     const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
     const labelsSha256 = digest(`wrong ${field} interpretation`);
     const run = parseLunaModelRun(runFixture(labels, labelsSha256, (value) => {
-      value.items[0].attempts[0].classification[field] = wrongValue;
+      const classification = value.items[0].attempts[0].classification;
+      classification[field] = wrongValue;
+      if (field === "evidenceSufficient") classification.disposition = deriveCategoricalDisposition(classification, true);
     }), labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.structuredClassificationStatus).toBe("UNVERIFIED");
@@ -297,7 +333,7 @@ describe("offline categorical Luna evaluation", () => {
     }), labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.quality.eventTypeReference).toMatchObject({ status: "PASS", mismatchCount: 0, resolvedReferenceCases: 30 });
-    expect(report.structuredClassificationStatus).toBe("PASS");
+    expect(report.structuredClassificationStatus).toBe("UNVERIFIED");
     expect(report.status).toBe("UNVERIFIED");
   });
 
@@ -427,7 +463,9 @@ describe("offline categorical Luna evaluation", () => {
     const labelsSha256 = digest("labels with one unresolved sentiment");
     const runRaw: any = runFixture(labels, labelsSha256);
     runRaw.items[1].attempts[0].classification.sentiment = null;
-    runRaw.items[1].attempts[0].classification.about = null;
+    const missingPrediction = runRaw.items[1].attempts[0].classification;
+    missingPrediction.about = null;
+    missingPrediction.disposition = deriveCategoricalDisposition(missingPrediction, true);
     const run = parseLunaModelRun(runRaw, labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.selectedCaseDenominator).toBe(30);

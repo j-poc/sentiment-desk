@@ -310,3 +310,34 @@ investor outcomes remain **UNVERIFIED/BLOCKED**. The generated adjudication JSON
 is ignored local evidence and is not included in the Git checkpoint; this log
 records its digest and aggregate result. No model-provider request or product
 write occurred.
+
+## Categorical disposition false-pass repair
+
+An adversarial evaluator test found that all 30 saved dispositions could be
+flipped to contradict their own inclusion fields while
+`structuredClassificationStatus` still returned `PASS`. Inclusion precision
+alone did not catch this because the saved disposition determines whether a
+classification is visible in the desk. The production pipeline now shares its
+disposition rule with the evaluator; the evaluator fails contradictions
+provable from the frozen output. Complete in-scope cases now remain
+**UNVERIFIED** because source identity strength, which determines
+`classified` versus `review_required`, is absent from the packet. An
+end-to-end pipeline regression checks that excluded and review-required rows
+remain out of sentiment chart counts.
+
+The final focused Luna evaluation, classifier, public benchmark, and evaluator
+CLI run passed **60 tests across four files**. Typecheck and production build
+passed; the existing Vite large-bundle advisory remains. The independent code
+review verified the shared disposition policy against 432 valid evidence
+combinations and found no mismatch. `git diff --check` passed.
+
+The final full-suite result is **UNVERIFIED**. A default parallel run passed
+879 tests but hit timeout failures in five files and one worker RPC timeout
+under concurrent machine load. A serial run with a 20-second per-test limit
+then encountered `ENOSPC` while database tests created temporary directories;
+the filesystem had 178 MB available. That run was stopped. No full-suite PASS
+is claimed for this final tree. The complete engineering gate also remains
+non-passing on whole-build findings, including stale/paused live SEC coverage
+and missing real Luna, benchmark, and investor-outcome evidence. These offline
+regressions establish software invariants only; no Luna request or
+classifier-quality conclusion was made.

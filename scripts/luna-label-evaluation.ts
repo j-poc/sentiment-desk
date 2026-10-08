@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { EVENT_TYPES, TAKEAWAY_KEYS } from "../server/rubric.js";
+import { categoricalDispositionDependsOnIdentity, isCategoricalDispositionAllowed } from "../shared/categorical-disposition.js";
 import { classificationMetrics, sha256Bytes, sha256Json } from "./jev-label-evaluation.js";
 export { sha256Bytes };
 
@@ -371,6 +372,29 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: 
     return { status, targetPrecision: 0.9, ...metric, resolvedReferenceCases: rows.length, selectedCases: labels.items.length, expectedAbstentionCases: abstentionRows.length, correctAbstentionCases: abstentionRows.length - abstentionMismatches.length, abstentionMismatchCount: abstentionMismatches.length, abstentionMismatches, missedResolvedInclusions, unresolvedReferenceCases };
   };
   const inclusionMetrics = { about: inclusion("about"), investorRelevant: inclusion("investorRelevant") };
+  const dispositionCases = cases.flatMap(({ item, run: result }) => {
+    const classification = acceptedClassification(result);
+    return classification ? [{ observationId: item.observationId, classification }] : [];
+  });
+  const dispositionMismatches = dispositionCases.flatMap(({ observationId, classification }) => {
+    return isCategoricalDispositionAllowed(classification, classification.disposition, null)
+      ? []
+      : [{ observationId, disposition: classification.disposition, reason: "saved disposition contradicts categorical inclusion or evidence fields" }];
+  });
+  const identityDependentCases = dispositionCases.flatMap(({ observationId, classification }) => {
+    return categoricalDispositionDependsOnIdentity(classification) ? [observationId] : [];
+  });
+  const dispositionStatus = {
+    status: dispositionMismatches.length ? "FAIL" : dispositionCases.length < cases.length || identityDependentCases.length ? "UNVERIFIED" : "PASS",
+    selectedCases: cases.length,
+    assessedCases: dispositionCases.length,
+    unavailableCases: cases.length - dispositionCases.length,
+    identityDependentCount: identityDependentCases.length,
+    identityDependentObservationIds: identityDependentCases,
+    mismatchCount: dispositionMismatches.length,
+    mismatches: dispositionMismatches,
+    scope: "Checks contradictions derivable from the frozen classifier output. Complete, in-scope cases remain unverified because source identity strength, which determines classified versus review_required, is absent from this packet.",
+  };
   const gatedFields = fields;
   const referenceEligibility = {
     status: cases.some(({ item }) => gatedFields.some((field) => referenceState(item, field) === "unresolved")) ? "UNVERIFIED" : "PASS",
@@ -384,7 +408,7 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: 
     })),
     metricScope: "Resolved-reference subset scores are diagnostic; unresolved required references prevent full-cohort qualification.",
   };
-  const qualityGateStatuses = [sentimentGate.status, inclusionMetrics.about.status, inclusionMetrics.investorRelevant.status, referenceEligibility.status];
+  const qualityGateStatuses = [sentimentGate.status, inclusionMetrics.about.status, inclusionMetrics.investorRelevant.status, dispositionStatus.status, referenceEligibility.status];
   const expectedIds = new Set(labels.items.map(({ observationId }) => observationId));
   const missingIds = [...expectedIds].filter((id) => !byRunId.has(id)); const unexpectedIds = [...byRunId.keys()].filter((id) => !expectedIds.has(id));
   const failed = run.items.filter(({ terminalStatus }) => ["refused", "incomplete", "invalid_output", "rejected", "not_sent", "not_attempted"].includes(terminalStatus));
@@ -427,7 +451,7 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: 
   const evidenceCases = cases.filter(({ reference }) => reference.evidenceSufficient !== null);
   const evidenceMetrics = classificationMetrics({ labels: evidenceCases.map(({ reference }) => String(reference.evidenceSufficient)), predictions: evidenceCases.map(({ run: result }) => { const prediction = acceptedClassification(result)?.evidenceSufficient; return prediction === null || prediction === undefined ? null : String(prediction); }), classes: ["false", "true"] });
   const evidenceSufficiencyReference = exactReferenceStatus(cases, "evidenceSufficient");
-  const structuredStatuses = [qualityGateStatuses[0]!, qualityGateStatuses[1]!, qualityGateStatuses[2]!, qualityGateStatuses[3]!, eventTypeReference.status, takeawayReference.status, materialReference.status, evidenceSufficiencyReference.status];
+  const structuredStatuses = [...qualityGateStatuses, eventTypeReference.status, takeawayReference.status, materialReference.status, evidenceSufficiencyReference.status];
   const structuredClassificationStatus = structuredStatuses.includes("FAIL") ? "FAIL" : structuredStatuses.includes("UNVERIFIED") ? "UNVERIFIED" : "PASS";
   const rawTotal = usageRows.reduce((sum, row) => sum + row.totalTokens, 0);
   const totalInput = usageRows.reduce((sum, row) => sum + row.inputTokens, 0); const cachedInputKnown = usageRows.filter((row) => row.cachedInputTokens !== null).reduce((sum, row) => sum + row.cachedInputTokens!, 0); const cacheWriteKnown = usageRows.filter((row) => row.cacheWriteInputTokens !== null).reduce((sum, row) => sum + row.cacheWriteInputTokens!, 0); const totalOutput = usageRows.reduce((sum, row) => sum + row.outputTokens, 0); const reasoningKnown = usageRows.filter((row) => row.reasoningTokens !== null).reduce((sum, row) => sum + row.reasoningTokens!, 0);
@@ -457,7 +481,7 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: 
     resolvedReferenceDenominators: { sentiment: sentimentCases.length, about: inclusionMetrics.about.resolvedReferenceCases, investorRelevant: inclusionMetrics.investorRelevant.resolvedReferenceCases, eventType: eventTypeCases.length, takeaway: takeawayCases.length, material: materialCases.length, evidenceSufficient: evidenceCases.length },
     expectedAbstentionDenominators: Object.fromEntries(fields.map((field) => [field, cases.filter(({ item }) => referenceState(item, field) === "abstention").length])),
     qualityStatus, structuredClassificationStatus, narrativeAssessment, referenceEligibility, provenanceExecutionStatus: executionStatus,
-    quality: { sentiment: sentimentGate, inclusionPrecision: inclusionMetrics, eventTypeReference, eventTypeDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: eventTypeCases.length, missingClasses: EVENT_TYPES.filter((name) => eventTypeMetrics.perClass[name]!.support === 0), metrics: eventTypeMetrics }, takeawayReference, takeawayDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: takeawayCases.length, missingClasses: TAKEAWAY_KEYS.filter((name) => takeawayMetrics.perClass[name]!.support === 0), metrics: takeawayMetrics }, materialReference, materialDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: materialCases.length, metrics: materialMetrics }, evidenceSufficiencyReference, evidenceSufficiencyDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: evidenceCases.length, metrics: evidenceMetrics }, modelCompletionCoverage: { selectedCases: labels.items.length, completedCases: completed.length, rate: completed.length / labels.items.length } },
+    quality: { sentiment: sentimentGate, inclusionPrecision: inclusionMetrics, classificationDisposition: dispositionStatus, eventTypeReference, eventTypeDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: eventTypeCases.length, missingClasses: EVENT_TYPES.filter((name) => eventTypeMetrics.perClass[name]!.support === 0), metrics: eventTypeMetrics }, takeawayReference, takeawayDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: takeawayCases.length, missingClasses: TAKEAWAY_KEYS.filter((name) => takeawayMetrics.perClass[name]!.support === 0), metrics: takeawayMetrics }, materialReference, materialDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: materialCases.length, metrics: materialMetrics }, evidenceSufficiencyReference, evidenceSufficiencyDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: evidenceCases.length, metrics: evidenceMetrics }, modelCompletionCoverage: { selectedCases: labels.items.length, completedCases: completed.length, rate: completed.length / labels.items.length } },
     execution: { status: executionStatus, requestedModel: run.requestedModel, requestedServiceTier: labels.requestedServiceTier, selectedCases: labels.items.length, runCases: run.items.length, missingIds, unexpectedIds, failedCases: failed.map(({ observationId, terminalStatus }) => ({ observationId, terminalStatus })), unknownCases: unknown.map(({ observationId }) => observationId), requestCount: run.requestCount, maxRequests: run.maxRequests, totalEstimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, maxEstimatedCostUsd: run.maxEstimatedCostUsd, usageMissingAttempts: missingUsage, incompleteUsageBreakdownAttempts: incompleteUsage, unpricedAttempts, retryableRateLimitAttempts, returnedModels, returnedTiers, missingReturnedModelCount, missingReturnedTierCount, returnedModelStatus, returnedTierStatus, latencyMs: { mean: completedAttempts.length ? completedAttempts.reduce((sum, attempt) => sum + attempt.latencyMs!, 0) / completedAttempts.length : null, max: completedAttempts.length ? Math.max(...completedAttempts.map((attempt) => attempt.latencyMs!)) : null } },
     usage: { inputTokens: totalInput, cachedInputTokensKnownSubtotal: cachedInputKnown, cachedInputTokensUnknownAttempts: usageRows.filter((row) => row.cachedInputTokens === null).length, cacheWriteInputTokensKnownSubtotal: cacheWriteKnown, cacheWriteInputTokensUnknownAttempts: usageRows.filter((row) => row.cacheWriteInputTokens === null).length, uncachedInputTokens: usageRows.filter((row) => row.cachedInputTokens !== null && row.cacheWriteInputTokens !== null).reduce((sum, row) => sum + row.inputTokens - row.cachedInputTokens! - row.cacheWriteInputTokens!, 0), outputTokens: totalOutput, reasoningTokensKnownSubtotal: reasoningKnown, reasoningTokensUnknownAttempts: usageRows.filter((row) => row.reasoningTokens === null).length, reasoningTokensAreIncludedInOutput: true, totalTokens: rawTotal, estimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, ratesPerMillionUsd: { input: run.inputPerMillionUsd, cachedInput: run.cachedInputPerMillionUsd, cacheWrite: run.cacheWritePerMillionUsd, output: run.outputPerMillionUsd } },
     perCase: labels.items.map((item) => { const result = byRunId.get(item.observationId); return { observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, source: { collector: item.collector, publisher: item.publisher }, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding, reference: resolveCaseLabels(item), modelStatus: result?.terminalStatus ?? "missing", prediction: acceptedClassification(result), attempts: result?.attempts ?? [] }; }),
