@@ -1,13 +1,14 @@
 # Sentiment Desk verification map
 
-This directory maps the selected-company SEC fundamentals recovery journey. The verifier starts a disposable local API instance with a temporary SQLite database; it does not use the active runtime or claim live SEC coverage.
+This directory maps two selected-company workflows: SEC fundamentals recovery and local private-evidence handling for configured public issuers. The verifier starts a disposable loopback API instance with temporary SQLite stores; it does not use the active runtime or claim live SEC availability or GPT-6 Luna quality.
 
 ## Baseline preconditions
 
 - Run the recipe from the Sentiment Desk repository root with dependencies already installed.
-- The recipe creates a fresh run ID, a temporary database, and an ephemeral loopback port.
+- The recipe creates a fresh run ID, a temporary public-data database, a separate private-evidence database, and an ephemeral loopback port.
 - The verifier doctor must identify the helper's own build and runtime before any refresh request.
 - Fixture responses are explicitly deterministic test evidence. They do not stand in for a live SEC observation.
+- The private-analysis callback is a local deterministic fixture. It does not send private data to OpenAI or establish that a real classification is correct.
 
 ## Driving conventions
 
@@ -19,3 +20,4 @@ This directory maps the selected-company SEC fundamentals recovery journey. The 
 ## Features
 
 - [SEC fundamentals recovery](./sec-fundamentals-recovery.md) covers partial revenue-only coverage, failed-refresh retention, and observation freshness.
+- [Private-evidence explicit consent](./private-evidence-explicit-consent.md) covers issuer isolation, metadata-only listing, explicit item-bound analysis confirmation, duplicate-call suppression, separation from public sentiment, and durable readback.

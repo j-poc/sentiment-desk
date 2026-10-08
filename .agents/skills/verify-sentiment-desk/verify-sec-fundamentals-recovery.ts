@@ -14,7 +14,10 @@ import { HealthTracker } from "../../../server/health.js";
 import { Hub } from "../../../server/hub.js";
 import { MarketData } from "../../../server/market.js";
 import { Pipeline } from "../../../server/pipeline.js";
+import { PRIVATE_EVIDENCE_ANALYSIS_DATA_CONTROLS } from "../../../server/private-evidence-analysis.js";
+import { PrivateEvidenceStore } from "../../../server/private-evidence-store.js";
 import type { Company, CollectorId } from "../../../server/types.js";
+import type { PrivateEvidenceAnalysisRecord, PrivateEvidenceItem } from "../../../shared/private-evidence.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(directory, "../../..");
@@ -26,13 +29,20 @@ const productFiles = [
   "server/config.ts",
   "server/db.ts",
   "server/index.ts",
+  "server/private-evidence-analysis.ts",
+  "server/private-evidence-store.ts",
   "server/storage-capacity.ts",
   "shared/company-fundamentals.ts",
+  "shared/private-evidence.ts",
+  "web/src/components/PrivateEvidencePanel.tsx",
+  "tests/app-private-evidence.test.ts",
+  "tests/private-evidence-panel.test.tsx",
 ];
 const verifierFiles = [
   ".agents/skills/verify-sentiment-desk/SKILL.md",
   ".agents/skills/verify-sentiment-desk/features/README.md",
   ".agents/skills/verify-sentiment-desk/features/sec-fundamentals-recovery.md",
+  ".agents/skills/verify-sentiment-desk/features/private-evidence-explicit-consent.md",
   ".agents/skills/verify-sentiment-desk/tsconfig.json",
   ".agents/skills/verify-sentiment-desk/verify-sec-fundamentals-recovery.ts",
 ];
@@ -112,6 +122,40 @@ function checkedResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
+function privateEvidenceAnalysis(company: Company, evidence: PrivateEvidenceItem, payloadSha256: string, requestBytes: number): PrivateEvidenceAnalysisRecord {
+  return {
+    companyId: company.id,
+    evidenceId: evidence.id,
+    evidenceSha256: evidence.sha256,
+    payloadSha256,
+    requestBytes,
+    modelRequested: "gpt-6-luna",
+    modelReturned: "gpt-6-luna",
+    serviceTierRequested: "default",
+    serviceTier: "default",
+    promptVersion: "private-evidence-luna-analysis/1",
+    promptSha256: sha256("verifier-only private evidence prompt fingerprint"),
+    schemaVersion: "private-evidence-luna-analysis-json/1",
+    schemaSha256: sha256("verifier-only private evidence schema fingerprint"),
+    profileVersion: "private-evidence-luna-profile/1",
+    profileSha256: sha256("verifier-only private evidence profile fingerprint"),
+    responseId: "resp_verifier_private_evidence",
+    responseSha256: sha256("verifier-only private evidence response fingerprint"),
+    usage: { inputTokens: 30, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 20,
+      reasoningTokens: 0, totalTokens: 50, estimatedCostUsd: 0 },
+    analysis: {
+      sentiment: "positive",
+      summary: "The selected verifier note reports that orders improved.",
+      evidence: [{ quote: "Orders improved this month.", explanation: "The selected note describes an operating trend." }],
+      uncertainties: ["This verifier note is unverified and does not establish the trend's scale or cause."],
+      nextQuestion: "What independent records corroborate the reported order trend?",
+    },
+    latencyMs: 0,
+    httpStatus: 200,
+    dataControls: PRIVATE_EVIDENCE_ANALYSIS_DATA_CONTROLS,
+  };
+}
+
 async function main(): Promise<void> {
   const sourceInventory = fingerprint(productFiles);
   const verifierInventory = fingerprint(verifierFiles);
@@ -147,6 +191,8 @@ async function main(): Promise<void> {
   let server: ReturnType<typeof serve> | null = null;
   let db: Desk | null = null;
   let reopenedDb: Desk | null = null;
+  let privateEvidenceStore: PrivateEvidenceStore | null = null;
+  let reopenedPrivateEvidenceStore: PrivateEvidenceStore | null = null;
   let pipeline: Pipeline | null = null;
   let outcome: "PASS" | "FAIL" = "PASS";
   let errorMessage: string | null = null;
@@ -154,6 +200,10 @@ async function main(): Promise<void> {
   let port: number | null = null;
   const actions: Array<Record<string, unknown>> = [];
   let persistedReadback: Record<string, unknown> | null = null;
+  let privateEvidenceId: string | null = null;
+  let privateEvidenceSha256: string | null = null;
+  let privateEvidenceAnalysisCalls = 0;
+  let privateEvidenceAnalysisCallsBeforeConsent = 0;
 
   try {
     db = new Desk(databasePath);
@@ -193,9 +243,30 @@ async function main(): Promise<void> {
       userAgent: "Sentiment Desk deterministic verifier fixture contact verifier@example.invalid",
       fetcher, now: () => ++clock,
     });
+    privateEvidenceStore = new PrivateEvidenceStore(path.join(scratchPath, "private-evidence", "evidence.sqlite"), () => ++clock);
     const app = createApp({
       db, dbPath: databasePath, pipeline, market, hub, health,
       version: "sentiment-desk-verifier-fixture", deliverySources: [], companyFundamentals: fundamentals,
+      privateEvidence: privateEvidenceStore,
+      privateEvidenceEnabled: true,
+      privateEvidenceCompanyIds: new Set([company.id]),
+      privateEvidenceAnalysis: {
+        enabled: true,
+        blockedReason: null,
+        analyze: async (selectedCompany, evidence, attempt) => {
+          privateEvidenceAnalysisCalls += 1;
+          assert.equal(selectedCompany.id, company.id, "analysis must remain bound to the selected listed issuer");
+          assert.equal(evidence.id, privateEvidenceId, "analysis must remain bound to the selected private item");
+          assert.equal(evidence.sha256, privateEvidenceSha256, "analysis must use the saved item digest");
+          assert.ok(evidence.content.includes("Orders improved this month."), "selected item must reach only its own analysis callback");
+          const payload = JSON.stringify({ companyId: selectedCompany.id, evidenceId: evidence.id, evidenceSha256: evidence.sha256 });
+          const payloadSha256 = sha256(payload);
+          const requestBytes = Buffer.byteLength(payload, "utf8");
+          assert.equal(attempt.begin({ payloadSha256, evidenceSha256: evidence.sha256, requestBytes }), true,
+            "explicitly confirmed analysis must reserve one item-bound attempt");
+          return privateEvidenceAnalysis(selectedCompany, evidence, payloadSha256, requestBytes);
+        },
+      },
     });
     server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
     await new Promise<void>((resolve, reject) => {
@@ -329,17 +400,115 @@ async function main(): Promise<void> {
       fixtureCalls: fixtureCalls.slice(5),
     });
 
+    const privateEvidenceRoute = `/api/companies/${encodeURIComponent(company.id)}/private-evidence`;
+    const privateNoteText = "The verifier-only source note says Orders improved this month.";
+    const privateSaveResponse = await fetch(`${origin}${privateEvidenceRoute}`, {
+      method: "POST", headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ title: "Verifier-only channel note", sourceLabel: "Isolated verifier fixture", content: privateNoteText }),
+    });
+    assert.equal(privateSaveResponse.status, 201);
+    const privateSaved = await privateSaveResponse.json() as { id: string; companyId: string; sha256: string };
+    assert.equal(privateSaved.companyId, company.id);
+    assert.match(privateSaved.sha256, /^[a-f0-9]{64}$/);
+    privateEvidenceId = privateSaved.id;
+    privateEvidenceSha256 = privateSaved.sha256;
+    const privateListResponse = await fetch(`${origin}${privateEvidenceRoute}`);
+    assert.equal(privateListResponse.status, 200);
+    const privateListText = await privateListResponse.text();
+    const privateList = JSON.parse(privateListText) as { items: Array<{ id: string; sha256: string }>; totalCount: number };
+    assert.equal(privateList.totalCount, 1);
+    assert.deepEqual(privateList.items.map(({ id, sha256: digest }) => ({ id, sha256: digest })), [{ id: privateSaved.id, sha256: privateSaved.sha256 }]);
+    assert.ok(!privateListText.includes(privateNoteText), "list endpoint must not expose private note contents");
+    const privateReadResponse = await fetch(`${origin}${privateEvidenceRoute}/${encodeURIComponent(privateSaved.id)}`);
+    assert.equal(privateReadResponse.status, 200);
+    const privateRead = await privateReadResponse.json() as { id: string; companyId: string; content: string; savedAnalysis: unknown };
+    assert.equal(privateRead.id, privateSaved.id);
+    assert.equal(privateRead.companyId, company.id);
+    assert.equal(privateRead.content === privateNoteText, true, "detail readback must return the exact selected private note");
+    assert.equal(privateRead.savedAnalysis, null);
+    const excludedIssuerResponse = await fetch(`${origin}/api/companies/${encodeURIComponent(recentCompany.id)}/private-evidence`);
+    assert.equal(excludedIssuerResponse.status, 404, "an issuer outside the verifier's explicit public allowlist must be excluded");
+    actions.push({
+      phase: "private_evidence_local_save_read", method: "POST+GET", companyId: company.id, evidenceId: privateSaved.id,
+      contentSha256: privateSaved.sha256, listMetadataOnly: !privateListText.includes(privateNoteText),
+      detailReadback: privateRead.content === privateNoteText, excludedIssuerStatus: excludedIssuerResponse.status,
+      result: "private note stays in the selected issuer's separate local store",
+    });
+
+    const analysisRoute = `${privateEvidenceRoute}/${encodeURIComponent(privateSaved.id)}/analyze`;
+    const unconfirmedAnalysisResponse = await fetch(`${origin}${analysisRoute}`, {
+      method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({}),
+    });
+    assert.equal(unconfirmedAnalysisResponse.status, 400);
+    assert.equal(privateEvidenceAnalysisCalls, 0, "absence of explicit confirmation must make zero analysis dispatches");
+    privateEvidenceAnalysisCallsBeforeConsent = privateEvidenceAnalysisCalls;
+    assert.equal(privateEvidenceStore.getAnalysis(company.id, privateSaved.id), null,
+      "an unconfirmed request must not leave an attempt in the private store");
+    actions.push({
+      phase: "private_evidence_consent_required", method: "POST", status: unconfirmedAnalysisResponse.status,
+      analysisCalls: privateEvidenceAnalysisCalls, attemptPersisted: false,
+      result: "no external processing without explicit confirmation",
+    });
+
+    const confirmedAnalysisResponse = await fetch(`${origin}${analysisRoute}`, {
+      method: "POST", headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ confirmExternalProcessing: true }),
+    });
+    assert.equal(confirmedAnalysisResponse.status, 201);
+    assert.equal(confirmedAnalysisResponse.headers.get("cache-control"), "no-store");
+    const confirmedAnalysis = await confirmedAnalysisResponse.json() as {
+      status: string; reusedSavedAnalysis: boolean; record: PrivateEvidenceAnalysisRecord;
+    };
+    assert.equal(confirmedAnalysis.status, "complete");
+    assert.equal(confirmedAnalysis.reusedSavedAnalysis, false);
+    assert.equal(confirmedAnalysis.record.modelRequested, "gpt-6-luna");
+    assert.equal(confirmedAnalysis.record.modelReturned, "gpt-6-luna");
+    assert.equal(confirmedAnalysis.record.companyId, company.id);
+    assert.equal(confirmedAnalysis.record.evidenceId, privateSaved.id);
+    assert.equal(confirmedAnalysis.record.evidenceSha256, privateSaved.sha256);
+    assert.equal(privateEvidenceAnalysisCalls, 1);
+    const repeatedAnalysisResponse = await fetch(`${origin}${analysisRoute}`, {
+      method: "POST", headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ confirmExternalProcessing: true }),
+    });
+    assert.equal(repeatedAnalysisResponse.status, 200);
+    const repeatedAnalysis = await repeatedAnalysisResponse.json() as {
+      status: string; reusedSavedAnalysis: boolean; record: PrivateEvidenceAnalysisRecord;
+    };
+    assert.equal(repeatedAnalysis.status, "complete");
+    assert.equal(repeatedAnalysis.reusedSavedAnalysis, true);
+    assert.equal(repeatedAnalysis.record.responseSha256, confirmedAnalysis.record.responseSha256);
+    assert.equal(privateEvidenceAnalysisCalls, 1, "reopening a saved analysis must not repeat external work");
+    const publicMentionsResponse = await fetch(`${origin}/api/companies/${encodeURIComponent(company.id)}/mentions?hours=168`);
+    assert.equal(publicMentionsResponse.status, 200);
+    const publicMentions = await publicMentionsResponse.json() as unknown[];
+    assert.deepEqual(publicMentions, [], "private notes must not enter the public sentiment feed");
+    assert.equal(db.realObservationCount(), 0, "private notes and their analysis must not become public observations");
+    actions.push({
+      phase: "private_evidence_selected_analysis", method: "POST", status: confirmedAnalysisResponse.status,
+      companyId: confirmedAnalysis.record.companyId, evidenceId: confirmedAnalysis.record.evidenceId,
+      evidenceSha256: confirmedAnalysis.record.evidenceSha256, model: confirmedAnalysis.record.modelReturned,
+      result: "one selected item analyzed after explicit confirmation; saved result reused without another call",
+      analysisCalls: privateEvidenceAnalysisCalls, repeatedResponseReused: repeatedAnalysis.reusedSavedAnalysis,
+      publicMentionCount: publicMentions.length,
+    });
+
     await new Promise<void>((resolve, reject) => server?.close((error) => error ? reject(error) : resolve()));
     server = null;
     pipeline.stop();
     pipeline = null;
+    privateEvidenceStore.close();
+    privateEvidenceStore = null;
     db.close();
     db = null;
     reopenedDb = new Desk(databasePath);
+    reopenedPrivateEvidenceStore = new PrivateEvidenceStore(path.join(scratchPath, "private-evidence", "evidence.sqlite"));
     const snapshot = reopenedDb.latestCompanyFundamentals(company.id);
     const latestAttempt = reopenedDb.latestFundamentalAttempt(company.id);
     const recentSnapshot = reopenedDb.latestCompanyFundamentals(recentCompany.id);
     const recentAttempt = reopenedDb.latestFundamentalAttempt(recentCompany.id);
+    const privateEvidenceReadback = reopenedPrivateEvidenceStore.get(company.id, privateEvidenceId!);
+    const privateEvidenceAnalysisReadback = reopenedPrivateEvidenceStore.getAnalysis(company.id, privateEvidenceId!);
     assert.equal(snapshot?.snapshotId, first.snapshotId);
     assert.equal(snapshot?.state, "partial");
     assert.equal(snapshot?.createdAt, first.retrievedAt);
@@ -353,6 +522,13 @@ async function main(): Promise<void> {
     assert.ok(recentSnapshot?.facts.every((fact) => fact.acceptedAt === recentFixtureAcceptedAt));
     assert.equal(recentAttempt?.status, "partial");
     assert.equal(recentAttempt?.error, null);
+    assert.equal(privateEvidenceReadback?.sha256, privateEvidenceSha256);
+    assert.equal(privateEvidenceReadback?.content === privateNoteText, true, "private note content must survive store reopen");
+    assert.equal(privateEvidenceAnalysisReadback?.status, "complete");
+    assert.equal(privateEvidenceAnalysisReadback?.record?.evidenceId, privateEvidenceId);
+    assert.equal(privateEvidenceAnalysisReadback?.record?.responseSha256,
+      confirmedAnalysis.record.responseSha256);
+    assert.equal(reopenedDb.realObservationCount(), 0, "private research remains separate after store and database reopen");
     persistedReadback = {
       reopenedDatabase: true, snapshotId: snapshot?.snapshotId, snapshotState: snapshot?.state,
       factMetrics: snapshot?.facts.map((fact) => fact.metric), snapshotRetrievedAt: snapshot?.createdAt,
@@ -362,6 +538,12 @@ async function main(): Promise<void> {
         snapshotId: recentSnapshot?.snapshotId, snapshotState: recentSnapshot?.state,
         acceptedAt: recentSnapshot?.facts[0]?.acceptedAt, retrievedAt: recentSnapshot?.createdAt,
         latestAttemptStatus: recentAttempt?.status, latestAttemptAt: recentAttempt?.requestedAt,
+      },
+      privateEvidence: {
+        companyId: company.id, evidenceId: privateEvidenceId, contentSha256: privateEvidenceReadback?.sha256,
+        analysisStatus: privateEvidenceAnalysisReadback?.status,
+        analysisResponseSha256: privateEvidenceAnalysisReadback?.record?.responseSha256,
+        analysisCallsBeforeRestart: privateEvidenceAnalysisCalls, publicObservationCount: reopenedDb.realObservationCount(),
       },
     };
     actions.push({ phase: "durable_readback", result: "PASS after API and database close/reopen", ...persistedReadback });
@@ -374,6 +556,10 @@ async function main(): Promise<void> {
       server = null;
       pipeline?.stop();
       pipeline = null;
+      reopenedPrivateEvidenceStore?.close();
+      reopenedPrivateEvidenceStore = null;
+      privateEvidenceStore?.close();
+      privateEvidenceStore = null;
       reopenedDb?.close();
       reopenedDb = null;
       db?.close();
@@ -417,7 +603,7 @@ async function main(): Promise<void> {
   const record = {
     schema: "sentiment-desk-verification-run/1",
     runId,
-    featureId: "sec-fundamentals-recovery",
+    featureIds: ["sec-fundamentals-recovery", "private-evidence-explicit-consent"],
     result: outcome,
     error: errorMessage,
     startedAt,
@@ -439,11 +625,18 @@ async function main(): Promise<void> {
     configuration: {
       appVersion: "sentiment-desk-verifier-fixture", host: "127.0.0.1", externalRequestsEnabledForService: true,
       secCompanyFactsEnabledForService: true, providerCalls: "none; injected deterministic fixture boundary",
+      privateEvidenceAnalysisEnabledForVerifier: true,
+      privateEvidenceProviderCalls: "none; selected-item callback is a local deterministic verifier fixture",
       modelDownloads: "none", paidRequests: "none", database: "temporary isolated SQLite; removed after run",
     },
     fixture: { label: "deterministic historical test evidence only", acceptedAt: new Date(fixtureAcceptedAt).toISOString(), calls: fixtureCalls },
     actions,
     persistedReadback,
+    privateEvidence: {
+      result: privateEvidenceAnalysisCalls === 1 ? "PASS: one isolated selected-item fixture call" : "FAIL: unexpected fixture call count",
+      externalProviderRequests: 0,
+      noConfirmationDispatches: privateEvidenceAnalysisCallsBeforeConsent,
+    },
     cleanup: cleanupResult,
   };
   writeFileSync(evidencePath, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
