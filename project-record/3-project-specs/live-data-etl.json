@@ -1105,6 +1105,8 @@
       "acquisition": {
         "method": "connector",
         "adapter_paths": [
+          "server/config.ts",
+          "server/sec-filings-hub-installation.ts",
           "server/sec-filings-inbox.ts",
           "server/app.ts",
           "server/index.ts",

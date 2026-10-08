@@ -45,9 +45,11 @@ export function shouldShowDeskFallback(
   state: SecFilingsInboxView["state"] | null,
   rowCount: number,
   loadFailed: boolean,
+  refreshPaused = false,
 ): boolean {
-  return loadFailed || (rowCount === 0
-    && (state === "not_configured" || state === "unsupported" || state === "unavailable" || state === "failed"));
+  return loadFailed
+    || (rowCount === 0 && (state === "not_configured" || state === "unsupported" || state === "unavailable" || state === "failed"))
+    || (rowCount > 0 && (state === "unavailable" || state === "unsupported" || (refreshPaused && (state === "stale" || state === "failed"))));
 }
 
 export function secInboxEmptyMessage(query: string, state: SecFilingsInboxView["state"] | undefined, savedRowCount: number): string {
@@ -73,17 +75,23 @@ export function deskFallbackMessage(
     : archiveStatus === "empty"
       ? "This Desk has no eligible saved evidence to search yet."
       : "Saved archive availability has not been confirmed, so no archive search is offered.";
-  if (loadFailed || state === "unavailable") {
+  if (loadFailed || (state === "unavailable" && !detail)) {
     return `The Desk cannot reach its registered local Public Data Hub. Start that Hub service, then choose Check Hub again. ${archiveNextStep}`;
   }
   if (state === "unsupported") {
     return `${detail || "The filing feed is not supported by the current Hub configuration."} Configure the SEC 8-K feed in the Hub, then check again. ${archiveNextStep}`;
+  }
+  if (state === "stale") {
+    return `${detail || "The saved SEC snapshot is stale."} Refresh is paused for this Desk. Open Sources & operations to check the source gate and recovery step.`;
   }
   if (state === "not_configured") {
     return `The SEC 8-K feed is not enabled for this Desk. ${archiveNextStep}`;
   }
   if (state === "failed") {
     return `The last SEC filing collection failed. Retry the SEC feed after checking Hub status. ${archiveNextStep}`;
+  }
+  if (state === "unavailable" && detail) {
+    return `${detail} ${archiveNextStep}`;
   }
   return `The no-ticker filing feed is unavailable. ${archiveNextStep}`;
 }
@@ -92,10 +100,11 @@ export function shouldOfferSavedArchiveSearch(archiveStatus: "available" | "empt
   return archiveStatus === "available" && hasAction;
 }
 
-export function SecFilingsRecoveryActions({ archiveStatus, onBrowseSavedSources, onOpenOperations }: {
+export function SecFilingsRecoveryActions({ archiveStatus, onBrowseSavedSources, onOpenOperations, showOperations = false }: {
   archiveStatus: "available" | "empty" | "unknown";
   onBrowseSavedSources?: () => void;
   onOpenOperations?: () => void;
+  showOperations?: boolean;
 }) {
   return <div className="flex shrink-0 flex-wrap gap-2">
     {shouldOfferSavedArchiveSearch(archiveStatus, onBrowseSavedSources != null) && (
@@ -103,7 +112,7 @@ export function SecFilingsRecoveryActions({ archiveStatus, onBrowseSavedSources,
         Search saved archive
       </button>
     )}
-    {archiveStatus !== "available" && onOpenOperations && (
+    {(showOperations || archiveStatus !== "available") && onOpenOperations && (
       <button type="button" onClick={onOpenOperations} className="w-fit rounded-md border border-white/15 px-3 py-2 text-sm font-medium text-white/75 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">
         Open Sources &amp; operations
       </button>
@@ -116,7 +125,7 @@ export function retainLastAcceptedFilings(
   next: SecFilingsInboxView,
 ): SecFilingsInboxView {
   if (!current?.rows.length || next.rows.length > 0
-    || (next.state !== "pending" && next.state !== "rate_limited" && next.state !== "failed")) return next;
+    || !["pending", "rate_limited", "failed", "unavailable", "unsupported", "not_configured"].includes(next.state)) return next;
   return {
     ...next,
     rows: current.rows,
@@ -258,7 +267,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const cooldown = view?.nextRefreshAt ? Math.max(0, Date.parse(view.nextRefreshAt) - now) : 0;
   const showActivate = view?.canActivate === true
     && ["not_configured", "ready", "stale", "empty", "failed", "rate_limited"].includes(view.state);
-  const showDeskFallback = shouldShowDeskFallback(view?.state ?? null, view?.rows.length ?? 0, loadFailed);
+  const showDeskFallback = shouldShowDeskFallback(view?.state ?? null, view?.rows.length ?? 0, loadFailed, view?.canActivate === false);
   const actionLabel = view?.state === "not_configured" ? "Enable real SEC feed"
     : view?.state === "failed" ? "Retry SEC feed"
       : view?.state === "rate_limited" || cooldown > 0 ? "Refresh available later" : "Refresh filings";
@@ -315,7 +324,8 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
           <p className="text-sm text-white/60">{view?.state === "not_configured"
             ? deskFallbackMessage(view.state, false, null, archiveStatus)
             : deskFallbackMessage(view?.state ?? null, loadFailed, view?.message, archiveStatus)}</p>
-          <SecFilingsRecoveryActions archiveStatus={archiveStatus} onBrowseSavedSources={onBrowseSavedSources} onOpenOperations={onOpenOperations} />
+          <SecFilingsRecoveryActions archiveStatus={archiveStatus} onBrowseSavedSources={onBrowseSavedSources} onOpenOperations={onOpenOperations}
+            showOperations={view?.state === "stale" || view?.state === "unavailable" || view?.state === "unsupported"} />
         </div>
       )}
       {view && (view.retrievedAt || view.nextRefreshAt) && (

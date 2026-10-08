@@ -595,6 +595,7 @@
         "--reporter=dot",
         "--maxWorkers=1",
         "--testTimeout=20000",
+        "tests/sec-filings-hub-installation.test.ts",
         "tests/sec-filings-inbox.test.ts",
         "tests/sec-filings-inbox-ui.test.tsx",
         "tests/external-request-gate.test.ts"

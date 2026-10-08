@@ -53,8 +53,11 @@ describe("first-run SEC filing browse surface", () => {
     expect(shouldShowDeskFallback("not_configured", 0, false)).toBe(true);
     expect(shouldShowDeskFallback("unsupported", 0, false)).toBe(true);
     expect(shouldShowDeskFallback("failed", 0, false)).toBe(true);
+    expect(shouldShowDeskFallback("stale", 38, false)).toBe(false);
+    expect(shouldShowDeskFallback("stale", 38, false, true)).toBe(true);
     expect(shouldShowDeskFallback("ready", 2, false)).toBe(false);
     expect(shouldShowDeskFallback("failed", 2, false)).toBe(false);
+    expect(shouldShowDeskFallback("unavailable", 38, false)).toBe(true);
     expect(shouldShowDeskFallback(null, 0, true)).toBe(true);
     expect(shouldOfferSavedArchiveSearch("available", true)).toBe(true);
     expect(shouldOfferSavedArchiveSearch("empty", true)).toBe(false);
@@ -78,6 +81,11 @@ describe("first-run SEC filing browse surface", () => {
     }));
     expect(available).toContain("Search saved archive");
     expect(available).not.toContain("Open Sources");
+    const stale = renderToStaticMarkup(createElement(SecFilingsRecoveryActions, {
+      archiveStatus: "available", onBrowseSavedSources, onOpenOperations, showOperations: true,
+    }));
+    expect(stale).toContain("Search saved archive");
+    expect(stale).toContain("Open Sources &amp; operations");
   });
 
   it("distinguishes an unsupported filing feed from an unavailable Hub", () => {
@@ -88,6 +96,15 @@ describe("first-run SEC filing browse surface", () => {
     expect(unsupported).toContain("not current coverage");
     expect(unsupported).not.toContain("cannot reach");
     expect(deskFallbackMessage("unsupported", false)).toContain("not supported by the current Hub configuration");
+
+    const blocked = deskFallbackMessage("unavailable", false, "The Hub needs its SEC contact User-Agent configured before collection can start.", "available");
+    expect(blocked).toContain("SEC contact User-Agent configured");
+    expect(blocked).not.toContain("cannot reach its registered local Public Data Hub");
+
+    const paused = deskFallbackMessage("stale", false, null, "empty");
+    expect(paused).toContain("saved SEC snapshot is stale");
+    expect(paused).toContain("Refresh is paused for this Desk");
+    expect(paused).toContain("Open Sources & operations");
 
     const unavailable = deskFallbackMessage("unavailable", false, null, "available");
     expect(unavailable).toContain("cannot reach its registered local Public Data Hub");
@@ -118,8 +135,12 @@ describe("first-run SEC filing browse surface", () => {
     });
     expect(retainLastAcceptedFilings(accepted, { ...pending, state: "rate_limited" }).rows).toEqual(accepted.rows);
     expect(retainLastAcceptedFilings(accepted, { ...pending, state: "failed" }).rows).toEqual(accepted.rows);
-    expect(retainLastAcceptedFilings(accepted, { ...pending, state: "unsupported" }).rows).toEqual([]);
-    expect(retainLastAcceptedFilings(accepted, { ...pending, state: "unavailable" }).rows).toEqual([]);
+    for (const state of ["unsupported", "unavailable", "not_configured"] as const) {
+      expect(retainLastAcceptedFilings(accepted, { ...pending, state, message: "Hub configuration needs attention." })).toMatchObject({
+        state, rows: accepted.rows, receiptId: "receipt-1", retrievedAt: accepted.retrievedAt,
+        feedUpdatedAt: accepted.feedUpdatedAt, freshness: "stale", message: "Hub configuration needs attention.",
+      });
+    }
   });
 
   it("labels source observation freshness separately from saved receipt delivery", () => {

@@ -1,6 +1,5 @@
-import { lstatSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
+import { config } from "./config.js";
+import { loadSecFilingsHubInstallation, type SecFilingsHubInstallation } from "./sec-filings-hub-installation.js";
 import { secFilingIdentity, secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
 
 const DATASET = "sec.latest_filings_8k";
@@ -8,7 +7,7 @@ const CONSUMER = "sentiment-desk";
 const MAX_HUB_BYTES = 2_000_000;
 const STALE_AFTER_MS = 30 * 60 * 1000;
 
-interface HubConnection { baseUrl: URL; token: string }
+interface HubConnection extends SecFilingsHubInstallation {}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -82,29 +81,6 @@ function normalizeRows(value: unknown): SecFilingInboxRow[] | null {
   return rows;
 }
 
-function installation(): { baseUrl: URL; token: string } {
-  const locatorPath = path.join(homedir(), ".codex", "references", "public-data-hub-installation.json");
-  const locatorStat = lstatSync(locatorPath);
-  if (!locatorStat.isFile() || locatorStat.isSymbolicLink()) throw new Error("hub_unavailable");
-  const locator = object(JSON.parse(readFileSync(locatorPath, "utf8")));
-  if (!locator || locator.scope !== "same-local-user-and-host"
-    || locator.repository !== path.join(homedir(), "Documents", "Codex", "public-data-hub")
-    || locator.repository_url !== "https://github.com/j-poc/public-data-hub"
-    || typeof locator.base_url !== "string" || typeof locator.state_directory !== "string") throw new Error("hub_unavailable");
-  const baseUrl = new URL(locator.base_url);
-  if (baseUrl.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(baseUrl.hostname)
-    || baseUrl.username || baseUrl.password || baseUrl.pathname !== "/" || baseUrl.search || baseUrl.hash) throw new Error("hub_unavailable");
-  const root = path.resolve(locator.repository);
-  const state = path.resolve(locator.state_directory);
-  if (!state.startsWith(`${root}${path.sep}.runtime${path.sep}`)) throw new Error("hub_unavailable");
-  const tokenPath = path.join(state, "client.token");
-  const tokenStat = lstatSync(tokenPath);
-  if (!tokenStat.isFile() || tokenStat.isSymbolicLink() || (tokenStat.mode & 0o077) !== 0) throw new Error("hub_unavailable");
-  const token = readFileSync(tokenPath, "utf8").trim();
-  if (!/^[\x21-\x7e]{1,128}$/.test(token)) throw new Error("hub_unavailable");
-  return { baseUrl, token };
-}
-
 export class SecFilingsInbox {
   constructor(private readonly options: {
     acquisitionEnabled: boolean;
@@ -113,7 +89,9 @@ export class SecFilingsInbox {
     connectionProvider?: () => HubConnection;
   }) {}
 
-  private connection(): HubConnection { return this.options.connectionProvider?.() ?? installation(); }
+  private connection(): HubConnection {
+    return this.options.connectionProvider?.() ?? loadSecFilingsHubInstallation(config.publicDataHubInstallationFile);
+  }
 
   private async request(url: URL, token: string, method = "GET", body?: unknown): Promise<unknown> {
     const fetcher = this.options.fetcher ?? fetch;
@@ -267,6 +245,6 @@ export class SecFilingsInbox {
   }
 
   private unavailable(): SecFilingsInboxView {
-    return this.empty("unavailable", "The local Public Data Hub is unavailable or its saved connection is incomplete.", false);
+    return this.empty("unavailable", "The Desk-specific Public Data Hub connection is unavailable or its private installation descriptor is invalid. Configure DESK_HUB_INSTALLATION_FILE, start that local Hub, then check again.", false);
   }
 }

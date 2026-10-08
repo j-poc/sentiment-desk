@@ -163,6 +163,26 @@ alone do not enable a collector. Luna has its own account,
 source, request/byte/USD controls described above. Keep publisher feeds and Yahoo quote/chart
 endpoints out of the approval list until their exact use rights are established.
 
+The no-ticker **Recent Filings** view reads an explicitly selected same-user
+Public Data Hub installation. By default, Desk reads
+`~/.codex/references/sentiment-desk-public-data-hub-installation.json`; set
+`DESK_HUB_INSTALLATION_FILE` only when the descriptor is stored elsewhere.
+Create that file with mode `600` and these exact fields: `schema_version: 1`,
+`scope: "same-local-user-and-host"`, the Hub checkout's canonical absolute
+`repository` path, `repository_url:
+"https://github.com/j-poc/public-data-hub"`, a loopback-only `base_url` such
+as `http://127.0.0.1:8766/`, and the canonical absolute `state_directory` that
+is a direct child of that checkout's private `.runtime` directory. The Hub
+state directory and `client.token` must be owned by the current user and have
+no group/world permissions. The Desk never falls back to the shared Hub
+descriptor. This selects a local endpoint; the Desk still checks the current
+8-K profile, receipt revision, display-only rights, source clocks, and issuer
+identity before showing filings. Starting the feed requires an explicit user
+click and enables the Hub's recurring 15-minute SEC profile; it does not enable
+separate SEC polling in the Desk. This local connection assumes the
+operator trusts the Hub process bound to the configured loopback port; the Hub
+API does not currently attest its running code revision to the Desk.
+
 Production:
 
 ```bash
@@ -241,6 +261,7 @@ recreates the container, then removes only its temporary volume.
 | `SOURCE_RIGHTS_APPROVED_COLLECTORS` | empty | Separate operator-attestation allowlist; a requested collector without this entry cannot make requests. It does not independently prove rights. |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |
 | `SEC_USER_AGENT` | empty (SEC disabled) | required descriptive SEC User-Agent with operator contact information |
+| `DESK_HUB_INSTALLATION_FILE` | `~/.codex/references/sentiment-desk-public-data-hub-installation.json` | private descriptor selecting the same-user loopback Public Data Hub; no shared-locator fallback |
 | `POLL_SEC_SECONDS` | `90` | EDGAR submissions poll cadence |
 | `POLL_GDELT_SECONDS` | `300` | GDELT breadth poll cadence |
 | `POLL_RSS_SECONDS` | `180` | Google/Yahoo RSS poll cadence; backs off source-wide on HTTP 429 |

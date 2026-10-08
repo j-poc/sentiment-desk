@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { CollectorId, Company } from "./types.js";
@@ -105,6 +106,8 @@ export const config = {
   /** Native runs stay loopback-only; container images override this for port publishing. */
   host: process.env.HOST?.trim() || "127.0.0.1",
   port: int(process.env.PORT, 8787),
+  publicDataHubInstallationFile: process.env.DESK_HUB_INSTALLATION_FILE?.trim()
+    || path.join(homedir(), ".codex", "references", "sentiment-desk-public-data-hub-installation.json"),
   dbPath: process.env.DB_PATH?.trim() || path.resolve("data/desk.db"),
   storage: storageConfig,
   companiesPath: process.env.COMPANIES_PATH?.trim() || path.resolve("config/companies.json"),
