@@ -347,3 +347,49 @@ Checkpoint: commit `7f4412d5d1153f921aca5c91164e31c8f34ea69e` is pushed to
 `https://github.com/j-poc/sentiment-desk/tree/codex/real-data-rebuild` and the
 remote branch SHA was read back as an exact match. The working tree was clean
 after the code checkpoint.
+
+## Repaired recovery-eval boundary — 2026-10-08
+
+The user invoked the Langfuse-principles evaluation workflow during the active
+build. I retained the repository's native deterministic checks; no Langfuse
+service or model-provider request was needed for this defect.
+
+- **Observed baseline failure:** the 2026-10-08 12:43 UTC live-data ETL run
+  failed `failure_recovery_regressions` once. In
+  `tests/openai-classifier.test.ts`, the completed insufficient-evidence
+  classification was present in SQLite, but the test expected a 24-hour
+  snapshot to count it when the independently sampled `Date.now()` cutoff
+  equaled the saved classification timestamp. The snapshot contract is
+  `[fromMs, throughMs)`: a record exactly at `throughMs` is excluded. The
+  focused rerun passed, consistent with a millisecond-boundary false failure;
+  this did not demonstrate a Luna classification error.
+- **Repair and retained regression:** the test now reads the persisted
+  `classifiedAt`, asserts exclusion at that exact end-exclusive cutoff, and
+  asserts inclusion at `classifiedAt + 1`. It still verifies the mutually
+  exclusive `review_required` or `excluded` disposition and zero directional
+  sentiment counts. The product interval semantics remain unchanged.
+- **Candidate results:** `live_data_etl_gate.py verify` passed all **9/9**
+  checks at `2026-10-08T12:55:44Z`, including recovery, replay, offline request
+  gates, real keyless-source Compose persistence/restart, capacity, SEC inbox
+  protocol/failure handling, and the current SEC Hub receipt. The receipt
+  verifier independently read **40 real 8-K rows**, source clock
+  `2026-10-08T12:55:30.000Z`, retrieval clock `2026-10-08T12:55:30.585Z`, and
+  made no provider call. The smoke explicitly disabled Luna and Jev and wrote
+  only to a temporary Compose volume.
+- **Regression and build checks:** the focused classifier/chart tests passed
+  **21/21**; the full repository suite passed **894/894** across 109 files;
+  TypeScript typecheck, production build, and `git diff --check` passed. Vite
+  retains the existing 826.46 kB main-web-chunk advisory.
+- **Classifier qualification remains unverified:** the fresh two-model-family
+  blinded agent-reference report covers 30 real SEC cases across 15 issuers;
+  13/30 cases fully match and sentiment agreement is 18/30 including abstention
+  (18/22 when both agents label). The pair disagrees on 37 fields. These are
+  reference-agreement diagnostics, not model accuracy or ground truth. There is
+  still no persisted OpenAI Luna prediction run, resolved serving-model/usage
+  receipt, or completed rights-cleared benchmark and investor-outcome study.
+  No paid classifier request was made, and no demo or synthetic record entered
+  the application or this cohort.
+
+This repair improves the reliability of one deterministic recovery evaluator;
+it does not change the classifier-quality, benchmark, investor-value, or
+whole-build verdicts above.

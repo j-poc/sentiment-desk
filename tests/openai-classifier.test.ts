@@ -172,7 +172,10 @@ describe("OpenAI Luna categorical classifier", () => {
 
     const saved = db.mentionsForCompany("acme", 0, 10)[0]!;
     expect(saved.classification?.disposition).toBe(expectedDisposition);
-    const counts = db.categoricalTrendSnapshot("acme", 24, Date.now()).counts;
+    const classifiedAt = saved.classification?.classifiedAt;
+    if (classifiedAt == null) throw new Error("Expected the completed classifier result to persist its classification time");
+    expect(db.categoricalTrendSnapshot("acme", 24, classifiedAt).counts.total).toBe(0);
+    const counts = db.categoricalTrendSnapshot("acme", 24, classifiedAt + 1).counts;
     expect(counts.total).toBe(1);
     expect(expectedDisposition === "review_required" ? counts.reviewRequired : counts.excluded).toBe(1);
     expect(counts.positive).toBe(0);
