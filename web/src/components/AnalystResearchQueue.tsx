@@ -1,19 +1,21 @@
 import { useEffect, useState } from "react";
 import type { AnalystSourceReview } from "../../../shared/analyst-research.js";
 import type { SecFilingResearchTask } from "../../../shared/sec-filings-inbox.js";
-import type { AnalystResearchQueueItem } from "../lib/api.js";
-import { getAnalystResearchQueue, getSecFilingResearchTasks, removeSecFilingResearchTask, saveSecFilingResearchTask, updateAnalystSourceReview } from "../lib/api.js";
-import { AnalystResearchQueueView, type QueueState } from "./AnalystResearchQueueView.js";
+import type { AnalystResearchQueueItem, CompanyResearchDecisionQueueItem } from "../lib/api.js";
+import { getAnalystResearchQueue, getCompanyResearchDecisionQueue, getSecFilingResearchTasks, removeSecFilingResearchTask, saveSecFilingResearchTask, updateAnalystSourceReview } from "../lib/api.js";
+import { AnalystResearchQueueView, CompanyResearchDecisionQueueView, type DecisionQueueState, type QueueState } from "./AnalystResearchQueueView.js";
 
 export function AnalystResearchQueue({
   refreshRevision,
   onReviewChanged,
   onOpenEvidence,
+  onOpenResearchDecision,
   onResumeSecTask,
 }: {
   refreshRevision: number;
   onReviewChanged: (review: AnalystSourceReview) => void;
   onOpenEvidence: (item: AnalystResearchQueueItem) => void;
+  onOpenResearchDecision: (item: CompanyResearchDecisionQueueItem) => void;
   onResumeSecTask: (item: SecFilingResearchTask) => void;
 }) {
   const [items, setItems] = useState<AnalystResearchQueueItem[]>([]);
@@ -21,6 +23,27 @@ export function AnalystResearchQueue({
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [dismissBusyId, setDismissBusyId] = useState<string | null>(null);
+  const [decisionItems, setDecisionItems] = useState<CompanyResearchDecisionQueueItem[]>([]);
+  const [decisionState, setDecisionState] = useState<DecisionQueueState>("loading");
+  const [decisionRevision, setDecisionRevision] = useState(0);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    setDecisionState("loading");
+    setDecisionError(null);
+    void getCompanyResearchDecisionQueue(controller.signal).then((result) => {
+      if (!active) return;
+      setDecisionItems(result.items);
+      setDecisionState("ready");
+    }, () => {
+      if (!active || controller.signal.aborted) return;
+      setDecisionError("The saved company-decision list could not be loaded.");
+      setDecisionState("failed");
+    });
+    return () => { active = false; controller.abort(); };
+  }, [refreshRevision, decisionRevision]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -61,6 +84,13 @@ export function AnalystResearchQueue({
   };
 
   return <div className="grid min-w-0 gap-3">
+    <CompanyResearchDecisionQueueView
+      items={decisionItems}
+      state={decisionState}
+      error={decisionError}
+      onRetry={() => setDecisionRevision((current) => current + 1)}
+      onOpen={onOpenResearchDecision}
+    />
     <AnalystResearchQueueView
       items={items}
       state={state}

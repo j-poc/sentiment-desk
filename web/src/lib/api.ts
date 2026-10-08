@@ -11,6 +11,8 @@ import type { AnalystResearchDisposition, AnalystResearchDispositionChange, Anal
 import type { SecFilingDetail, SecFilingsInboxView, SecFilingResearchTask } from "../../../shared/sec-filings-inbox.js";
 import type { SavedSourceCoverageSnapshot } from "../../../shared/saved-source-coverage.js";
 import type { SavedSourceSearchCursor, SavedSourceSearchPage } from "../../../shared/saved-source-search.js";
+import type { CompanyResearchBriefResponse, CompanyResearchBriefResumeSnapshot, CompanyResearchDecision, CompanyResearchDecisionQueueItem, CompanyResearchEvidenceRoleChoice } from "../../../shared/company-research-brief.js";
+export type { CompanyResearchDecisionQueueItem } from "../../../shared/company-research-brief.js";
 
 /** Shared identity guard used before applying any selected-company response. */
 export function isCurrentCompanySelection(requestCompanyId: string, selectedCompanyId: string | null): boolean {
@@ -28,6 +30,21 @@ export async function refreshCompanyFundamentals(
   return requestJSON<FundamentalRefreshResult>(
     `/api/companies/${encodeURIComponent(companyId)}/fundamentals/refresh`,
     { method: "POST", body: JSON.stringify({ requestKey }) },
+  );
+}
+
+export function getCompanyResearchBrief(companyId: string, signal?: AbortSignal, asOfMs?: number): Promise<CompanyResearchBriefResponse> {
+  const query = asOfMs == null ? "" : `?asOfMs=${encodeURIComponent(String(asOfMs))}`;
+  return getJSON<CompanyResearchBriefResponse>(`/api/companies/${encodeURIComponent(companyId)}/research-brief${query}`, signal);
+}
+
+export function saveCompanyResearchDecision(companyId: string, input: {
+  requestKey: string; asOfMs: number; snapshotKey: string; decision: CompanyResearchDecision;
+  rationale: string; evidenceRoles: CompanyResearchEvidenceRoleChoice[]; nextCheckDate: string | null;
+}): Promise<CompanyResearchBriefResponse> {
+  return requestJSON<CompanyResearchBriefResponse>(
+    `/api/companies/${encodeURIComponent(companyId)}/research-brief/decisions`,
+    { method: "POST", body: JSON.stringify(input) },
   );
 }
 
@@ -99,6 +116,10 @@ export interface AnalystResearchQueueItem extends AnalystSourceReview {
 
 export async function getAnalystResearchQueue(signal?: AbortSignal): Promise<{ items: AnalystResearchQueueItem[] }> {
   return getJSON<{ items: AnalystResearchQueueItem[] }>("/api/research-queue", signal);
+}
+
+export async function getCompanyResearchDecisionQueue(signal?: AbortSignal): Promise<{ items: CompanyResearchDecisionQueueItem[] }> {
+  return getJSON<{ items: CompanyResearchDecisionQueueItem[] }>("/api/research-queue/company-decisions", signal);
 }
 
 export async function getAnalystSourceReview(observationId: string, signal?: AbortSignal): Promise<AnalystSourceReview | null> {

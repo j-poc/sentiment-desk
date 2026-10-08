@@ -393,3 +393,49 @@ service or model-provider request was needed for this defect.
 This repair improves the reliability of one deterministic recovery evaluator;
 it does not change the classifier-quality, benchmark, investor-value, or
 whole-build verdicts above.
+
+## Selected private-note analysis and current ETL recheck — 2026-10-08
+
+The user confirmed that optional private notes about configured public issuers
+may be analyzed by GPT-6 Luna only when the user explicitly chooses the item
+and confirms external processing. Private companies remain outside the product
+scope. The UI already names the exact note, configured issuer, Luna destination,
+data sent, local-only result, and retention disclosure in a separate item-level
+confirmation. The server still requires `confirmExternalProcessing: true`, binds
+the request/result to the selected note digest, and keeps private results out of
+public sentiment and charts.
+
+- Added UI regressions for both consent outcomes: cancellation sends no analysis
+  request; confirmation dispatches only the selected note to that issuer's Luna
+  route and sends the explicit confirmation field. These use isolated test
+  records only and do not call OpenAI.
+- Focused private-evidence tests passed **86/86**; the complete suite passed
+  **123 files / 1,057 tests**; TypeScript typecheck and production build passed.
+  The secret scan found no leaks across 344 source/config files and client
+  assets. The private-evidence scope check passed. The existing 882.21 kB
+  minified frontend bundle warning remains.
+- Restarted the existing dedicated `sentiment-desk-verify` Colima profile after
+  the first live-smoke failure showed that its Docker socket was unavailable.
+  The refreshed ETL receipt passes **9/10** checks, including the real keyless
+  RSS/GDELT/Yahoo Compose persistence/recreation smoke and current Nasdaq
+  directory replay. The sole remaining failure is
+  `sec_filings_current_hub_receipt`.
+- `npm run verify:sec-filings-hub` still reports the local Public Data Hub as
+  unavailable, with zero rows and unknown source freshness. Its private
+  installation descriptor was not inspected or changed, and this verifier made
+  no provider request. No current SEC filing can yet be opened or saved in the
+  Desk.
+- No OpenAI Luna request was made: `OPENAI_API_KEY` is absent from the active
+  process environment, external requests remain paused, and finite shared
+  request/byte/USD limits and account-use approval are not configured in this
+  installation. The user's earlier Jev credential is not used for Luna.
+- The existing saved-data browser screenshot still proves the chart is visible,
+  but the final brief copy and selected-note consent flow were not re-opened in
+  the browser because local navigation was rejected by browser policy. UI tests
+  do not substitute for that rendered check.
+
+The selected-note consent path is verified at the component/request boundary,
+not with a real note or model response. Classifier quality, source-grounded
+investor usefulness, the paired AlphaSense study, intended-user outcomes, and
+the local SEC Hub remain unverified or blocked. This update does not qualify the
+Desk for release.

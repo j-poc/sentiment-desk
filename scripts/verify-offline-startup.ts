@@ -51,6 +51,7 @@ const sourceCollectors = [
   "yahoo_chart",
   "gdelt_doc_api",
   "sec_edgar",
+  "nasdaq_symbol_directories",
   "finnhub",
   "reddit",
   "x",
@@ -74,6 +75,9 @@ function matchesCollectorRequest(collector: typeof sourceCollectors[number], att
       return attempt.origin === "https://api.gdeltproject.org" && attempt.pathname === "/api/v2/doc/doc";
     case "sec_edgar":
       return attempt.origin === "https://www.sec.gov" && attempt.pathname === "/files/company_tickers.json";
+    case "nasdaq_symbol_directories":
+      return attempt.origin === "https://www.nasdaqtrader.com"
+        && ["/dynamic/symdir/nasdaqlisted.txt", "/dynamic/symdir/otherlisted.txt"].includes(attempt.pathname);
     case "finnhub":
       return attempt.origin === "https://finnhub.io";
     case "reddit":
@@ -110,12 +114,15 @@ async function verifyCollectorGate(
     Object.assign(env, {
       DB_PATH: dbPath,
       COMPANIES_PATH: companiesPath,
+      DESK_HUB_INSTALLATION_FILE: path.join(directory, "disabled-hub-installation.json"),
       HOST: "127.0.0.1",
       PORT: String(port),
       NETWORK_GUARD_LOG: guardLog,
       EXTERNAL_REQUESTS_ENABLED: "true",
-      EXTERNAL_SOURCE_COLLECTORS: collector,
-      SOURCE_RIGHTS_APPROVED_COLLECTORS: options.sourceRightsApproved === false ? "" : collector,
+      EXTERNAL_SOURCE_COLLECTORS: collector === "nasdaq_symbol_directories"
+        ? "sec_latest_filings_8k,nasdaq_symbol_directories" : collector,
+      SOURCE_RIGHTS_APPROVED_COLLECTORS: options.sourceRightsApproved === false ? ""
+        : collector === "nasdaq_symbol_directories" ? "sec_latest_filings_8k,nasdaq_symbol_directories" : collector,
       CLASSIFICATION_PROVIDER: "openai_luna",
       OPENAI_API_KEY: options.luna?.apiKey ?? "",
       OPENAI_ACCOUNT_USE_APPROVED: options.luna?.accountApproved ? "true" : "false",
@@ -171,8 +178,9 @@ async function verifyCollectorGate(
     assert.equal(health.externalRequestsEnabled, true);
     const deliveryHealth = health.deliveryHealth as Array<{ collector: string; enabled: boolean }>;
     const sourceIsApproved = options.sourceRightsApproved !== false;
-    assert.equal(deliveryHealth.length, sourceCollectors.length, "health should disclose each real collector");
-    for (const source of sourceCollectors) {
+    const deliveryCollectors = sourceCollectors.filter((source) => source !== "nasdaq_symbol_directories");
+    assert.equal(deliveryHealth.length, deliveryCollectors.length, "health should disclose each scheduled real collector");
+    for (const source of deliveryCollectors) {
       const delivery = deliveryHealth.find((row) => row.collector === source);
       assert.ok(delivery, `${source} must appear in delivery health`);
       assert.equal(delivery.enabled, source === collector && sourceIsApproved,
@@ -185,7 +193,8 @@ async function verifyCollectorGate(
     } }>;
     const sourceApproval = counters.sourceApproval;
     assert.ok(sourceApproval, "health should disclose source-use and account-approval gates");
-    assert.deepEqual(sourceApproval.blockedRequestedCollectors, sourceIsApproved ? [] : [collector]);
+    assert.deepEqual(sourceApproval.blockedRequestedCollectors, sourceIsApproved ? []
+      : collector === "nasdaq_symbol_directories" ? ["nasdaq_symbol_directories", "sec_latest_filings_8k"] : [collector]);
     assert.equal(sourceApproval.typesafeAccountUseApproved, false,
       "retired Jev account use must stay disabled while Luna is the selected classifier");
     const expectedCounter: Record<string, string> = {
@@ -207,6 +216,18 @@ async function verifyCollectorGate(
     assert.equal(selectedClassifier.enabled, options.luna?.expectedEnabled ?? false);
     if (options.luna) assert.equal(counters.jev?.enabled, false, "Luna selection must never enable a TypeSafe fallback");
 
+    if (collector === "nasdaq_symbol_directories") {
+      const response = await fetch(`http://127.0.0.1:${port}/api/sec-filings-inbox/activate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirmUse: true }),
+      });
+      assert.equal(response.status, 200, "the guarded Recent Filings activation should reach the on-demand listing request path");
+      if (!sourceIsApproved) {
+        const view = await response.json() as { state?: string };
+        assert.equal(view.state, "unavailable", "the on-demand listing source must remain paused when either source rights approval is missing");
+      }
+    }
     if (sourceIsApproved && collector === "yahoo_chart") {
       const response = await fetch(`http://127.0.0.1:${port}/api/companies/apple/price?ticker=AAPL&hours=24`);
       assert.equal(response.status, 502, "the guarded chart request should fail visibly at the fetch boundary");
@@ -218,14 +239,16 @@ async function verifyCollectorGate(
       attempts = existsSync(guardLog)
         ? readFileSync(guardLog, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as GuardedAttempt)
         : [];
-      if (sourceIsApproved && attempts.some((attempt) => matchesCollectorRequest(collector, attempt))) break;
+      if (sourceIsApproved && (collector === "nasdaq_symbol_directories"
+        ? attempts.filter((attempt) => matchesCollectorRequest(collector, attempt)).length === 2
+        : attempts.some((attempt) => matchesCollectorRequest(collector, attempt)))) break;
       await delay(100);
     }
     if (sourceIsApproved) {
       assert.ok(attempts.some((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} never reached its guarded request path`);
       assert.ok(attempts.every((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} allowlist leaked requests to another source: ${JSON.stringify(attempts)}`);
     } else {
-      assert.equal(attempts.length, 0, `${collector} attempted a request without explicit source-use approval`);
+    assert.equal(attempts.length, 0, `${collector} attempted a request without explicit source-use approval`);
     }
   } finally {
     try {
@@ -275,6 +298,7 @@ async function main(): Promise<void> {
     Object.assign(env, {
       DB_PATH: dbPath,
       COMPANIES_PATH: companiesPath,
+      DESK_HUB_INSTALLATION_FILE: path.join(directory, "disabled-hub-installation.json"),
       HOST: "127.0.0.1",
       PORT: String(port),
       NETWORK_GUARD_LOG: guardLog,
@@ -289,8 +313,8 @@ async function main(): Promise<void> {
       TYPESAFE_ALLOWED_COLLECTORS: "sec_edgar",
       TYPESAFE_MAX_REQUESTS_PER_DAY: "10",
       TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: "100000",
-      EXTERNAL_SOURCE_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,finnhub,reddit,x",
-      SOURCE_RIGHTS_APPROVED_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,finnhub,reddit,x",
+      EXTERNAL_SOURCE_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,sec_latest_filings_8k,nasdaq_symbol_directories,finnhub,reddit,x",
+      SOURCE_RIGHTS_APPROVED_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,sec_latest_filings_8k,nasdaq_symbol_directories,finnhub,reddit,x",
       TYPESAFE_ACCOUNT_USE_APPROVED: "true",
       SEC_USER_AGENT: "Offline verifier offline@example.invalid",
       FINNHUB_API_KEY: "unused-offline-verification-key",
@@ -321,7 +345,11 @@ async function main(): Promise<void> {
     let health: Record<string, unknown> | null = null;
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline && health == null) {
-      if (exitResult != null) throw new Error(`server exited before health check (${exitResult})`);
+      if (exitResult != null) {
+        throw new Error(
+          `server exited before health check (${exitResult}); stdout: ${stdout.slice(-2_000)}; stderr: ${stderr.slice(-2_000)}`,
+        );
+      }
       try {
         const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(500) });
         if (response.ok) health = await response.json() as Record<string, unknown>;
@@ -361,6 +389,7 @@ async function main(): Promise<void> {
     writeFileSync(singleCompanyPath, JSON.stringify({ companies: [apple] }));
     for (const collector of sourceCollectors) await verifyCollectorGate(repo, singleCompanyPath, collector);
     await verifyCollectorGate(repo, singleCompanyPath, "finnhub", { sourceRightsApproved: false });
+    await verifyCollectorGate(repo, singleCompanyPath, "nasdaq_symbol_directories", { sourceRightsApproved: false });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar");
     const lunaGate = { apiKey: "unused-offline-verification-key", allowedCollectors: "sec_edgar", accountApproved: true, maxDailyCostUsd: "1", expectedEnabled: true };
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, apiKey: "", expectedEnabled: false } });
@@ -368,7 +397,7 @@ async function main(): Promise<void> {
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, allowedCollectors: "google_news_rss", expectedEnabled: false } });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, maxDailyCostUsd: "0", expectedEnabled: false } });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: lunaGate });
-    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, a missing source approval made zero fetches, and the selected classifier stays GPT-6 Luna even when the retired Jev adapter is separately configured. Luna gates required a key, account approval, approved source overlap and a nonzero dollar cap, with no TypeSafe fallback. All outbound fetches were intercepted before network access.`);
+    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, including both on-demand Nasdaq directories behind the joint SEC/Nasdaq gate; a missing source approval made zero fetches, and the selected classifier stays GPT-6 Luna even when the retired Jev adapter is separately configured. Luna gates required a key, account approval, approved source overlap and a nonzero dollar cap, with no TypeSafe fallback. All outbound fetches were intercepted before network access.`);
   } finally {
     try {
       if (child && exitResult == null) {

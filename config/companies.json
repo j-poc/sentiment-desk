@@ -11,7 +11,8 @@
         "GeForce",
         "Blackwell"
       ],
-      "color": "#76b900"
+      "color": "#76b900",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "apple",
@@ -26,7 +27,8 @@
         "App Store"
       ],
       "color": "#cbd5e1",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "microsoft",
@@ -40,7 +42,8 @@
         "Windows",
         "Copilot"
       ],
-      "color": "#38bdf8"
+      "color": "#38bdf8",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "alphabet",
@@ -55,7 +58,8 @@
         "Gemini"
       ],
       "color": "#818cf8",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "amazon",
@@ -69,7 +73,8 @@
         "Prime"
       ],
       "color": "#fbbf24",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "meta",
@@ -85,7 +90,8 @@
         "Llama"
       ],
       "color": "#22d3ee",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "tesla",
@@ -98,7 +104,8 @@
         "Cybertruck",
         "Model Y"
       ],
-      "color": "#ef4444"
+      "color": "#ef4444",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "netflix",
@@ -109,7 +116,8 @@
         "Netflix",
         "Ted Sarandos"
       ],
-      "color": "#fb7185"
+      "color": "#fb7185",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "amd",
@@ -123,7 +131,8 @@
         "Ryzen",
         "Instinct"
       ],
-      "color": "#fb923c"
+      "color": "#fb923c",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "broadcom",
@@ -135,7 +144,8 @@
         "Hock Tan",
         "VMware"
       ],
-      "color": "#c084fc"
+      "color": "#c084fc",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "intel",
@@ -149,7 +159,8 @@
         "Core Ultra"
       ],
       "color": "#60a5fa",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "tsmc",
@@ -161,7 +172,8 @@
         "TSMC",
         "Foundry"
       ],
-      "color": "#2dd4bf"
+      "color": "#2dd4bf",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "oracle",
@@ -174,7 +186,8 @@
         "OCI"
       ],
       "color": "#e879f9",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "salesforce",
@@ -187,7 +200,8 @@
         "Agentforce"
       ],
       "color": "#86efac",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "adobe",
@@ -200,7 +214,8 @@
         "Creative Cloud"
       ],
       "color": "#fca5a5",
-      "ambiguous": true
+      "ambiguous": true,
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "palantir",
@@ -212,7 +227,8 @@
         "Alex Karp",
         "AIP"
       ],
-      "color": "#a5b4fc"
+      "color": "#a5b4fc",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "coinbase",
@@ -223,7 +239,8 @@
         "Coinbase",
         "Brian Armstrong"
       ],
-      "color": "#38bdf8"
+      "color": "#38bdf8",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "jpmorgan",
@@ -235,7 +252,8 @@
         "Jamie Dimon",
         "Chase"
       ],
-      "color": "#a78bfa"
+      "color": "#a78bfa",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "goldman",
@@ -246,7 +264,8 @@
         "Goldman Sachs",
         "David Solomon"
       ],
-      "color": "#f0abfc"
+      "color": "#f0abfc",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "exxon",
@@ -257,7 +276,8 @@
         "Exxon",
         "ExxonMobil"
       ],
-      "color": "#d4d4d8"
+      "color": "#d4d4d8",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "chevron",
@@ -267,7 +287,8 @@
       "aliases": [
         "Chevron"
       ],
-      "color": "#94a3b8"
+      "color": "#94a3b8",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "unh",
@@ -278,7 +299,8 @@
         "UnitedHealth",
         "UnitedHealth Group"
       ],
-      "color": "#4ade80"
+      "color": "#4ade80",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "lilly",
@@ -290,7 +312,8 @@
         "Zepbound",
         "Mounjaro"
       ],
-      "color": "#fda4af"
+      "color": "#fda4af",
+      "listingStatus": "publicly_listed"
     },
     {
       "id": "walmart",
@@ -300,7 +323,8 @@
       "aliases": [
         "Walmart"
       ],
-      "color": "#5eead4"
+      "color": "#5eead4",
+      "listingStatus": "publicly_listed"
     }
   ]
 }

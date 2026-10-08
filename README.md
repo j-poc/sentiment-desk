@@ -205,6 +205,12 @@ remain read-only historical records.
 Optional Finnhub, Reddit, and X credentials do not enable those sources unless
 both their request and approval entries are present.
 
+The no-ticker Recent Filings inbox also checks the current Nasdaq Trader security
+directories when you explicitly activate the page. Permit both
+`sec_latest_filings_8k` and `nasdaq_symbol_directories` in both source lists; the
+directory fetch stays paused unless external requests and both source approvals
+are active. Its raw directory snapshot is held in memory only.
+
 ```bash
 docker compose up --build
 ```

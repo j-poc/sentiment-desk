@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { intersectClassifierSourceAllowlist, intersectCollectorAllowlists, intersectJevSourceAllowlist } from "../server/collector-policy.js";
+import { intersectClassifierSourceAllowlist, intersectCollectorAllowlists, intersectJevSourceAllowlist, secFilingsInboxRequestsEnabled } from "../server/collector-policy.js";
 
 // Config resolution must not inspect the real shared-machine credential file
 // while these tests exercise explicit or empty environment values.
 vi.stubEnv("OPENAI_MAX_DAILY_COST_USD", "");
+vi.stubEnv("OPENAI_PRIVATE_EVIDENCE_ANALYSIS_ENABLED", "false");
 const {
   boundedUsdMicros,
   boundedNonNegativeInt,
@@ -32,6 +33,7 @@ describe("external request mode", () => {
       new Set(["sec_edgar", "yahoo_chart"]),
     );
     expect(parseExternalSourceCollectors("sec_company_facts")).toEqual(new Set(["sec_company_facts"]));
+    expect(parseExternalSourceCollectors("nasdaq_symbol_directories")).toEqual(new Set(["nasdaq_symbol_directories"]));
     expect(() => parseExternalSourceCollectors("demo_simulation")).toThrow();
     expect(() => parseExternalSourceCollectors("not_a_source")).toThrow();
   });
@@ -49,8 +51,23 @@ describe("external request mode", () => {
   });
 
   it("never treats CompanyFacts payload receipts as classifier input", () => {
-    const admitted = new Set(["sec_company_facts", "sec_edgar", "google_news_rss"] as const);
+    const admitted = new Set(["sec_company_facts", "nasdaq_symbol_directories", "sec_edgar", "google_news_rss"] as const);
     expect(intersectClassifierSourceAllowlist(admitted, admitted, admitted)).toEqual(new Set(["sec_edgar", "google_news_rss"]));
+  });
+
+  it("requires separate request and rights approval for both SEC filings and Nasdaq listing verification", () => {
+    const secOnly = new Set(["sec_latest_filings_8k"] as const);
+    const nasdaqOnly = new Set(["nasdaq_symbol_directories"] as const);
+    const both = new Set(["sec_latest_filings_8k", "nasdaq_symbol_directories"] as const);
+    expect(secFilingsInboxRequestsEnabled(false, both)).toBe(false);
+    expect(secFilingsInboxRequestsEnabled(true, secOnly)).toBe(false);
+    expect(secFilingsInboxRequestsEnabled(true, nasdaqOnly)).toBe(false);
+    expect(secFilingsInboxRequestsEnabled(true, both)).toBe(true);
+  });
+
+  it("never forwards Nasdaq symbol-directory rows to a classifier", () => {
+    const admitted = new Set(["nasdaq_symbol_directories", "sec_edgar"] as const);
+    expect(intersectClassifierSourceAllowlist(admitted, admitted, admitted)).toEqual(new Set(["sec_edgar"]));
   });
 
   it("requires an explicit account-use attestation and rejects malformed values", () => {
@@ -58,6 +75,10 @@ describe("external request mode", () => {
     expect(parseExplicitBoolean("TRUE")).toBe(true);
     expect(parseExplicitBoolean("false")).toBe(false);
     expect(() => parseExplicitBoolean("yes")).toThrow();
+  });
+
+  it("keeps private-note model dispatch independently disabled by default", () => {
+    expect(config.openai.privateEvidenceAnalysisEnabled).toBe(false);
   });
 
   it("intersects Jev forwarding permission with the active source allowlist", () => {

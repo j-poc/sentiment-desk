@@ -1,5 +1,15 @@
 # Live SEC refresh and scoped readiness — 2026-10-08
 
+## Later user correction — current private-evidence scope
+
+The opening scope note below records the user's earlier instruction at the
+time of the SEC refresh. A later direct correction superseded it: user-owned
+private research data is in scope only as optional local evidence for an
+already-configured publicly listed issuer; privately held companies are out of
+scope. See `project-record/3-project-specs/public-issuer-private-evidence.md`.
+The correction does not authorize private-company profiles, new data sources,
+provider uploads, or model processing.
+
 ## Scope correction
 
 The user clarified that private data does not need to be integrated. Private
@@ -84,3 +94,46 @@ inspection was available. The new focus target and question context are
 statically present, but actual keyboard focus and the mounted UI journey remain
 unverified. This review was read-only: no browser session, provider call, or
 canonical database inspection was performed. Private data remains out of scope.
+
+## Verification refresh — 2026-10-08 16:38 UTC
+
+The first Hub launcher attempt used its default state directory rather than the
+state directory named by Sentiment Desk's existing installation descriptor. It
+was stopped immediately after this mismatch was detected, and its data was not
+used. The Hub was then restarted on loopback port 8766 with the descriptor's
+existing state directory; no profile, credential, or source setting was changed.
+The Desk's display-only SEC verifier passed against the existing 40-row receipt:
+
+- feed observation: `2026-10-08T16:16:01.000Z`
+- local retrieval: `2026-10-08T16:16:03.371Z`
+- the verifier made no provider request.
+
+The final-candidate `live_data_etl_gate.py verify` passed all nine required
+checks at `2026-10-08T16:38:34Z`. This includes offline startup with external
+requests disabled, source-request guards, current SEC receipt validation,
+storage headroom, failure/recovery regressions, and the real keyless Compose
+smoke. The live smoke used only the five named public feeds, recorded 27 Yahoo
+quotes for 24 configured companies and 41 real chart points, then confirmed that
+the pending real news observation and chart receipt survived container
+recreation. It removed its isolated Compose volume. The host was kept above the
+app's disk-pressure guard for this check; the guard itself remains unchanged.
+
+The offline-startup verifier now includes the server's bounded stdout and stderr
+when boot exits before health, so storage and configuration failures remain
+diagnosable. Its updated code was included in the passing ETL verification. The
+current local Hub remains on the descriptor-selected state and loopback port;
+the separate Citrini Docker context was not started or changed.
+
+## Verification refresh — 2026-10-08 18:28 UTC
+
+The public-data ETL gate was rerun against the current checkout. The isolated
+credential-free keyless live Compose smoke passed and removed its temporary
+container and volume. Eight of nine required checks passed. The only failed
+check was `sec_filings_current_hub_receipt`: the installation descriptor is
+valid and points to loopback port 8766, but no Hub process was listening there
+(`ECONNREFUSED`). The verifier made no upstream request and did not change the
+Hub configuration or canonical Desk database. Therefore the previous 16:38
+current-receipt PASS is time-bound; the Desk's SEC inbox is currently
+unavailable until the separately owned Hub service is running and a current
+receipt is readable. No fresh SEC acquisition or account/data setting change
+was performed in this verification.

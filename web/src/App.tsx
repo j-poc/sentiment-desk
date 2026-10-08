@@ -23,7 +23,9 @@ import {
   getJevHistoryWeek,
   type FirstRunEvidenceDTO,
   type AnalystResearchQueueItem,
+  type CompanyResearchDecisionQueueItem,
 } from "./lib/api.js";
+import type { CompanyResearchBriefResumeSnapshot } from "../../shared/company-research-brief.js";
 import type { CompanyFundamentalsView } from "../../shared/company-fundamentals.js";
 import type { SavedSourceCoverageSnapshot } from "../../shared/saved-source-coverage.js";
 import { filterFreshQuotes, nextQuoteExpiryDelayMs } from "../../shared/quote-freshness.js";
@@ -56,6 +58,8 @@ import { StatusBar } from "./components/StatusBar.js";
 import { FirstRunEvidenceBrief } from "./components/FirstRunEvidenceBrief.js";
 import { FollowedEvidenceBaseline } from "./components/FollowedEvidenceBaseline.js";
 import { CompanyFundamentals } from "./components/CompanyFundamentals.js";
+import { PrivateEvidencePanel } from "./components/PrivateEvidencePanel.js";
+import { CompanyResearchBriefPanel } from "./components/CompanyResearchBriefPanel.js";
 import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
 import { SelectedCompanyMarketPriceContext } from "./components/MarketPriceContextChart.js";
 import { AnalystResearchQueue } from "./components/AnalystResearchQueue.js";
@@ -65,6 +69,7 @@ import { isScoreBucketCoverage, sameScoreBucketCoverage } from "../../shared/sco
 import { OpportunityRadar } from "./components/OpportunityRadar.js";
 import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { filterMentionFeed, matchesMentionFeedFilter } from "./lib/mention-filters.js";
+import { focusCompanyResearchBrief, revealCompanyPrivateEvidence } from "./lib/research-navigation.js";
 import { applyDispositionChange, includesWeakIssuerMatches, visibleInWorkingScan } from "./lib/analyst-feed.js";
 import { operationsAttentionCount } from "./lib/operations-attention.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
@@ -233,6 +238,10 @@ export default function App() {
   });
   const researchViewTouchedRef = useRef(readSessionPreference("sentiment-desk-research-view") !== null);
   const [researchQueueRevision, setResearchQueueRevision] = useState(0);
+  const [resumeCompanyResearchSnapshot, setResumeCompanyResearchSnapshot] = useState<{
+    companyId: string;
+    snapshot: CompanyResearchBriefResumeSnapshot;
+  } | null>(null);
   const [secResumeTarget, setSecResumeTarget] = useState<SecFilingResumeTarget | null>(null);
   const secResumeRequestId = useRef(0);
   const [sourceReviewRevision, setSourceReviewRevision] = useState(0);
@@ -511,6 +520,7 @@ export default function App() {
       setChartView(chartViewRef.current);
     }
     setSelectedId(next.selectedCompanyId);
+    setResumeCompanyResearchSnapshot(null);
     researchViewTouchedRef.current = true;
     writeSessionPreference("sentiment-desk-research-view", next.view);
     setResearchView(next.view);
@@ -519,6 +529,20 @@ export default function App() {
     navigateToCompanyResearch(item.companyId);
     openDrawerMention(item.mention);
   }, [navigateToCompanyResearch, openDrawerMention]);
+  const openQueuedResearchDecision = useCallback((item: CompanyResearchDecisionQueueItem) => {
+    navigateToCompanyResearch(item.company.companyId);
+    setResumeCompanyResearchSnapshot({
+      companyId: item.company.companyId,
+      snapshot: { asOfMs: item.decision.asOfMs, snapshotKey: item.decision.snapshotKey },
+    });
+    const headingId = `research-brief-${item.company.ticker.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const heading = document.getElementById(headingId);
+      if (!heading) return;
+      heading.scrollIntoView({ behavior: "auto", block: "start" });
+      heading.focus({ preventScroll: true });
+    }));
+  }, [navigateToCompanyResearch]);
   const openSavedSource = useCallback((mention: Mention) => {
     savedSourcesDrawerReturnScrollRef.current = mentionDrawerReturnTarget(researchView, researchScrollRef.current?.scrollTop ?? 0, mention.id);
     navigateToCompanyResearch(mention.companyId);
@@ -747,23 +771,32 @@ export default function App() {
     }
   }, [selected, selectedFundamentals]);
   const selectedCompanyFundamentalsPanel = selected ? (
-    <CompanyFundamentals
-      companyName={selected.name}
-      ticker={selected.ticker}
-      state={selectedFundamentals?.refreshing ? "refreshing"
-        : selectedFundamentals?.loading ? "loading"
-          : selectedFundamentals?.transportError && !(selectedFundamentals.view?.facts.length) ? "failed"
-            : selectedFundamentals?.view?.state ?? "loading"}
-      facts={selectedFundamentals?.view?.facts ?? []}
-      comparisons={selectedFundamentals?.view?.comparisons ?? []}
-      points={selectedFundamentals?.view?.points ?? []}
-      coverage={selectedFundamentals?.view?.coverage ?? []}
-      refreshAllowed={selectedFundamentals?.view?.refreshAllowed === true && !selectedFundamentals.refreshing}
-      refreshBlockedReason={selectedFundamentals?.view?.refreshBlockedReason}
-      lastRefreshError={selectedFundamentals?.transportError ?? selectedFundamentals?.view?.lastRefreshError}
-      staleReason={selectedFundamentals?.view?.staleReason}
-      onRefresh={() => void refreshSelectedFundamentals()}
-    />
+    <>
+      <CompanyResearchBriefPanel
+        companyId={selected.id}
+        companyName={selected.name}
+        ticker={selected.ticker}
+        resumeSnapshot={resumeCompanyResearchSnapshot?.companyId === selected.id ? resumeCompanyResearchSnapshot.snapshot : null}
+      />
+      <PrivateEvidencePanel companyId={selected.id} companyName={selected.name} ticker={selected.ticker} />
+      <CompanyFundamentals
+        companyName={selected.name}
+        ticker={selected.ticker}
+        state={selectedFundamentals?.refreshing ? "refreshing"
+          : selectedFundamentals?.loading ? "loading"
+            : selectedFundamentals?.transportError && !(selectedFundamentals.view?.facts.length) ? "failed"
+              : selectedFundamentals?.view?.state ?? "loading"}
+        facts={selectedFundamentals?.view?.facts ?? []}
+        comparisons={selectedFundamentals?.view?.comparisons ?? []}
+        points={selectedFundamentals?.view?.points ?? []}
+        coverage={selectedFundamentals?.view?.coverage ?? []}
+        refreshAllowed={selectedFundamentals?.view?.refreshAllowed === true && !selectedFundamentals.refreshing}
+        refreshBlockedReason={selectedFundamentals?.view?.refreshBlockedReason}
+        lastRefreshError={selectedFundamentals?.transportError ?? selectedFundamentals?.view?.lastRefreshError}
+        staleReason={selectedFundamentals?.view?.staleReason}
+        onRefresh={() => void refreshSelectedFundamentals()}
+      />
+    </>
   ) : null;
   const selectedQuote = selected && market ? market.quotes[selected.ticker] ?? null : null;
   const priceRefreshState = marketPriceRefreshState({
@@ -2158,6 +2191,7 @@ export default function App() {
               refreshRevision={researchQueueRevision}
               onReviewChanged={reportResearchReviewChanged}
               onOpenEvidence={openQueuedEvidence}
+              onOpenResearchDecision={openQueuedResearchDecision}
               onResumeSecTask={resumeSecResearchTask}
             />
           ) : selected ? (
@@ -2280,6 +2314,10 @@ export default function App() {
                       <kbd>{i + 1}</kbd>
                     </button>
                   ))}
+                </div>
+                <div className="selected-company-shortcuts" role="group" aria-label="Selected company research shortcuts">
+                  <button type="button" onClick={() => { focusCompanyResearchBrief(selected.id); }}>Research brief</button>
+                  <button type="button" aria-label={`Open private research notes for ${selected.name} (${selected.ticker})`} onClick={() => { revealCompanyPrivateEvidence(selected.id); }}>Private notes</button>
                 </div>
               </div>
 

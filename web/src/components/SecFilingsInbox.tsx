@@ -31,11 +31,19 @@ const stateLabel: Record<SecFilingsInboxView["state"], string> = {
   not_configured: "Feed not enabled",
   unsupported: "Feed not supported by this Hub",
   unavailable: "Hub unavailable",
+  listing_unverified: "Issuer listing needs verification",
 };
 
 export function secFreshnessLabel(freshness: SecFilingsInboxView["freshness"]): string {
   return freshness === "current" ? "Source freshness current"
     : freshness === "stale" ? "Source update is stale" : "Source freshness unknown";
+}
+
+export function secListingVerificationSummary(view: SecFilingsInboxView): string | null {
+  if (!view.listingVerificationGap || (view.rows.length === 0 && (view.withheldCount ?? 0) === 0)) return null;
+  const clocks = view.listingDirectories?.map((directory) => `${directory.source.split("/").at(-1)} created ${utc(directory.createdAt)} / retrieved ${utc(directory.retrievedAt)}`).join(" · ");
+  const aggregate = view.listingDirectoryCreatedAt ? `Directory created ${utc(view.listingDirectoryCreatedAt)}; retrieved ${utc(view.listingDirectoryRetrievedAt ?? null)}.` : "";
+  return `Current exchange-listing verification · ${view.withheldCount ?? 0} withheld. ${view.listingVerificationGap}${aggregate ? ` ${aggregate}` : ""}${clocks ? ` ${clocks}` : ""}`;
 }
 
 export function secInboxStatusLabel(view: SecFilingsInboxView, now = Date.now()): string {
@@ -49,7 +57,7 @@ export function shouldShowDeskFallback(
   refreshPaused = false,
 ): boolean {
   return loadFailed
-    || (rowCount === 0 && (state === "not_configured" || state === "unsupported" || state === "unavailable" || state === "failed"))
+    || (rowCount === 0 && (state === "not_configured" || state === "unsupported" || state === "unavailable" || state === "failed" || state === "listing_unverified"))
     || (rowCount > 0 && (state === "unavailable" || state === "unsupported" || state === "not_configured" || (refreshPaused && (state === "stale" || state === "failed"))));
 }
 
@@ -60,6 +68,7 @@ export function secInboxEmptyMessage(query: string, state: SecFilingsInboxView["
   if (state === "not_configured") return "Enable the SEC 8-K feed to load current filings.";
   if (state === "unsupported") return "This Public Data Hub does not support the SEC 8-K feed yet.";
   if (state === "unavailable") return "Reconnect the local Public Data Hub to load SEC filings.";
+  if (state === "listing_unverified") return "No SEC rows are shown because the app could not confirm a unique current listed-security match. Read the verification notice for the available next step.";
   if (state === "failed") return "The latest SEC collection failed and there is no accepted snapshot to show. Retry the feed to try again.";
   if (state === "pending") return "The first SEC filing collection is in progress.";
   return "No saved SEC filing snapshot is available yet.";
@@ -93,6 +102,9 @@ export function deskFallbackMessage(
   }
   if (state === "unavailable" && detail) {
     return `${detail} ${archiveNextStep}`;
+  }
+  if (state === "listing_unverified") {
+    return `${detail || "SEC rows are withheld until a unique current listed-security match is confirmed."} ${archiveNextStep}`;
   }
   return `The no-ticker filing feed is unavailable. ${archiveNextStep}`;
 }
@@ -132,6 +144,7 @@ export function retainLastAcceptedFilings(
 ): SecFilingsInboxView {
   if (!current?.rows.length || next.rows.length > 0
     || !["pending", "rate_limited", "failed", "unavailable", "unsupported", "not_configured"].includes(next.state)) return next;
+  if (!hasFreshListingEvidence(current, now)) return next;
   return {
     ...next,
     rows: current.rows,
@@ -142,12 +155,43 @@ export function retainLastAcceptedFilings(
   };
 }
 
+function hasFreshListingEvidence(view: SecFilingsInboxView, now: number): boolean {
+  const createdAt = view.listingDirectoryCreatedAt ? Date.parse(view.listingDirectoryCreatedAt) : NaN;
+  const validSources = (sources: NonNullable<SecFilingsInboxView["listingDirectories"]>) => {
+    if (sources.length !== 2) return false;
+    const names = new Set<string>();
+    return sources.every((source) => {
+        try {
+          const url = new URL(source.source);
+          const retrieved = Date.parse(source.retrievedAt);
+          const name = url.pathname.split("/").at(-1);
+          if (url.protocol !== "https:" || url.hostname !== "www.nasdaqtrader.com" || !["nasdaqlisted.txt", "otherlisted.txt"].includes(name ?? "")
+            || !Number.isFinite(retrieved) || retrieved > now || now - retrieved > 24 * 60 * 60 * 1000 || names.has(name!)) return false;
+          names.add(name!);
+          return true;
+        } catch { return false; }
+      }) && names.has("nasdaqlisted.txt") && names.has("otherlisted.txt");
+  };
+  return Number.isFinite(createdAt) && now >= createdAt && now - createdAt <= 24 * 60 * 60 * 1000 && validSources(view.listingDirectories ?? [])
+    && view.rows.every((row) => row.listing && row.listing.directoryCreatedAt === view.listingDirectoryCreatedAt
+      && validSources(row.listing.directories));
+}
+
 export function markSecFilingsRequestFailure(
   current: SecFilingsInboxView | null,
   message: string,
   now = Date.now(),
 ): SecFilingsInboxView | null {
   if (!current) return current;
+  if (current.rows.length === 0 && (current.withheldCount ?? 0) === 0) {
+    return { ...current, listingVerificationGap: null, freshness: secFilingsSourceFreshness(current.feedUpdatedAt, now), message };
+  }
+  if (!hasFreshListingEvidence(current, now)) {
+    const withheldCount = current.rows.length + (current.withheldCount ?? 0);
+    return { ...current, state: "listing_unverified", rows: [], withheldCount,
+    listingVerificationGap: `${withheldCount} SEC filing${withheldCount === 1 ? " remains" : "s remain"} withheld because fresh current exchange-listing evidence is unavailable. ${current.canActivate ? "Retry the explicit listing check." : "Enable external requests and approve both SEC 8-K and Nasdaq directory sources in both source lists."}`,
+    freshness: secFilingsSourceFreshness(current.feedUpdatedAt, now), message };
+  }
   return {
     ...current,
     state: "failed",
@@ -471,6 +515,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
       </header>
 
       {view?.message && <p className={`rounded-md border px-4 py-3 text-sm ${view.state === "failed" || view.state === "unavailable" || view.state === "unsupported" ? "border-amber-300/20 bg-amber-300/[0.05] text-amber-100/80" : "border-white/10 bg-white/[0.025] text-white/60"}`} role="status">{view.message}</p>}
+      {view && secListingVerificationSummary(view) && <p className="rounded-md border border-amber-300/20 bg-amber-300/[0.045] px-4 py-3 text-xs leading-5 text-amber-100/75" role="status">{secListingVerificationSummary(view)}</p>}
       {resumeNotice && <div className={`rounded-md border px-4 py-3 text-sm ${resumeNotice.state === "open" ? "border-emerald-300/20 bg-emerald-300/[0.04] text-emerald-100/80" : "border-amber-300/20 bg-amber-300/[0.04] text-amber-100/80"}`} role="status" aria-live="polite">
         {resumeNotice.state === "open" ? <>Opened the exact filing from your saved task: CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved question is shown with the filing below. Choose “Inspect in Desk” to request SEC document evidence.</>
           : resumeNotice.state === "rolled_out" ? <>CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession} is no longer in the current SEC feed. Your saved question and receipt lineage remain in My Research.</>
@@ -551,6 +596,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
                       <p className="mt-1 text-[11px] text-white/35">EDGAR login CIK {row.accessionCik}{row.filingCikPath ? ` · Archive path CIK ${row.filingCikPath}` : ""}</p>
                     )}
                     <p className="mt-1 text-xs text-white/50">{row.filedOn ? `Filed ${utc(row.filedOn, true)}` : "Filing date not in feed"} · {row.acceptedAt ? `Accepted ${utc(row.acceptedAt)}` : "Acceptance time not in feed"}</p>
+                    {row.listing && <p className="mt-1 text-[11px] text-emerald-200/65">Listed security {row.listing.symbol} · {row.listing.exchange} · {row.listing.securityName}</p>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button type="button" aria-expanded={expandedFiling === secFilingIdentity(row)}

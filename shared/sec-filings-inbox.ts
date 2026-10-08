@@ -14,6 +14,8 @@ export interface SecFilingInboxRow {
   feedPublishedAt: string | null;
   feedUpdatedAt: string | null;
   filingUrl: string;
+  /** Current active-listing proof from the SEC-approved Nasdaq Trader directories. */
+  listing?: { symbol: string; exchange: string; securityName: string; directoryCreatedAt: string; directoryRetrievedAt: string; directories: Array<{ source: string; createdAt: string; retrievedAt: string }> };
 }
 
 /** Stable identity for an SEC filing as surfaced for a specific issuer. Joint filings may share an accession. */
@@ -35,7 +37,7 @@ export function secFilingArchiveCikPath(filingUrl: string, accession: string): s
 }
 
 export interface SecFilingsInboxView {
-  state: "ready" | "stale" | "empty" | "pending" | "rate_limited" | "failed" | "not_configured" | "unsupported" | "unavailable";
+  state: "ready" | "stale" | "empty" | "pending" | "rate_limited" | "failed" | "not_configured" | "unsupported" | "unavailable" | "listing_unverified";
   /** Freshness of the SEC source observation, independent of when the Hub retrieved the saved receipt. */
   freshness: "current" | "stale" | "unknown";
   rows: SecFilingInboxRow[];
@@ -46,6 +48,13 @@ export interface SecFilingsInboxView {
   canActivate: boolean;
   nextRefreshAt: string | null;
   message: string | null;
+  /** SEC feed records excluded because an unambiguous current exchange listing was not verified. */
+  withheldCount?: number;
+  /** Exact current-listing evidence gap; null only when every SEC record passed the gate. */
+  listingVerificationGap?: string | null;
+  listingDirectoryCreatedAt?: string | null;
+  listingDirectoryRetrievedAt?: string | null;
+  listingDirectories?: Array<{ source: string; createdAt: string; retrievedAt: string }>;
 }
 
 export const SEC_FILINGS_FRESHNESS_BUDGET_MS = 30 * 60 * 1000;

@@ -39,6 +39,8 @@ const currentProfile = {
 function responseFor({ records = [validRow], job = "succeeded", updatedAt = "2026-10-05T12:00:00Z", rights = {} } = {}) {
   return vi.fn<typeof fetch>(async (input) => {
     const url = String(input);
+    if (url === "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt") return new Response(listingFile("nasdaq"), { status: 200 });
+    if (url === "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt") return new Response(listingFile("other"), { status: 200 });
     if (url.endsWith("/api/v1/sources")) return Response.json({ implemented: [{ id: "sec.latest_filings_8k", configured: true }] });
     if (url.endsWith("/api/v1/state?include_results=false")) return Response.json({ profiles: [{
       profile: currentProfile, latest_job: { status: job, updated_at: updatedAt },
@@ -54,6 +56,27 @@ function responseFor({ records = [validRow], job = "succeeded", updatedAt = "202
   });
 }
 
+function listingFile(kind: "nasdaq" | "other"): string {
+  if (kind === "nasdaq") return [
+    "File Creation Time: 10052026 08:00",
+    "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF",
+    "EXMP|Example Issuer Inc.|Q|N|N|100|N",
+    "BIOF|BIOFORCE NANOSCIENCES HOLDINGS, INC.|Q|N|N|100|N",
+    "VICR|VICOR CORP|Q|N|N|100|N",
+    "COR|Corteva, Inc.|Q|N|N|100|N",
+    "EID|EIDP, Inc.|Q|N|N|100|N",
+    "TEST|Example Issuer Inc.|Q|Y|N|100|N",
+    "FUND|Example Issuer Inc.|Q|N|N|100|Y",
+    "File Creation Time: 10052026 08:00", "",
+  ].join("\n");
+  return [
+    "File Creation Time: 10052026 08:00",
+    "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol",
+    "OTCX|Unknown Issuer Inc.|N|OTCX|N|100|N|OTCX",
+    "File Creation Time: 10052026 08:00", "",
+  ].join("\n");
+}
+
 function makeInbox(fetcher: typeof fetch, now = Date.parse("2026-10-05T12:05:00Z"), acquisitionEnabled = true) {
   return new SecFilingsInbox({
     acquisitionEnabled, fetcher, now: () => now,
@@ -61,17 +84,29 @@ function makeInbox(fetcher: typeof fetch, now = Date.parse("2026-10-05T12:05:00Z
   });
 }
 
+async function readAfterListing(fetcher: ReturnType<typeof responseFor>, now = Date.parse("2026-10-05T12:05:00Z")) {
+  const inbox = makeInbox(fetcher, now);
+  await inbox.activate(); // Listing acquisition is explicit; read() itself remains saved/local-only.
+  return { result: await inbox.read(), inbox };
+}
+
 describe("real SEC filings inbox Hub boundary", () => {
   it("reads a private-display-only Hub receipt and preserves source clocks", async () => {
     const fetcher = responseFor();
-    const result = await makeInbox(fetcher).read();
+    const { result } = await readAfterListing(fetcher);
     expect(result).toMatchObject({ state: "ready", freshness: "stale", receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z" });
     expect(result.rows).toEqual([{
       accession: "0000000320-25-000001", cik: "0000000320", accessionCik: "0000000320", filingCikPath: "320",
       issuer: "Example Issuer", form: "8-K",
       filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedPublishedAt: "2026-10-04T19:19:00.000Z",
       feedUpdatedAt: "2026-10-04T15:21:00.000Z", filingUrl,
+      listing: { symbol: "EXMP", exchange: "Nasdaq", securityName: "Example Issuer Inc.", directoryCreatedAt: "2026-10-05T12:00:00.000Z", directoryRetrievedAt: "2026-10-05T12:05:00.000Z",
+        directories: [
+          { source: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", createdAt: "2026-10-05T12:00:00.000Z", retrievedAt: "2026-10-05T12:05:00.000Z" },
+          { source: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", createdAt: "2026-10-05T12:00:00.000Z", retrievedAt: "2026-10-05T12:05:00.000Z" },
+        ] },
     }]);
+    expect(result).toMatchObject({ withheldCount: 0, listingVerificationGap: null });
     const receiptRequest = fetcher.mock.calls.find(([input]) => String(input).includes("/api/v1/receipts/"));
     expect(String(receiptRequest?.[0])).toBe(`${base}/api/v1/receipts/receipt-1?purpose=private_display`);
   });
@@ -79,12 +114,25 @@ describe("real SEC filings inbox Hub boundary", () => {
   it("normalizes the exact machine suffix used in live SEC Atom issuer titles", async () => {
     const liveTitle = structuredClone(validRow);
     liveTitle.attributes.issuer_label = "BIOFORCE NANOSCIENCES HOLDINGS, INC. (0001310488) (Filer)";
-    const result = await makeInbox(responseFor({ records: [liveTitle] })).read();
+    const { result } = await readAfterListing(responseFor({ records: [liveTitle] }));
     expect(result.rows[0]?.issuer).toBe("BIOFORCE NANOSCIENCES HOLDINGS, INC.");
   });
 
+  it("parses Nasdaq's documented compact file-creation clock with trailing empty directory fields", async () => {
+    const compactTimestamp = (value: string) => value.replaceAll("File Creation Time: 10052026 08:00", "File Creation Time: 1005202608:00|||||||");
+    const fallback = responseFor();
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt") return new Response(compactTimestamp(listingFile("nasdaq")), { status: 200 });
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt") return new Response(compactTimestamp(listingFile("other")), { status: 200 });
+      return fallback(input, init);
+    });
+    const { result } = await readAfterListing(fetcher);
+    expect(result).toMatchObject({ state: "ready", rows: [{ listing: { symbol: "EXMP" } }], listingVerificationGap: null });
+  });
+
   it("keeps fresh retrieval separate from an old SEC source observation", async () => {
-    const result = await makeInbox(responseFor(), Date.parse("2026-10-05T12:05:00Z")).read();
+    const { result } = await readAfterListing(responseFor(), Date.parse("2026-10-05T12:05:00Z"));
     expect(result).toMatchObject({
       state: "ready", freshness: "stale", retrievedAt: "2026-10-05T12:00:00.000Z",
       feedUpdatedAt: "2026-10-04T15:21:00.000Z",
@@ -95,7 +143,7 @@ describe("real SEC filings inbox Hub boundary", () => {
   it("reports source freshness unknown when the recent saved receipt has no feed update clock", async () => {
     const noClock = structuredClone(validRow);
     delete noClock.attributes.feed_updated_at;
-    const result = await makeInbox(responseFor({ records: [noClock] })).read();
+    const { result } = await readAfterListing(responseFor({ records: [noClock] }));
     expect(result).toMatchObject({ state: "ready", freshness: "unknown", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: null });
     expect(result.rows).toHaveLength(1);
   });
@@ -103,25 +151,74 @@ describe("real SEC filings inbox Hub boundary", () => {
   it("marks the source current only when its own update clock is inside the freshness budget", async () => {
     const observed = structuredClone(validRow);
     observed.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
-    const result = await makeInbox(responseFor({ records: [observed] }), Date.parse("2026-10-05T12:05:00Z")).read();
+    const { result } = await readAfterListing(responseFor({ records: [observed] }), Date.parse("2026-10-05T12:05:00Z"));
     expect(result).toMatchObject({ state: "ready", freshness: "current", feedUpdatedAt: "2026-10-05T12:04:00.000Z" });
+  });
+
+  it("withholds SEC filers that lack a unique active-listed security match", async () => {
+    const privateIssuer = structuredClone(validRow);
+    privateIssuer.attributes.issuer_label = "Ford Credit Floorplan LLC";
+    const fetcher = responseFor({ records: [privateIssuer] });
+    const { result } = await readAfterListing(fetcher);
+    expect(result).toMatchObject({ rows: [], withheldCount: 1, listingDirectoryCreatedAt: "2026-10-05T12:00:00.000Z" });
+    expect(result.listingVerificationGap).toContain("no unique exact match");
+  });
+
+  it("withholds same-name multi-symbol ambiguity rather than choosing a listing", async () => {
+    const fallback = responseFor();
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt") {
+        const duplicate = listingFile("nasdaq").replace("TEST|Example Issuer Inc.|Q|Y|N|100|N", "EXM2|Example Issuer Inc.|Q|N|N|100|N");
+        return new Response(duplicate, { status: 200 });
+      }
+      return fallback(input, init);
+    });
+    const { result } = await readAfterListing(fetcher);
+    expect(result).toMatchObject({ rows: [], withheldCount: 1 });
+    expect(result.listingVerificationGap).toContain("no unique exact match");
+  });
+
+  it("withholds all issuers when either official directory is malformed", async () => {
+    const fallback = responseFor();
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt") return new Response("File Creation Time: yesterday\nmalformed", { status: 200 });
+      return fallback(input, init);
+    });
+    const { result } = await readAfterListing(fetcher);
+    expect(result).toMatchObject({ state: "listing_unverified", rows: [], withheldCount: 1, listingDirectoryCreatedAt: null });
+    expect(result.listingVerificationGap).toContain("could not be verified");
+  });
+
+  it("keeps read local-only and withholds every row until explicit current-listing activation", async () => {
+    const fetcher = responseFor();
+    const result = await makeInbox(fetcher).read();
+    expect(result).toMatchObject({ state: "listing_unverified", rows: [], withheldCount: 1, listingDirectoryCreatedAt: null });
+    expect(result.listingVerificationGap).toContain("local app session has no directory snapshot");
+    expect(fetcher.mock.calls.some(([input]) => String(input).includes("nasdaqtrader.com"))).toBe(false);
+  });
+
+  it("withholds listings whose exchange-directory creation clock exceeds the freshness budget", async () => {
+    const fetcher = responseFor();
+    const { result } = await readAfterListing(fetcher, Date.parse("2026-10-06T13:00:00Z"));
+    expect(result).toMatchObject({ state: "listing_unverified", rows: [], withheldCount: 1, listingDirectoryCreatedAt: "2026-10-05T12:00:00.000Z" });
+    expect(result.listingVerificationGap).toContain("stale or have an invalid clock");
   });
 
   it("does not treat a future Atom update clock as current source data", async () => {
     const future = structuredClone(validRow);
     future.attributes.feed_updated_at = "2026-10-05T12:06:00Z";
-    const result = await makeInbox(responseFor({ records: [future] }), Date.parse("2026-10-05T12:05:00Z")).read();
+    const { result } = await readAfterListing(responseFor({ records: [future] }), Date.parse("2026-10-05T12:05:00Z"));
     expect(result).toMatchObject({ state: "ready", freshness: "stale", feedUpdatedAt: "2026-10-05T12:06:00.000Z" });
   });
 
   it("requires current source time before the live-receipt verifier can pass", async () => {
-    const feed = await makeInbox(responseFor(), Date.parse("2026-10-05T12:05:00Z")).read();
+    const { result: feed } = await readAfterListing(responseFor(), Date.parse("2026-10-05T12:05:00Z"));
     expect(feed).toMatchObject({ state: "ready", freshness: "stale", retrievedAt: "2026-10-05T12:00:00.000Z" });
     expect(isCurrentSecFilingsFeed(feed)).toBe(false);
 
     const current = structuredClone(validRow);
     current.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
-    const currentFeed = await makeInbox(responseFor({ records: [current] }), Date.parse("2026-10-05T12:05:00Z")).read();
+    const { result: currentFeed } = await readAfterListing(responseFor({ records: [current] }), Date.parse("2026-10-05T12:05:00Z"));
     expect(isCurrentSecFilingsFeed(currentFeed)).toBe(true);
   });
 
@@ -142,12 +239,17 @@ describe("real SEC filings inbox Hub boundary", () => {
     agentFiled.attributes.published_source_timestamp = "";
     agentFiled.attributes.feed_updated_at = null;
 
-    const result = await makeInbox(responseFor({ records: [agentFiled] })).read();
+    const { result } = await readAfterListing(responseFor({ records: [agentFiled] }));
     expect(result).toMatchObject({ state: "ready" });
     expect(result.rows).toEqual([{
       accession: "0001193125-26-370420", cik: "0000751978", accessionCik: "0001193125", filingCikPath: "1193125",
       issuer: "VICOR CORP", form: "8-K", filedOn: "2026-08-27", acceptedAt: null,
       feedPublishedAt: null, feedUpdatedAt: null, filingUrl,
+      listing: { symbol: "VICR", exchange: "Nasdaq", securityName: "VICOR CORP", directoryCreatedAt: "2026-10-05T12:00:00.000Z", directoryRetrievedAt: "2026-10-05T12:05:00.000Z",
+        directories: [
+          { source: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", createdAt: "2026-10-05T12:00:00.000Z", retrievedAt: "2026-10-05T12:05:00.000Z" },
+          { source: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", createdAt: "2026-10-05T12:00:00.000Z", retrievedAt: "2026-10-05T12:05:00.000Z" },
+        ] },
     }]);
   });
 
@@ -174,14 +276,14 @@ describe("real SEC filings inbox Hub boundary", () => {
       delete record.attributes.published_source_timestamp;
       delete record.attributes.feed_updated_at;
     }
-    const result = await makeInbox(responseFor({ records: [first, second] })).read();
+    const { result } = await readAfterListing(responseFor({ records: [first, second] }));
     expect(result.state).toBe("ready");
     expect(result.rows).toHaveLength(2);
     expect(result.rows.map(({ cik, accession }) => [cik, accession])).toEqual([
       ["0001755672", jointAccession], ["0000030554", jointAccession],
     ]);
 
-    const duplicate = await makeInbox(responseFor({ records: [first, structuredClone(first)] })).read();
+    const { result: duplicate } = await readAfterListing(responseFor({ records: [first, structuredClone(first)] }));
     expect(duplicate.state).toBe("unsupported");
     expect(duplicate.rows).toEqual([]);
   });
@@ -189,46 +291,46 @@ describe("real SEC filings inbox Hub boundary", () => {
   it("rejects forms outside the exact 8-K Hub profile and keeps Atom publication separate from filing time", async () => {
     const amendment = structuredClone(validRow);
     amendment.attributes.form = "8-K/A";
-    const result = await makeInbox(responseFor({ records: [amendment] })).read();
+    const { result } = await readAfterListing(responseFor({ records: [amendment] }));
     expect(result.state).toBe("unsupported");
     expect(result.rows).toEqual([]);
 
     const noFilingClocks = structuredClone(validRow);
     delete noFilingClocks.attributes.filed_at;
     delete noFilingClocks.attributes.accepted_at;
-    const clockResult = await makeInbox(responseFor({ records: [noFilingClocks] })).read();
+    const { result: clockResult } = await readAfterListing(responseFor({ records: [noFilingClocks] }));
     expect(clockResult.rows[0]).toMatchObject({ filedOn: null, acceptedAt: null, feedPublishedAt: "2026-10-04T19:19:00.000Z" });
   });
 
   it("fails closed on inconsistent accession or archive identities and on any export permission", async () => {
     const badAccessionCik = structuredClone(validRow);
     badAccessionCik.attributes.accession_cik = "0000000321";
-    const invalidAccession = await makeInbox(responseFor({ records: [badAccessionCik] })).read();
+    const { result: invalidAccession } = await readAfterListing(responseFor({ records: [badAccessionCik] }));
     expect(invalidAccession.state).toBe("unsupported");
     expect(invalidAccession.rows).toEqual([]);
 
     const badArchiveCik = structuredClone(validRow);
     badArchiveCik.attributes.filing_cik_path = "321";
-    const invalidArchive = await makeInbox(responseFor({ records: [badArchiveCik] })).read();
+    const { result: invalidArchive } = await readAfterListing(responseFor({ records: [badArchiveCik] }));
     expect(invalidArchive.state).toBe("unsupported");
     expect(invalidArchive.rows).toEqual([]);
 
     const mismatch = structuredClone(validRow);
     mismatch.source_address = "https://www.sec.gov/Archives/edgar/data/321/000000032025000001/0000000320-25-000001-index.htm";
     mismatch.attributes.filing_url = mismatch.source_address;
-    const invalidLink = await makeInbox(responseFor({ records: [mismatch] })).read();
+    const { result: invalidLink } = await readAfterListing(responseFor({ records: [mismatch] }));
     expect(invalidLink.state).toBe("unsupported");
     expect(invalidLink.rows).toEqual([]);
 
-    const exportAllowed = await makeInbox(responseFor({ rights: { export: true } })).read();
+    const { result: exportAllowed } = await readAfterListing(responseFor({ rights: { export: true } }));
     expect(exportAllowed.state).toBe("unsupported");
     expect(exportAllowed.rows).toEqual([]);
   });
 
   it("distinguishes stale receipts and failed refreshes while retaining the last accepted rows", async () => {
-    const stale = await makeInbox(responseFor(), Date.parse("2026-10-06T00:00:00Z")).read();
+    const { result: stale } = await readAfterListing(responseFor(), Date.parse("2026-10-06T00:00:00Z"));
     expect(stale.state).toBe("stale");
-    const failed = await makeInbox(responseFor({ job: "failed", updatedAt: "2026-10-05T12:04:00Z" })).read();
+    const { result: failed } = await readAfterListing(responseFor({ job: "failed", updatedAt: "2026-10-05T12:04:00Z" }));
     expect(failed.state).toBe("failed");
     expect(failed.rows).toHaveLength(1);
     expect(failed.message).toMatch(/last accepted snapshot is retained/);

@@ -147,6 +147,36 @@ separate end-to-end tasks in the acceptance plan:
    source origins, whether coverage is repeated, what remains uncertain, and
    the next check. Stale history must not be presented as a live change.
 
+### Selected-company public research brief acceptance
+
+The first complete research-worthiness workflow is a source-bound analyst brief,
+not an automatic buy/sell or company-quality score. It is available only for an
+issuer in the curated publicly listed-company configuration. The server builds
+each brief from one fixed UTC cutoff and saved state only: an as-of SEC
+CompanyFacts snapshot, plus at most 20 issuer-identity-verified public
+observations whose source delivery and ingestion completed successfully or
+partially by that cutoff. Demo, synthetic, `legacy_unknown`, weak-identity,
+unreceipted, nonterminal, cross-company, and late-arriving rows are excluded.
+
+The rendered brief shows the actual coverage state, filing/source IDs and URLs,
+observation and retrieval clocks, receipt completion clocks, and any truncated
+or withheld counts. It preserves each SEC value, unit, period, filing form,
+accession, precision status, and the existing validated comparison; a
+deterministic next research question appears only when an eligible same-filing
+metric pair is comparable. Source excerpts are leads to inspect. The product
+does not infer driver support, counterevidence, source independence, materiality,
+company quality, or research-worthiness from sentiment or repeated coverage.
+
+The analyst can record `investigate further`, `insufficient evidence`, or `set
+aside`, a short rationale, and an optional next-check date. The append-only
+decision stores the exact evidence IDs, SEC snapshot, fixed cutoff, and content
+digest; reloading returns that decision with its original evidence reference.
+A changed snapshot rejects a stale save. Reading the brief and saving a
+decision make zero source or model requests. Empty, partial, stale, failed, and
+storage-unavailable states remain explicit. Private notes are excluded from the
+brief and its counts; only the separate selected-note flow may send a selected
+item to Luna after the explicit confirmation already required by the user.
+
 Product-owned public or licensed information must be acquired through an
 authorized programmatic route. A new investor should see useful evidence before
 being asked to add a private watchlist or configure a ticker; personalized
@@ -1880,19 +1910,56 @@ boundary. Verify a real search result and a later page in the rendered app
 through the full open-return journey; a component remount test is supplemental
 evidence.
 
-## Private-company narrative scope — 2026-10-08
+## Private-evidence scope correction — 2026-10-08
 
-The user-supplied private-company research requirements v1.1 and free-only
-public-source plan v2.0 are recorded in
-`project-record/3-project-specs/private-company-narrative-slice.md`. This is a
-requirements-only public-source narrative context inside existing
-listed-issuer evidence. Private files, proprietary customer data, and
-private-company data access are not required or enabled. No paid source, paid
-feed, subscription, paid API, usage fee, or new provider account is required or
-active. A future public source must be free for the intended use and have
-current terms permitting the intended collection, retention, processing and
-display; unclear routes are not ingested. No runtime capability is claimed.
-All source, SEC/Compose, account, spend, freshness, and release gates remain
-unchanged. Private-company claim behavior and investor usefulness remain
-unverified until a later authorized runtime slice is evaluated on real,
-rights-cleared public cases and the actual persisted UI.
+**Supersedes the earlier same-day private-company narrative scope note.** The
+user's latest direct correction puts optional user-owned private research
+material in scope only for already-configured, publicly listed issuers. Private
+companies remain out of scope for profiles, discovery, monitoring, counts,
+ranking, and research targets. The implementation and boundaries are recorded
+in `project-record/3-project-specs/public-issuer-private-evidence.md`. This
+workflow does not alter public sentiment, classifier counts, baselines, or
+alerts. A user may explicitly select one item and confirm the exact disclosure
+before sending it to OpenAI GPT-6 Luna for a separate analyst-only assessment;
+no automatic forwarding occurs. The analysis remains an unverified aid and
+cannot authenticate the user's note. Actual user documents and research
+usefulness remain unverified. The standard Docker Compose service does not
+expose this capability until its container boundary is proven; the native app
+must be loopback-bound. Existing public-source, SEC/Compose, account, spend,
+freshness, and release gates remain unchanged.
+
+## Resume the exact company-research decision snapshot — 2026-10-08
+
+The independently observed baseline exposed a resume defect: My Research could
+select the issuer and open its brief, but the brief rendered the newest evidence
+cutoff rather than the saved decision's evidence. The earlier panel exposed the
+old manifest mostly as IDs, which did not restore the analyst's original work.
+The database retains immutable SEC snapshots, accession-linked facts, and
+receipt-backed source observations with their original clocks, so the resume
+path can reconstruct the original manifest at the decision's saved cutoff.
+
+Acceptance requires My Research to list the latest saved decision per configured
+public issuer with its rationale, disposition, next-check date/status, saved
+time, exact evidence cutoff, and manifest counts. Its keyboard-accessible action
+selects the issuer and reopens the exact cutoff-bound research brief. The server
+reconstructs only locally persisted evidence as of that cutoff; it makes no
+provider or collector request. The returned evidence manifest must match the
+decision's saved digest before it is presented as the resumed snapshot. If the
+required historical rows cannot be reconstructed or the digest differs, the UI
+must explain that and withhold the replacement brief rather than silently show
+newer evidence. The normal current brief still advances independently. Loading,
+empty, read-error/retry, unavailable-store, issuer-switch, and keyboard focus
+behavior remain clear, and the existing source-record and SEC filing queues stay
+usable if this queue fails.
+
+The SEC pair behind a next research question must remain directly inspectable
+even when the current fact is hidden by latest-per-metric cards. Show both exact
+reported values and units, full date intervals or instant dates, duration,
+form/accession, acceptance and retrieval times, and SEC filing links. State that
+reported-value arithmetic does not establish cause, business significance, or
+materiality. The question's pair and the ordinary latest-fact view stay distinct.
+
+These criteria establish deterministic persistence and navigation only. They do
+not establish source independence, investment materiality, Luna research quality,
+or product-level investor usefulness. Offline boundary fixtures are confined to
+tests; the rendered product remains free of demo or synthetic data.

@@ -29,6 +29,7 @@ import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js
 import type { CompanyFundamentalsView, PersistedFundamentalFact } from "../shared/company-fundamentals.js";
 import type { SavedSourceCoverageSnapshot } from "../shared/saved-source-coverage.js";
 import { savedSourceTextMatches, type SavedSourceSearchCursor, type SavedSourceSearchPage } from "../shared/saved-source-search.js";
+import type { CompanyResearchDecision, CompanyResearchDecisionQueueItem, CompanyResearchEvidenceRole, CompanyResearchEvidenceRoleChoice, SavedCompanyResearchDecision } from "../shared/company-research-brief.js";
 import {
   MAX_ACTIVE_ANALYST_RESEARCH_ITEMS,
   MAX_ANALYST_RESEARCH_QUESTION_CHARS,
@@ -54,6 +55,7 @@ const DISPLAYED_SOURCE_CLOCK_ORDER_SQL = `COALESCE(${DISPLAYED_SOURCE_CLOCK_SQL}
 const REVIEW_REVISION_KEY = "analyst_source_review_revision";
 const FOLLOWED_BASELINE_POLICY = "receipt-ingestion-success/1";
 const MAX_FOLLOWED_BASELINE_OBSERVATIONS = 50_000;
+const MAX_STORED_COMPANY_RESEARCH_DECISIONS = 10_000;
 const FOLLOWED_BASELINE_ELIGIBLE_FILTER = `m.company_id = ?
   AND m.collector NOT IN ('demo_simulation', 'legacy_unknown')
   AND COALESCE(m.engine, '') <> 'demo-sim'
@@ -1129,6 +1131,33 @@ export class Desk {
         this.exec(SCHEMA);
         this.migrate();
       }
+      // Additive, append-only analyst decisions can be introduced without
+      // rewriting source observations or changing their immutable lineage.
+      this.exec(`CREATE TABLE IF NOT EXISTS company_research_decisions (
+        id TEXT PRIMARY KEY,
+        request_key TEXT NOT NULL UNIQUE,
+        company_id TEXT NOT NULL REFERENCES companies(id),
+        as_of_ms INTEGER NOT NULL CHECK (as_of_ms >= 0),
+        snapshot_id TEXT,
+        snapshot_key TEXT NOT NULL CHECK (length(snapshot_key) = 64),
+        fact_ids_json TEXT NOT NULL,
+        observation_ids_json TEXT NOT NULL,
+        evidence_roles_json TEXT NOT NULL DEFAULT '[]',
+        decision TEXT NOT NULL CHECK (decision IN ('investigate_further', 'insufficient_evidence', 'set_aside')),
+        rationale TEXT NOT NULL CHECK (length(rationale) <= 2000),
+        next_check_date TEXT,
+        created_at INTEGER NOT NULL CHECK (created_at >= 0)
+      );
+      CREATE INDEX IF NOT EXISTS company_research_decisions_company_created
+        ON company_research_decisions(company_id, created_at DESC, id DESC);
+      CREATE TRIGGER IF NOT EXISTS company_research_decisions_no_update BEFORE UPDATE ON company_research_decisions
+      BEGIN SELECT RAISE(ABORT, 'company research decisions are immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS company_research_decisions_no_delete BEFORE DELETE ON company_research_decisions
+      BEGIN SELECT RAISE(ABORT, 'company research decisions are immutable'); END;`);
+      const researchDecisionColumns = new Set((this.prepare("PRAGMA table_info(company_research_decisions)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!researchDecisionColumns.has("evidence_roles_json")) {
+        this.exec("ALTER TABLE company_research_decisions ADD COLUMN evidence_roles_json TEXT NOT NULL DEFAULT '[]'");
+      }
       this.exec(ANALYST_SOURCE_REVIEW_GUARDS);
       // Filing tasks use exact issuer-plus-accession identity, independent of the configured watchlist.
       this.exec(`CREATE TABLE IF NOT EXISTS sec_filing_research_tasks (
@@ -1815,12 +1844,13 @@ export class Desk {
     }
   }
 
-  latestCompanyFundamentals(companyId: string): {
+  latestCompanyFundamentals(companyId: string, asOfMs = Number.MAX_SAFE_INTEGER): {
     snapshotId: string; cik: string; state: "ready" | "partial" | "empty"; createdAt: number;
     coverage: string[]; facts: PersistedFundamentalFact[];
   } | null {
+    if (!Number.isSafeInteger(asOfMs) || asOfMs < 0) throw new Error("invalid_company_fundamentals_cutoff");
     const snapshot = this.prepare(`SELECT id, cik, state, created_at, coverage_json FROM sec_fundamental_snapshots
-      WHERE company_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(companyId) as
+      WHERE company_id=? AND created_at<=? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(companyId, asOfMs) as
       { id: string; cik: string; state: "ready" | "partial" | "empty"; created_at: number; coverage_json: string } | undefined;
     if (!snapshot) return null;
     let coverage: string[];
@@ -1832,8 +1862,8 @@ export class Desk {
       reported_decimals, reported_precision_status,
       start_date, end_date, fiscal_year, fiscal_period, form, accession, filed_at, accepted_at,
       retrieved_at, source_url, response_sha256, directory_delivery_id, submissions_delivery_id, companyfacts_delivery_id,
-      duration_class, amended FROM sec_fundamental_facts WHERE snapshot_id=?
-      ORDER BY end_date DESC, metric, concept, accession`).all(snapshot.id) as Array<Record<string, unknown>>;
+      duration_class, amended FROM sec_fundamental_facts WHERE snapshot_id=? AND retrieved_at<=?
+      ORDER BY end_date DESC, metric, concept, accession`).all(snapshot.id, asOfMs) as Array<Record<string, unknown>>;
     return {
       snapshotId: snapshot.id, cik: snapshot.cik, state: snapshot.state, createdAt: Number(snapshot.created_at), coverage,
       facts: facts.map((row) => ({
@@ -1850,6 +1880,233 @@ export class Desk {
         amended: Number(row.amended) === 1,
       })),
     };
+  }
+
+  companyResearchBriefInputs(companyId: string, asOfMs: number, limit = 20): {
+    company: Company;
+    asOfMs: number;
+    fundamentals: ReturnType<Desk["latestCompanyFundamentals"]>;
+    observations: Array<{
+      id: string; companyId: string; title: string; snippet: string; publisher: string; sourceUrl: string;
+      sourceTime: number | null; retrievedAt: number; deliveryId: string; ingestedAt: number;
+      status: string; collector: string; timeBasis: string; deliveryCompletedAt: number; ingestionCompletedAt: number;
+    }>;
+    eligibleObservationCount: number;
+    withheldIdentifiedObservationCount: number;
+    truncated: boolean;
+  } | null {
+    if (!Number.isSafeInteger(asOfMs) || asOfMs < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 20) {
+      throw new Error("invalid_company_research_snapshot");
+    }
+    this.exec("BEGIN");
+    try {
+      const company = this.companies().find((candidate) => candidate.id === companyId);
+      if (!company) { this.exec("COMMIT"); return null; }
+      const fundamentals = this.latestCompanyFundamentals(companyId, asOfMs);
+      const maxRow = this.prepare(`SELECT COALESCE(MAX(rowid), 0) AS maxRowId
+        FROM source_observations WHERE company_id=? AND ingested_at<=?`).get(companyId, asOfMs) as { maxRowId: number | bigint };
+      const maxRowId = Number(maxRow.maxRowId);
+      const realFilter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
+      const common = `${FOLLOWED_BASELINE_ELIGIBLE_FILTER}
+        AND i.completed_at<=? AND o.ingested_at<=? AND o.rowid<=? AND m.retrieved_at<=?
+        AND COALESCE(${DISPLAYED_SOURCE_CLOCK_SQL}, m.retrieved_at)<=?
+        AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)=1`;
+      const joins = `FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS} JOIN companies c ON c.id=m.company_id`;
+      const asOfParams = [companyId, asOfMs, asOfMs, asOfMs, maxRowId, asOfMs, asOfMs] as const;
+      const eligibleRow = this.prepare(`SELECT COUNT(*) AS count ${joins}
+        WHERE ${common} AND m.collector NOT IN ('demo_simulation','legacy_unknown')
+          AND COALESCE(m.engine,'')<>'demo-sim'`).get(...asOfParams) as { count: number };
+      const eligibleObservationCount = Number(eligibleRow.count);
+      const realRow = this.prepare(`SELECT COUNT(*) AS count FROM mentions m JOIN source_observations o ON o.id=m.id
+        WHERE m.company_id=? AND ${realFilter} AND o.ingested_at<=? AND m.retrieved_at<=? AND o.rowid<=?`)
+        .get(companyId, asOfMs, asOfMs, maxRowId) as { count: number };
+      const totalIdentified = Number(realRow.count);
+      const withheldIdentifiedObservationCount = Math.max(0, totalIdentified - eligibleObservationCount);
+      const rows = this.prepare(`SELECT m.*, d.completed_at AS brief_delivery_completed_at,
+        i.completed_at AS brief_ingestion_completed_at,
+        desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) AS brief_identity_strong,
+        ${DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL} AS brief_source_time_unknown,
+        ${DISPLAYED_SOURCE_CLOCK_ORDER_SQL} AS brief_source_order_at
+        ${joins} WHERE ${common}
+        ORDER BY brief_source_time_unknown ASC, brief_source_order_at DESC, m.retrieved_at DESC, m.ingested_at DESC, m.id DESC
+        LIMIT ?`).all(...asOfParams, limit) as unknown as Array<MentionRow & {
+          brief_delivery_completed_at: number; brief_ingestion_completed_at: number;
+          brief_identity_strong: number; brief_source_order_at: number;
+        }>;
+      const observations = rows.filter((row) => row.delivery_id != null && Number(row.brief_identity_strong) === 1)
+        .map((row) => {
+          const mention = rowToDTO(row);
+          return {
+            id: mention.id,
+            companyId: mention.companyId,
+            title: mention.title,
+            snippet: mention.snippet,
+            publisher: mention.publisherName,
+            sourceUrl: mention.source.url,
+            sourceTime: mention.publishedAt ?? mention.aggregatorPublishedAt ?? mention.providerObservedAt,
+            retrievedAt: mention.retrievedAt,
+            deliveryId: mention.source.deliveryId!,
+            ingestedAt: mention.ingestedAt,
+            status: mention.status,
+            collector: mention.collector,
+            timeBasis: mention.timeBasis,
+            deliveryCompletedAt: Number(row.brief_delivery_completed_at),
+            ingestionCompletedAt: Number(row.brief_ingestion_completed_at),
+          };
+        });
+      this.exec("COMMIT");
+      return {
+        company,
+        asOfMs,
+        fundamentals,
+        observations,
+        eligibleObservationCount,
+        withheldIdentifiedObservationCount,
+        truncated: eligibleObservationCount > limit,
+      };
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
+  companyResearchDecisionStoreAvailable(): boolean {
+    const row = this.prepare("SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name='company_research_decisions'").get() as { found: number } | undefined;
+    return row != null;
+  }
+
+  latestCompanyResearchDecision(companyId: string): SavedCompanyResearchDecision | null {
+    if (!this.companyResearchDecisionStoreAvailable()) return null;
+    const row = this.prepare(`SELECT * FROM company_research_decisions WHERE company_id=?
+      ORDER BY created_at DESC, id DESC LIMIT 1`).get(companyId) as {
+        id: string; request_key: string; company_id: string; as_of_ms: number; snapshot_id: string | null;
+        snapshot_key: string; fact_ids_json: string; observation_ids_json: string; evidence_roles_json: string;
+        decision: CompanyResearchDecision; rationale: string; next_check_date: string | null; created_at: number;
+      } | undefined;
+    if (!row) return null;
+    const factIds = JSON.parse(row.fact_ids_json) as unknown;
+    const observationIds = JSON.parse(row.observation_ids_json) as unknown;
+    const evidenceRoles = JSON.parse(row.evidence_roles_json) as unknown;
+    if (!Array.isArray(factIds) || !factIds.every((id) => typeof id === "string")
+      || !Array.isArray(observationIds) || !observationIds.every((id) => typeof id === "string")
+      || !Array.isArray(evidenceRoles) || !evidenceRoles.every((item) => typeof item === "object" && item !== null
+        && typeof (item as { observationId?: unknown }).observationId === "string"
+        && ["supports_assessment", "challenges_assessment", "context_only", "not_reviewed"].includes(String((item as { role?: unknown }).role)))) {
+      throw new Error("company_research_decision_manifest_corrupt");
+    }
+    return {
+      id: row.id, requestKey: row.request_key, companyId: row.company_id, asOfMs: Number(row.as_of_ms),
+      snapshotId: row.snapshot_id, snapshotKey: row.snapshot_key, factIds, observationIds,
+      evidenceRoles: evidenceRoles as CompanyResearchEvidenceRoleChoice[],
+      decision: row.decision, rationale: row.rationale, nextCheckDate: row.next_check_date,
+      createdAt: Number(row.created_at),
+    };
+  }
+
+  /** Latest saved decision for each supplied (caller-authorized) issuer, newest first. */
+  latestCompanyResearchDecisionQueue(companyIds: readonly string[]): CompanyResearchDecisionQueueItem[] {
+    if (!this.companyResearchDecisionStoreAvailable() || companyIds.length === 0) return [];
+    const allowed = new Set(companyIds);
+    const companies = new Map(this.companies().filter((company) => allowed.has(company.id)).map((company) => [company.id, company]));
+    const items: CompanyResearchDecisionQueueItem[] = [];
+    for (const companyId of allowed) {
+      const company = companies.get(companyId);
+      const decision = company ? this.latestCompanyResearchDecision(companyId) : null;
+      if (!company || !decision) continue;
+      items.push({
+        company: { companyId: company.id, name: company.name, ticker: company.ticker, cik: null },
+        decision,
+        factCount: decision.factIds.length,
+        observationCount: decision.observationIds.length,
+      });
+    }
+    return items.sort((a, b) => b.decision.createdAt - a.decision.createdAt || a.company.ticker.localeCompare(b.company.ticker));
+  }
+
+  saveCompanyResearchDecision(input: {
+    requestKey: string; companyId: string; asOfMs: number; snapshotId: string | null; snapshotKey: string;
+    factIds: readonly string[]; observationIds: readonly string[]; evidenceRoles: readonly CompanyResearchEvidenceRoleChoice[];
+    decision: CompanyResearchDecision;
+    rationale: string; nextCheckDate: string | null;
+  }): SavedCompanyResearchDecision {
+    if (!this.companyResearchDecisionStoreAvailable()) throw new Error("company_research_decision_store_unavailable");
+    const rationale = input.rationale.trim();
+    if (!/^[0-9a-f-]{36}$/i.test(input.requestKey) || !Number.isSafeInteger(input.asOfMs) || input.asOfMs < 0
+      || !/^[a-f0-9]{64}$/.test(input.snapshotKey) || !["investigate_further", "insufficient_evidence", "set_aside"].includes(input.decision)
+      || [...rationale].length > 2_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(rationale)
+      || input.factIds.length > 500 || input.observationIds.length > 500
+      || !input.factIds.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200)
+      || !input.observationIds.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200)
+      || input.evidenceRoles.length > 20 || !input.evidenceRoles.every((item) => typeof item.observationId === "string"
+        && item.observationId.length > 0 && item.observationId.length <= 200
+        && ["supports_assessment", "challenges_assessment", "context_only", "not_reviewed"].includes(item.role))
+      || new Set(input.factIds).size !== input.factIds.length
+      || new Set(input.observationIds).size !== input.observationIds.length
+      || (input.nextCheckDate != null && (() => {
+        const date = new Date(`${input.nextCheckDate}T00:00:00.000Z`);
+        return !/^\d{4}-\d{2}-\d{2}$/.test(input.nextCheckDate) || !Number.isFinite(date.valueOf())
+          || date.toISOString().slice(0, 10) !== input.nextCheckDate;
+      })())) {
+      throw new Error("invalid_company_research_decision");
+    }
+    const expectedObservationIds = [...input.observationIds].sort();
+    const roleObservationIds = input.evidenceRoles.map((item) => item.observationId).sort();
+    if (new Set(roleObservationIds).size !== roleObservationIds.length
+      || JSON.stringify(roleObservationIds) !== JSON.stringify(expectedObservationIds)) {
+      throw new Error("invalid_company_research_decision");
+    }
+    const factIdsJson = JSON.stringify([...new Set(input.factIds)].sort());
+    const observationIdsJson = JSON.stringify([...new Set(input.observationIds)].sort());
+    const evidenceRolesJson = JSON.stringify([...input.evidenceRoles]
+      .map((item) => ({ observationId: item.observationId, role: item.role as CompanyResearchEvidenceRole }))
+      .sort((a, b) => a.observationId.localeCompare(b.observationId)));
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const previous = this.prepare("SELECT * FROM company_research_decisions WHERE request_key=?").get(input.requestKey) as {
+        id: string; request_key: string; company_id: string; as_of_ms: number; snapshot_id: string | null;
+        snapshot_key: string; fact_ids_json: string; observation_ids_json: string; evidence_roles_json: string;
+        decision: CompanyResearchDecision;
+        rationale: string; next_check_date: string | null; created_at: number;
+      } | undefined;
+      if (previous) {
+        const same = previous.company_id === input.companyId && Number(previous.as_of_ms) === input.asOfMs
+          && previous.snapshot_id === input.snapshotId && previous.snapshot_key === input.snapshotKey
+          && previous.fact_ids_json === factIdsJson && previous.observation_ids_json === observationIdsJson
+          && previous.evidence_roles_json === evidenceRolesJson
+          && previous.decision === input.decision && previous.rationale === rationale && previous.next_check_date === input.nextCheckDate;
+        if (!same) throw new Error("company_research_decision_request_key_reused");
+        this.exec("COMMIT");
+        return {
+          id: previous.id, requestKey: previous.request_key, companyId: previous.company_id,
+          asOfMs: Number(previous.as_of_ms), snapshotId: previous.snapshot_id, snapshotKey: previous.snapshot_key,
+          factIds: JSON.parse(previous.fact_ids_json) as string[], observationIds: JSON.parse(previous.observation_ids_json) as string[],
+          evidenceRoles: JSON.parse(previous.evidence_roles_json) as CompanyResearchEvidenceRoleChoice[],
+          decision: previous.decision, rationale: previous.rationale, nextCheckDate: previous.next_check_date,
+          createdAt: Number(previous.created_at),
+        };
+      }
+      const count = this.prepare("SELECT COUNT(*) AS count FROM company_research_decisions").get() as { count: number };
+      if (Number(count.count) >= MAX_STORED_COMPANY_RESEARCH_DECISIONS) throw new Error("company_research_decision_limit_exceeded");
+      const id = randomUUID();
+      const createdAt = Date.now();
+      this.prepare(`INSERT INTO company_research_decisions
+        (id, request_key, company_id, as_of_ms, snapshot_id, snapshot_key, fact_ids_json, observation_ids_json,
+         evidence_roles_json, decision, rationale, next_check_date, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, input.requestKey, input.companyId, input.asOfMs, input.snapshotId, input.snapshotKey,
+          factIdsJson, observationIdsJson, evidenceRolesJson, input.decision, rationale, input.nextCheckDate, createdAt);
+      this.exec("COMMIT");
+      return {
+        id, requestKey: input.requestKey, companyId: input.companyId, asOfMs: input.asOfMs,
+        snapshotId: input.snapshotId, snapshotKey: input.snapshotKey,
+        factIds: JSON.parse(factIdsJson) as string[], observationIds: JSON.parse(observationIdsJson) as string[],
+        evidenceRoles: JSON.parse(evidenceRolesJson) as CompanyResearchEvidenceRoleChoice[],
+        decision: input.decision, rationale, nextCheckDate: input.nextCheckDate, createdAt,
+      };
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
   }
 
   seedCompanies(companies: Company[]): void {

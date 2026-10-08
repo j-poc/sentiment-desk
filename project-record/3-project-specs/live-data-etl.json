@@ -111,6 +111,11 @@
         "source": "SEC EDGAR RSS and Latest Filings search",
         "url": "https://www.sec.gov/about/rss-feeds",
         "finding": "Official SEC documentation states EDGAR Latest Filings can be captured as RSS and filtered by form type. The product uses a bounded newest-first Form 8-K feed and makes no completeness or small-cap claim."
+      },
+      {
+        "source": "Nasdaq Trader Symbol Directory Definitions",
+        "url": "https://www.nasdaqtrader.com/Trader.aspx?id=SymbolDirDefs",
+        "finding": "Official definitions document the Nasdaq-listed and other-exchange file fields and say both files update periodically through the day; the File Creation Time row carries the file clock and is padded with empty delimiters. The parser handles the documented compact clock and bounded row schema. Market Category is a listing-requirements category, not market capitalization. The documentation does not establish unrestricted retention or redistribution; app acquisition remains explicit, in-memory only, and rights-attested."
       }
     ]
   },
@@ -383,7 +388,7 @@
       "command": "npm run verify:jev-sanity",
       "covers": "Historical ten-case fictional sanity pilot using isolated test databases; reports only test-fixture agreement and is not real-source quality, classifier calibration, or release evidence.",
       "status": "PASS",
-      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234–370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
+      "evidence": "Run jev-sanity-2026-09-27T23-46-51-479Z completed 2026-09-27T23:46:54.366Z from code revision f523e51ac12b85493d8f95e22f41c972c5a24586 (sourceTreeDirty=false; 2 unrelated, untracked output screenshots). The frozen 10-case file SHA-256 was 733669851a6890f2d748a833b29727fe6c9264c3ce3e49ef0672f94507ac8a97; ten independent temporary SQLite cases made ten requests, all terminal. Jev returned jev-1.13.0 for each with rubric SHA a88fad772230c65f38104cf5934dc7b81e4201b8fcc4ee2876f63d7eeb830c7e. Seven clear cases exactly matched both expected direction and event type (7/7); namesake and sector cases each passed about<0.5; consumer-trivia passed investor_relevant<0.5. Provider reported 19,253 input and 3,835 output tokens. Estimated input cost using the configured unit rate was USD 0.000808626, not an invoice or verified billing amount. Successful response latency was 234\u2013370 ms. Complete per-case results are in project-record/4-log/2026-09-28-jev-synthetic-sanity.json. Fictional data only; this is not real-source classifier accuracy/calibration, alpha, legal rights, or investment-quality evidence."
     },
     "no_synthetic_runtime": {
       "command": "npm test -- --reporter=dot && npm run typecheck && npm run verify:offline-startup; production browser and API readback at http://127.0.0.1:8795/ against isolated saved data",
@@ -448,7 +453,7 @@
         ],
         "evidence": "All nine real external collector IDs were checked against config, adapter/poller bounds, delivery health, allowlist probes, rights records, and user-visible scope. The Sentiment Desk now exposes one-response RSS uncertainty, GDELT cap behavior, SEC/Finnhub/Reddit/X time windows, price-only endpoints, missing direct source families, optional social collectors, and per-source rights caveat. Trace: project-record/4-log/2026-09-29-source-scope-disclosure.md."
       },
-      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays “Configured feeds only. This desk does not cover the entire public web or all investor activity.” Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
+      "evidence": "Google News RSS requests a two-day window; Finnhub default backfill is five days; Reddit requests 25 newest link posts from a one-week search and follows the provider listing after cursor one page per company/cycle; GDELT requests up to 250 English-language results from two days and records a raw response at the requested cap as partial even when invalid rows are dropped; SEC polls 8-K/8-K/A filings accepted within three days; Yahoo RSS is one provider response per ticker. X recent search follows the official next_token page chain, persists progress across scheduled cycles, and commits the newest numeric post ID only after a terminal page; its documented recent-search window is seven days. Reddit cursor behavior follows the official https://www.reddit.com/dev/api/ listing contract; the GDELT cap follows the DOC API guide at https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/; X pagination follows the official Recent Search guide. Pagination and cap reporting do not establish exhaustive coverage, and X/Reddit/Finnhub were disabled for this checkpoint. The Desk displays \u201cConfigured feeds only. This desk does not cover the entire public web or all investor activity.\u201d Provider rights, disabled feeds, point-in-time completeness, exact Yahoo endpoint terms, and broader exhaustive coverage remain unresolved. Latest tests establish local adapter/poller behavior only; no current provider delivery was tested. 2026-09-29 follow-up: adapter and poller regressions now preserve raw provider row counts and distinguish mixed malformed rows from wholly invalid responses for RSS, GDELT, Reddit, and Finnhub; repeated X continuation tokens fail closed; SEC missing ticker/CIK mappings are visible invalid deliveries; SEC and Yahoo chart structures are validated. Local tests do not establish live provider behavior or exhaustive source coverage."
     },
     "legacy_provider_usage_audit": {
       "command": "Reconcile legacy TypeSafe request payloads and provider usage for the previously stopped loopback process",
@@ -562,7 +567,7 @@
       "command": "Isolated local application process using the supported SEC collector and Jev dispatch path",
       "covers": "One real SEC filing through source delivery receipt, Jev request, persisted judgment, and saved-data UI; integration only, not a quality evaluation or ongoing live-operations claim.",
       "status": "PASS",
-      "evidence": "2026-10-01T09:41:27Z–09:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
+      "evidence": "2026-10-01T09:41:27Z\u201309:41:35Z: isolated temporary SQLite database; 27 SEC receipts (5 success, 22 empty), 2 actual filing observations across 2 issuers. Only sec_edgar was enabled; a temporary contact-bearing SEC User-Agent was supplied; Jev was pinned to 1.13.0; maximum 1 request and 40,000 request bytes per UTC day; other feeds/webhooks disabled. Tesla accession 0001628280-26-063820 and receipt dca6b627-8b86-4288-bc01-6e88bf3bd072 received one HTTP 200 classification at 09:41:29Z: neutral, corporate_action, about 0.95, investor_relevant 0.97, impact +29.0; input/output 2,978/387 tokens; 10,138 request bytes; 290 ms; request SHA-256 4af7c9e7f2d0e2d5fbfc943ecf87c0a883eb1f082c07da6e504df597fefc70ee; rubric SHA-256 0fcc7e5e785bd431b47789a38843a8840fe66c5fc285241a106ff18fccd6755b. Stored input-cost estimate USD 0.000125076 is not an invoice or balance reconciliation. AMD remained pending after cap exhaustion. SQLite quick_check=ok. Main data/desk.db was not modified and its Jev request-attempt count remains zero. No second request or retry occurred. The default checkout still has no configured SEC_USER_AGENT. The run does not meet the frozen 30-issuer evaluation minimum and has no human labels."
     }
   },
   "sources": [
@@ -862,7 +867,7 @@
       "rights_evidence": "User attested on 2026-09-29; exact unofficial endpoint and downstream display/retention rights remain unverified.",
       "consumer_paths": [
         "price-series API",
-        "selected-company sentiment × price chart"
+        "selected-company sentiment \u00d7 price chart"
       ],
       "coverage_limit": "Only provider points inside the requested window are drawn; cache/network/local-store provenance stays visible. Saved observations may remain visible after a collector pause or failure with their original source time; cache delivery never resets freshness or makes a result current.",
       "acquisition": {
@@ -1118,6 +1123,54 @@
       "content_scope": "filing_metadata_only",
       "document_body_use": "none",
       "delivery_ttl_seconds": 900
+    },
+    {
+      "id": "nasdaq_symbol_directories",
+      "provider": "Nasdaq Trader Symbol Directory",
+      "endpoint": "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt and https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt",
+      "freshness_budget_seconds": 86400,
+      "delivery_states": [
+        "network",
+        "cache"
+      ],
+      "freshness_states": [
+        "current",
+        "stale",
+        "unknown"
+      ],
+      "timing_fields": [
+        "observation",
+        "retrieved",
+        "directory_created_at"
+      ],
+      "revision_policy": "Acquire both official directories only on explicit Recent Filings activation. Parse the embedded file creation clock separately from retrieval time; keep the response and parsed directory in memory only and expire proof at 24 hours.",
+      "rights": "restricted",
+      "rights_evidence": "The user attested to source rights for public sources and APIs. Official Nasdaq Trader Symbol Directory Definitions describe these files, fields, and periodic updates. No right to persist or redistribute raw directory data is inferred; the app keeps the response in memory only for current issuer-to-security verification and private display of verified symbol/exchange fields. Any broader rights remain unverified.",
+      "consumer_paths": [
+        "GET /api/sec-filings-inbox/activate",
+        "Recent Filings issuer identity gate"
+      ],
+      "coverage_limit": "The two directories are used only to verify exact, unique, active, non-test, non-ETF security-name matches for issuers already present in the bounded SEC 8-K receipt. OTC-only, ambiguous, unknown, and nonmatching issuer rows are withheld. This is not an exhaustive issuer universe, small-cap screen, or market-cap source.",
+      "acquisition": {
+        "method": "api",
+        "adapter_paths": [
+          "server/sec-filings-inbox.ts",
+          "server/config.ts",
+          "server/index.ts",
+          "server/collector-policy.ts",
+          "shared/sec-filings-inbox.ts",
+          "web/src/components/SecFilingsInbox.tsx",
+          "tests/sec-filings-inbox.test.ts",
+          "tests/sec-filings-inbox-ui.test.tsx",
+          "tests/config.test.ts",
+          "scripts/verify-nasdaq-symbol-directories.ts"
+        ]
+      },
+      "source_mode": "live_observation",
+      "freshness_budget_reason": "Nasdaq Trader states the symbol directory files update periodically during the day and provides an embedded file creation time; current issuer verification expires after 24 hours. A recent retrieval never resets the embedded observation clock.",
+      "content_scope": "listed_security_identity_fields",
+      "document_body_use": "In-memory exact-name matching only. The raw directory response is not persisted or sent to a classifier; verified ticker, exchange, and security name may be shown privately beside the SEC filing.",
+      "delivery_ttl_seconds": 86400
     }
   ],
   "checks": [
@@ -1341,15 +1394,17 @@
         "--reporter=dot",
         "--maxWorkers=1",
         "--testTimeout=20000",
+        "tests/config.test.ts",
         "tests/sec-filings-inbox.test.ts",
         "tests/sec-filings-inbox-ui.test.tsx",
         "tests/external-request-gate.test.ts"
       ],
-      "covers": "Fixed SEC 8-K profile identity, display-only rights, exact SEC archive URL and CIK/accession matching, source and retrieval clocks, bounded response parsing, Hub failures, rate limits, no request while gates are closed, and first-run UI caveats. Positive in-test protocol cases are never persisted or served by the product. Includes the explicit detail action’s source-gate and no-persistence boundary through its focused service and API regressions.",
+      "covers": "Fixed SEC 8-K profile identity, display-only rights, exact SEC archive URL and CIK/accession matching, source and retrieval clocks, bounded response parsing, Hub failures, rate limits, no request while gates are closed, and first-run UI caveats. Positive in-test protocol cases are never persisted or served by the product. Includes the explicit detail action\u2019s source-gate and no-persistence boundary through its focused service and API regressions. Source-specific activation also requires external request approval for both SEC 8-K and Nasdaq Trader directories; Nasdaq listing data is excluded from classifier forwarding.",
       "kind": "fixture",
       "required": true,
       "source_ids": [
-        "sec_latest_filings_8k"
+        "sec_latest_filings_8k",
+        "nasdaq_symbol_directories"
       ]
     },
     {
@@ -1371,7 +1426,8 @@
       "kind": "failure",
       "required": true,
       "source_ids": [
-        "sec_latest_filings_8k"
+        "sec_latest_filings_8k",
+        "nasdaq_symbol_directories"
       ],
       "command": [
         "npm",
@@ -1380,11 +1436,28 @@
         "--reporter=dot",
         "--maxWorkers=1",
         "--testTimeout=20000",
+        "tests/config.test.ts",
         "tests/sec-filings-inbox.test.ts",
         "tests/external-request-gate.test.ts"
       ],
       "timeout_seconds": 120,
-      "covers": "Malformed/mismatched CIK and accession, unapproved export rights, failed and pending Hub state, request cadence, and closed source gates fail visibly without emitting filing rows or provider requests. Detail failure tests include exact accession/issuer mismatch, disabled source gate, partial ambiguous Item 2.02 extraction and SEC rate limit."
+      "covers": "Malformed/mismatched CIK and accession, unapproved export rights, failed and pending Hub state, request cadence, and closed source gates fail visibly without emitting filing rows or provider requests. Detail failure tests include exact accession/issuer mismatch, disabled source gate, partial ambiguous Item 2.02 extraction and SEC rate limit. Missing either SEC 8-K or Nasdaq source approval produces no external request."
+    },
+    {
+      "id": "nasdaq_symbol_directory_current_replay",
+      "kind": "replay",
+      "required": true,
+      "command": [
+        "env",
+        "ALLOW_LIVE_NASDAQ_REPLAY=true",
+        "./node_modules/.bin/tsx",
+        "scripts/verify-nasdaq-symbol-directories.ts"
+      ],
+      "timeout_seconds": 90,
+      "source_ids": [
+        "nasdaq_symbol_directories"
+      ],
+      "covers": "Explicit, bounded live replay reads both official directory files, enforces response size and timeout limits, parses the same source timestamps/eligible instruments as the app, and verifies each embedded listing-file clock is current. It reports counts and clocks only; it does not persist directory content or create fictional product rows."
     }
   ],
   "gate_execution_scope": {

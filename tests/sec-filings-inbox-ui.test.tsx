@@ -2,8 +2,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { secFilingArchiveCikPath, secIssuerDisplayName } from "../shared/sec-filings-inbox.js";
-import { SavedFilingTasksRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFilingQuestionValue, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, shouldOfferSavedArchiveSearch, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
+import { SavedFilingTasksRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFilingQuestionValue, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, secListingVerificationSummary, shouldOfferSavedArchiveSearch, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
 import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingsFreshnessNextCheckMs, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecFilingResearchTask } from "../shared/sec-filings-inbox.js";
+
+const currentListing = { symbol: "ISSR", exchange: "Nasdaq", securityName: "Issuer One Inc.", directoryCreatedAt: "2026-10-08T11:00:00.000Z", directoryRetrievedAt: "2026-10-08T11:01:00.000Z",
+  directories: [
+    { source: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", createdAt: "2026-10-08T11:00:00.000Z", retrievedAt: "2026-10-08T11:01:00.000Z" },
+    { source: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", createdAt: "2026-10-08T11:00:00.000Z", retrievedAt: "2026-10-08T11:01:00.000Z" },
+  ] };
 
 describe("first-run SEC filing browse surface", () => {
   it("ages source freshness from the SEC feed clock while the saved snapshot remains visible", () => {
@@ -13,8 +19,9 @@ describe("first-run SEC filing browse surface", () => {
         accession: "0000000320-25-000001", cik: "0000000320", issuer: "Issuer One", form: "8-K",
         filedOn: "2026-10-04", acceptedAt: null, feedPublishedAt: null, feedUpdatedAt: new Date(observedAt).toISOString(),
         filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
+        listing: currentListing,
       }], receiptId: "receipt-1",
-      retrievedAt: new Date(observedAt + 60_000).toISOString(), feedUpdatedAt: new Date(observedAt).toISOString(),
+      retrievedAt: new Date(observedAt + 60_000).toISOString(), feedUpdatedAt: new Date(observedAt).toISOString(), listingDirectoryCreatedAt: currentListing.directoryCreatedAt, listingDirectories: currentListing.directories,
       jobStatus: "succeeded", canActivate: true, nextRefreshAt: null, message: null,
     };
     const pending: SecFilingsInboxView = {
@@ -39,6 +46,14 @@ describe("first-run SEC filing browse surface", () => {
     expect(shouldStartSecFilingsPoll(true)).toBe(false);
     expect(markSecFilingsRequestFailure(current, "Activation failed.", observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS + 1))
       .toMatchObject({ state: "failed", rows: current.rows, receiptId: "receipt-1", freshness: "stale", message: "Activation failed." });
+    const listingExpiredAt = Date.parse(currentListing.directoryCreatedAt) + 24 * 60 * 60 * 1000 + 1;
+    expect(retainLastAcceptedFilings(current, pending, listingExpiredAt)).toMatchObject({ rows: [] });
+    expect(markSecFilingsRequestFailure(current, "Activation failed.", listingExpiredAt)).toMatchObject({ rows: [], withheldCount: 1 });
+    const emptyUnavailable: SecFilingsInboxView = { ...current, state: "unavailable", rows: [], withheldCount: 0,
+      listingVerificationGap: "Current exchange-listing directories have not been verified in this app session." };
+    expect(secListingVerificationSummary(emptyUnavailable)).toBeNull();
+    expect(markSecFilingsRequestFailure(emptyUnavailable, "Hub status unavailable.", observedAt))
+      .toMatchObject({ state: "unavailable", rows: [], withheldCount: 0, listingVerificationGap: null, message: "Hub status unavailable." });
   });
 
   it("removes only the SEC Atom machine suffix from issuer display names", () => {
@@ -91,6 +106,23 @@ describe("first-run SEC filing browse surface", () => {
     expect(secInboxEmptyMessage("", "not_configured", 0)).toBe("Enable the SEC 8-K feed to load current filings.");
   });
 
+  it("shows withheld issuer count, exact current-listing gap, and both source-file clocks", () => {
+    const view: SecFilingsInboxView = { state: "ready", freshness: "current", rows: [], receiptId: "receipt-1",
+      retrievedAt: "2026-10-08T16:00:00.000Z", feedUpdatedAt: "2026-10-08T15:59:00.000Z", jobStatus: "succeeded",
+      canActivate: true, nextRefreshAt: null, message: null, withheldCount: 2,
+      listingVerificationGap: "2 SEC filings were withheld because the SEC issuer name had no unique exact match to an active, non-test, non-ETF Nasdaq Trader security name.",
+      listingDirectoryCreatedAt: "2026-10-08T19:41:00.000Z", listingDirectoryRetrievedAt: "2026-10-08T20:00:00.000Z",
+      listingDirectories: [
+        { source: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", createdAt: "2026-10-08T19:41:00.000Z", retrievedAt: "2026-10-08T20:00:00.000Z" },
+        { source: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", createdAt: "2026-10-08T19:41:00.000Z", retrievedAt: "2026-10-08T20:00:00.000Z" },
+      ] };
+    const summary = secListingVerificationSummary(view);
+    expect(summary).toContain("2 withheld");
+    expect(summary).toContain("no unique exact match");
+    expect(summary).toContain("nasdaqlisted.txt created");
+    expect(summary).toContain("otherlisted.txt created");
+  });
+
   it("explains the bounded, unranked coverage and does not invent any rows", () => {
     const html = renderToStaticMarkup(createElement(SecFilingsInbox));
     expect(html).toContain("Recent 8-K filings");
@@ -106,6 +138,7 @@ describe("first-run SEC filing browse surface", () => {
     expect(shouldShowDeskFallback("not_configured", 0, false)).toBe(true);
     expect(shouldShowDeskFallback("unsupported", 0, false)).toBe(true);
     expect(shouldShowDeskFallback("failed", 0, false)).toBe(true);
+    expect(shouldShowDeskFallback("listing_unverified", 0, false)).toBe(true);
     expect(shouldShowDeskFallback("stale", 38, false)).toBe(false);
     expect(shouldShowDeskFallback("stale", 38, false, true)).toBe(true);
     expect(shouldShowDeskFallback("not_configured", 38, false, true)).toBe(true);
@@ -118,6 +151,11 @@ describe("first-run SEC filing browse surface", () => {
     expect(shouldOfferSavedArchiveSearch("unknown", true)).toBe(false);
     expect(shouldOfferSavedArchiveSearch("available", false)).toBe(false);
     expect(deskFallbackMessage("unavailable", false, null, "empty")).toContain("no eligible saved evidence to search");
+    expect(secInboxEmptyMessage("", "listing_unverified", 0)).toContain("Read the verification notice for the available next step");
+    expect(deskFallbackMessage("listing_unverified", false, "2 SEC filings were withheld", "empty"))
+      .toContain("2 SEC filings were withheld");
+    expect(deskFallbackMessage("listing_unverified", false, "Listing check is paused; approve both sources", "empty"))
+      .not.toContain("Activate Recent Filings");
   });
 
   it("renders the matching recovery action instead of an empty archive search", () => {
@@ -180,8 +218,9 @@ describe("first-run SEC filing browse surface", () => {
         accession: "0000000320-25-000001", cik: "0000000320", issuer: "Issuer One", form: "8-K",
         filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedPublishedAt: "2026-10-04T15:19:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
         filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
+        listing: currentListing,
       }],
-      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
+      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z", listingDirectoryCreatedAt: currentListing.directoryCreatedAt, listingDirectories: currentListing.directories,
       jobStatus: "succeeded", canActivate: true, nextRefreshAt: null, message: null,
     };
     const pending: SecFilingsInboxView = {
@@ -209,8 +248,9 @@ describe("first-run SEC filing browse surface", () => {
         accession: "0000000320-25-000001", cik: "0000000320", issuer: "Issuer One", form: "8-K",
         filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedPublishedAt: "2026-10-04T15:19:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
         filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
+        listing: currentListing,
       }],
-      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
+      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z", listingDirectoryCreatedAt: currentListing.directoryCreatedAt, listingDirectories: currentListing.directories,
       jobStatus: "succeeded", canActivate: false, nextRefreshAt: null, message: null,
     };
     const unavailable: SecFilingsInboxView = {
@@ -252,8 +292,9 @@ describe("first-run SEC filing browse surface", () => {
         accession: "0000000320-25-000001", cik: "0000000320", issuer: "Issuer One", form: "8-K",
         filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedPublishedAt: "2026-10-04T15:19:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
         filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
+        listing: currentListing,
       }],
-      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
+      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z", listingDirectoryCreatedAt: currentListing.directoryCreatedAt, listingDirectories: currentListing.directories,
       jobStatus: "succeeded", canActivate: false, nextRefreshAt: null, message: null,
     };
     let view: SecFilingsInboxView | null = accepted;
@@ -282,8 +323,9 @@ describe("first-run SEC filing browse surface", () => {
         accession: "0000000320-25-000001", cik: "0000000320", issuer: "Issuer One", form: "8-K",
         filedOn: "2026-10-04", acceptedAt: "2026-10-04T15:20:00.000Z", feedPublishedAt: "2026-10-04T15:19:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
         filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
+        listing: currentListing,
       }],
-      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z",
+      receiptId: "receipt-1", retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: "2026-10-04T15:21:00.000Z", listingDirectoryCreatedAt: currentListing.directoryCreatedAt, listingDirectories: currentListing.directories,
       jobStatus: "succeeded", canActivate: false, nextRefreshAt: null, message: null,
     };
     const older: SecFilingsInboxView = { ...accepted, receiptId: "receipt-older", retrievedAt: "2026-10-05T12:01:00.000Z" };

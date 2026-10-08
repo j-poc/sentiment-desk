@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -22,11 +23,25 @@ import type { CompanyFundamentals } from "./company-fundamentals.js";
 import type { SecFilingsInbox } from "./sec-filings-inbox.js";
 import type { SecFilingDetailService } from "./sec-filing-detail.js";
 import { MAX_ANALYST_RESEARCH_QUESTION_CHARS } from "../shared/analyst-research.js";
+import {
+  MAX_PRIVATE_EVIDENCE_REQUEST_BYTES,
+  PRIVATE_EVIDENCE_ANALYSIS_MODEL,
+  privateEvidenceInputSchema,
+  privateEvidenceAnalysisRecordSchema,
+  type PrivateEvidenceAnalysisRecord,
+  type PrivateEvidenceItem,
+} from "../shared/private-evidence.js";
+import { PRIVATE_EVIDENCE_ANALYSIS_DATA_CONTROLS } from "./private-evidence-analysis.js";
 import { savedSourceSearchCursorSchema, type SavedSourceSearchCursor } from "../shared/saved-source-search.js";
 import { secFilingArchiveCikPath, type SecFilingInboxRow } from "../shared/sec-filings-inbox.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 import type { CategoricalBucketCursor } from "./types.js";
+import type { Company } from "./types.js";
+import { PrivateEvidenceLimitError, type PrivateEvidenceStore } from "./private-evidence-store.js";
+import { comparePersistedFundamentalFacts } from "./company-fundamentals.js";
+import { compileCompanyResearchBrief } from "./company-research-brief.js";
+import type { CompanyResearchBriefResponse, CompanyResearchDecision } from "../shared/company-research-brief.js";
 
 /**
  * HTTP surface: read APIs, an explicitly confirmed single-item Jev retry, and
@@ -46,6 +61,22 @@ export interface AppDeps {
   companyFundamentals?: CompanyFundamentals;
   secFilingsInbox?: SecFilingsInbox;
   secFilingDetail?: SecFilingDetailService;
+  privateEvidence?: PrivateEvidenceStore;
+  privateEvidenceEnabled?: boolean;
+  privateEvidenceCompanyIds?: ReadonlySet<string>;
+  configuredPublicCompanyIds?: ReadonlySet<string>;
+  privateEvidenceAnalysis?: {
+    enabled: boolean;
+    blockedReason: string | null;
+    analyze: (
+      company: Company,
+      evidence: PrivateEvidenceItem,
+      attempt: {
+        begin: (prepared: { payloadSha256: string; evidenceSha256: string; requestBytes: number }) => boolean;
+        cancelBeforeDispatch: (payloadSha256: string) => void;
+      },
+    ) => Promise<PrivateEvidenceAnalysisRecord>;
+  };
   webRoot?: string;
   deliverySources: DeliverySourceSchedule[];
 }
@@ -105,9 +136,152 @@ const analystResearchReviewSchema = z.object({
   disposition: z.enum(["investigate", "dismissed"]),
   nextQuestion: z.string().max(MAX_ANALYST_RESEARCH_QUESTION_CHARS),
 }).strict();
+const privateEvidenceAnalysisConfirmationSchema = z.object({ confirmExternalProcessing: z.literal(true) }).strict();
+const companyResearchDecisionSchema = z.object({
+  requestKey: z.string().uuid(),
+  asOfMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  snapshotKey: z.string().regex(/^[a-f0-9]{64}$/),
+  decision: z.enum(["investigate_further", "insufficient_evidence", "set_aside"]),
+  rationale: z.string().max(2_000),
+  evidenceRoles: z.array(z.object({
+    observationId: z.string().min(1).max(200),
+    role: z.enum(["supports_assessment", "challenges_assessment", "context_only", "not_reviewed"]),
+  }).strict()).max(20),
+  nextCheckDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+}).strict().refine((value) => value.nextCheckDate == null || (() => {
+  const date = new Date(`${value.nextCheckDate}T00:00:00.000Z`);
+  return Number.isFinite(date.valueOf()) && date.toISOString().slice(0, 10) === value.nextCheckDate;
+})(), { message: "invalid_date" });
+
+function isLoopbackRequest(request: Request, requireOrigin: boolean): boolean {
+  const url = new URL(request.url);
+  const hostname = url.hostname.toLowerCase();
+  const hostHeader = request.headers.get("host")?.toLowerCase();
+  const originHeader = request.headers.get("origin");
+  let sameOrigin = !requireOrigin;
+  if (originHeader) {
+    try { sameOrigin = new URL(originHeader).origin === url.origin; }
+    catch { sameOrigin = false; }
+  }
+  return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(hostname)
+    && (hostHeader == null || hostHeader === url.host.toLowerCase())
+    && sameOrigin
+    && request.headers.get("sec-fetch-site")?.toLowerCase() !== "cross-site";
+}
+
+async function readBoundedJson(request: Request, maxBytes = MAX_PRIVATE_EVIDENCE_REQUEST_BYTES): Promise<{ kind: "ok"; value: unknown } | { kind: "invalid" } | { kind: "too_large" }> {
+  const declared = request.headers.get("content-length");
+  if (declared != null && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) {
+    return { kind: "too_large" };
+  }
+  if (!request.body) return { kind: "invalid" };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return { kind: "too_large" };
+      }
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { kind: "ok", value: JSON.parse(decoded) as unknown };
+  } catch {
+    return { kind: "invalid" };
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function privateEvidenceJson(c: Context, body: unknown, status = 200) {
+  c.header("Cache-Control", "no-store");
+  c.header("Cross-Origin-Resource-Policy", "same-origin");
+  c.header("X-Frame-Options", "DENY");
+  return c.json(body, status as ContentfulStatusCode);
+}
+
+function companyResearchDecisionStorageState(deps: AppDeps): {
+  storeInitialized: boolean;
+  available: boolean;
+  unavailableReason: string | null;
+} {
+  const storeInitialized = deps.db.companyResearchDecisionStoreAvailable();
+  if (!storeInitialized) {
+    return { storeInitialized, available: false, unavailableReason: "Local decision storage is not initialized." };
+  }
+  const storage = deps.db.storageCapacity();
+  return {
+    storeInitialized,
+    available: storage.writesAllowed,
+    unavailableReason: storage.writesAllowed ? null : storage.reason ?? "Local database writes are paused.",
+  };
+}
+
+function companyResearchBriefResponse(deps: AppDeps, companyId: string, asOfMs = Date.now()): CompanyResearchBriefResponse | null {
+  const source = deps.db.companyResearchBriefInputs(companyId, asOfMs, 20);
+  if (!source) return null;
+  const resolved = comparePersistedFundamentalFacts(source.fundamentals?.facts ?? []);
+  const reasons = [
+    ...(source.fundamentals?.coverage ?? ["No saved SEC CompanyFacts snapshot exists for this issuer."]),
+    ...resolved.coverage,
+    "Public observations are limited to saved, issuer-matched rows with completed source and ingestion receipts; this is not complete public-web coverage.",
+  ];
+  if (source.withheldIdentifiedObservationCount > 0) {
+    reasons.push(`${source.withheldIdentifiedObservationCount} other saved identified-source row(s) were withheld because issuer identity or delivery/ingestion receipt requirements were not met.`);
+  }
+  if (source.truncated) reasons.push(`Showing the newest 20 of ${source.eligibleObservationCount} eligible saved public observations.`);
+  if (source.eligibleObservationCount === 0) reasons.push("No receipt-verified public observations were saved by this cutoff.");
+  const brief = compileCompanyResearchBrief({
+    company: {
+      companyId,
+      name: source.company.name,
+      ticker: source.company.ticker,
+      cik: source.fundamentals?.cik ?? null,
+    },
+    asOfMs,
+    snapshotId: source.fundamentals?.snapshotId ?? null,
+    facts: resolved.facts,
+    comparisons: resolved.comparisons,
+    observations: source.observations,
+    coverage: {
+      sec: source.fundamentals?.state === "ready" ? "complete" : source.fundamentals?.state ?? "empty",
+      publicObservations: source.eligibleObservationCount === 0 ? "empty" : "partial",
+      reasons,
+    },
+  });
+  // Keep the fixed cutoff on the saved decision, but hash the exact evidence
+  // manifest rather than the wall-clock read time. Reloading an unchanged
+  // snapshot then rehydrates the analyst's decision; newly eligible facts or
+  // observations still change the key and are surfaced as a newer snapshot.
+  const { asOfMs: _cutoff, ...evidenceManifest } = brief;
+  const snapshotKey = createHash("sha256").update(JSON.stringify(evidenceManifest), "utf8").digest("hex");
+  const decisionStorage = companyResearchDecisionStorageState(deps);
+  return {
+    brief,
+    snapshotKey,
+    decision: decisionStorage.storeInitialized ? deps.db.latestCompanyResearchDecision(companyId) : null,
+    decisionStorageAvailable: decisionStorage.available,
+    decisionStorageUnavailableReason: decisionStorage.unavailableReason,
+  };
+}
+
+function privateEvidenceUnavailable(c: Context, reason = "private_evidence_unavailable") {
+  return privateEvidenceJson(c, { error: reason }, 503);
+}
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
+  const isConfiguredPublicIssuer = (companyId: string) =>
+    deps.privateEvidenceCompanyIds?.has(companyId) === true &&
+    deps.db.companies().some((company) => company.id === companyId);
   const runtimeId = randomUUID();
 
   app.onError((err, c) => {
@@ -200,6 +374,169 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/companies", (c) => c.json(deps.pipeline.snapshots()));
 
+  app.get("/api/companies/:id/private-evidence", (c) => {
+    if (!deps.privateEvidence || deps.privateEvidenceEnabled !== true) return privateEvidenceUnavailable(c, "private_evidence_requires_loopback_binding");
+    if (!isLoopbackRequest(c.req.raw, false)) return privateEvidenceJson(c, { error: "unsafe_private_evidence_origin" }, 403);
+    const companyId = c.req.param("id");
+    if (!isConfiguredPublicIssuer(companyId)) {
+      return privateEvidenceJson(c, { error: "unknown_configured_public_company" }, 404);
+    }
+    try {
+      return privateEvidenceJson(c, {
+        ...deps.privateEvidence.list(companyId),
+        analysis: {
+          enabled: deps.privateEvidenceAnalysis?.enabled === true,
+          blockedReason: deps.privateEvidenceAnalysis?.enabled === true ? null : deps.privateEvidenceAnalysis?.blockedReason ?? "private_note_model_analysis_disabled",
+          model: PRIVATE_EVIDENCE_ANALYSIS_MODEL,
+          dataControls: PRIVATE_EVIDENCE_ANALYSIS_DATA_CONTROLS,
+        },
+      });
+    } catch {
+      return privateEvidenceUnavailable(c, "private_evidence_read_failed");
+    }
+  });
+
+  app.get("/api/companies/:id/private-evidence/:evidenceId", (c) => {
+    if (!deps.privateEvidence || deps.privateEvidenceEnabled !== true) return privateEvidenceUnavailable(c, "private_evidence_requires_loopback_binding");
+    if (!isLoopbackRequest(c.req.raw, false)) return privateEvidenceJson(c, { error: "unsafe_private_evidence_origin" }, 403);
+    const companyId = c.req.param("id");
+    const evidenceId = c.req.param("evidenceId");
+    if (!isConfiguredPublicIssuer(companyId)) {
+      return privateEvidenceJson(c, { error: "unknown_configured_public_company" }, 404);
+    }
+    if (!z.string().uuid().safeParse(evidenceId).success) return privateEvidenceJson(c, { error: "invalid_private_evidence_id" }, 400);
+    try {
+      const item = deps.privateEvidence.get(companyId, evidenceId);
+      return item
+        ? privateEvidenceJson(c, { ...item, savedAnalysis: deps.privateEvidence.getAnalysis(companyId, evidenceId) })
+        : privateEvidenceJson(c, { error: "private_evidence_not_found" }, 404);
+    } catch {
+      return privateEvidenceUnavailable(c, "private_evidence_integrity_or_read_failure");
+    }
+  });
+
+  app.post("/api/companies/:id/private-evidence/:evidenceId/analyze", async (c) => {
+    if (!deps.privateEvidence || deps.privateEvidenceEnabled !== true) return privateEvidenceUnavailable(c, "private_evidence_requires_loopback_binding");
+    if (!isLoopbackRequest(c.req.raw, true)) return privateEvidenceJson(c, { error: "unsafe_private_evidence_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) {
+      return privateEvidenceJson(c, { error: "json_content_type_required" }, 415);
+    }
+    const companyId = c.req.param("id");
+    const evidenceId = c.req.param("evidenceId");
+    if (!isConfiguredPublicIssuer(companyId)) return privateEvidenceJson(c, { error: "unknown_configured_public_company" }, 404);
+    if (!z.string().uuid().safeParse(evidenceId).success) return privateEvidenceJson(c, { error: "invalid_private_evidence_id" }, 400);
+    const body = await readBoundedJson(c.req.raw, 1_024);
+    if (body.kind === "too_large") return privateEvidenceJson(c, { error: "private_evidence_analysis_confirmation_too_large" }, 413);
+    if (body.kind === "invalid" || !privateEvidenceAnalysisConfirmationSchema.safeParse(body.value).success) {
+      return privateEvidenceJson(c, { error: "explicit_private_evidence_analysis_confirmation_required" }, 400);
+    }
+    let preparedPayloadSha256: string | null = null;
+    try {
+      const evidence = deps.privateEvidence.get(companyId, evidenceId);
+      if (!evidence) return privateEvidenceJson(c, { error: "private_evidence_not_found" }, 404);
+      const prior = deps.privateEvidence.getAnalysis(companyId, evidenceId);
+      if (prior) {
+        return prior.status === "complete"
+          ? privateEvidenceJson(c, { ...prior, reusedSavedAnalysis: true })
+          : privateEvidenceJson(c, { error: "private_evidence_analysis_attempt_already_recorded", attempt: prior }, 409);
+      }
+      if (!deps.privateEvidenceAnalysis?.enabled) {
+        return privateEvidenceUnavailable(c, deps.privateEvidenceAnalysis?.blockedReason ?? "private_note_model_analysis_disabled");
+      }
+      const company = deps.db.companies().find((candidate) => candidate.id === companyId);
+      if (!company) return privateEvidenceJson(c, { error: "unknown_configured_public_company" }, 404);
+      const result = await deps.privateEvidenceAnalysis.analyze(company, evidence, {
+        begin: (prepared) => {
+          const began = deps.privateEvidence!.beginAnalysis(companyId, evidenceId, prepared.evidenceSha256, prepared.payloadSha256, prepared.requestBytes);
+          if (began) preparedPayloadSha256 = prepared.payloadSha256;
+          return began;
+        },
+        cancelBeforeDispatch: (payloadSha256) => deps.privateEvidence!.cancelAnalysisBeforeDispatch(companyId, evidenceId, payloadSha256),
+      });
+      const validated = privateEvidenceAnalysisRecordSchema.safeParse(result);
+      if (!validated.success || validated.data.companyId !== companyId || validated.data.evidenceId !== evidenceId ||
+        validated.data.evidenceSha256 !== evidence.sha256 || validated.data.modelRequested !== PRIVATE_EVIDENCE_ANALYSIS_MODEL ||
+        validated.data.modelReturned !== PRIVATE_EVIDENCE_ANALYSIS_MODEL ||
+        validated.data.analysis.evidence.some((item) => !evidence.content.includes(item.quote))) {
+        throw Object.assign(new Error("private_evidence_analysis_result_integrity_failed"), { code: "private_evidence_analysis_response_invalid" });
+      }
+      const saved = deps.privateEvidence.completeAnalysis(companyId, evidenceId, validated.data);
+      const completed = deps.privateEvidence.getAnalysis(companyId, evidenceId);
+      if (!completed || completed.status !== "complete" || completed.record == null || completed.record.responseSha256 !== saved.record.responseSha256) {
+        throw Object.assign(new Error("private_evidence_analysis_persisted_readback_failed"), { code: "private_evidence_analysis_response_invalid" });
+      }
+      return privateEvidenceJson(c, { ...completed, reusedSavedAnalysis: false }, 201);
+    } catch (error) {
+      const candidate = error && typeof error === "object" ? error as { code?: unknown; category?: unknown; outcomeUnknown?: unknown } : {};
+      const category = typeof candidate.category === "string" ? candidate.category : "";
+      const rawCode = typeof candidate.code === "string" ? candidate.code : category === "provider_outcome_unknown" || category === "transport_unknown" || category === "response_unreadable"
+        ? "private_evidence_analysis_provider_outcome_unknown"
+        : category === "http_rejected" || category === "refused" ? "private_evidence_analysis_provider_rejected"
+          : category === "invalid_response" || category === "ungrounded_output" || category === "invalid_request" ? "private_evidence_analysis_response_invalid"
+            : category === "not_configured" ? "private_evidence_analysis_disabled" : "";
+      const safeCodes = new Set([
+        "private_evidence_analysis_budget_exhausted", "private_evidence_analysis_storage_read_only",
+        "private_evidence_analysis_external_requests_paused", "private_evidence_analysis_disabled",
+        "private_evidence_analysis_provider_failed", "private_evidence_analysis_provider_outcome_unknown",
+        "private_evidence_analysis_provider_rejected", "private_evidence_analysis_response_invalid",
+        "private_evidence_analysis_attempt_already_recorded",
+      ]);
+      const reason = safeCodes.has(rawCode) ? rawCode : "private_evidence_analysis_failed";
+      if (typeof preparedPayloadSha256 === "string") {
+        try {
+          deps.privateEvidence?.failAnalysis(companyId, evidenceId, preparedPayloadSha256, reason, candidate.outcomeUnknown === true || reason === "private_evidence_analysis_provider_outcome_unknown");
+        } catch { /* keep the provider failure response bounded; an in-progress row prevents duplicate dispatch */ }
+      }
+      const outcomeUnknown = candidate.outcomeUnknown === true || reason === "private_evidence_analysis_provider_outcome_unknown";
+      return privateEvidenceJson(c, { error: reason, outcomeUnknown }, 503);
+    }
+  });
+
+  app.post("/api/companies/:id/private-evidence", async (c) => {
+    if (!deps.privateEvidence || deps.privateEvidenceEnabled !== true) return privateEvidenceUnavailable(c, "private_evidence_requires_loopback_binding");
+    if (!isLoopbackRequest(c.req.raw, true)) return privateEvidenceJson(c, { error: "unsafe_private_evidence_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) {
+      return privateEvidenceJson(c, { error: "json_content_type_required" }, 415);
+    }
+    const companyId = c.req.param("id");
+    if (!isConfiguredPublicIssuer(companyId)) {
+      return privateEvidenceJson(c, { error: "unknown_configured_public_company" }, 404);
+    }
+    const body = await readBoundedJson(c.req.raw);
+    if (body.kind === "too_large") return privateEvidenceJson(c, { error: "private_evidence_request_too_large" }, 413);
+    if (body.kind === "invalid") return privateEvidenceJson(c, { error: "invalid_private_evidence_request" }, 400);
+    const input = privateEvidenceInputSchema.safeParse(body.value);
+    if (!input.success) return privateEvidenceJson(c, { error: "invalid_private_evidence_request" }, 400);
+    if (input.data.fileName && !/\.(?:txt|md|csv)$/i.test(input.data.fileName)) {
+      return privateEvidenceJson(c, { error: "unsupported_private_evidence_file_type" }, 415);
+    }
+    try {
+      return privateEvidenceJson(c, deps.privateEvidence.save(companyId, input.data), 201);
+    } catch (error) {
+      if (error instanceof PrivateEvidenceLimitError) {
+        return privateEvidenceJson(c, { error: "private_evidence_capacity_reached", limit: error.reason }, 409);
+      }
+      return privateEvidenceUnavailable(c, "private_evidence_write_failed");
+    }
+  });
+
+  app.delete("/api/companies/:id/private-evidence/:evidenceId", (c) => {
+    if (!deps.privateEvidence || deps.privateEvidenceEnabled !== true) return privateEvidenceUnavailable(c, "private_evidence_requires_loopback_binding");
+    if (!isLoopbackRequest(c.req.raw, true)) return privateEvidenceJson(c, { error: "unsafe_private_evidence_origin" }, 403);
+    const companyId = c.req.param("id");
+    const evidenceId = c.req.param("evidenceId");
+    if (!isConfiguredPublicIssuer(companyId)) {
+      return privateEvidenceJson(c, { error: "unknown_configured_public_company" }, 404);
+    }
+    if (!z.string().uuid().safeParse(evidenceId).success) return privateEvidenceJson(c, { error: "invalid_private_evidence_id" }, 400);
+    try {
+      if (!deps.privateEvidence.delete(companyId, evidenceId)) return privateEvidenceJson(c, { error: "private_evidence_not_found" }, 404);
+      return privateEvidenceJson(c, { deleted: true });
+    } catch {
+      return privateEvidenceUnavailable(c, "private_evidence_delete_failed");
+    }
+  });
+
   app.get("/api/companies/:id/mentions", (c) => {
     const id = c.req.param("id");
     const hours = clampNumber(c.req.query("hours"), 1, 168, 24);
@@ -272,6 +609,107 @@ export function createApp(deps: AppDeps): Hono {
     if (!deps.db.companies().some((company) => company.id === companyId)) return c.json({ error: "unknown_company" }, 404);
     if (!deps.companyFundamentals) return c.json({ error: "company_fundamentals_unavailable" }, 503);
     return c.json(deps.companyFundamentals.read(companyId));
+  });
+
+  app.get("/api/companies/:id/research-brief", (c) => {
+    const companyId = c.req.param("id");
+    if (!deps.configuredPublicCompanyIds?.has(companyId)) return privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
+    const cutoffs = new URL(c.req.url).searchParams.getAll("asOfMs");
+    let asOfMs: number | undefined;
+    if (cutoffs.length > 1 || (cutoffs.length === 1 && !/^(0|[1-9]\d*)$/.test(cutoffs[0]!))) {
+      return privateEvidenceJson(c, { error: "invalid_research_brief_cutoff" }, 400);
+    }
+    if (cutoffs.length === 1) {
+      asOfMs = Number(cutoffs[0]);
+      if (!Number.isSafeInteger(asOfMs) || asOfMs < 0) {
+        return privateEvidenceJson(c, { error: "invalid_research_brief_cutoff" }, 400);
+      }
+    }
+    try {
+      const response = companyResearchBriefResponse(deps, companyId, asOfMs);
+      return response ? privateEvidenceJson(c, response) : privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
+    } catch {
+      return privateEvidenceJson(c, { error: "company_research_brief_unavailable" }, 503);
+    }
+  });
+
+  app.get("/api/research-queue/company-decisions", (c) => {
+    if (!deps.db.companyResearchDecisionStoreAvailable()) {
+      return privateEvidenceJson(c, { error: "company_research_decision_store_unavailable" }, 503);
+    }
+    try {
+      const companyIds = [...(deps.configuredPublicCompanyIds ?? [])];
+      return privateEvidenceJson(c, { items: deps.db.latestCompanyResearchDecisionQueue(companyIds) });
+    } catch {
+      return privateEvidenceJson(c, { error: "company_research_decision_queue_unavailable" }, 503);
+    }
+  });
+
+  app.post("/api/companies/:id/research-brief/decisions", async (c) => {
+    const companyId = c.req.param("id");
+    if (!deps.configuredPublicCompanyIds?.has(companyId)) return privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
+    if (!isLoopbackRequest(c.req.raw, true)) return privateEvidenceJson(c, { error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) {
+      return privateEvidenceJson(c, { error: "json_content_type_required" }, 415);
+    }
+    const decisionStorage = companyResearchDecisionStorageState(deps);
+    if (!decisionStorage.storeInitialized) {
+      return privateEvidenceJson(c, { error: "company_research_decision_store_unavailable" }, 503);
+    }
+    if (!decisionStorage.available) {
+      return privateEvidenceJson(c, {
+        error: "company_research_decision_storage_paused",
+        reason: decisionStorage.unavailableReason,
+      }, 503);
+    }
+    const body = await readBoundedJson(c.req.raw, 16_384);
+    if (body.kind === "too_large") return privateEvidenceJson(c, { error: "request_too_large" }, 413);
+    if (body.kind !== "ok") return privateEvidenceJson(c, { error: "invalid_company_research_decision" }, 400);
+    const input = companyResearchDecisionSchema.safeParse(body.value);
+    if (!input.success) return privateEvidenceJson(c, { error: "invalid_company_research_decision" }, 400);
+    try {
+      const current = companyResearchBriefResponse(deps, companyId, input.data.asOfMs);
+      if (!current) return privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
+      if (current.snapshotKey !== input.data.snapshotKey) return privateEvidenceJson(c, { error: "research_brief_snapshot_changed" }, 409);
+      const expectedObservationIds = current.brief.observations.map((item) => item.id).sort();
+      const roleObservationIds = input.data.evidenceRoles.map((item) => item.observationId).sort();
+      if (new Set(roleObservationIds).size !== roleObservationIds.length
+        || JSON.stringify(roleObservationIds) !== JSON.stringify(expectedObservationIds)) {
+        return privateEvidenceJson(c, { error: "invalid_company_research_evidence_roles" }, 400);
+      }
+      const decision = deps.db.saveCompanyResearchDecision({
+        requestKey: input.data.requestKey,
+        companyId,
+        asOfMs: current.brief.asOfMs,
+        snapshotId: current.brief.snapshotId,
+        snapshotKey: current.snapshotKey,
+        factIds: current.brief.facts.map((fact) => fact.id),
+        observationIds: current.brief.observations.map((item) => item.id),
+        evidenceRoles: input.data.evidenceRoles,
+        decision: input.data.decision as CompanyResearchDecision,
+        rationale: input.data.rationale,
+        nextCheckDate: input.data.nextCheckDate,
+      });
+      return privateEvidenceJson(c, { ...current, decision });
+    } catch (error) {
+      if (error instanceof Error && error.message === "company_research_decision_request_key_reused") {
+        return privateEvidenceJson(c, { error: "request_key_reused" }, 409);
+      }
+      if (error instanceof Error && error.message === "company_research_decision_limit_exceeded") {
+        return privateEvidenceJson(c, { error: "company_research_decision_limit_exceeded" }, 409);
+      }
+      if (error instanceof Error && error.message === "invalid_company_research_decision") {
+        return privateEvidenceJson(c, { error: "invalid_company_research_decision" }, 400);
+      }
+      const storage = companyResearchDecisionStorageState(deps);
+      if (storage.storeInitialized && !storage.available) {
+        return privateEvidenceJson(c, {
+          error: "company_research_decision_storage_paused",
+          reason: storage.unavailableReason,
+        }, 503);
+      }
+      return privateEvidenceJson(c, { error: "company_research_decision_save_failed" }, 503);
+    }
   });
 
   app.get("/api/sec-filings-inbox", async (c) => {

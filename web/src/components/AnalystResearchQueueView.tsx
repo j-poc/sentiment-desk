@@ -1,8 +1,83 @@
 import type { AnalystResearchQueueItem } from "../lib/api.js";
 import { timeAgo } from "../lib/format.js";
 import { sourceClockForMention } from "../lib/source-clock.js";
+import type { CompanyResearchDecisionQueueItem } from "../../../shared/company-research-brief.js";
 
 export type QueueState = "loading" | "ready" | "failed";
+export type DecisionQueueState = "loading" | "ready" | "failed";
+
+function localDateString(date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function decisionLabel(value: CompanyResearchDecisionQueueItem["decision"]["decision"]): string {
+  switch (value) {
+    case "investigate_further": return "Investigate further";
+    case "insufficient_evidence": return "Insufficient evidence";
+    case "set_aside": return "Set aside";
+  }
+}
+
+function savedDecisionDate(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(ms);
+}
+
+function decisionNextCheck(item: CompanyResearchDecisionQueueItem): { label: string; status: string } {
+  const date = item.decision.nextCheckDate;
+  if (!date) return { label: "No next-check date", status: "No date" };
+  const today = localDateString();
+  if (date < today) return { label: `${date} · overdue`, status: "Overdue" };
+  return { label: `${date} · upcoming`, status: "Upcoming" };
+}
+
+export function CompanyResearchDecisionQueueView({
+  items, state, error, onRetry, onOpen,
+}: {
+  items: readonly CompanyResearchDecisionQueueItem[];
+  state: DecisionQueueState;
+  error: string | null;
+  onRetry: () => void;
+  onOpen: (item: CompanyResearchDecisionQueueItem) => void;
+}) {
+  return <section className="panel min-w-0" aria-labelledby="company-research-decisions-heading">
+    <div className="panel-head flex-wrap gap-y-1">
+      <div className="min-w-0">
+        <h2 id="company-research-decisions-heading" className="micro m-0 p-0">COMPANY RESEARCH DECISIONS</h2>
+        <p className="mt-1 text-[11px] normal-case tracking-normal text-white/45">Your latest immutable decision per configured public company, bound to its saved evidence cutoff.</p>
+      </div>
+      {state === "ready" && <span className="tabnum text-[10px] text-white/45">{items.length} saved</span>}
+    </div>
+    {error && <p className="mx-3 mt-3 rounded border border-amber-300/20 bg-amber-200/[0.04] px-3 py-2 text-[11px] text-amber-100/80" role="alert">{error}</p>}
+    {state === "loading" && <p className="px-3 py-4 text-xs text-white/50" role="status">Loading saved company decisions…</p>}
+    {state === "failed" && <div className="px-3 py-4 text-xs text-white/55" role="alert">
+      <p>Saved company decisions could not be loaded. Source-record and SEC filing queues remain available.</p>
+      <button type="button" onClick={onRetry} className="mt-2 rounded border border-white/15 px-2.5 py-1.5 text-[11px] text-white/75 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Retry company decisions</button>
+    </div>}
+    {state === "ready" && items.length === 0 && <p className="px-3 py-4 text-xs text-white/50" role="status">No saved company research decisions. Save one from the selected company’s Desk research brief.</p>}
+    {state === "ready" && items.length > 0 && <ol className="divide-y divide-white/[0.07]">
+      {items.map((item) => {
+        const { label: nextCheck, status } = decisionNextCheck(item);
+        return <li key={item.decision.id} className="grid min-w-0 gap-2 px-3 py-3 sm:px-4">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-semibold text-white/75">{item.company.ticker}</span>
+            <span className="min-w-0 break-words text-[11px] text-white/65">{item.company.name}</span>
+            <span className="rounded border border-emerald-200/15 px-1.5 py-0.5 text-[9px] text-emerald-100/65">{decisionLabel(item.decision.decision)}</span>
+            <time className="ml-auto text-[9.5px] text-white/35" dateTime={new Date(item.decision.createdAt).toISOString()}>saved {savedDecisionDate(item.decision.createdAt)}</time>
+          </div>
+          <p className="whitespace-pre-wrap break-words rounded border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[11px] leading-relaxed text-white/65">{item.decision.rationale || <span className="italic text-white/35">No rationale saved.</span>}</p>
+          <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/45">
+            <span>Next check: <strong className={status === "Overdue" ? "text-amber-100/80" : "font-medium text-white/60"}>{nextCheck}</strong></span>
+            <span>Evidence cutoff: <time dateTime={new Date(item.decision.asOfMs).toISOString()}>{new Date(item.decision.asOfMs).toISOString()}</time></span>
+            <span>{item.factCount} SEC facts</span>
+            <span>{item.observationCount} public-source {item.observationCount === 1 ? "record" : "records"}</span>
+          </div>
+          <div><button type="button" onClick={() => onOpen(item)} className="rounded border border-white/15 px-2.5 py-1.5 text-[10.5px] text-white/75 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Open {item.company.ticker} research brief</button></div>
+        </li>;
+      })}
+    </ol>}
+    <p className="border-t border-white/[0.07] px-3 py-2 text-[9.5px] leading-relaxed text-white/35 sm:px-4">Decision history stays tied to its original fact and source manifest. This queue is separate from saved source-record reviews and SEC filing tasks.</p>
+  </section>;
+}
 
 function judgmentLabel(item: AnalystResearchQueueItem): string {
   switch (item.mention.status) {

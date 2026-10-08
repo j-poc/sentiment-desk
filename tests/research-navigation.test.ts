@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { mentionDrawerReturnTarget, researchViewAfterMentionClose, selectCompanyForResearch } from "../web/src/lib/research-navigation.js";
+/** @vitest-environment jsdom */
+import { describe, expect, it, vi } from "vitest";
+import { focusCompanyResearchBrief, mentionDrawerReturnTarget, researchViewAfterMentionClose, revealCompanyPrivateEvidence, selectCompanyForResearch } from "../web/src/lib/research-navigation.js";
 
 describe("company selection navigation", () => {
   it("opens the selected issuer in Desk from My Research", () => {
@@ -37,5 +38,38 @@ describe("company selection navigation", () => {
     const returnTarget = mentionDrawerReturnTarget("sources", 1_280, "source-128");
     expect(returnTarget?.mentionId).toBe("source-128");
     expect(researchViewAfterMentionClose("desk", returnTarget)).toBe("sources");
+  });
+
+  it("scrolls to and focuses the selected issuer's research brief", () => {
+    const section = document.createElement("section");
+    section.id = "company-research-brief-apple";
+    const heading = document.createElement("h2");
+    heading.tabIndex = -1;
+    section.append(heading);
+    document.body.append(section);
+    const scroll = vi.fn();
+    Object.defineProperty(section, "scrollIntoView", { value: scroll });
+
+    expect(focusCompanyResearchBrief("apple")).toBe(true);
+    expect(scroll).toHaveBeenCalledWith({ block: "start" });
+    expect(document.activeElement).toBe(heading);
+    section.remove();
+  });
+
+  it("opens, scrolls to, and focuses only the selected issuer's private notes", () => {
+    const section = document.createElement("details");
+    section.id = "private-evidence-adobe";
+    const summary = document.createElement("summary");
+    section.append(summary);
+    document.body.append(section);
+    const scroll = vi.fn();
+    Object.defineProperty(section, "scrollIntoView", { value: scroll });
+
+    expect(revealCompanyPrivateEvidence("adobe")).toBe(true);
+    expect(section.open).toBe(true);
+    expect(scroll).toHaveBeenCalledWith({ block: "start" });
+    expect(document.activeElement).toBe(summary);
+    expect(revealCompanyPrivateEvidence("apple")).toBe(false);
+    section.remove();
   });
 });

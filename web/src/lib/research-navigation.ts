@@ -22,3 +22,25 @@ export function selectCompanyForResearch(
 ): ResearchNavigationState {
   return { ...current, selectedCompanyId: companyId, view: "desk" };
 }
+
+export function focusCompanyResearchBrief(companyId: string): boolean {
+  if (typeof document === "undefined") return false;
+  const section = document.getElementById(`company-research-brief-${companyId}`);
+  const heading = section?.querySelector<HTMLElement>("h2");
+  if (!section || !heading) return false;
+  section.scrollIntoView({ block: "start" });
+  heading.focus({ preventScroll: true });
+  return true;
+}
+
+export function revealCompanyPrivateEvidence(companyId: string): boolean {
+  if (typeof document === "undefined") return false;
+  const section = document.getElementById(`private-evidence-${companyId}`);
+  if (!(section instanceof HTMLDetailsElement)) return false;
+  const summary = section.querySelector<HTMLElement>("summary");
+  if (!summary) return false;
+  section.open = true;
+  section.scrollIntoView({ block: "start" });
+  summary.focus({ preventScroll: true });
+  return true;
+}

@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { VERSION, config, loadCompanies } from "./config.js";
-import { intersectClassifierSourceAllowlist, intersectCollectorAllowlists } from "./collector-policy.js";
+import { intersectClassifierSourceAllowlist, intersectCollectorAllowlists, secFilingsInboxRequestsEnabled } from "./collector-policy.js";
 import { Desk } from "./db.js";
 import { HealthTracker } from "./health.js";
 import { Hub } from "./hub.js";
@@ -25,6 +25,16 @@ import {
 import type { SchedulerControl } from "./scheduler.js";
 import type { CollectorId } from "./types.js";
 import { installExternalRequestGate } from "./external-request-gate.js";
+import { dirname, resolve, join } from "node:path";
+import { isIP } from "node:net";
+import { PrivateEvidenceStore } from "./private-evidence-store.js";
+import { PrivateEvidenceAnalyzer } from "./private-evidence-analysis.js";
+import { createPrivateEvidenceAnalysisService } from "./private-evidence-analysis-service.js";
+
+function isLoopbackHost(value: string): boolean {
+  const host = value.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || (isIP(host) === 4 && host.split(".")[0] === "127");
+}
 
 /**
  * Boot order matters: DB first (schema + seed), then pipeline, then HTTP, then
@@ -36,6 +46,16 @@ import { installExternalRequestGate } from "./external-request-gate.js";
 async function main(): Promise<void> {
   const companies = loadCompanies();
   const db = new Desk(config.dbPath, config.storage);
+  let privateEvidence: PrivateEvidenceStore | undefined;
+  const privateEvidenceEnabled = isLoopbackHost(config.host);
+  if (privateEvidenceEnabled) {
+    try {
+      privateEvidence = new PrivateEvidenceStore(join(dirname(resolve(config.dbPath)), "private-evidence", "evidence.sqlite"));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown initialization failure";
+      console.warn(`[desk] private evidence unavailable (${reason})`);
+    }
+  }
   const uninstallExternalRequestGate = installExternalRequestGate(
     () => config.externalRequestsEnabled && db.externalRequestAllowed(),
   );
@@ -93,6 +113,19 @@ async function main(): Promise<void> {
   const openaiClassifier = new OpenAIClassifier({
     apiKey: config.openai.apiKey, model: config.openai.model, timeoutMs: config.openai.timeoutMs,
   });
+  const privateEvidenceAnalysis = createPrivateEvidenceAnalysisService({
+    loopbackBound: privateEvidenceEnabled,
+    privateStoreReady: privateEvidence !== undefined,
+    externalRequestsEnabled: config.externalRequestsEnabled,
+    featureEnabled: config.openai.privateEvidenceAnalysisEnabled,
+    apiKey: config.openai.apiKey,
+    accountUseApproved: config.openai.accountUseApproved,
+    maxRequestsPerDay: config.openai.maxRequestsPerDay,
+    maxRequestBytesPerDay: config.openai.maxRequestBytesPerDay,
+    maxDailyCostMicros: config.openai.maxDailyCostMicros,
+    db,
+    analyzer: new PrivateEvidenceAnalyzer({ apiKey: config.openai.apiKey, timeoutMs: config.openai.timeoutMs }),
+  });
 
   const pipeline = new Pipeline({
     db,
@@ -141,7 +174,7 @@ async function main(): Promise<void> {
     userAgent: config.secUserAgent,
   });
   const secFilingsInbox = new SecFilingsInbox({
-    acquisitionEnabled: collectorEnabled("sec_latest_filings_8k"),
+    acquisitionEnabled: secFilingsInboxRequestsEnabled(config.externalRequestsEnabled, activeSourceCollectors),
   });
   const secFilingDetail = new SecFilingDetailService({
     enabled: collectorEnabled("sec_edgar") && collectorEnabled("sec_latest_filings_8k") && config.secUserAgent !== "",
@@ -166,6 +199,15 @@ async function main(): Promise<void> {
     companyFundamentals,
     secFilingsInbox,
     secFilingDetail,
+    privateEvidence,
+    privateEvidenceEnabled,
+    privateEvidenceCompanyIds: new Set(companies
+      .filter((company) => company.listingStatus === "publicly_listed")
+      .map((company) => company.id)),
+    configuredPublicCompanyIds: new Set(companies
+      .filter((company) => company.listingStatus === "publicly_listed")
+      .map((company) => company.id)),
+    privateEvidenceAnalysis,
     deliverySources: [
       { collector: "google_news_rss", enabled: collectorEnabled("google_news_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
       { collector: "yahoo_finance_rss", enabled: collectorEnabled("yahoo_finance_rss"), intervalSeconds: config.pollRssSeconds, targetCount: companies.length },
@@ -307,6 +349,7 @@ async function main(): Promise<void> {
       if ("closeAllConnections" in server) server.closeAllConnections();
       await httpClosed;
       uninstallExternalRequestGate();
+      privateEvidence?.close();
       db.close();
       process.exit(0);
     })().catch((error: unknown) => {

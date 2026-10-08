@@ -25,6 +25,14 @@ export function intersectClassifierSourceAllowlist(
   return withoutNonClassificationSources(intersectCollectorAllowlists(...allowlists));
 }
 
+/** Recent Filings needs independent approval for both the SEC feed and listing lookup. */
+export function secFilingsInboxRequestsEnabled(
+  externalRequestsEnabled: boolean,
+  activeSources: ReadonlySet<CollectorId>,
+): boolean {
+  return externalRequestsEnabled && activeSources.has("sec_latest_filings_8k") && activeSources.has("nasdaq_symbol_directories");
+}
+
 function withoutNonClassificationSources(collectors: ReadonlySet<CollectorId>): Set<CollectorId> {
-  return new Set([...collectors].filter((collector) => collector !== "sec_company_facts"));
+  return new Set([...collectors].filter((collector) => collector !== "sec_company_facts" && collector !== "nasdaq_symbol_directories"));
 }

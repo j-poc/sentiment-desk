@@ -5,10 +5,99 @@ import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingIdentity, secFilingsSourceFre
 const DATASET = "sec.latest_filings_8k";
 const CONSUMER = "sentiment-desk";
 const MAX_HUB_BYTES = 2_000_000;
+const LISTING_FRESHNESS_MS = 24 * 60 * 60 * 1000;
+const LISTING_SOURCES = [
+  { url: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", kind: "nasdaq" as const },
+  { url: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", kind: "other" as const },
+];
+const MAX_LISTING_BYTES = 1_500_000;
+const MAX_LISTING_ROWS = 20_000;
 
 interface HubConnection extends SecFilingsHubInstallation {}
 
 type JsonRecord = Record<string, unknown>;
+
+export interface ListedSecurity { symbol: string; exchange: string; securityName: string; normalizedName: string }
+export interface ListingDirectoryEvidence { source: string; createdAt: string; retrievedAt: string }
+export interface ListingSnapshot { securities: ListedSecurity[]; createdAt: string; retrievedAt: string; directories: ListingDirectoryEvidence[] }
+
+function easternTimestamp(value: string): string | null {
+  const match = value.match(/^(\d{2})(\d{2})(\d{4}) (\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const [, month, day, year, hour, minute] = match;
+  const wallClock = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+  const date = new Date(wallClock);
+  if (date.getUTCFullYear() !== Number(year) || date.getUTCMonth() !== Number(month) - 1 || date.getUTCDate() !== Number(day)
+    || Number(hour) > 23 || Number(minute) > 59) return null;
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "longOffset", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  // Resolve the source's Eastern wall clock without assuming a fixed DST offset.
+  let candidate = wallClock;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const parts = Object.fromEntries(formatter.formatToParts(new Date(candidate)).map((part) => [part.type, part.value]));
+    const represented = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute));
+    candidate += wallClock - represented;
+  }
+  const check = Object.fromEntries(formatter.formatToParts(new Date(candidate)).map((part) => [part.type, part.value]));
+  if (Number(check.month) !== Number(month) || Number(check.day) !== Number(day) || Number(check.year) !== Number(year)
+    || Number(check.hour) !== Number(hour) || Number(check.minute) !== Number(minute)) return null;
+  return new Date(candidate).toISOString();
+}
+
+function normalizedSecurityName(value: string): string {
+  let name = value.trim().toLocaleLowerCase("en-US").replace(/\s+\([^)]*\)\s*$/, "");
+  const securitySuffix = /(?:\s*[-,]\s*|\s+)(?:class\s+[a-z0-9]+\s+)?(?:common stock|ordinary shares?|common shares?|ordinary share|depositary shares?|american depositary shares?|equity shares?)$/i;
+  const legalSuffix = /(?:\s+)(?:incorporated|inc\.?|corporation|corp\.?|company|co\.?|limited|ltd\.?|llc|l\.l\.c\.?|plc\.?|lp|l\.p\.?|n\.v\.?|s\.a\.?|ag|asa|ab|oyj|se)$/i;
+  let changed = true;
+  while (changed) {
+    const before = name;
+    name = name.replace(securitySuffix, "").replace(legalSuffix, "");
+    changed = name !== before;
+  }
+  return name.replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+export function parseListingDirectory(text: string, kind: "nasdaq" | "other", source: string, retrievedAt: string): ListingSnapshot | null {
+  const creation = text.match(/^File Creation Time:[ \t]*(\d{8})[ \t]*(\d{2}:\d{2})[ \t]*\|*[ \t]*$/m);
+  const createdAt = creation ? easternTimestamp(`${creation[1]} ${creation[2]}`) : null;
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const headerIndex = lines.findIndex((line) => line.startsWith(kind === "nasdaq" ? "Symbol|Security Name|" : "ACT Symbol|Security Name|"));
+  if (!createdAt || headerIndex < 0 || lines.length > MAX_LISTING_ROWS + 10) return null;
+  const headers = lines[headerIndex]!.split("|");
+  const col = Object.fromEntries(headers.map((header, index) => [header, index]));
+  const required = kind === "nasdaq" ? ["Symbol", "Security Name", "Test Issue", "ETF"] : ["ACT Symbol", "Security Name", "Exchange", "ETF", "Test Issue"];
+  if (required.some((field) => col[field] === undefined)) return null;
+  const securities: ListedSecurity[] = [];
+  const symbols = new Set<string>();
+  const eligibleExchanges = new Map([["A", "NYSE American"], ["N", "NYSE"], ["P", "NYSE Arca"], ["Z", "Cboe BZX"], ["V", "IEX"]]);
+  for (const line of lines.slice(headerIndex + 1)) {
+    if (!line || line.startsWith("File Creation Time:")) continue;
+    const fields = line.split("|");
+    if (fields.length !== headers.length) return null;
+    const symbol = fields[col[kind === "nasdaq" ? "Symbol" : "ACT Symbol"]!]!.trim();
+    const securityName = fields[col["Security Name"]!]!.trim();
+    const isTest = fields[col["Test Issue"]!]!.trim();
+    const isEtf = fields[col["ETF"]!]!.trim();
+    if (!symbol || !securityName || !/^[\x21-\x7e]{1,14}$/.test(symbol) || symbol.includes("|") || !["Y", "N"].includes(isTest) || !["Y", "N"].includes(isEtf)) return null;
+    const exchangeCode = kind === "nasdaq" ? "NASDAQ" : fields[col["Exchange"]!]!.trim();
+    const exchange = kind === "nasdaq" ? "Nasdaq" : eligibleExchanges.get(exchangeCode);
+    const instrumentOnly = /\b(?:warrants?|rights?|units?|preferred stock|depositary receipts?)\b/i.test(securityName);
+    if (isTest !== "N" || isEtf !== "N" || !exchange || instrumentOnly) continue;
+    const normalizedName = normalizedSecurityName(securityName);
+    if (!normalizedName || symbols.has(symbol.toUpperCase())) return null;
+    symbols.add(symbol.toUpperCase());
+    securities.push({ symbol, exchange, securityName, normalizedName });
+  }
+  return securities.length > 0 ? { securities, createdAt, retrievedAt, directories: [{ source, createdAt, retrievedAt }] } : null;
+}
+
+function currentListingMatch(issuer: string, snapshot: ListingSnapshot, now: number): ListedSecurity | null {
+  const age = now - Date.parse(snapshot.createdAt);
+  if (!Number.isFinite(age) || age < 0 || age > LISTING_FRESHNESS_MS) return null;
+  const normalized = normalizedSecurityName(issuer);
+  if (!normalized) return null;
+  const matches = snapshot.securities.filter((security) => security.normalizedName === normalized);
+  return matches.length === 1 ? matches[0]! : null;
+}
 
 function object(value: unknown): JsonRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonRecord : null;
@@ -81,6 +170,8 @@ function normalizeRows(value: unknown): SecFilingInboxRow[] | null {
 }
 
 export class SecFilingsInbox {
+  private listingSnapshot: ListingSnapshot | null = null;
+
   constructor(private readonly options: {
     acquisitionEnabled: boolean;
     fetcher?: typeof fetch;
@@ -176,7 +267,7 @@ export class SecFilingsInbox {
       const jobFailed = job?.status === "failed" || job?.status === "interrupted" || job?.status === "cancelled";
       const jobRunning = ["queued", "running", "cancelling"].includes(String(job?.status ?? ""));
       const latestUpdatedMs = typeof job?.updated_at === "string" ? Date.parse(job.updated_at) : NaN;
-      return {
+      return this.applyListingGate({
         state: jobFailed ? "failed" : jobRunning ? "pending" : rows.length === 0 ? "empty" : stale ? "stale" : "ready",
         freshness,
         rows,
@@ -188,7 +279,7 @@ export class SecFilingsInbox {
         canActivate: this.options.acquisitionEnabled,
         message: jobFailed ? "Refresh failed; the last accepted snapshot is retained below." : jobRunning ? "Refresh in progress; showing the last accepted snapshot below."
           : rows.length === 0 ? "The accepted SEC feed returned no filings in its bounded recent window." : null,
-      };
+      });
     } catch (error) {
       if (error instanceof Error && error.message === "hub_contract_missing") return this.empty("unsupported", "The connected Hub does not yet provide the SEC 8-K feed.");
       return this.unavailable();
@@ -196,7 +287,9 @@ export class SecFilingsInbox {
   }
 
   async activate(): Promise<SecFilingsInboxView> {
-    if (!this.options.acquisitionEnabled) return this.empty("unavailable", "SEC acquisition is paused. Enable external requests and approve only the SEC 8-K source in both source lists.");
+    if (!this.options.acquisitionEnabled) return this.empty("unavailable", "Recent Filings is paused. Enable external requests and approve both SEC 8-K and Nasdaq symbol-directory sources in both source lists.");
+    try { this.listingSnapshot = await this.fetchListingSnapshot(); }
+    catch { this.listingSnapshot = null; }
     let connection: HubConnection;
     try { connection = this.connection(); }
     catch { return this.unavailable(); }
@@ -238,7 +331,64 @@ export class SecFilingsInbox {
   }
 
   private empty(state: SecFilingsInboxView["state"], message: string | null, canActivate = this.options.acquisitionEnabled): SecFilingsInboxView {
-    return { state, freshness: "unknown", rows: [], receiptId: null, retrievedAt: null, feedUpdatedAt: null, jobStatus: null, canActivate, nextRefreshAt: null, message };
+    const listingDirectoryCreatedAt = this.listingSnapshot?.createdAt ?? null;
+    const listingDirectoryRetrievedAt = this.listingSnapshot?.retrievedAt ?? null;
+    return { state, freshness: "unknown", rows: [], receiptId: null, retrievedAt: null, feedUpdatedAt: null, jobStatus: null, canActivate, nextRefreshAt: null, message,
+      withheldCount: 0, listingVerificationGap: listingDirectoryCreatedAt ? null : "Current exchange-listing directories have not been verified in this app session.", listingDirectoryCreatedAt, listingDirectoryRetrievedAt, listingDirectories: this.listingSnapshot?.directories ?? [] };
+  }
+
+  private async fetchListingSnapshot(): Promise<ListingSnapshot> {
+    const fetcher = this.options.fetcher ?? fetch;
+    const responses = await Promise.all(LISTING_SOURCES.map(async ({ url, kind }) => {
+      const response = await fetcher(url, { method: "GET", headers: { accept: "text/plain" }, redirect: "error", signal: AbortSignal.timeout(15_000) });
+      if (!response.ok || (response.url && response.url !== url)) throw new Error("listing_directory_unavailable");
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("listing_directory_unavailable");
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > MAX_LISTING_BYTES) { await reader.cancel(); throw new Error("listing_directory_too_large"); }
+        chunks.push(part.value);
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const retrievedAt = new Date(this.options.now?.() ?? Date.now()).toISOString();
+      const parsed = parseListingDirectory(text, kind, url, retrievedAt);
+      if (!parsed) throw new Error("listing_directory_invalid");
+      return parsed;
+    }));
+    const createdAt = responses.map((response) => response.createdAt).sort((a, b) => Date.parse(a) - Date.parse(b))[0]!;
+    const retrievedAt = responses.map((response) => response.retrievedAt).sort((a, b) => Date.parse(b) - Date.parse(a))[0]!;
+    const securities = responses.flatMap((response) => response.securities);
+    return { securities, createdAt, retrievedAt, directories: responses.flatMap((response) => response.directories) };
+  }
+
+  private applyListingGate(view: SecFilingsInboxView): SecFilingsInboxView {
+    const snapshot = this.listingSnapshot;
+    if (!snapshot) return { ...view, state: view.rows.length ? "listing_unverified" : view.state, rows: [], withheldCount: view.rows.length,
+      listingVerificationGap: view.rows.length ? `${view.rows.length} SEC filing${view.rows.length === 1 ? " was" : "s were"} withheld because current Nasdaq Trader listing files could not be verified; the local app session has no directory snapshot. ${view.canActivate ? "Activate Recent Filings to check both official directories." : "The listing check is paused. Enable external requests and approve both sec_latest_filings_8k and nasdaq_symbol_directories in both source lists."}` : "Current exchange-listing directories have not been verified in this app session.",
+      listingDirectoryCreatedAt: null, listingDirectoryRetrievedAt: null, listingDirectories: [] };
+    const now = this.options.now?.() ?? Date.now();
+    const age = now - Date.parse(snapshot.createdAt);
+    const fresh = Number.isFinite(age) && age >= 0 && age <= LISTING_FRESHNESS_MS;
+    const verified = fresh ? view.rows.flatMap((row) => {
+      const listing = currentListingMatch(row.issuer, snapshot, now);
+      return listing ? [{ ...row, listing: { symbol: listing.symbol, exchange: listing.exchange, securityName: listing.securityName,
+        directoryCreatedAt: snapshot.createdAt, directoryRetrievedAt: snapshot.retrievedAt, directories: snapshot.directories } }] : [];
+    }) : [];
+    const withheldCount = view.rows.length - verified.length;
+    const listingVerificationGap = !fresh
+      ? `${withheldCount} SEC filing${withheldCount === 1 ? " was" : "s were"} withheld because Nasdaq Trader listing files are stale or have an invalid clock; ${view.canActivate ? "refresh is available only by explicit activation." : "the source check is paused; enable external requests and approve both required sources to retry."}`
+      : withheldCount > 0
+        ? `${withheldCount} SEC filing${withheldCount === 1 ? " was" : "s were"} withheld because the SEC issuer name had no unique exact match to an active, non-test, non-ETF Nasdaq Trader security name. OTC-only, ambiguous, and unknown issuers remain out of scope; repeating the current directory check will not resolve this match.`
+        : null;
+    return { ...view, state: verified.length === 0 && withheldCount > 0 ? "listing_unverified" : view.state, rows: verified, withheldCount, listingVerificationGap,
+      listingDirectoryCreatedAt: snapshot.createdAt, listingDirectoryRetrievedAt: snapshot.retrievedAt, listingDirectories: snapshot.directories };
   }
 
   private unavailable(): SecFilingsInboxView {

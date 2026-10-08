@@ -9,6 +9,7 @@ export type CollectorId =
   | "sec_edgar"
   | "sec_company_facts"
   | "sec_latest_filings_8k"
+  | "nasdaq_symbol_directories"
   | "finnhub"
   | "reddit"
   | "x"
@@ -46,6 +47,8 @@ export interface Company {
   name: string;
   ticker: string;
   sector: string;
+  /** Curated listing assertion required by config/companies.json for in-scope issuers. */
+  listingStatus?: "publicly_listed";
   aliases: string[];
   color: string;
   /** True when the name doubles as a common word (Apple, Meta, Intel, Amazon the river): text-matched mentions face a stricter identity bar. */

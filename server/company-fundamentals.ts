@@ -128,7 +128,7 @@ function decimalText(units: bigint, scale: number): string {
   return /^0(?:\.0*)?$/.test(result) ? "0" : `${negative ? "-" : ""}${result}`;
 }
 
-function decimalComparison(current: string, prior: string): { delta: string; percentChange: string | null } | null {
+export function decimalComparison(current: string, prior: string): { delta: string; percentChange: string | null } | null {
   const currentParts = decimalParts(current);
   const priorParts = decimalParts(prior);
   if (!currentParts || !priorParts) return null;
@@ -504,6 +504,17 @@ function resolvedFacts(facts: readonly PersistedFundamentalFact[], coverage: str
   return result.sort((a, b) => b.endDate.localeCompare(a.endDate) || a.metric.localeCompare(b.metric));
 }
 
+/** Resolve duplicate SEC vintages and compute comparisons without performing I/O. */
+export function comparePersistedFundamentalFacts(inputFacts: readonly PersistedFundamentalFact[]): {
+  facts: PersistedFundamentalFact[];
+  comparisons: FundamentalComparison[];
+  coverage: string[];
+} {
+  const coverage: string[] = [];
+  const facts = resolvedFacts(inputFacts, coverage);
+  return { facts, comparisons: facts.map((fact) => comparisonFor(fact, facts)), coverage };
+}
+
 export function addOneCalendarYear(date: string | null): string | null {
   if (!date || epochFromDate(date) == null) return null;
   const [year, month, day] = date.split("-").map(Number);
@@ -642,7 +653,9 @@ export class CompanyFundamentals {
     const snapshot = this.db.latestCompanyFundamentals(companyId);
     const latestAttempt = this.db.latestFundamentalAttempt(companyId);
     const coverage = snapshot?.coverage.slice() ?? [];
-    const facts = snapshot ? resolvedFacts(snapshot.facts, coverage) : [];
+    const resolved = snapshot ? comparePersistedFundamentalFacts(snapshot.facts) : { facts: [], comparisons: [], coverage: [] };
+    const facts = resolved.facts;
+    coverage.push(...resolved.coverage);
     const blocked = this.blockedReason(companyId, facts.length > 0);
     const retrievedAt = snapshot?.createdAt ?? null;
     const checkedAt = this.now();
@@ -663,7 +676,7 @@ export class CompanyFundamentals {
     return {
       companyId, state, periodComparisonPolicyVersion: PERIOD_COMPARISON_POLICY_VERSION,
       snapshotId: snapshot?.snapshotId ?? null, facts,
-      comparisons: facts.map((fact) => comparisonFor(fact, facts)), points: derivePoints(facts), coverage,
+      comparisons: resolved.comparisons, points: derivePoints(facts), coverage,
       refreshAllowed: blocked == null,
       refreshBlockedReason: blocked,
       lastRefreshError: attemptFailedAfterSnapshot ? latestAttempt?.error : null,
