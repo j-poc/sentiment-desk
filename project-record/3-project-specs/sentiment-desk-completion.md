@@ -1879,3 +1879,16 @@ or stayed on the current issuer. Preserve the existing read-only request
 boundary. Verify a real search result and a later page in the rendered app
 through the full open-return journey; a component remount test is supplemental
 evidence.
+
+## Private-company narrative scope — 2026-10-08
+
+The shared v1.0 private-company research specification is integrated as the
+separate scope record in
+`project-record/3-project-specs/private-company-narrative-slice.md`. The current
+Desk slice is public-source narrative context inside existing listed-issuer
+evidence. It does not add a private-company coverage universe, claim extraction,
+private financial data, or thesis alerts. The new scope record maps present,
+partial, missing, inapplicable, and unverified capabilities and defines the
+real-source acceptance needed before runtime support. No SEC/Compose, source,
+account, retention, or spending gate is changed; the wider private-company
+workflow remains unimplemented and unqualified.
