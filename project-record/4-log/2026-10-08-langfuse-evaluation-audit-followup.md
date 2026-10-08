@@ -331,16 +331,17 @@ passed; the existing Vite large-bundle advisory remains. The independent code
 review verified the shared disposition policy against 432 valid evidence
 combinations and found no mismatch. `git diff --check` passed.
 
-The final full-suite result is **UNVERIFIED**. A default parallel run passed
-879 tests but hit timeout failures in five files and one worker RPC timeout
-under concurrent machine load. A serial run with a 20-second per-test limit
-then encountered `ENOSPC` while database tests created temporary directories;
-the filesystem had 178 MB available. That run was stopped. No full-suite PASS
-is claimed for this final tree. The complete engineering gate also remains
-non-passing on whole-build findings, including stale/paused live SEC coverage
-and missing real Luna, benchmark, and investor-outcome evidence. These offline
-regressions establish software invariants only; no Luna request or
-classifier-quality conclusion was made.
+The final full suite passed **894 tests across 109 files** with
+`npm test -- --maxWorkers=1 --testTimeout=20000` (96.72 seconds). An earlier
+parallel run under concurrent machine load hit timeouts; one serial attempt
+also hit `ENOSPC` when only 178 MB was free. After the temporary test files
+released storage, the isolated serial rerun completed cleanly. Typecheck,
+production build, focused tests, staged Gitleaks scan, and `git diff --check`
+passed. The engineering completion gate remains non-passing on whole-build
+findings, including stale live-data ETL evidence and missing real Luna,
+benchmark, discovery, and investor-outcome evidence. These offline regressions
+establish software invariants only; no Luna request or classifier-quality
+conclusion was made.
 
 Checkpoint: commit `7f4412d5d1153f921aca5c91164e31c8f34ea69e` is pushed to
 `https://github.com/j-poc/sentiment-desk/tree/codex/real-data-rebuild` and the
