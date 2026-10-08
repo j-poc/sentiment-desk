@@ -1,3 +1,19 @@
+# Sentiment Desk continuation board — 2026-10-09 (current)
+
+| Owner | Scope | Status | Evidence / next |
+|---|---|---|---|
+| `/root` | Real SEC Recent Filings listing verification, cache recovery, and UI | Focused workflow verified | Current official Nasdaq Trader directories were acquired once in an isolated candidate; after app restart with external requests disabled, the real current SEC receipt rendered **29 verified / 10 withheld** with both source clocks. The 214-character GJP name from the live directory now survives cache validation. Full Vitest: **1,058/1,058**; typecheck/build passed; focused restart regression passed. The temporary preview uses a disposable SQLite DB and real public receipt only; it did not alter the user's main DB or create a Hub refresh. |
+| `/root/whole_build_detector_oct08_recheck` | Independent review of the full product | Full product still fails acceptance | Refreshed review: **4.9/10**, 12 pass, 16 unverified, 3 blocked, 2 fail. It confirms the isolated SEC candidate but keeps tickerless small-cap discovery, Luna qualification, real user outcomes, AlphaSense comparison, and the 4,700-row usage reconciliation open. The 33-index evidence matrix is preserved in the current engineering alignment review. |
+| `/root/ui_acceptance_review` | Independent SEC and investor UI review | SEC clock disclosure verified | The 29/39 SEC feed stays visible after offline restart. Rows explicitly show “Filing date not in feed” and “Acceptance time not in feed”; the header labels the source update “not a filing time.” This review does not establish current Luna or overall investor workflow completion. |
+| `/root` | Explicit private-note consent | Scope recorded; live analysis unverified | User authorizes GPT-6 Luna analysis only after explicit selection and confirmation of the exact note and listed issuer. The note remains local by default. No real note or configured OpenAI credential was available for a model run. Official OpenAI documentation confirms the `gpt-6-luna` model ID and API support; it does not prove account access. |
+| `/root` | Reviewed GitHub checkpoint | In progress | Current branch `codex/real-data-rebuild`; base push is `7d553b0d0d1720e9cac83b9a73eed3f5c6baf075`. Commit only reviewed source/tests/project docs; generated ETL evidence remains outside the source commit. |
+| `/root` | Full Sentiment Desk acceptance | Open | Current whole-build review: 12 pass, 16 unverified, 3 blocked, 2 fail (**4.9/10**). Missing evidence includes real Luna output and benchmark, no-ticker small-cap discovery, 30-task AlphaSense comparison, uncoached investor/analyst outcomes, and reconciliation of 4,700 legacy-unknown rows. Private-company discovery remains out of scope. Opportunity Radar remains disabled. |
+
+The live preview at `http://127.0.0.1:8898/` is the rebuilt production client
+over an isolated database. It is in saved-data-only mode and displays the
+source-backed 29/10 listing result after restart. The user's primary database was
+not modified; the primary app at `:8787` still has 0 visible and 39 withheld.
+
 # Sentiment Desk continuation board — 2026-10-07
 
 ## Selected filing evidence usability — 2026-10-07

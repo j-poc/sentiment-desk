@@ -1,23 +1,22 @@
-import { SecFilingsInbox } from "../server/sec-filings-inbox.js";
-import type { SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
+import { SecFilingsInbox, type SecFilingsReceiptEvidence } from "../server/sec-filings-inbox.js";
 import { pathToFileURL } from "node:url";
 
-export function isCurrentSecFilingsFeed(feed: SecFilingsInboxView): boolean {
-  return feed.state === "ready"
-    && feed.freshness === "current"
-    && feed.rows.length > 0
-    && Boolean(feed.receiptId)
-    && Boolean(feed.retrievedAt)
-    && Boolean(feed.feedUpdatedAt);
+export function isCurrentSecFilingsReceiptEvidence(evidence: SecFilingsReceiptEvidence): boolean {
+  return evidence.state === "ready"
+    && evidence.freshness === "current"
+    && evidence.rowCount > 0
+    && Boolean(evidence.receiptId)
+    && Boolean(evidence.retrievedAt)
+    && Boolean(evidence.feedUpdatedAt);
 }
 
 async function main(): Promise<void> {
-  const feed = await new SecFilingsInbox({ acquisitionEnabled: false }).read();
-  if (!isCurrentSecFilingsFeed(feed)) {
-    console.error(`SEC filing feed is not current: state=${feed.state}; source_freshness=${feed.freshness}; rows=${feed.rows.length}; feed_updated_at=${feed.feedUpdatedAt ?? "unknown"}; reason=${feed.message ?? "none"}`);
+  const evidence = await new SecFilingsInbox({ acquisitionEnabled: false }).readReceiptEvidence();
+  if (!isCurrentSecFilingsReceiptEvidence(evidence)) {
+    console.error(`SEC Hub receipt is not current: state=${evidence.state}; source_freshness=${evidence.freshness}; rows=${evidence.rowCount}; feed_updated_at=${evidence.feedUpdatedAt ?? "unknown"}`);
     process.exitCode = 1;
   } else {
-    console.log(`PASS: exact SEC 8-K Hub receipt is current and display-only; rows=${feed.rows.length}; feed_updated_at=${feed.feedUpdatedAt}; retrieved_at=${feed.retrievedAt}; no provider call made by this verifier.`);
+    console.log(`PASS: exact SEC 8-K Hub receipt is current and private-display-only; rows=${evidence.rowCount}; feed_updated_at=${evidence.feedUpdatedAt}; retrieved_at=${evidence.retrievedAt}; no provider request made by this verifier.`);
   }
 }
 

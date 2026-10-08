@@ -175,6 +175,10 @@ async function main(): Promise<void> {
   });
   const secFilingsInbox = new SecFilingsInbox({
     acquisitionEnabled: secFilingsInboxRequestsEnabled(config.externalRequestsEnabled, activeSourceCollectors),
+    listingSnapshotStore: {
+      read: () => db.readSecListingSnapshot(),
+      write: (snapshot) => db.saveSecListingSnapshot(snapshot),
+    },
   });
   const secFilingDetail = new SecFilingDetailService({
     enabled: collectorEnabled("sec_edgar") && collectorEnabled("sec_latest_filings_8k") && config.secUserAgent !== "",

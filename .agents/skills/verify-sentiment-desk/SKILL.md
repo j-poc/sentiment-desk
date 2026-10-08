@@ -1,11 +1,11 @@
 ---
 name: verify-sentiment-desk
-description: Verify selected-company SEC fundamentals recovery and explicit consent for local private evidence analysis.
+description: Verify SEC fundamentals recovery, explicit private-evidence consent, and listed-issuer filtering for Recent Filings.
 ---
 
 # Verify Sentiment Desk
 
-Use this skill for targeted real-API checks of the selected-company SEC fundamentals recovery and public-issuer private-evidence consent workflows. The recipe binds each run to current source and verifier fingerprints, then drives an isolated loopback instance backed by temporary SQLite databases. The SEC adapter receives deterministic, clearly labeled fixtures; the private-analysis adapter is a local verifier fixture. The helper makes no SEC, model-provider, or paid calls.
+Use this skill for targeted checks of selected-company SEC fundamentals recovery, public-issuer private-evidence consent, and the SEC Recent Filings listing gate. The fundamentals and private-evidence recipe binds each run to current source and verifier fingerprints, then drives an isolated loopback instance backed by temporary SQLite databases. Its SEC adapter and private-analysis adapter are clearly labeled verifier fixtures and make no provider calls. Recent Filings directory acquisition is a separate real-public-source path; its cache tests and live-data ETL gate must not be represented by those fixtures.
 
 ## Launch
 
@@ -62,6 +62,6 @@ npm test -- --reporter=dot --maxWorkers=1 --testTimeout=20000 tests/app-private-
 
 ## Feature map
 
-Read [the feature index](./features/README.md) before driving. The current map covers selected-company SEC fundamentals recovery and the local private-evidence consent boundary. It does not certify live source availability, GPT-6 Luna quality, or rendered cross-device journeys.
+Read [the feature index](./features/README.md) before driving. The map covers selected-company SEC fundamentals recovery, local private-evidence consent, and the Recent Filings active-listing cache. It does not certify live Luna classification quality, investor outcomes, or rendered cross-device journeys.
 
 For verifier upkeep, use `$maintain-verification-skill` to reconcile this recipe and map with the source before relying on a later run.

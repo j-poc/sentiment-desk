@@ -1,8 +1,8 @@
 # User-private evidence for listed issuers
 
-- **Recorded:** 2026-10-08
+- **Recorded:** 2026-10-09
 - **Authority:** the user's direct scope correction in this conversation
-- **Status:** implementation and mocked boundary tests complete; the user explicitly authorized selected-item GPT-6 Luna analysis; live provider execution and usefulness on actual user-owned material remain unverified because no OpenAI API credential is available and no note was provided.
+- **Status:** the user explicitly authorized GPT-6 Luna analysis only after selecting and confirming the exact note and issuer. The control path passes its isolated tests and an independent finance acceptance review. Live provider execution and usefulness on user-owned material remain unverified: no OpenAI API credential was found in the process environment or 1,039 local environment/credential/OpenAI candidate files, no spend-limit readback is available, and no note was provided.
 
 ## Current scope
 

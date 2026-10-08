@@ -7,7 +7,7 @@ tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/sentiment-desk-smoke.XXXXXX")
 compose_file="$tmp_dir/compose.yaml"
 
 cleanup() {
-  docker compose --project-name "$project" --file "$compose_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  docker compose --project-name "$project" --file "$compose_file" down --rmi local --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT HUP INT TERM

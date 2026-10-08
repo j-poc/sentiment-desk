@@ -1,6 +1,6 @@
 # Sentiment Desk verification map
 
-This directory maps two selected-company workflows: SEC fundamentals recovery and local private-evidence handling for configured public issuers. The verifier starts a disposable loopback API instance with temporary SQLite stores; it does not use the active runtime or claim live SEC availability or GPT-6 Luna quality.
+This directory maps three selected-company workflows: SEC fundamentals recovery, local private-evidence handling for configured public issuers, and the current-listed-issuer gate for Recent Filings. The verifier's isolated loopback API recipe uses temporary SQLite stores; it does not use the active runtime or claim live SEC availability or GPT-6 Luna quality.
 
 ## Baseline preconditions
 
@@ -21,3 +21,4 @@ This directory maps two selected-company workflows: SEC fundamentals recovery an
 
 - [SEC fundamentals recovery](./sec-fundamentals-recovery.md) covers partial revenue-only coverage, failed-refresh retention, and observation freshness.
 - [Private-evidence explicit consent](./private-evidence-explicit-consent.md) covers issuer isolation, metadata-only listing, explicit item-bound analysis confirmation, duplicate-call suppression, separation from public sentiment, and durable readback.
+- [SEC filing listed-issuer cache](./sec-filings-inbox-directory-cache.md) covers active Nasdaq/NYSE issuer verification, bounded local cache persistence across restart, offline reads, and fail-closed expiry or corruption.

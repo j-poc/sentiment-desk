@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { z } from "zod";
 import type {
   CollectorId,
@@ -30,6 +31,7 @@ import type { CompanyFundamentalsView, PersistedFundamentalFact } from "../share
 import type { SavedSourceCoverageSnapshot } from "../shared/saved-source-coverage.js";
 import { savedSourceTextMatches, type SavedSourceSearchCursor, type SavedSourceSearchPage } from "../shared/saved-source-search.js";
 import type { CompanyResearchDecision, CompanyResearchDecisionQueueItem, CompanyResearchEvidenceRole, CompanyResearchEvidenceRoleChoice, SavedCompanyResearchDecision } from "../shared/company-research-brief.js";
+import type { ListingSnapshot } from "../shared/sec-listing-snapshot.js";
 import {
   MAX_ACTIVE_ANALYST_RESEARCH_ITEMS,
   MAX_ANALYST_RESEARCH_QUESTION_CHARS,
@@ -1172,6 +1174,14 @@ export class Desk {
         saved_at INTEGER NOT NULL,
         PRIMARY KEY(cik, triggering_accession)
       )`);
+      // This replaceable cache lets the SEC inbox reuse the last verified
+      // exchange directory for the same 24-hour source window after restart.
+      this.exec(`CREATE TABLE IF NOT EXISTS sec_listing_verification_cache (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        snapshot_gzip BLOB NOT NULL CHECK (length(snapshot_gzip) <= 4000000),
+        snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+        saved_at INTEGER NOT NULL CHECK (saved_at >= 0)
+      ) STRICT`);
       // Additive and idempotent: existing v9 databases receive the guard on
       // writable startup without a table rebuild or historical row rewrite.
       this.exec(CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER);
@@ -1240,6 +1250,33 @@ export class Desk {
 
   externalRequestAllowed(): boolean {
     return this.storage.status(this.db, this.storageReadOnly).canStartExternalWork;
+  }
+
+  saveSecListingSnapshot(snapshot: ListingSnapshot): void {
+    const serialized = JSON.stringify(snapshot);
+    if (Buffer.byteLength(serialized, "utf8") > 8_000_000) throw new Error("sec_listing_snapshot_too_large");
+    const digest = createHash("sha256").update(serialized).digest("hex");
+    const compressed = gzipSync(Buffer.from(serialized, "utf8"));
+    if (compressed.byteLength > 4_000_000) throw new Error("sec_listing_snapshot_too_large");
+    this.prepare(`INSERT INTO sec_listing_verification_cache(singleton, snapshot_gzip, snapshot_sha256, saved_at)
+      VALUES (1, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET
+      snapshot_gzip=excluded.snapshot_gzip, snapshot_sha256=excluded.snapshot_sha256, saved_at=excluded.saved_at`)
+      .run(compressed, digest, Date.now());
+  }
+
+  readSecListingSnapshot(): unknown | null {
+    try {
+      const row = this.prepare("SELECT snapshot_gzip, snapshot_sha256 FROM sec_listing_verification_cache WHERE singleton=1").get() as
+        { snapshot_gzip?: Uint8Array; snapshot_sha256?: string } | undefined;
+      if (!(row?.snapshot_gzip instanceof Uint8Array) || typeof row.snapshot_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(row.snapshot_sha256)) return null;
+      const serialized = gunzipSync(Buffer.from(row.snapshot_gzip), { maxOutputLength: 8_000_000 }).toString("utf8");
+      if (createHash("sha256").update(serialized).digest("hex") !== row.snapshot_sha256) return null;
+      return JSON.parse(serialized) as unknown;
+    } catch {
+      // Missing table on a read-only legacy database and corrupt cache rows
+      // both degrade to a fresh explicit directory check.
+      return null;
+    }
   }
 
   prepareExternalWork(): boolean {

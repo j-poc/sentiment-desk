@@ -1,6 +1,8 @@
 import { config } from "./config.js";
+import { createHash } from "node:crypto";
 import { loadSecFilingsHubInstallation, type SecFilingsHubInstallation } from "./sec-filings-hub-installation.js";
 import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingIdentity, secFilingsSourceFreshness, secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
+import type { ListedSecurity, ListingDirectoryEvidence, ListingSnapshot } from "../shared/sec-listing-snapshot.js";
 
 const DATASET = "sec.latest_filings_8k";
 const CONSUMER = "sentiment-desk";
@@ -12,14 +14,17 @@ const LISTING_SOURCES = [
 ];
 const MAX_LISTING_BYTES = 1_500_000;
 const MAX_LISTING_ROWS = 20_000;
+const MAX_LISTING_NAME_CHARS = 512;
 
 interface HubConnection extends SecFilingsHubInstallation {}
+export type { ListedSecurity, ListingDirectoryEvidence, ListingSnapshot } from "../shared/sec-listing-snapshot.js";
+
+export interface ListingSnapshotStore {
+  read(): unknown | null;
+  write(snapshot: ListingSnapshot): void;
+}
 
 type JsonRecord = Record<string, unknown>;
-
-export interface ListedSecurity { symbol: string; exchange: string; securityName: string; normalizedName: string }
-export interface ListingDirectoryEvidence { source: string; createdAt: string; retrievedAt: string }
-export interface ListingSnapshot { securities: ListedSecurity[]; createdAt: string; retrievedAt: string; directories: ListingDirectoryEvidence[] }
 
 function easternTimestamp(value: string): string | null {
   const match = value.match(/^(\d{2})(\d{2})(\d{4}) (\d{2}):(\d{2})$/);
@@ -56,7 +61,10 @@ function normalizedSecurityName(value: string): string {
   return name.replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
-export function parseListingDirectory(text: string, kind: "nasdaq" | "other", source: string, retrievedAt: string): ListingSnapshot | null {
+export function parseListingDirectory(text: string, kind: "nasdaq" | "other", source: string, retrievedAt: string,
+  bodyEvidence: Pick<ListingDirectoryEvidence, "bodyBytes" | "bodySha256"> = {
+    bodyBytes: Buffer.byteLength(text, "utf8"), bodySha256: createHash("sha256").update(text, "utf8").digest("hex"),
+  }): ListingSnapshot | null {
   const creation = text.match(/^File Creation Time:[ \t]*(\d{8})[ \t]*(\d{2}:\d{2})[ \t]*\|*[ \t]*$/m);
   const createdAt = creation ? easternTimestamp(`${creation[1]} ${creation[2]}`) : null;
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
@@ -77,7 +85,8 @@ export function parseListingDirectory(text: string, kind: "nasdaq" | "other", so
     const securityName = fields[col["Security Name"]!]!.trim();
     const isTest = fields[col["Test Issue"]!]!.trim();
     const isEtf = fields[col["ETF"]!]!.trim();
-    if (!symbol || !securityName || !/^[\x21-\x7e]{1,14}$/.test(symbol) || symbol.includes("|") || !["Y", "N"].includes(isTest) || !["Y", "N"].includes(isEtf)) return null;
+    if (!symbol || !securityName || securityName.length > MAX_LISTING_NAME_CHARS || !/^[\x21-\x7e]{1,14}$/.test(symbol)
+      || symbol.includes("|") || !["Y", "N"].includes(isTest) || !["Y", "N"].includes(isEtf)) return null;
     const exchangeCode = kind === "nasdaq" ? "NASDAQ" : fields[col["Exchange"]!]!.trim();
     const exchange = kind === "nasdaq" ? "Nasdaq" : eligibleExchanges.get(exchangeCode);
     const instrumentOnly = /\b(?:warrants?|rights?|units?|preferred stock|depositary receipts?)\b/i.test(securityName);
@@ -87,7 +96,42 @@ export function parseListingDirectory(text: string, kind: "nasdaq" | "other", so
     symbols.add(symbol.toUpperCase());
     securities.push({ symbol, exchange, securityName, normalizedName });
   }
-  return securities.length > 0 ? { securities, createdAt, retrievedAt, directories: [{ source, createdAt, retrievedAt }] } : null;
+  return securities.length > 0 ? {
+    securities,
+    createdAt,
+    retrievedAt,
+    directories: [{ source, createdAt, retrievedAt, ...bodyEvidence }],
+  } : null;
+}
+
+function validatedListingSnapshot(value: unknown): ListingSnapshot | null {
+  const candidate = object(value);
+  if (!candidate || !Array.isArray(candidate.securities) || candidate.securities.length < 1 || candidate.securities.length > MAX_LISTING_ROWS * 2
+    || !Array.isArray(candidate.directories) || candidate.directories.length !== LISTING_SOURCES.length) return null;
+  const createdAt = validTimestamp(candidate.createdAt);
+  const retrievedAt = validTimestamp(candidate.retrievedAt);
+  if (!createdAt || !retrievedAt || Date.parse(retrievedAt) < Date.parse(createdAt)) return null;
+  const directories: ListingDirectoryEvidence[] = [];
+  for (const [index, source] of LISTING_SOURCES.entries()) {
+    const entry = object(candidate.directories[index]);
+    const entryCreatedAt = validTimestamp(entry?.createdAt);
+    const entryRetrievedAt = validTimestamp(entry?.retrievedAt);
+    if (!entry || entry.source !== source.url || !entryCreatedAt || !entryRetrievedAt
+      || typeof entry.bodyBytes !== "number" || !Number.isSafeInteger(entry.bodyBytes) || entry.bodyBytes < 1 || entry.bodyBytes > MAX_LISTING_BYTES
+      || typeof entry.bodySha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.bodySha256)) return null;
+    directories.push({ source: source.url, createdAt: entryCreatedAt, retrievedAt: entryRetrievedAt,
+      bodyBytes: Number(entry.bodyBytes), bodySha256: entry.bodySha256 });
+  }
+  const securities: ListedSecurity[] = [];
+  for (const raw of candidate.securities) {
+    const entry = object(raw);
+    if (!entry || typeof entry.symbol !== "string" || !/^[\x21-\x7e]{1,14}$/.test(entry.symbol)
+      || typeof entry.exchange !== "string" || !["Nasdaq", "NYSE American", "NYSE", "NYSE Arca", "Cboe BZX", "IEX"].includes(entry.exchange)
+      || typeof entry.securityName !== "string" || entry.securityName.length < 1 || entry.securityName.length > MAX_LISTING_NAME_CHARS
+      || typeof entry.normalizedName !== "string" || entry.normalizedName !== normalizedSecurityName(entry.securityName)) return null;
+    securities.push({ symbol: entry.symbol, exchange: entry.exchange, securityName: entry.securityName, normalizedName: entry.normalizedName });
+  }
+  return { securities, createdAt, retrievedAt, directories };
 }
 
 function currentListingMatch(issuer: string, snapshot: ListingSnapshot, now: number): ListedSecurity | null {
@@ -169,6 +213,16 @@ function normalizeRows(value: unknown): SecFilingInboxRow[] | null {
   return rows;
 }
 
+export interface SecFilingsReceiptEvidence {
+  state: SecFilingsInboxView["state"];
+  freshness: SecFilingsInboxView["freshness"];
+  rowCount: number;
+  receiptId: string | null;
+  retrievedAt: string | null;
+  feedUpdatedAt: string | null;
+  jobStatus: string | null;
+}
+
 export class SecFilingsInbox {
   private listingSnapshot: ListingSnapshot | null = null;
 
@@ -177,7 +231,11 @@ export class SecFilingsInbox {
     fetcher?: typeof fetch;
     now?: () => number;
     connectionProvider?: () => HubConnection;
-  }) {}
+    listingSnapshotStore?: ListingSnapshotStore;
+  }) {
+    try { this.listingSnapshot = validatedListingSnapshot(options.listingSnapshotStore?.read()); }
+    catch { this.listingSnapshot = null; }
+  }
 
   private connection(): HubConnection {
     return this.options.connectionProvider?.() ?? loadSecFilingsHubInstallation(config.publicDataHubInstallationFile);
@@ -220,6 +278,24 @@ export class SecFilingsInbox {
   private async get(url: URL, token: string): Promise<unknown> { return this.request(url, token); }
 
   async read(): Promise<SecFilingsInboxView> {
+    return this.applyListingGate(await this.readHubReceipt());
+  }
+
+  /** Read receipt freshness and shape without bypassing the UI's active-listing gate. */
+  async readReceiptEvidence(): Promise<SecFilingsReceiptEvidence> {
+    const view = await this.readHubReceipt();
+    return {
+      state: view.state,
+      freshness: view.freshness,
+      rowCount: view.rows.length,
+      receiptId: view.receiptId,
+      retrievedAt: view.retrievedAt,
+      feedUpdatedAt: view.feedUpdatedAt,
+      jobStatus: view.jobStatus,
+    };
+  }
+
+  private async readHubReceipt(): Promise<SecFilingsInboxView> {
     let connection: HubConnection;
     try { connection = this.connection(); }
     catch { return this.unavailable(); }
@@ -267,7 +343,7 @@ export class SecFilingsInbox {
       const jobFailed = job?.status === "failed" || job?.status === "interrupted" || job?.status === "cancelled";
       const jobRunning = ["queued", "running", "cancelling"].includes(String(job?.status ?? ""));
       const latestUpdatedMs = typeof job?.updated_at === "string" ? Date.parse(job.updated_at) : NaN;
-      return this.applyListingGate({
+      return {
         state: jobFailed ? "failed" : jobRunning ? "pending" : rows.length === 0 ? "empty" : stale ? "stale" : "ready",
         freshness,
         rows,
@@ -279,7 +355,7 @@ export class SecFilingsInbox {
         canActivate: this.options.acquisitionEnabled,
         message: jobFailed ? "Refresh failed; the last accepted snapshot is retained below." : jobRunning ? "Refresh in progress; showing the last accepted snapshot below."
           : rows.length === 0 ? "The accepted SEC feed returned no filings in its bounded recent window." : null,
-      });
+      };
     } catch (error) {
       if (error instanceof Error && error.message === "hub_contract_missing") return this.empty("unsupported", "The connected Hub does not yet provide the SEC 8-K feed.");
       return this.unavailable();
@@ -290,6 +366,10 @@ export class SecFilingsInbox {
     if (!this.options.acquisitionEnabled) return this.empty("unavailable", "Recent Filings is paused. Enable external requests and approve both SEC 8-K and Nasdaq symbol-directory sources in both source lists.");
     try { this.listingSnapshot = await this.fetchListingSnapshot(); }
     catch { this.listingSnapshot = null; }
+    if (this.listingSnapshot) {
+      try { this.options.listingSnapshotStore?.write(this.listingSnapshot); }
+      catch { /* the verified in-memory snapshot still serves this app session */ }
+    }
     let connection: HubConnection;
     try { connection = this.connection(); }
     catch { return this.unavailable(); }
@@ -358,7 +438,10 @@ export class SecFilingsInbox {
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       const retrievedAt = new Date(this.options.now?.() ?? Date.now()).toISOString();
-      const parsed = parseListingDirectory(text, kind, url, retrievedAt);
+      const parsed = parseListingDirectory(text, kind, url, retrievedAt, {
+        bodyBytes: size,
+        bodySha256: createHash("sha256").update(bytes).digest("hex"),
+      });
       if (!parsed) throw new Error("listing_directory_invalid");
       return parsed;
     }));
@@ -379,7 +462,8 @@ export class SecFilingsInbox {
     const verified = fresh ? view.rows.flatMap((row) => {
       const listing = currentListingMatch(row.issuer, snapshot, now);
       return listing ? [{ ...row, listing: { symbol: listing.symbol, exchange: listing.exchange, securityName: listing.securityName,
-        directoryCreatedAt: snapshot.createdAt, directoryRetrievedAt: snapshot.retrievedAt, directories: snapshot.directories } }] : [];
+        directoryCreatedAt: snapshot.createdAt, directoryRetrievedAt: snapshot.retrievedAt,
+        directories: snapshot.directories.map(({ source, createdAt, retrievedAt }) => ({ source, createdAt, retrievedAt })) } }] : [];
     }) : [];
     const withheldCount = view.rows.length - verified.length;
     const listingVerificationGap = !fresh

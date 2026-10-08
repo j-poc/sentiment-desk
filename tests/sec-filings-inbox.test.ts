@@ -1,9 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
-import { SecFilingsInbox } from "../server/sec-filings-inbox.js";
-import { isCurrentSecFilingsFeed } from "../scripts/verify-sec-filings-hub.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { Desk } from "../server/db.js";
+import { SecFilingsInbox, type ListingSnapshotStore } from "../server/sec-filings-inbox.js";
+import { isCurrentSecFilingsReceiptEvidence } from "../scripts/verify-sec-filings-hub.js";
+
+const temporaryDirectories: string[] = [];
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 const base = "http://127.0.0.1:18765";
 const filingUrl = "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm";
+const longNasdaqListedSecurityName = "Synthetic Fixed-Income Securities, Inc. on behalf of STRATS (SM) Trust for Dominion Resources, Inc. Securities, Series 2005-6, Floating Rate Structured Repackaged Asset-Backed Trust Securities (STRATS) Certificates";
 type HubFilingRecord = {
   kind: string;
   entity: string;
@@ -72,14 +83,17 @@ function listingFile(kind: "nasdaq" | "other"): string {
   return [
     "File Creation Time: 10052026 08:00",
     "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol",
+    // Exact 214-character security name observed in the 2026-10-08 Nasdaq Trader directory.
+    `GJP|${longNasdaqListedSecurityName}|N|GJP|N|100|N|GJP`,
     "OTCX|Unknown Issuer Inc.|N|OTCX|N|100|N|OTCX",
     "File Creation Time: 10052026 08:00", "",
   ].join("\n");
 }
 
-function makeInbox(fetcher: typeof fetch, now = Date.parse("2026-10-05T12:05:00Z"), acquisitionEnabled = true) {
+function makeInbox(fetcher: typeof fetch, now = Date.parse("2026-10-05T12:05:00Z"), acquisitionEnabled = true, listingSnapshotStore?: ListingSnapshotStore) {
   return new SecFilingsInbox({
     acquisitionEnabled, fetcher, now: () => now,
+    listingSnapshotStore,
     connectionProvider: () => ({ baseUrl: new URL(base), token: "test-token" }),
   });
 }
@@ -197,6 +211,56 @@ describe("real SEC filings inbox Hub boundary", () => {
     expect(fetcher.mock.calls.some(([input]) => String(input).includes("nasdaqtrader.com"))).toBe(false);
   });
 
+  it("reuses the verified real-source directory after app restart without another provider request", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-sec-listing-cache-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "desk.sqlite");
+    const firstDb = new Desk(databasePath);
+    const firstStore: ListingSnapshotStore = {
+      read: () => firstDb.readSecListingSnapshot(),
+      write: (snapshot) => firstDb.saveSecListingSnapshot(snapshot),
+    };
+    const fetcher = responseFor();
+    const firstInbox = makeInbox(fetcher, Date.parse("2026-10-05T12:05:00Z"), true, firstStore);
+    expect((await firstInbox.activate()).state).toBe("rate_limited");
+    expect((await firstInbox.read())).toMatchObject({ state: "ready", rows: [{ listing: { symbol: "EXMP" } }], withheldCount: 0 });
+    expect(firstDb.readSecListingSnapshot()).toMatchObject({
+      directories: [
+        { source: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", bodyBytes: expect.any(Number), bodySha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+        { source: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", bodyBytes: expect.any(Number), bodySha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      ],
+    });
+    firstDb.close();
+
+    const secondDb = new Desk(databasePath);
+    try {
+      const secondStore: ListingSnapshotStore = {
+        read: () => secondDb.readSecListingSnapshot(),
+        write: (snapshot) => secondDb.saveSecListingSnapshot(snapshot),
+      };
+      const restartedFetcher = responseFor();
+      const restarted = makeInbox(restartedFetcher, Date.parse("2026-10-05T12:10:00Z"), false, secondStore);
+      expect(await restarted.read()).toMatchObject({ state: "ready", rows: [{ listing: { symbol: "EXMP" } }], withheldCount: 0 });
+      expect((secondDb.readSecListingSnapshot() as { securities: Array<{ symbol: string; securityName: string }> }).securities)
+        .toContainEqual(expect.objectContaining({ symbol: "GJP", securityName: longNasdaqListedSecurityName }));
+      expect(restartedFetcher.mock.calls.some(([input]) => String(input).includes("nasdaqtrader.com"))).toBe(false);
+
+      const expiredFetcher = responseFor();
+      const expired = makeInbox(expiredFetcher, Date.parse("2026-10-06T12:10:01Z"), false, secondStore);
+      expect(await expired.read()).toMatchObject({ state: "listing_unverified", rows: [], withheldCount: 1 });
+      expect((await expired.read()).listingVerificationGap).toContain("stale or have an invalid clock");
+      expect(expiredFetcher.mock.calls.some(([input]) => String(input).includes("nasdaqtrader.com"))).toBe(false);
+
+      const rawDb = (secondDb as unknown as { db: DatabaseSync }).db;
+      rawDb.prepare("UPDATE sec_listing_verification_cache SET snapshot_sha256=? WHERE singleton=1").run("0".repeat(64));
+      expect(secondDb.readSecListingSnapshot()).toBeNull();
+      const corrupted = makeInbox(responseFor(), Date.parse("2026-10-05T12:10:00Z"), false, secondStore);
+      expect(await corrupted.read()).toMatchObject({ state: "listing_unverified", rows: [], withheldCount: 1 });
+    } finally {
+      secondDb.close();
+    }
+  });
+
   it("withholds listings whose exchange-directory creation clock exceeds the freshness budget", async () => {
     const fetcher = responseFor();
     const { result } = await readAfterListing(fetcher, Date.parse("2026-10-06T13:00:00Z"));
@@ -211,15 +275,24 @@ describe("real SEC filings inbox Hub boundary", () => {
     expect(result).toMatchObject({ state: "ready", freshness: "stale", feedUpdatedAt: "2026-10-05T12:06:00.000Z" });
   });
 
-  it("requires current source time before the live-receipt verifier can pass", async () => {
-    const { result: feed } = await readAfterListing(responseFor(), Date.parse("2026-10-05T12:05:00Z"));
-    expect(feed).toMatchObject({ state: "ready", freshness: "stale", retrievedAt: "2026-10-05T12:00:00.000Z" });
-    expect(isCurrentSecFilingsFeed(feed)).toBe(false);
+  it("verifies the current private-display receipt without bypassing the UI listing gate", async () => {
+    const now = Date.parse("2026-10-05T12:05:00Z");
+    const staleInbox = makeInbox(responseFor(), now, false);
+    const staleEvidence = await staleInbox.readReceiptEvidence();
+    expect(staleEvidence).toMatchObject({ state: "ready", freshness: "stale", rowCount: 1, retrievedAt: "2026-10-05T12:00:00.000Z" });
+    expect(isCurrentSecFilingsReceiptEvidence(staleEvidence)).toBe(false);
 
     const current = structuredClone(validRow);
     current.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
-    const { result: currentFeed } = await readAfterListing(responseFor({ records: [current] }), Date.parse("2026-10-05T12:05:00Z"));
-    expect(isCurrentSecFilingsFeed(currentFeed)).toBe(true);
+    const fetcher = responseFor({ records: [current] });
+    const inbox = makeInbox(fetcher, now, false);
+    const evidence = await inbox.readReceiptEvidence();
+    expect(evidence).toMatchObject({ state: "ready", freshness: "current", rowCount: 1, receiptId: "receipt-1", feedUpdatedAt: "2026-10-05T12:04:00.000Z" });
+    expect(isCurrentSecFilingsReceiptEvidence(evidence)).toBe(true);
+
+    const display = await inbox.read();
+    expect(display).toMatchObject({ state: "listing_unverified", rows: [], withheldCount: 1 });
+    expect(fetcher.mock.calls.some(([input]) => String(input).includes("nasdaqtrader.com"))).toBe(false);
   });
 
   it("keeps the issuer, EDGAR login CIK, and archive-path CIK distinct", async () => {
