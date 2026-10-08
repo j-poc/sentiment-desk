@@ -91,6 +91,11 @@ const classificationSchema = z.object({
   summary: z.string().max(500).nullable(), supportingExcerpt: z.string().max(240).nullable(),
   disposition: z.enum(["classified", "excluded", "review_required"]),
 }).strict();
+const providerClassificationSchema = z.object({
+  sentiment: sentimentSchema.nullable(), event_type: eventTypeSchema.nullable(), takeaway: takeawaySchema.nullable(),
+  about: z.boolean().nullable(), material: z.boolean().nullable(), investor_relevant: z.boolean().nullable(), evidence_sufficient: z.boolean(),
+  summary: z.string().max(500).nullable(), supporting_excerpt: z.string().max(240).nullable(),
+}).strict();
 const usageSchema = z.object({
   inputTokens: z.number().int().nonnegative(), cachedInputTokens: z.number().int().nonnegative().nullable(), cacheWriteInputTokens: z.number().int().nonnegative().nullable(), outputTokens: z.number().int().nonnegative(),
   reasoningTokens: z.number().int().nonnegative().nullable(), totalTokens: z.number().int().nonnegative(), estimatedCostUsd: z.number().finite().nonnegative().nullable(),
@@ -99,7 +104,8 @@ const attemptSchema = z.object({
   attemptNumber: z.number().int().positive(), outcome: z.enum(["completed", "refused", "incomplete", "invalid_output", "rejected", "unknown", "not_sent"]),
   requestPayloadSha256: digestSchema,
   submitted: z.boolean(), httpStatus: z.number().int().min(100).max(599).nullable(), responseId: z.string().min(1).max(200).nullable(),
-  responseSha256: digestSchema.nullable(), modelReturned: z.string().min(1).max(200).nullable(), serviceTier: z.string().min(1).max(80).nullable(), latencyMs: z.number().finite().nonnegative().nullable(),
+  responseSha256: digestSchema.nullable(), responsePayload: z.string().max(65_536).nullable(),
+  modelReturned: z.string().min(1).max(200).nullable(), serviceTier: z.string().min(1).max(80).nullable(), latencyMs: z.number().finite().nonnegative().nullable(),
   classification: classificationSchema.nullable(), usage: usageSchema.nullable(),
 }).strict();
 const runItemSchema = z.object({
@@ -107,8 +113,8 @@ const runItemSchema = z.object({
   terminalStatus: z.enum(["completed", "refused", "incomplete", "invalid_output", "rejected", "unknown", "not_sent", "not_attempted"]),
   attempts: z.array(attemptSchema).max(3),
 }).strict();
-export const lunaModelRunV1Schema = z.object({
-  schemaVersion: z.literal(1), studyId: z.string().min(1).max(200), runId: z.string().min(1).max(200), labelsSha256: digestSchema,
+export const lunaModelRunV2Schema = z.object({
+  schemaVersion: z.literal(2), studyId: z.string().min(1).max(200), runId: z.string().min(1).max(200), labelsSha256: digestSchema,
   sampleManifestSha256: digestSchema, evaluationProfile: z.literal(LUNA_DIAGNOSTIC_PROFILE), profileSha256: digestSchema,
   analysisCodeRevision: z.string().regex(COMMIT_SHA), sourceTreeDirty: z.literal(false), startedAt: ISO_TIME, requestCount: z.number().int().nonnegative(),
   requestedModel: z.string().min(1).max(200), maxRequests: z.number().int().positive(), maxEstimatedCostUsd: z.number().finite().positive(),
@@ -117,7 +123,7 @@ export const lunaModelRunV1Schema = z.object({
 }).strict();
 
 export type LunaLabelSetV2 = z.infer<typeof lunaLabelSetV2Schema>;
-export type LunaModelRunV1 = z.infer<typeof lunaModelRunV1Schema>;
+export type LunaModelRunV2 = z.infer<typeof lunaModelRunV2Schema>;
 export type LunaClassification = z.infer<typeof classificationSchema>;
 export type LunaUsage = z.infer<typeof usageSchema>;
 
@@ -140,6 +146,86 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 function hashCanonical(value: unknown): string { return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex"); }
+function assertCompletedResponseBinding(attempt: z.infer<typeof attemptSchema>, observationId: string): void {
+  if (attempt.outcome !== "completed") {
+    if (attempt.outcome === "not_sent" && attempt.responsePayload !== null) throw new Error(`not-sent Luna attempt ${observationId}/${attempt.attemptNumber} must not contain provider response bytes`);
+    if (attempt.responsePayload !== null) {
+      if (!attempt.responseSha256 || Buffer.byteLength(attempt.responsePayload, "utf8") > 65_536
+        || sha256Bytes(Buffer.from(attempt.responsePayload, "utf8")) !== attempt.responseSha256) {
+        throw new Error(`Luna attempt ${observationId}/${attempt.attemptNumber} response digest does not match its exact response payload`);
+      }
+    }
+    return;
+  }
+  if (attempt.responsePayload === null || !attempt.responseSha256 || Buffer.byteLength(attempt.responsePayload, "utf8") > 65_536
+    || sha256Bytes(Buffer.from(attempt.responsePayload, "utf8")) !== attempt.responseSha256) {
+    throw new Error(`completed Luna attempt ${observationId}/${attempt.attemptNumber} lacks a matching bounded response payload`);
+  }
+
+  let response: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(attempt.responsePayload) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("response is not an object");
+    response = parsed as Record<string, unknown>;
+  } catch {
+    throw new Error(`completed Luna attempt ${observationId}/${attempt.attemptNumber} has an invalid JSON response payload`);
+  }
+  const serviceTier = typeof response.service_tier === "string" ? response.service_tier : null;
+  if (response.id !== attempt.responseId || response.model !== attempt.modelReturned || serviceTier !== attempt.serviceTier || response.status !== "completed") {
+    throw new Error(`completed Luna attempt ${observationId}/${attempt.attemptNumber} response identity differs from its saved receipt`);
+  }
+
+  const texts: string[] = [];
+  let refused = false;
+  if (Array.isArray(response.output)) for (const outputItem of response.output) {
+    if (!outputItem || typeof outputItem !== "object" || Array.isArray(outputItem)) continue;
+    const item = outputItem as Record<string, unknown>;
+    if (item.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const contentItem of item.content) {
+      if (!contentItem || typeof contentItem !== "object" || Array.isArray(contentItem)) continue;
+      const content = contentItem as Record<string, unknown>;
+      if (content.type === "refusal") refused = true;
+      if (content.type === "output_text" && typeof content.text === "string") texts.push(content.text);
+    }
+  }
+  if (refused || texts.length !== 1) throw new Error(`completed Luna attempt ${observationId}/${attempt.attemptNumber} must contain one non-refusal structured response`);
+
+  let providerOutput: unknown;
+  try { providerOutput = JSON.parse(texts[0]!); }
+  catch { throw new Error(`completed Luna attempt ${observationId}/${attempt.attemptNumber} has invalid structured output JSON`); }
+  const parsedOutput = providerClassificationSchema.safeParse(providerOutput);
+  if (!parsedOutput.success) throw new Error(`completed Luna attempt ${observationId}/${attempt.attemptNumber} has an invalid structured classification`);
+  const output = parsedOutput.data;
+  const savedClassification = attempt.classification;
+  if (!savedClassification || canonicalJson({
+    sentiment: output.sentiment, eventType: output.event_type, takeaway: output.takeaway, about: output.about,
+    material: output.material, investorRelevant: output.investor_relevant, evidenceSufficient: output.evidence_sufficient,
+    summary: output.summary, supportingExcerpt: output.supporting_excerpt,
+  }) !== canonicalJson({
+    sentiment: savedClassification.sentiment, eventType: savedClassification.eventType, takeaway: savedClassification.takeaway,
+    about: savedClassification.about, material: savedClassification.material, investorRelevant: savedClassification.investorRelevant,
+    evidenceSufficient: savedClassification.evidenceSufficient, summary: savedClassification.summary,
+    supportingExcerpt: savedClassification.supportingExcerpt,
+  })) throw new Error("classification does not match the exact hashed response payload");
+
+  const usage = response.usage && typeof response.usage === "object" && !Array.isArray(response.usage)
+    ? response.usage as Record<string, unknown> : null;
+  const inputDetails = usage?.input_tokens_details && typeof usage.input_tokens_details === "object" && !Array.isArray(usage.input_tokens_details)
+    ? usage.input_tokens_details as Record<string, unknown> : {};
+  const outputDetails = usage?.output_tokens_details && typeof usage.output_tokens_details === "object" && !Array.isArray(usage.output_tokens_details)
+    ? usage.output_tokens_details as Record<string, unknown> : {};
+  const safeTokenCount = (value: unknown): number | null => Number.isSafeInteger(value) && typeof value === "number" && value >= 0 ? value : null;
+  const providerUsage = {
+    inputTokens: safeTokenCount(usage?.input_tokens), cachedInputTokens: safeTokenCount(inputDetails.cached_tokens),
+    cacheWriteInputTokens: safeTokenCount(inputDetails.cache_write_tokens), outputTokens: safeTokenCount(usage?.output_tokens),
+    reasoningTokens: safeTokenCount(outputDetails.reasoning_tokens), totalTokens: safeTokenCount(usage?.total_tokens),
+  };
+  const savedUsage = attempt.usage;
+  if (!savedUsage || canonicalJson(providerUsage) !== canonicalJson({
+    inputTokens: savedUsage.inputTokens, cachedInputTokens: savedUsage.cachedInputTokens, cacheWriteInputTokens: savedUsage.cacheWriteInputTokens,
+    outputTokens: savedUsage.outputTokens, reasoningTokens: savedUsage.reasoningTokens, totalTokens: savedUsage.totalTokens,
+  })) throw new Error(`usage does not match the exact hashed response payload for ${observationId}/${attempt.attemptNumber}`);
+}
 function assertSecSource(row: z.infer<typeof secCaseProvenanceSchema>): void {
   const url = new URL(row.sourceUrl);
   if (url.protocol !== "https:" || !["sec.gov", "www.sec.gov"].includes(url.hostname.toLowerCase()) || url.username || url.password || url.search || url.hash) throw new Error(`case ${row.observationId} has a non-canonical SEC source URL`);
@@ -240,8 +326,8 @@ export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierCont
   return labels;
 }
 
-export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV2, classifier: LunaClassifierContract): LunaModelRunV1 {
-  const run = lunaModelRunV1Schema.parse(value);
+export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV2, classifier: LunaClassifierContract): LunaModelRunV2 {
+  const run = lunaModelRunV2Schema.parse(value);
   if (labels.stage !== "final") throw new Error("a Luna model run is only valid for a frozen final label set");
   if (!labels.evaluationBudget) throw new Error("a final Luna run requires pre-frozen account-approved spend controls");
   if (run.studyId !== labels.studyId || run.sampleManifestSha256 !== labels.sampleManifestSha256 || run.evaluationProfile !== labels.evaluationProfile || run.profileSha256 !== labels.profileSha256 || run.analysisCodeRevision !== labels.analysisCodeRevision || run.sourceTreeDirty || run.requestedModel !== labels.requestedModel) throw new Error("Luna run identity differs from the frozen label and request profile");
@@ -266,6 +352,7 @@ export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV2, classi
       if (attempt.requestPayloadSha256 !== labelItem.requestBinding.payloadSha256) throw new Error(`Luna attempt request digest does not match frozen request for ${item.observationId}/${attempt.attemptNumber}`);
       if (attempt.outcome === "not_sent" ? attempt.submitted : !attempt.submitted) throw new Error(`Luna attempt ${item.observationId}/${attempt.attemptNumber} submission flag conflicts with its terminal outcome`);
       if (attempt.submitted) submittedCount += 1;
+      assertCompletedResponseBinding(attempt, item.observationId);
       if (attempt.outcome === "not_sent" && (attempt.httpStatus !== null || attempt.responseId !== null || attempt.responseSha256 !== null || attempt.classification !== null || attempt.usage !== null)) throw new Error(`not-sent Luna attempt ${item.observationId}/${attempt.attemptNumber} must not contain a provider response`);
       if (attempt.outcome === "completed") {
         if (attempt.httpStatus === null || attempt.httpStatus < 200 || attempt.httpStatus >= 300 || !attempt.responseId || !attempt.responseSha256 || !attempt.modelReturned || attempt.latencyMs === null || !attempt.classification || !attempt.usage) throw new Error(`completed Luna attempt ${item.observationId}/${attempt.attemptNumber} lacks complete response and usage evidence`);
@@ -289,7 +376,7 @@ function referenceState(item: LunaLabelSetV2["items"][number], field: keyof Luna
   if (field !== "evidenceSufficient" && item.expectedAbstentions.includes(field)) return "abstention" as const;
   return resolveCaseLabels(item)[field] === null ? "unresolved" as const : "resolved" as const;
 }
-function acceptedClassification(item: LunaModelRunV1["items"][number] | null | undefined): LunaClassification | null {
+function acceptedClassification(item: LunaModelRunV2["items"][number] | null | undefined): LunaClassification | null {
   if (!item || item.terminalStatus !== "completed") return null;
   return item.attempts[item.attempts.length - 1]?.classification ?? null;
 }
@@ -307,7 +394,7 @@ function gateStatus(metric: ReturnType<typeof classificationMetrics>, allClasses
 }
 
 function exactReferenceStatus(
-  cases: Array<{ item: LunaLabelSetV2["items"][number]; reference: ReturnType<typeof resolveCaseLabels>; run: LunaModelRunV1["items"][number] | null }>,
+  cases: Array<{ item: LunaLabelSetV2["items"][number]; reference: ReturnType<typeof resolveCaseLabels>; run: LunaModelRunV2["items"][number] | null }>,
   field: "eventType" | "takeaway" | "material" | "evidenceSufficient",
 ) {
   const resolved = cases.filter(({ item }) => referenceState(item, field) === "resolved");
@@ -339,7 +426,7 @@ export function analyzeLunaPilot(labels: LunaLabelSetV2): Record<string, unknown
   return { mode: "luna-agent-reference-pilot", status: "UNVERIFIED", statusScope: "agent-reference agreement only; no classifier run is present", evaluationProfile: labels.evaluationProfile, labelAuthority: "independent_subagents", humanGroundTruth: "NOT_PROVIDED", statisticalCertification: "UNVERIFIED", investmentValue: "UNVERIFIED", selectedCaseDenominator: labels.items.length, issuerCount: new Set(labels.items.map(({ cik }) => cik)).size, companyCount: new Set(labels.items.map(({ company }) => company.id)).size, rawAgentAgreement: rawAgreement(labels), unresolvedReferences: unresolved, unresolvedReferenceFieldCount: unresolved.length, unresolvedReferenceFieldRate: unresolved.length / (labels.items.length * 7), caseBindings: labels.items.map((item) => ({ observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding })), blindedProtocol: labels.agentLabelProtocol, limitations: ["Independent agents are references, not human ground truth.", "No Luna classifier run is present; classifier quality and execution remain UNVERIFIED.", "Source rights and receipt authenticity require the separately bound evidence package."] };
 }
 
-export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: string; run: LunaModelRunV1 | null }): Record<string, any> {
+export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: string; run: LunaModelRunV2 | null }): Record<string, any> {
   const { labels, run } = input;
   if (!run) return { ...analyzeLunaPilot(labels), mode: "luna-final-diagnostic", runId: null, provenanceExecutionStatus: "UNVERIFIED", qualityStatus: "UNVERIFIED", reason: "no saved Luna model run was provided", labelsSha256: input.labelsSha256 };
   if (run.labelsSha256 !== input.labelsSha256) throw new Error("Luna run label digest does not bind the exact frozen label bytes");
@@ -484,7 +571,7 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: 
     quality: { sentiment: sentimentGate, inclusionPrecision: inclusionMetrics, classificationDisposition: dispositionStatus, eventTypeReference, eventTypeDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: eventTypeCases.length, missingClasses: EVENT_TYPES.filter((name) => eventTypeMetrics.perClass[name]!.support === 0), metrics: eventTypeMetrics }, takeawayReference, takeawayDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: takeawayCases.length, missingClasses: TAKEAWAY_KEYS.filter((name) => takeawayMetrics.perClass[name]!.support === 0), metrics: takeawayMetrics }, materialReference, materialDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: materialCases.length, metrics: materialMetrics }, evidenceSufficiencyReference, evidenceSufficiencyDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: evidenceCases.length, metrics: evidenceMetrics }, modelCompletionCoverage: { selectedCases: labels.items.length, completedCases: completed.length, rate: completed.length / labels.items.length } },
     execution: { status: executionStatus, requestedModel: run.requestedModel, requestedServiceTier: labels.requestedServiceTier, selectedCases: labels.items.length, runCases: run.items.length, missingIds, unexpectedIds, failedCases: failed.map(({ observationId, terminalStatus }) => ({ observationId, terminalStatus })), unknownCases: unknown.map(({ observationId }) => observationId), requestCount: run.requestCount, maxRequests: run.maxRequests, totalEstimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, maxEstimatedCostUsd: run.maxEstimatedCostUsd, usageMissingAttempts: missingUsage, incompleteUsageBreakdownAttempts: incompleteUsage, unpricedAttempts, retryableRateLimitAttempts, returnedModels, returnedTiers, missingReturnedModelCount, missingReturnedTierCount, returnedModelStatus, returnedTierStatus, latencyMs: { mean: completedAttempts.length ? completedAttempts.reduce((sum, attempt) => sum + attempt.latencyMs!, 0) / completedAttempts.length : null, max: completedAttempts.length ? Math.max(...completedAttempts.map((attempt) => attempt.latencyMs!)) : null } },
     usage: { inputTokens: totalInput, cachedInputTokensKnownSubtotal: cachedInputKnown, cachedInputTokensUnknownAttempts: usageRows.filter((row) => row.cachedInputTokens === null).length, cacheWriteInputTokensKnownSubtotal: cacheWriteKnown, cacheWriteInputTokensUnknownAttempts: usageRows.filter((row) => row.cacheWriteInputTokens === null).length, uncachedInputTokens: usageRows.filter((row) => row.cachedInputTokens !== null && row.cacheWriteInputTokens !== null).reduce((sum, row) => sum + row.inputTokens - row.cachedInputTokens! - row.cacheWriteInputTokens!, 0), outputTokens: totalOutput, reasoningTokensKnownSubtotal: reasoningKnown, reasoningTokensUnknownAttempts: usageRows.filter((row) => row.reasoningTokens === null).length, reasoningTokensAreIncludedInOutput: true, totalTokens: rawTotal, estimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, ratesPerMillionUsd: { input: run.inputPerMillionUsd, cachedInput: run.cachedInputPerMillionUsd, cacheWrite: run.cacheWritePerMillionUsd, output: run.outputPerMillionUsd } },
-    perCase: labels.items.map((item) => { const result = byRunId.get(item.observationId); return { observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, source: { collector: item.collector, publisher: item.publisher }, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding, reference: resolveCaseLabels(item), modelStatus: result?.terminalStatus ?? "missing", prediction: acceptedClassification(result), attempts: result?.attempts ?? [] }; }),
+    perCase: labels.items.map((item) => { const result = byRunId.get(item.observationId); return { observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, source: { collector: item.collector, publisher: item.publisher }, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding, reference: resolveCaseLabels(item), modelStatus: result?.terminalStatus ?? "missing", prediction: acceptedClassification(result), attempts: result?.attempts.map(({ responsePayload: _responsePayload, ...attempt }) => attempt) ?? [] }; }),
     blindedProtocol: labels.agentLabelProtocol,
     limitations: ["Independent agent labels are references, not human ground truth.", "All selected cases remain in referenceEligibility; unresolved required references keep structured classification unverified. Resolved-subset scores do not assign a true class to unresolved references.", "Event type, takeaway, materiality and evidence sufficiency disagreements are routed to independent review because the references are not ground truth; they cannot produce a pass or an automatic model-error claim.", "Generated summary support and usefulness are not evaluated by a frozen reference set or validated judge; substring quote presence does not establish entailment, so any run containing summaries stays unverified.", "All intervals/population claims and investment value remain unverified; the 30-case issuer sample is a bounded diagnostic.", "Source-rights and SEC receipt authenticity are established by the separately bound evidence package, not model agreement."],
   };

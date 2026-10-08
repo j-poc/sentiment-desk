@@ -223,7 +223,7 @@ function extractOutputText(raw: Record<string, unknown>): { text: string | null;
 
 export class OpenAIClassifier {
   private readonly fetchImpl: typeof fetch;
-  constructor(private readonly options: { apiKey: string; model: string; timeoutMs?: number; fetchImpl?: typeof fetch }) {
+  constructor(private readonly options: { apiKey: string; model: string; timeoutMs?: number; fetchImpl?: typeof fetch; onResponseBytes?: (status: number, bytes: Uint8Array) => void }) {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -267,6 +267,9 @@ export class OpenAIClassifier {
     try { rawBytes = await readBoundedResponse(response); } catch {
       throw new OpenAIClassifierError("OpenAI response exceeded the bounded response size or could not be read; provider usage must be reconciled", response.status, false, true, null, null, null, Date.now() - started);
     }
+    // The evaluation runner uses this private hook to bind a local run artifact
+    // to the exact bounded response. Production callers leave it unset.
+    this.options.onResponseBytes?.(response.status, rawBytes.slice());
     const digest = createHash("sha256").update(rawBytes).digest("hex");
     let raw: unknown;
     try { raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(rawBytes)) as unknown; } catch {

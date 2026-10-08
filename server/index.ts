@@ -147,8 +147,9 @@ async function main(): Promise<void> {
     enabled: collectorEnabled("sec_edgar") && collectorEnabled("sec_latest_filings_8k") && config.secUserAgent !== "",
     userAgent: config.secUserAgent,
   });
-  // Pending work drains on boot only when Jev is configured. Without a key,
-  // real observations remain pending and create no scoring failure attempts.
+  // Pending work drains on boot only when the selected OpenAI Luna route is
+  // authorized and within its configured budget. Otherwise real observations
+  // remain pending and create no scoring failure attempts.
   // Existing completed scores remain untouched when the current rubric changes.
   const drained = activeProviderEnabled ? pipeline.drainPending(5_000) : 0;
   if (drained > 0) console.log(`[desk] re-queued ${drained} pending mentions`);

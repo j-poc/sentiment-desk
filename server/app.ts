@@ -23,6 +23,7 @@ import type { SecFilingsInbox } from "./sec-filings-inbox.js";
 import type { SecFilingDetailService } from "./sec-filing-detail.js";
 import { MAX_ANALYST_RESEARCH_QUESTION_CHARS } from "../shared/analyst-research.js";
 import { savedSourceSearchCursorSchema, type SavedSourceSearchCursor } from "../shared/saved-source-search.js";
+import { secFilingArchiveCikPath, type SecFilingInboxRow } from "../shared/sec-filings-inbox.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 import type { CategoricalBucketCursor } from "./types.js";
@@ -97,7 +98,8 @@ const mentionLookupSchema = z.object({
 });
 const fundamentalRefreshSchema = z.object({ requestKey: z.string().uuid() }).strict();
 const secFilingsInboxActivationSchema = z.object({ confirmUse: z.literal(true) }).strict();
-const secIssuerFollowupSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/) }).strict();
+const secFilingResearchTaskSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/),
+  nextQuestion: z.string().max(500).optional() }).strict();
 const secFilingDetailSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/), confirmUse: z.literal(true) }).strict();
 const analystResearchReviewSchema = z.object({
   disposition: z.enum(["investigate", "dismissed"]),
@@ -292,13 +294,34 @@ export function createApp(deps: AppDeps): Hono {
     if (!input.success) return c.json({ error: "invalid_sec_filing_detail_request" }, 400);
     const current = await deps.secFilingsInbox.read();
     const row = current.rows.find((item) => item.cik === input.data.cik && item.accession === input.data.accession && item.form === "8-K");
-    if (!row || !/^\d{10}$/.test(row.cik) || row.filingUrl == null) return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
-    return c.json(await deps.secFilingDetail.inspect(row));
+    if (row && /^\d{10}$/.test(row.cik) && row.filingUrl != null) return c.json(await deps.secFilingDetail.inspect(row));
+    if (!deps.db.hasSecFilingResearchTaskStore()) return c.json({ error: "sec_filing_research_tasks_unavailable" }, 503);
+    const saved = deps.db.secFilingResearchTasks().find((task) => task.cik === input.data.cik && task.triggeringAccession === input.data.accession);
+    if (!saved || !/^\d{10}$/.test(saved.cik)) return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
+    const filingCikPath = secFilingArchiveCikPath(saved.filingUrl, saved.triggeringAccession);
+    if (!filingCikPath) return c.json({ error: "saved_filing_url_invalid" }, 409);
+    const savedRow: SecFilingInboxRow = {
+      cik: saved.cik,
+      accession: saved.triggeringAccession,
+      accessionCik: saved.triggeringAccession.slice(0, 10),
+      filingCikPath,
+      issuer: saved.issuer,
+      form: "8-K",
+      filedOn: null,
+      acceptedAt: null,
+      feedPublishedAt: null,
+      feedUpdatedAt: saved.feedUpdatedAt,
+      filingUrl: saved.filingUrl,
+    };
+    return c.json(await deps.secFilingDetail.inspect(savedRow));
   });
 
-  app.get("/api/sec-issuer-followups", (c) => c.json({ items: deps.db.secIssuerFollowups() }));
+  app.get("/api/sec-filing-research-tasks", (c) => {
+    if (!deps.db.hasSecFilingResearchTaskStore()) return c.json({ error: "sec_filing_research_tasks_unavailable" }, 503);
+    return c.json({ items: deps.db.secFilingResearchTasks() });
+  });
 
-  app.post("/api/sec-issuer-followups", async (c) => {
+  app.post("/api/sec-filing-research-tasks", async (c) => {
     const requestUrl = new URL(c.req.url);
     const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
     const hostHeader = c.req.header("host")?.toLowerCase();
@@ -309,17 +332,42 @@ export function createApp(deps: AppDeps): Hono {
       || !sameOrigin || c.req.header("sec-fetch-site")?.toLowerCase() === "cross-site") return c.json({ error: "unsafe_external_request_origin" }, 403);
     if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
     if (!deps.secFilingsInbox) return c.json({ error: "sec_filings_inbox_unavailable" }, 503);
-    const input = secIssuerFollowupSchema.safeParse(await c.req.json().catch(() => null));
-    if (!input.success) return c.json({ error: "invalid_sec_issuer_followup" }, 400);
-    const source = (await deps.secFilingsInbox.read()).rows.find((row) => row.cik === input.data.cik && row.accession === input.data.accession && row.form === "8-K");
-    if (!source || !/^\d{10}$/.test(source.cik) || source.filingUrl == null) return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
-    deps.db.saveSecIssuerFollowup({ cik: source.cik, issuer: source.issuer, triggeringAccession: source.accession, filingUrl: source.filingUrl });
-    const saved = deps.db.secIssuerFollowups().find((item) => item.cik === source.cik);
-    if (!saved) return c.json({ error: "sec_issuer_followup_readback_failed" }, 500);
-    return c.json(saved, 201);
+    const input = secFilingResearchTaskSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_sec_filing_research_task" }, 400);
+    if (!deps.db.hasSecFilingResearchTaskStore()) return c.json({ error: "sec_filing_research_tasks_unavailable" }, 503);
+    const existing = deps.db.secFilingResearchTasks().find((item) => item.cik === input.data.cik && item.triggeringAccession === input.data.accession);
+    let currentFeed: Awaited<ReturnType<SecFilingsInbox["read"]>> | null = null;
+    let source: Awaited<ReturnType<SecFilingsInbox["read"]>>["rows"][number] | undefined;
+    if (!existing) {
+      currentFeed = await deps.secFilingsInbox.read();
+      if (currentFeed.state !== "ready" || currentFeed.freshness !== "current") {
+        return c.json({ error: "sec_feed_not_current" }, 409);
+      }
+      source = currentFeed.rows.find((row) => row.cik === input.data.cik && row.accession === input.data.accession && row.form === "8-K");
+    }
+    if (!existing && (!source || !/^\d{10}$/.test(source.cik) || source.filingUrl == null)) {
+      return c.json({ error: "filing_not_in_current_sec_inbox" }, 404);
+    }
+    if (existing && input.data.nextQuestion === undefined) return c.json(existing, 200);
+    const accepted = existing ? {
+      cik: existing.cik, issuer: existing.issuer, accession: existing.triggeringAccession, filingUrl: existing.filingUrl,
+      receiptId: existing.feedReceiptId, feedUpdatedAt: existing.feedUpdatedAt, retrievedAt: existing.retrievedAt,
+    } : {
+      cik: source!.cik, issuer: source!.issuer, accession: source!.accession, filingUrl: source!.filingUrl!,
+      receiptId: currentFeed!.receiptId, feedUpdatedAt: currentFeed!.feedUpdatedAt, retrievedAt: currentFeed!.retrievedAt,
+    };
+    if (!accepted.receiptId) return c.json({ error: "sec_feed_receipt_missing" }, 409);
+    try {
+      deps.db.saveSecFilingResearchTask({ cik: accepted.cik, issuer: accepted.issuer, triggeringAccession: accepted.accession,
+        filingUrl: accepted.filingUrl, nextQuestion: input.data.nextQuestion ?? existing?.nextQuestion ?? "",
+      feedReceiptId: accepted.receiptId, feedUpdatedAt: accepted.feedUpdatedAt, retrievedAt: accepted.retrievedAt });
+    } catch { return c.json({ error: "sec_filing_research_task_storage_failed" }, 503); }
+    const saved = deps.db.secFilingResearchTasks().find((item) => item.cik === accepted.cik && item.triggeringAccession === accepted.accession);
+    if (!saved) return c.json({ error: "sec_filing_research_task_readback_failed" }, 503);
+    return c.json(saved, existing ? 200 : 201);
   });
 
-  app.delete("/api/sec-issuer-followups/:cik", (c) => {
+  app.delete("/api/sec-filing-research-tasks/:cik/:accession", (c) => {
     const requestUrl = new URL(c.req.url);
     const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
     const hostHeader = c.req.header("host")?.toLowerCase();
@@ -329,9 +377,11 @@ export function createApp(deps: AppDeps): Hono {
     if (!localHosts.has(requestUrl.hostname.toLowerCase()) || (hostHeader != null && hostHeader !== requestUrl.host.toLowerCase())
       || !sameOrigin || c.req.header("sec-fetch-site")?.toLowerCase() === "cross-site") return c.json({ error: "unsafe_external_request_origin" }, 403);
     const cik = c.req.param("cik");
-    if (!/^\d{10}$/.test(cik)) return c.json({ error: "invalid_sec_issuer_cik" }, 400);
-    deps.db.removeSecIssuerFollowup(cik);
-    return c.json({ items: deps.db.secIssuerFollowups() });
+    const accession = c.req.param("accession");
+    if (!/^\d{10}$/.test(cik) || !/^\d{10}-\d{2}-\d{6}$/.test(accession)) return c.json({ error: "invalid_sec_filing_research_task_identity" }, 400);
+    if (!deps.db.hasSecFilingResearchTaskStore()) return c.json({ error: "sec_filing_research_tasks_unavailable" }, 503);
+    deps.db.removeSecFilingResearchTask(cik, accession);
+    return c.json({ items: deps.db.secFilingResearchTasks() });
   });
 
   app.post("/api/sec-filings-inbox/activate", async (c) => {

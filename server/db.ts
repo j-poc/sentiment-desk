@@ -282,13 +282,6 @@ CREATE TABLE IF NOT EXISTS companies (
   color TEXT NOT NULL,
   ambiguous INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS sec_issuer_followups (
-  cik TEXT PRIMARY KEY CHECK (length(cik) = 10 AND cik NOT GLOB '*[^0-9]*'),
-  issuer TEXT NOT NULL,
-  triggering_accession TEXT NOT NULL,
-  filing_url TEXT NOT NULL,
-  saved_at INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS source_observations (
   id TEXT PRIMARY KEY,
   company_id TEXT NOT NULL REFERENCES companies(id),
@@ -1137,13 +1130,18 @@ export class Desk {
         this.migrate();
       }
       this.exec(ANALYST_SOURCE_REVIEW_GUARDS);
-      // Additive: issuer research leads exist independently of the old fixed company/watchlist table.
-      this.exec(`CREATE TABLE IF NOT EXISTS sec_issuer_followups (
-        cik TEXT PRIMARY KEY CHECK (length(cik) = 10 AND cik NOT GLOB '*[^0-9]*'),
+      // Filing tasks use exact issuer-plus-accession identity, independent of the configured watchlist.
+      this.exec(`CREATE TABLE IF NOT EXISTS sec_filing_research_tasks (
+        cik TEXT NOT NULL CHECK (length(cik) = 10 AND cik NOT GLOB '*[^0-9]*'),
         issuer TEXT NOT NULL,
         triggering_accession TEXT NOT NULL,
         filing_url TEXT NOT NULL,
-        saved_at INTEGER NOT NULL
+        next_question TEXT NOT NULL DEFAULT '',
+        feed_receipt_id TEXT NOT NULL,
+        feed_updated_at TEXT,
+        retrieved_at TEXT,
+        saved_at INTEGER NOT NULL,
+        PRIMARY KEY(cik, triggering_accession)
       )`);
       // Additive and idempotent: existing v9 databases receive the guard on
       // writable startup without a table rebuild or historical row rewrite.
@@ -4140,6 +4138,51 @@ export class Desk {
     }
   }
 
+  /** Permanently reserves a whole Luna evaluation cohort against the same daily counters as Pipeline. */
+  reserveOpenAIEvaluationBudget(input: {
+    utcDay: string; requests: number; requestBytes: number; costMicros: number;
+    maxRequests: number; maxRequestBytes: number; maxDailyCostMicros: number;
+  }): { reserved: true } | { reserved: false; reason: "read_only" | "capacity" | "invalid" | "closed" | "exhausted" } {
+    if (!/^(?:19|20|21)\d\d-\d\d-\d\d$/.test(input.utcDay) ||
+      !Number.isSafeInteger(input.requests) || input.requests <= 0 ||
+      !Number.isSafeInteger(input.requestBytes) || input.requestBytes <= 0 ||
+      !Number.isSafeInteger(input.costMicros) || input.costMicros <= 0 ||
+      !Number.isSafeInteger(input.maxRequests) || input.maxRequests <= 0 ||
+      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0 ||
+      !Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros <= 0) return { reserved: false, reason: "invalid" };
+    if (this.storageReadOnly) return { reserved: false, reason: "read_only" };
+    if (!this.prepareExternalWork()) return { reserved: false, reason: "capacity" };
+
+    const prefix = `openai:budget:${input.utcDay}`;
+    const requestKey = `${prefix}:requests`; const bytesKey = `${prefix}:request-bytes`;
+    const costKey = `${prefix}:cost-micros`; const closedKey = `${prefix}:closed`;
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const read = (key: string): number | null => {
+        const row = this.prepare("SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | undefined;
+        if (!row) return 0;
+        const parsed = Number(row.value);
+        return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+      };
+      const closed = this.prepare("SELECT value FROM kv WHERE key = ?").get(closedKey) as { value: string } | undefined;
+      if (closed && closed.value !== "0") { this.exec("COMMIT"); return { reserved: false, reason: "closed" }; }
+      const requests = read(requestKey); const bytes = read(bytesKey); const cost = read(costKey);
+      if (requests === null || bytes === null || cost === null) { this.exec("COMMIT"); return { reserved: false, reason: "invalid" }; }
+      if (requests + input.requests > input.maxRequests || bytes + input.requestBytes > input.maxRequestBytes || cost + input.costMicros > input.maxDailyCostMicros) {
+        this.exec("COMMIT"); return { reserved: false, reason: "exhausted" };
+      }
+      const write = this.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+      write.run(requestKey, String(requests + input.requests));
+      write.run(bytesKey, String(bytes + input.requestBytes));
+      write.run(costKey, String(cost + input.costMicros));
+      this.exec("COMMIT");
+      return { reserved: true };
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
   /** Atomically change persisted state and append its matching event. */
   transitionKvWithEvent(input: {
     key: string;
@@ -4287,34 +4330,44 @@ export class Desk {
     };
   }
 
-  secIssuerFollowups(): Array<{ cik: string; issuer: string; triggeringAccession: string; filingUrl: string; savedAt: string }> {
-    return (this.prepare(`SELECT cik, issuer, triggering_accession, filing_url, saved_at
-      FROM sec_issuer_followups ORDER BY saved_at DESC, cik ASC`).all() as Array<{
-      cik: string; issuer: string; triggering_accession: string; filing_url: string; saved_at: number;
-    }>).map((row) => ({ cik: row.cik, issuer: row.issuer, triggeringAccession: row.triggering_accession,
-      filingUrl: row.filing_url, savedAt: new Date(row.saved_at).toISOString() }));
+  hasSecFilingResearchTaskStore(): boolean {
+    return this.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sec_filing_research_tasks'").get() != null;
   }
 
-  saveSecIssuerFollowup(input: { cik: string; issuer: string; triggeringAccession: string; filingUrl: string }): void {
+  secFilingResearchTasks(): Array<{ cik: string; issuer: string; triggeringAccession: string; filingUrl: string;
+    nextQuestion: string; feedReceiptId: string; feedUpdatedAt: string | null; retrievedAt: string | null; savedAt: string }> {
+    return (this.prepare(`SELECT cik, issuer, triggering_accession, filing_url, next_question, feed_receipt_id,
+      feed_updated_at, retrieved_at, saved_at FROM sec_filing_research_tasks ORDER BY saved_at DESC, cik ASC, triggering_accession ASC`).all() as Array<{
+      cik: string; issuer: string; triggering_accession: string; filing_url: string; next_question: string;
+      feed_receipt_id: string; feed_updated_at: string | null; retrieved_at: string | null; saved_at: number;
+    }>).map((row) => ({ cik: row.cik, issuer: row.issuer, triggeringAccession: row.triggering_accession,
+      filingUrl: row.filing_url, nextQuestion: row.next_question, feedReceiptId: row.feed_receipt_id,
+      feedUpdatedAt: row.feed_updated_at, retrievedAt: row.retrieved_at, savedAt: new Date(row.saved_at).toISOString() }));
+  }
+
+  saveSecFilingResearchTask(input: { cik: string; issuer: string; triggeringAccession: string; filingUrl: string;
+    nextQuestion: string; feedReceiptId: string; feedUpdatedAt: string | null; retrievedAt: string | null }): void {
     if (!/^\d{10}$/.test(input.cik) || !input.issuer.trim() || input.issuer.length > 200
-      || !/^\d{10}-\d{2}-\d{6}$/.test(input.triggeringAccession)) throw new Error("invalid_sec_issuer_followup");
+      || !/^\d{10}-\d{2}-\d{6}$/.test(input.triggeringAccession) || input.nextQuestion.length > 500
+      || !input.feedReceiptId || input.feedReceiptId.length > 200) throw new Error("invalid_sec_filing_research_task");
     const filing = new URL(input.filingUrl);
     if (filing.protocol !== "https:" || filing.hostname !== "www.sec.gov"
       || !filing.pathname.startsWith("/Archives/edgar/data/")) throw new Error("invalid_sec_filing_url");
-    this.prepare(`INSERT INTO sec_issuer_followups(cik, issuer, triggering_accession, filing_url, saved_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(cik) DO UPDATE SET issuer = excluded.issuer,
-        triggering_accession = excluded.triggering_accession,
-        filing_url = excluded.filing_url,
-        saved_at = MAX(sec_issuer_followups.saved_at + 1, excluded.saved_at)
-      WHERE sec_issuer_followups.triggering_accession <> excluded.triggering_accession`).run(
-      input.cik, input.issuer.trim(), input.triggeringAccession, filing.toString(), Date.now(),
+    this.prepare(`INSERT INTO sec_filing_research_tasks(cik, issuer, triggering_accession, filing_url, next_question,
+      feed_receipt_id, feed_updated_at, retrieved_at, saved_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cik, triggering_accession) DO UPDATE SET issuer = excluded.issuer, filing_url = excluded.filing_url,
+        next_question = excluded.next_question,
+        saved_at = MAX(sec_filing_research_tasks.saved_at + 1, excluded.saved_at)
+      WHERE sec_filing_research_tasks.next_question <> excluded.next_question`).run(
+      input.cik, input.issuer.trim(), input.triggeringAccession, filing.toString(), input.nextQuestion.trim(),
+      input.feedReceiptId, input.feedUpdatedAt, input.retrievedAt, Date.now(),
     );
   }
 
-  removeSecIssuerFollowup(cik: string): boolean {
-    if (!/^\d{10}$/.test(cik)) throw new Error("invalid_sec_issuer_cik");
-    return this.prepare("DELETE FROM sec_issuer_followups WHERE cik = ?").run(cik).changes > 0;
+  removeSecFilingResearchTask(cik: string, accession: string): boolean {
+    if (!/^\d{10}$/.test(cik) || !/^\d{10}-\d{2}-\d{6}$/.test(accession)) throw new Error("invalid_sec_filing_research_task_identity");
+    return this.prepare("DELETE FROM sec_filing_research_tasks WHERE cik = ? AND triggering_accession = ?").run(cik, accession).changes > 0;
   }
 
   close(): void {

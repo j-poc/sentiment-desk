@@ -1,9 +1,9 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { secIssuerDisplayName } from "../shared/sec-filings-inbox.js";
-import { SavedIssuerLeadsRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, shouldOfferSavedArchiveSearch, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
-import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingsFreshnessNextCheckMs, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecIssuerFollowup } from "../shared/sec-filings-inbox.js";
+import { secFilingArchiveCikPath, secIssuerDisplayName } from "../shared/sec-filings-inbox.js";
+import { SavedFilingTasksRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFilingQuestionValue, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, shouldOfferSavedArchiveSearch, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
+import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingsFreshnessNextCheckMs, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecFilingResearchTask } from "../shared/sec-filings-inbox.js";
 
 describe("first-run SEC filing browse surface", () => {
   it("ages source freshness from the SEC feed clock while the saved snapshot remains visible", () => {
@@ -47,21 +47,39 @@ describe("first-run SEC filing browse surface", () => {
     expect(secIssuerDisplayName("Example Holdings (Class B)" )).toBe("Example Holdings (Class B)");
   });
 
-  it("offers a distinct update action when an issuer is saved from an older current filing", () => {
+  it("treats filings from the same issuer as separate research tasks", () => {
     const row: SecFilingInboxRow = { accession: "0000000320-25-000002", cik: "0000000320", issuer: "Issuer", form: "8-K",
       filedOn: "2025-01-02", acceptedAt: null, feedPublishedAt: null, feedUpdatedAt: null,
       filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000002/0000000320-25-000002-index.htm" };
-    const saved: SecIssuerFollowup = { cik: "0000000320", issuer: "Issuer", triggeringAccession: "0000000320-25-000001",
-      filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm", savedAt: "2025-01-01T00:00:00.000Z" };
+    const saved: SecFilingResearchTask = { cik: "0000000320", issuer: "Issuer", triggeringAccession: "0000000320-25-000001",
+      filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
+      nextQuestion: "", feedReceiptId: "receipt", feedUpdatedAt: "2025-01-01T00:00:00.000Z", retrievedAt: "2025-01-01T00:01:00.000Z", savedAt: "2025-01-01T00:00:00.000Z" };
     expect(secIssuerRowAction(row, undefined)).toBe("save");
-    expect(secIssuerRowAction(row, saved)).toBe("update");
+    expect(secIssuerRowAction(row, saved)).toBe("save");
     expect(secIssuerRowAction({ ...row, accession: saved.triggeringAccession }, saved)).toBe("remove");
   });
 
-  it("renders an in-page retry for saved issuer lead load failures", () => {
-    expect(renderToStaticMarkup(createElement(SavedIssuerLeadsRetry, { retrying: false, onRetry: () => {} })))
-      .toContain("Retry saved leads");
-    expect(renderToStaticMarkup(createElement(SavedIssuerLeadsRetry, { retrying: true, onRetry: () => {} })))
+  it("preserves a saved research question when updating a task without editing its draft", () => {
+    const saved = { cik: "0000000320", issuer: "Issuer", triggeringAccession: "0000000320-25-000001",
+      filingUrl: "https://www.sec.gov/Archives/edgar/data/320/000000032025000001/0000000320-25-000001-index.htm",
+      nextQuestion: "Check customer concentration", feedReceiptId: "receipt", feedUpdatedAt: null, retrievedAt: null, savedAt: "2025-01-01T00:00:00.000Z" };
+    expect(secFilingQuestionValue(undefined, saved)).toBe("Check customer concentration");
+    expect(secFilingQuestionValue("", saved)).toBe("");
+    expect(secFilingQuestionValue("Check amended terms", saved)).toBe("Check amended terms");
+  });
+
+  it("recovers the exact SEC archive path CIK without confusing it with the accession filer CIK", () => {
+    const accession = "0001193125-26-417064";
+    const filingUrl = "https://www.sec.gov/Archives/edgar/data/1755672/000119312526417064/0001193125-26-417064-index.htm";
+    expect(secFilingArchiveCikPath(filingUrl, accession)).toBe("1755672");
+    expect(secFilingArchiveCikPath(filingUrl, "0001193125-26-417065")).toBeNull();
+    expect(secFilingArchiveCikPath(filingUrl.replace("www.sec.gov", "attacker.example"), accession)).toBeNull();
+  });
+
+  it("renders an in-page retry for saved filing task load failures", () => {
+    expect(renderToStaticMarkup(createElement(SavedFilingTasksRetry, { retrying: false, onRetry: () => {} })))
+      .toContain("Retry saved tasks");
+    expect(renderToStaticMarkup(createElement(SavedFilingTasksRetry, { retrying: true, onRetry: () => {} })))
       .toContain("Retrying…");
   });
 

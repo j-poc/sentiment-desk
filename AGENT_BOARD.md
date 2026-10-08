@@ -1,5 +1,26 @@
 # Sentiment Desk Agent Board
 
+## Evaluation integrity and filing-to-research handoff — 2026-10-08
+
+Completed two scoped usability/evidence repairs. Luna offline run schema v2 now
+retains bounded raw response bytes and verifies that classification and usage
+match the exact hashed response; reports omit raw response bodies. SEC research
+tasks are keyed by exact CIK plus accession, keep their own question and feed
+clocks, and can be resumed from My Research after feed rollover. A missing task
+table on an older read-only database now produces an explicit unavailable state
+with recovery guidance instead of a server error or false empty list.
+
+- Luna integrity suite: 36 tests pass. SEC task/API/UI suite: 20 pass, including
+  a writer-lock read-only start on an older v16 schema. Typecheck passes.
+- These checks make no source or classifier requests and add no product rows.
+  The actual rendered handoff still awaits a fresh browser inspection.
+- Whole-build review remains **FAIL**: tickerless small-cap discovery, current
+  Luna output, paired AlphaSense and investor outcomes, and a followed-company
+  baseline readback are not proven. Keep Opportunity Radar disabled.
+
+See `project-record/4-log/2026-10-08-luna-response-binding-and-sec-filing-tasks.md`
+for acceptance details and verification evidence.
+
 ## Latest archive usability pass — 2026-10-06
 
 The priority is investor task usability. The rendered archive search now uses

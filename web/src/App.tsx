@@ -28,6 +28,7 @@ import type { CompanyFundamentalsView } from "../../shared/company-fundamentals.
 import type { SavedSourceCoverageSnapshot } from "../../shared/saved-source-coverage.js";
 import { filterFreshQuotes, nextQuoteExpiryDelayMs } from "../../shared/quote-freshness.js";
 import type { AnalystResearchDispositionChange, AnalystSourceReview } from "../../shared/analyst-research.js";
+import type { SecFilingResearchTask } from "../../shared/sec-filings-inbox.js";
 import { sessionInfo, type SessionInfo } from "./lib/marketHours.js";
 import { Header } from "./components/Header.js";
 import { MobileCompanyPicker } from "./components/MobileCompanyPicker.js";
@@ -75,6 +76,7 @@ import { categoricalChartStatusLabel } from "./lib/categorical-chart-status.js";
 import { mentionDrawerReturnTarget, researchViewAfterMentionClose, selectCompanyForResearch, type MentionDrawerReturnTarget, type ResearchView } from "./lib/research-navigation.js";
 import { marketPriceRefreshState, shouldLeadWithMarketPriceContext, shouldShowMarketPriceContext } from "./lib/market-price-context.js";
 import { readSessionPreference, writeSessionPreference } from "./lib/session-preferences.js";
+import { secFilingResumeTargetFromTask, type SecFilingResumeTarget } from "./lib/sec-filing-resume.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
 import { createHealthRefresher } from "./lib/health-refresh.js";
 import { hasComparableDeltas, orderWatchlistCompanies } from "./lib/watchlist-order.js";
@@ -231,6 +233,8 @@ export default function App() {
   });
   const researchViewTouchedRef = useRef(readSessionPreference("sentiment-desk-research-view") !== null);
   const [researchQueueRevision, setResearchQueueRevision] = useState(0);
+  const [secResumeTarget, setSecResumeTarget] = useState<SecFilingResumeTarget | null>(null);
+  const secResumeRequestId = useRef(0);
   const [sourceReviewRevision, setSourceReviewRevision] = useState(0);
   const [tape, setTape] = useState<Mention[]>([]);
   const [savedSourcesState, setSavedSourcesState] = useState<SavedSourcesState>("loading");
@@ -485,6 +489,13 @@ export default function App() {
   const openResearchQueue = useCallback(() => {
     closeDrawer(false);
     setResearchView("queue");
+  }, [closeDrawer]);
+  const resumeSecResearchTask = useCallback((task: SecFilingResearchTask) => {
+    closeDrawer(false);
+    researchViewTouchedRef.current = true;
+    writeSessionPreference("sentiment-desk-research-view", "filings");
+    setResearchView("filings");
+    setSecResumeTarget(secFilingResumeTargetFromTask(task, ++secResumeRequestId.current));
   }, [closeDrawer]);
   const navigateToCompanyResearch = useCallback((companyId: string) => {
     const next = selectCompanyForResearch({ selectedCompanyId: selectedId, view: researchView }, companyId);
@@ -2131,6 +2142,8 @@ export default function App() {
               void refreshBackendSnapshot();
             }}
           /> : researchView === "filings" ? <SecFilingsInbox
+            resumeTarget={secResumeTarget}
+            onResumeHandled={(requestId) => setSecResumeTarget((current) => current?.requestId === requestId ? null : current)}
             archiveStatus={firstRunEvidence.state !== "ready" ? "unknown" : firstRunEvidence.eligibleObservationCount > 0 ? "available" : "empty"}
             onOpenOperations={openOperationsFromFilings}
             onBrowseSavedSources={firstRunEvidence.state === "ready" && firstRunEvidence.eligibleObservationCount > 0 ? () => {
@@ -2145,6 +2158,7 @@ export default function App() {
               refreshRevision={researchQueueRevision}
               onReviewChanged={reportResearchReviewChanged}
               onOpenEvidence={openQueuedEvidence}
+              onResumeSecTask={resumeSecResearchTask}
             />
           ) : selected ? (
             researchView === "radar" ? (

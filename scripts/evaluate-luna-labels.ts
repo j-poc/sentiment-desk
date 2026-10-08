@@ -63,7 +63,7 @@ function readJson(filePath: string): { bytes: Buffer; value: unknown } {
   return { bytes, value: JSON.parse(bytes.toString("utf8")) as unknown };
 }
 
-function verifyFrozenLunaCode(labels: LunaLabelSetV2, cwd = process.cwd()): void {
+export function verifyFrozenLunaCode(labels: LunaLabelSetV2, cwd = process.cwd()): void {
   const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
   if (revision !== labels.analysisCodeRevision) throw new Error("current HEAD differs from the code revision frozen with Luna labels");
   const trackedChanges = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd, encoding: "utf8" }).trim();
@@ -72,7 +72,7 @@ function verifyFrozenLunaCode(labels: LunaLabelSetV2, cwd = process.cwd()): void
     .filter((file) => /^(server|shared|scripts|tests|web\/src)\//.test(file) || ["package.json", "tsconfig.json"].includes(file));
   if (untracked.length) throw new Error("untracked executable or test source exists; frozen Luna evaluation code must be committed first");
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const sources = ["scripts/evaluate-luna-labels.ts", "scripts/luna-label-evaluation.ts", "server/openai-classifier.ts", "server/pipeline.ts", "server/rubric.ts", "shared/categorical-disposition.ts", "config/companies.json"];
+  const sources = ["scripts/evaluate-luna-labels.ts", "scripts/run-luna-label-evaluation.ts", "scripts/luna-label-evaluation.ts", "server/openai-classifier.ts", "server/pipeline.ts", "server/rubric.ts", "shared/categorical-disposition.ts", "config/companies.json"];
   for (const relative of sources) {
     const sourceFile = path.resolve(sourceRoot, relative); const frozenFile = path.resolve(cwd, relative);
     if (!frozenFile.startsWith(`${path.resolve(cwd)}${path.sep}`)) throw new Error("frozen Luna source path escapes its checkout");

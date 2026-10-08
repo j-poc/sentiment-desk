@@ -7,7 +7,8 @@ import sys
 
 SPEC = Path("project-record/3-project-specs/private-company-narrative-slice.md")
 REQUIRED = (
-    "version 1.0, SHA-256 `6e7705a3edf0a5c5f91f4ec4cc9d645eae81c51017939d5baae156eb926d2ca6`",
+    "user-supplied private-company research requirements, version 1.1",
+    "user-supplied free-only source plan, version 2.0",
     "**Status:** requirements integrated; runtime capability not implemented or qualified.",
     "## Current capability status",
     "| **Implemented** |",
@@ -18,6 +19,10 @@ REQUIRED = (
     "## Smallest relevant next implementation slice",
     "## Runtime acceptance before enabling the slice",
     "No new source, account, credential, collection, retention entitlement, model call, private-data upload, or alert path is activated by this record.",
+    "private files, private-company data access, and proprietary customer data are not required",
+    "free to access for",
+    "Exclude subscriptions, paid feeds, paid APIs, per-query or",
+    "If terms or costs are unclear, do not collect the data",
     "The existing SEC/Compose and Luna source/account/spend gates are unchanged.",
     "does not make the stale SEC receipt current",
     "Do not fill this gap with generated examples, synthetic product rows, or assumed source rights.",
@@ -38,10 +43,14 @@ def main() -> int:
         return 1
 
     missing = [marker for marker in REQUIRED if marker not in content]
-    if missing:
+    superseded = ("PitchBook", "Crunchbase", "Dealroom", "Harmonic", "private-company-data-sources.md`, version 1.0")
+    present_superseded = [marker for marker in superseded if marker in content]
+    if missing or present_superseded:
         print("FAIL: private-company scope record is missing required scope or boundary statements", file=sys.stderr)
         for marker in missing:
             print(f"  missing: {marker}", file=sys.stderr)
+        for marker in present_superseded:
+            print(f"  superseded source candidate still present: {marker}", file=sys.stderr)
         return 1
 
     print("SCOPE_RECORD=PASS: source, status matrix, selected slice, and unchanged gates are recorded")

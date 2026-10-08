@@ -8,7 +8,7 @@ import { withReadDeadline } from "./bounded-read.js";
 import type { ScoreBucketCoverage } from "../../../shared/score-bucket-coverage.js";
 import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../../../shared/company-fundamentals.js";
 import type { AnalystResearchDisposition, AnalystResearchDispositionChange, AnalystSourceReview } from "../../../shared/analyst-research.js";
-import type { SecFilingDetail, SecFilingsInboxView, SecIssuerFollowup } from "../../../shared/sec-filings-inbox.js";
+import type { SecFilingDetail, SecFilingsInboxView, SecFilingResearchTask } from "../../../shared/sec-filings-inbox.js";
 import type { SavedSourceCoverageSnapshot } from "../../../shared/saved-source-coverage.js";
 import type { SavedSourceSearchCursor, SavedSourceSearchPage } from "../../../shared/saved-source-search.js";
 
@@ -47,18 +47,18 @@ export function inspectSecFiling(cik: string, accession: string): Promise<SecFil
   });
 }
 
-export async function getSecIssuerFollowups(signal?: AbortSignal): Promise<SecIssuerFollowup[]> {
-  return (await getJSON<{ items: SecIssuerFollowup[] }>("/api/sec-issuer-followups", signal)).items;
+export async function getSecFilingResearchTasks(signal?: AbortSignal): Promise<SecFilingResearchTask[]> {
+  return (await getJSON<{ items: SecFilingResearchTask[] }>("/api/sec-filing-research-tasks", signal)).items;
 }
 
-export function saveSecIssuerFollowup(cik: string, accession: string): Promise<SecIssuerFollowup> {
-  return requestJSON<SecIssuerFollowup>("/api/sec-issuer-followups", {
-    method: "POST", body: JSON.stringify({ cik, accession }),
+export function saveSecFilingResearchTask(cik: string, accession: string, nextQuestion: string): Promise<SecFilingResearchTask> {
+  return requestJSON<SecFilingResearchTask>("/api/sec-filing-research-tasks", {
+    method: "POST", body: JSON.stringify({ cik, accession, nextQuestion }),
   });
 }
 
-export async function removeSecIssuerFollowup(cik: string): Promise<SecIssuerFollowup[]> {
-  return (await requestJSON<{ items: SecIssuerFollowup[] }>(`/api/sec-issuer-followups/${encodeURIComponent(cik)}`, {
+export async function removeSecFilingResearchTask(cik: string, accession: string): Promise<SecFilingResearchTask[]> {
+  return (await requestJSON<{ items: SecFilingResearchTask[] }>(`/api/sec-filing-research-tasks/${encodeURIComponent(cik)}/${encodeURIComponent(accession)}`, {
     method: "DELETE",
   })).items;
 }

@@ -16,7 +16,7 @@ import {
   sha256Bytes,
   type LunaClassifierContract,
   type LunaLabelSetV2,
-  type LunaModelRunV1,
+  type LunaModelRunV2,
 } from "../scripts/luna-label-evaluation.js";
 
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
@@ -110,7 +110,28 @@ function labelsFixture(stage: "pilot" | "final" = "pilot", tweak?: (labels: any)
   return labels as LunaLabelSetV2;
 }
 
-function runFixture(labels: LunaLabelSetV2, labelsSha256: string, mutate?: (run: any) => void): LunaModelRunV1 {
+function bindProviderResponse(attempt: any): void {
+  const classification = attempt.classification;
+  const usage = attempt.usage;
+  const response = {
+    id: attempt.responseId, model: attempt.modelReturned, service_tier: attempt.serviceTier, status: "completed",
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({
+      sentiment: classification.sentiment, event_type: classification.eventType, takeaway: classification.takeaway,
+      about: classification.about, material: classification.material, investor_relevant: classification.investorRelevant,
+      evidence_sufficient: classification.evidenceSufficient, summary: classification.summary,
+      supporting_excerpt: classification.supportingExcerpt,
+    }) }] }],
+    usage: {
+      input_tokens: usage.inputTokens, output_tokens: usage.outputTokens, total_tokens: usage.totalTokens,
+      input_tokens_details: { cached_tokens: usage.cachedInputTokens, cache_write_tokens: usage.cacheWriteInputTokens },
+      output_tokens_details: { reasoning_tokens: usage.reasoningTokens },
+    },
+  };
+  attempt.responsePayload = JSON.stringify(response);
+  attempt.responseSha256 = digest(attempt.responsePayload);
+}
+
+function runFixture(labels: LunaLabelSetV2, labelsSha256: string, mutate?: (run: any) => void): LunaModelRunV2 {
   const items = labels.items.map((item) => {
     const refs = item.reviews[0]!.labels;
     const prepared = makeContract().prepareRequest(item.input, model);
@@ -123,24 +144,46 @@ function runFixture(labels: LunaLabelSetV2, labelsSha256: string, mutate?: (run:
     const classification = { ...classificationFields, disposition: deriveCategoricalDisposition(classificationFields, true) };
     return {
       observationId: item.observationId, requestPayloadSha256: prepared.payloadSha256, terminalStatus: "completed",
-      attempts: [{ attemptNumber: 1, requestPayloadSha256: prepared.payloadSha256, outcome: "completed", submitted: true, httpStatus: 200, responseId: `resp-${item.observationId}`, responseSha256: digest(`response ${item.observationId}`), modelReturned: model, serviceTier: "default", latencyMs: 10 + labels.items.indexOf(item), classification, usage: { ...usage, estimatedCostUsd } }],
+      attempts: [{ attemptNumber: 1, requestPayloadSha256: prepared.payloadSha256, outcome: "completed", submitted: true, httpStatus: 200, responseId: `resp-${item.observationId}`, responseSha256: digest(`response ${item.observationId}`), responsePayload: null, modelReturned: model, serviceTier: "default", latencyMs: 10 + labels.items.indexOf(item), classification, usage: { ...usage, estimatedCostUsd } }],
     };
   });
   const openTime = "2026-10-01T21:00:00Z";
   const finalLabels = { ...labels, agentLabelProtocol: { ...labels.agentLabelProtocol, lunaOutputsOpenedAt: openTime } } as any;
   Object.assign(labels as any, finalLabels);
   const run: any = {
-    schemaVersion: 1, studyId: labels.studyId, runId: "luna-run-001", labelsSha256, sampleManifestSha256: labels.sampleManifestSha256,
+    schemaVersion: 2, studyId: labels.studyId, runId: "luna-run-001", labelsSha256, sampleManifestSha256: labels.sampleManifestSha256,
     evaluationProfile: labels.evaluationProfile, profileSha256: labels.profileSha256, analysisCodeRevision: labels.analysisCodeRevision, sourceTreeDirty: false,
     startedAt: openTime, requestCount: items.length, requestedModel: labels.requestedModel, maxRequests: labels.evaluationBudget!.maxRequests, maxEstimatedCostUsd: labels.evaluationBudget!.maxEstimatedCostUsd,
     inputPerMillionUsd: labels.evaluationBudget!.inputPerMillionUsd, cachedInputPerMillionUsd: labels.evaluationBudget!.cachedInputPerMillionUsd, cacheWritePerMillionUsd: labels.evaluationBudget!.cacheWritePerMillionUsd, outputPerMillionUsd: labels.evaluationBudget!.outputPerMillionUsd,
     items,
   };
   mutate?.(run);
-  return run as LunaModelRunV1;
+  for (const row of run.items) for (const attempt of row.attempts) if (attempt.outcome === "completed") bindProviderResponse(attempt);
+  return run as LunaModelRunV2;
 }
 
 describe("offline categorical Luna evaluation", () => {
+  it("rejects a completed classification that no longer matches its hashed provider response", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest("response-bound prediction");
+    const run = runFixture(labels, labelsSha256) as any;
+    run.items[0].attempts[0].classification.sentiment = run.items[0].attempts[0].classification.sentiment === "negative" ? "positive" : "negative";
+    expect(() => parseLunaModelRun(run, labels, makeContract())).toThrow("classification does not match the exact hashed response payload");
+  });
+
+  it("recomputes exact response digests and excludes raw bodies from evaluation reports", () => {
+    const labels = parseLunaLabelSet(labelsFixture("final"), makeContract());
+    const labelsSha256 = digest("response byte binding");
+    const run = runFixture(labels, labelsSha256) as any;
+    const parsed = parseLunaModelRun(run, labels, makeContract());
+    const report = analyzeLunaFinal({ labels, labelsSha256, run: parsed }) as any;
+    expect(report.perCase[0].attempts[0]).not.toHaveProperty("responsePayload");
+    expect(report.perCase[0].attempts[0].responseSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    run.items[0].attempts[0].responsePayload += " ";
+    expect(() => parseLunaModelRun(run, labels, makeContract())).toThrow("lacks a matching bounded response payload");
+  });
+
   it("rejects human or probability-shaped schema fields and binds the configured company universe", () => {
     const labels = labelsFixture();
     expect(lunaLabelSetV2Schema.safeParse({ ...labels, reviewers: [{ id: "human", qualifiedHumanAttested: true }] }).success).toBe(false);
@@ -351,7 +394,10 @@ describe("offline categorical Luna evaluation", () => {
     const labels = parseLunaLabelSet(raw, makeContract());
     const labelsSha256 = digest(`unresolved ${field} reference`);
     const runRaw: any = runFixture(labels, labelsSha256);
-    if (field === "evidenceSufficient") runRaw.items[0].attempts[0].classification.evidenceSufficient = true;
+    if (field === "evidenceSufficient") {
+      runRaw.items[0].attempts[0].classification.evidenceSufficient = true;
+      bindProviderResponse(runRaw.items[0].attempts[0]);
+    }
     const run = parseLunaModelRun(runRaw, labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.referenceEligibility).toMatchObject({ status: "UNVERIFIED", selectedCaseDenominator: 30 });
@@ -466,6 +512,7 @@ describe("offline categorical Luna evaluation", () => {
     const missingPrediction = runRaw.items[1].attempts[0].classification;
     missingPrediction.about = null;
     missingPrediction.disposition = deriveCategoricalDisposition(missingPrediction, true);
+    bindProviderResponse(runRaw.items[1].attempts[0]);
     const run = parseLunaModelRun(runRaw, labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.selectedCaseDenominator).toBe(30);
@@ -511,7 +558,7 @@ describe("offline categorical Luna evaluation", () => {
     const raw = labelsFixture("final"); const labels = parseLunaLabelSet(raw, makeContract()); const labelsSha256 = digest("retry fixture");
     const retry = runFixture(labels, labelsSha256, (value) => {
       const firstItem = value.items[0];
-      firstItem.attempts.unshift({ attemptNumber: 1, requestPayloadSha256: firstItem.requestPayloadSha256, outcome: "rejected", submitted: true, httpStatus: 429, responseId: "rate-limited", responseSha256: digest("429 response"), modelReturned: null, serviceTier: null, latencyMs: 3, classification: null, usage: null });
+      firstItem.attempts.unshift({ attemptNumber: 1, requestPayloadSha256: firstItem.requestPayloadSha256, outcome: "rejected", submitted: true, httpStatus: 429, responseId: "rate-limited", responseSha256: digest("429 response"), responsePayload: null, modelReturned: null, serviceTier: null, latencyMs: 3, classification: null, usage: null });
       firstItem.attempts[1].attemptNumber = 2;
       firstItem.terminalStatus = "completed";
       value.requestCount += 1;
@@ -548,6 +595,7 @@ describe("offline categorical Luna evaluation", () => {
     wrongTier.items[0].attempts[0].usage.cacheWriteInputTokens = 5;
     wrongTier.items[0].attempts[0].usage.estimatedCostUsd = 0.0001;
     wrongTier.items[0].attempts[0].serviceTier = "priority";
+    bindProviderResponse(wrongTier.items[0].attempts[0]);
     expect(() => parseLunaModelRun(wrongTier, labels, makeContract())).toThrow("cost does not match the production classifier");
   });
 
@@ -560,7 +608,7 @@ describe("offline categorical Luna evaluation", () => {
     const unknownLabels = parseLunaLabelSet(labelsFixture("final"), makeContract());
     const unknownLabelsSha256 = digest("unknown fixture");
     const unknown = runFixture(unknownLabels, unknownLabelsSha256, (value) => {
-      const row = value.items[0]; row.terminalStatus = "unknown"; row.attempts[0] = { attemptNumber: 1, requestPayloadSha256: row.requestPayloadSha256, outcome: "unknown", submitted: true, httpStatus: null, responseId: null, responseSha256: null, modelReturned: null, serviceTier: null, latencyMs: null, classification: null, usage: null };
+      const row = value.items[0]; row.terminalStatus = "unknown"; row.attempts[0] = { attemptNumber: 1, requestPayloadSha256: row.requestPayloadSha256, outcome: "unknown", submitted: true, httpStatus: null, responseId: null, responseSha256: null, responsePayload: null, modelReturned: null, serviceTier: null, latencyMs: null, classification: null, usage: null };
     });
     const unknownReport = analyzeLunaFinal({ labels: unknownLabels, labelsSha256: unknownLabelsSha256, run: parseLunaModelRun(unknown, unknownLabels, makeContract()) }) as any;
     expect(unknownReport.execution.unknownCases).toContain(unknownLabels.items[0]!.observationId);

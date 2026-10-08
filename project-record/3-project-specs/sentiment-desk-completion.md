@@ -1882,13 +1882,17 @@ evidence.
 
 ## Private-company narrative scope — 2026-10-08
 
-The shared v1.0 private-company research specification is integrated as the
-separate scope record in
-`project-record/3-project-specs/private-company-narrative-slice.md`. The current
-Desk slice is public-source narrative context inside existing listed-issuer
-evidence. It does not add a private-company coverage universe, claim extraction,
-private financial data, or thesis alerts. The new scope record maps present,
-partial, missing, inapplicable, and unverified capabilities and defines the
-real-source acceptance needed before runtime support. No SEC/Compose, source,
-account, retention, or spending gate is changed; the wider private-company
-workflow remains unimplemented and unqualified.
+The user-supplied private-company research requirements v1.1 and free-only
+public-source plan v2.0 are recorded in
+`project-record/3-project-specs/private-company-narrative-slice.md`. This is a
+requirements-only public-source narrative context inside existing
+listed-issuer evidence. Private files, proprietary customer data, and
+private-company data access are not required or enabled. No paid source, paid
+feed, subscription, paid API, usage fee, or new provider account is required or
+active. A future public source must be free for the intended use and have
+current terms permitting the intended collection, retention, processing and
+display; unclear routes are not ingested. No runtime capability is claimed.
+All source, SEC/Compose, account, spend, freshness, and release gates remain
+unchanged. Private-company claim behavior and investor usefulness remain
+unverified until a later authorized runtime slice is evaluated on real,
+rights-cleared public cases and the actual persisted UI.

@@ -21,6 +21,19 @@ export function secFilingIdentity(row: Pick<SecFilingInboxRow, "cik" | "accessio
   return `${row.cik}:${row.accession}`;
 }
 
+/** Read the official archive-path CIK from a previously validated SEC filing URL. */
+export function secFilingArchiveCikPath(filingUrl: string, accession: string): string | null {
+  try {
+    const url = new URL(filingUrl);
+    const match = url.pathname.match(/^\/Archives\/edgar\/data\/([0-9]{1,10})\/([0-9]{18})\/([0-9]{10}-[0-9]{2}-[0-9]{6})-index\.htm$/);
+    if (url.protocol !== "https:" || url.hostname !== "www.sec.gov" || url.port || url.username || url.password || url.search || url.hash
+      || !match || match[2] !== accession.replaceAll("-", "") || match[3] !== accession) return null;
+    return match[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface SecFilingsInboxView {
   state: "ready" | "stale" | "empty" | "pending" | "rate_limited" | "failed" | "not_configured" | "unsupported" | "unavailable";
   /** Freshness of the SEC source observation, independent of when the Hub retrieved the saved receipt. */
@@ -54,14 +67,20 @@ export function secFilingsFreshnessNextCheckMs(feedUpdatedAt: string | null, now
   return transitionAt > now ? transitionAt - now : null;
 }
 
-/** A saved issuer research lead anchored to the exact SEC filing that prompted it. */
-export interface SecIssuerFollowup {
+/** A durable analyst task anchored to the exact SEC filing that prompted it. */
+export interface SecFilingResearchTask {
   cik: string;
   issuer: string;
   triggeringAccession: string;
   filingUrl: string;
+  nextQuestion: string;
+  feedReceiptId: string;
+  feedUpdatedAt: string | null;
+  retrievedAt: string | null;
   savedAt: string;
 }
+
+export const MAX_SEC_RESEARCH_QUESTION_CHARS = 500;
 
 /** An on-demand, exact-accession SEC read. Excerpts are source text, never a model summary. */
 export interface SecFilingDetail {

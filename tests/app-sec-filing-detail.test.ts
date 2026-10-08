@@ -101,11 +101,12 @@ describe("SEC filing detail route", () => {
   it("routes a joint-filing issuer follow-up by exact issuer and accession", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sec-joint-followup-api-")); directories.push(directory);
     const { app } = appAt(join(directory, "desk.sqlite"));
-    const response = await app.request("/api/sec-issuer-followups", {
+    const response = await app.request("/api/sec-filing-research-tasks", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ cik: secondRow.cik, accession }),
     });
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({ cik: secondRow.cik, issuer: secondRow.issuer, triggeringAccession: accession, filingUrl: secondRow.filingUrl });
+    expect(await response.json()).toMatchObject({ cik: secondRow.cik, issuer: secondRow.issuer, triggeringAccession: accession,
+      filingUrl: secondRow.filingUrl, feedReceiptId: "receipt", feedUpdatedAt: null, retrievedAt: inbox.retrievedAt });
   });
 });

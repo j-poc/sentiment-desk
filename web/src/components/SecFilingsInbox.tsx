@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { activateSecFilingsInbox, getSecFilingsInbox, getSecIssuerFollowups, inspectSecFiling, removeSecIssuerFollowup, saveSecIssuerFollowup } from "../lib/api.js";
-import { secFilingIdentity, secFilingsFreshnessNextCheckMs, secFilingsSourceFreshness, secIssuerDisplayName, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecIssuerFollowup } from "../../../shared/sec-filings-inbox.js";
+import { activateSecFilingsInbox, getSecFilingsInbox, getSecFilingResearchTasks, inspectSecFiling, removeSecFilingResearchTask, saveSecFilingResearchTask } from "../lib/api.js";
+import { secFilingResumeActionId, type SecFilingResumeTarget } from "../lib/sec-filing-resume.js";
+import { secFilingIdentity, secFilingsFreshnessNextCheckMs, secFilingsSourceFreshness, secIssuerDisplayName, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecFilingResearchTask } from "../../../shared/sec-filings-inbox.js";
 
 function utc(value: string | null, dateOnly = false): string {
   if (!value) return dateOnly ? "Filing date not supplied" : "Not supplied";
@@ -185,22 +186,86 @@ export async function reloadSecFilingsInbox(
   }
 }
 
-export function secIssuerRowAction(row: SecFilingInboxRow, saved: SecIssuerFollowup | undefined): "save" | "update" | "remove" {
+export function secIssuerRowAction(row: SecFilingInboxRow, saved: SecFilingResearchTask | undefined): "save" | "remove" {
   if (!saved) return "save";
-  return saved.triggeringAccession === row.accession ? "remove" : "update";
+  return saved.cik === row.cik && saved.triggeringAccession === row.accession ? "remove" : "save";
 }
 
-export function SavedIssuerLeadsRetry({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
+export function SavedFilingTasksRetry({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
   return <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300/20 bg-amber-300/[0.05] px-4 py-3" role="alert">
-    <p className="text-sm text-amber-100/80">Saved issuer leads could not be loaded.</p>
-    <button type="button" onClick={onRetry} disabled={retrying} className="rounded border border-amber-100/20 px-3 py-1.5 text-xs font-medium text-amber-50 hover:bg-amber-100/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200 disabled:opacity-45">{retrying ? "Retrying…" : "Retry saved leads"}</button>
+    <p className="text-sm text-amber-100/80">Saved SEC filing tasks could not be loaded. Check Desk storage status, then retry after writable startup; saved work is unchanged.</p>
+    <button type="button" onClick={onRetry} disabled={retrying} className="rounded border border-amber-100/20 px-3 py-1.5 text-xs font-medium text-amber-50 hover:bg-amber-100/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200 disabled:opacity-45">{retrying ? "Retrying…" : "Retry saved tasks"}</button>
   </div>;
 }
 
-export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiveStatus = "unknown" }: {
+export type SecFilingResumeState = "wait" | "open" | "rolled_out" | "stale" | "unavailable";
+
+export function SavedSecFilingResumeCard({ target, detail, loading, failed, onInspect }: {
+  target: SecFilingResumeTarget;
+  detail: SecFilingDetail | null;
+  loading: boolean;
+  failed: boolean;
+  onInspect: () => void;
+}) {
+  const row: SecFilingInboxRow = {
+    cik: target.cik, accession: target.accession, issuer: target.issuer, form: "8-K",
+    filedOn: null, acceptedAt: null, feedPublishedAt: null, feedUpdatedAt: null, filingUrl: target.filingUrl,
+  };
+  const matchingDetail = detail?.cik === row.cik && detail.accession === row.accession ? detail : null;
+  return <section className="grid gap-3 rounded-md border border-white/10 bg-black/20 px-4 py-3" aria-labelledby="saved-sec-resume-heading">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h2 id="saved-sec-resume-heading" className="text-sm font-medium text-white/80">{secIssuerDisplayName(target.issuer)} · saved filing</h2>
+        <p className="mt-1 break-all font-mono text-[11px] text-white/45">CIK {target.cik} · accession {target.accession}</p>
+        {target.nextQuestion && <p className="mt-2 break-words text-xs leading-5 text-white/70"><span className="text-white/45">Research question: </span>{target.nextQuestion}</p>}
+        <p className="mt-1 break-words text-[10px] text-white/35">Saved feed receipt {target.feedReceiptId} · observed {target.feedUpdatedAt ?? "unknown"} · retrieved {target.retrievedAt ?? "unknown"}</p>
+      </div>
+      <button id={secFilingResumeActionId(target, "rolled_out")} type="button" onClick={onInspect} disabled={loading} aria-controls="saved-sec-resume-evidence"
+        className="inline-flex w-fit items-center rounded-md border border-emerald-300/25 bg-emerald-300/[0.055] px-3 py-2 text-xs font-medium text-emerald-100/85 hover:bg-emerald-300/[0.11] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-50">
+        {loading ? "Loading SEC evidence…" : failed ? "Retry SEC evidence in Desk" : "Inspect saved filing in Desk"}
+      </button>
+    </div>
+    {failed && <p className="text-sm text-amber-100/80" role="alert">The Desk could not load this exact filing. Your saved task and question are unchanged; retry or open the exact SEC source link above.</p>}
+    <div id="saved-sec-resume-evidence" aria-live="polite">
+      {loading && <p className="text-sm text-white/60" role="status">Checking this exact accession with SEC EDGAR…</p>}
+      {!loading && matchingDetail && <SecFilingDetailPanel detail={matchingDetail} onRetry={onInspect} />}
+    </div>
+  </section>;
+}
+
+export function SecFilingInFeedResumeContext({ target, onInspect }: {
+  target: SecFilingResumeTarget;
+  onInspect: () => void;
+}) {
+  return <div className="grid gap-2">
+    <p className="text-sm text-white/60">Exact filing selected from My Research. SEC document text has not been requested.</p>
+    {target.nextQuestion
+      ? <p className="break-words text-xs leading-5 text-white/70"><span className="text-white/45">Saved research question: </span>{target.nextQuestion}</p>
+      : <p className="text-xs text-white/45">No research question was saved for this filing.</p>}
+    <button id={secFilingResumeActionId(target, "open")} type="button" onClick={onInspect}
+      className="mt-1 w-fit rounded-md border border-emerald-300/25 px-3 py-2 text-xs font-medium text-emerald-100/85 hover:bg-emerald-300/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">
+      Inspect in Desk
+    </button>
+  </div>;
+}
+
+export function secFilingResumeState(target: SecFilingResumeTarget, view: SecFilingsInboxView | null, loading: boolean, loadFailed: boolean, now = Date.now()): SecFilingResumeState {
+  if (view === null) return loading ? "wait" : loadFailed ? "unavailable" : "wait";
+  if (view.state === "unavailable" || view.state === "unsupported" || loadFailed) return "unavailable";
+  if (view.state !== "ready" || view.freshness !== "current" || secFilingsSourceFreshness(view.feedUpdatedAt, now) !== "current") return "stale";
+  return view.rows.some((row) => row.cik === target.cik && row.accession === target.accession && isFilingRow(row)) ? "open" : "rolled_out";
+}
+
+export function secFilingQuestionValue(draft: string | undefined, saved: SecFilingResearchTask | undefined): string {
+  return draft ?? saved?.nextQuestion ?? "";
+}
+
+export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiveStatus = "unknown", resumeTarget = null, onResumeHandled }: {
   onBrowseSavedSources?: () => void;
   onOpenOperations?: () => void;
   archiveStatus?: "available" | "empty" | "unknown";
+  resumeTarget?: SecFilingResumeTarget | null;
+  onResumeHandled?: (requestId: number) => void;
 }) {
   const [view, setView] = useState<SecFilingsInboxView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -208,15 +273,19 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const [loadFailed, setLoadFailed] = useState(false);
   const [query, setQuery] = useState("");
   const [now, setNow] = useState(Date.now());
-  const [followups, setFollowups] = useState<SecIssuerFollowup[]>([]);
+  const [followups, setFollowups] = useState<SecFilingResearchTask[]>([]);
   const [followupWorking, setFollowupWorking] = useState<string | null>(null);
   const [followupError, setFollowupError] = useState<string | null>(null);
   const [followupsLoadFailed, setFollowupsLoadFailed] = useState(false);
   const [followupsLoading, setFollowupsLoading] = useState(false);
+  const [leadDrafts, setLeadDrafts] = useState<Record<string, string>>({});
   const [expandedFiling, setExpandedFiling] = useState<string | null>(null);
   const [detail, setDetail] = useState<SecFilingDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailLoadFailed, setDetailLoadFailed] = useState(false);
+  const [resumeNotice, setResumeNotice] = useState<{ target: SecFilingResumeTarget; state: Exclude<SecFilingResumeState, "wait"> } | null>(null);
+  const [pendingResumeFocusId, setPendingResumeFocusId] = useState<string | null>(null);
+  const handledResumeRequest = useRef<number | null>(null);
   const latestInboxRequest = useRef(0);
   const activationInFlight = useRef(false);
   const mounted = useRef(true);
@@ -230,7 +299,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const reloadFollowups = useCallback(async (signal?: AbortSignal) => {
     setFollowupsLoading(true);
     try {
-      setFollowups(await getSecIssuerFollowups(signal));
+      setFollowups(await getSecFilingResearchTasks(signal));
       setFollowupsLoadFailed(false);
       setFollowupError(null);
     } catch {
@@ -253,6 +322,35 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   }, [reload, reloadFollowups]);
 
   useEffect(() => {
+    if (!resumeTarget || handledResumeRequest.current === resumeTarget.requestId) return;
+    const result = secFilingResumeState(resumeTarget, view, loading, loadFailed, now);
+    if (result === "wait") return;
+    handledResumeRequest.current = resumeTarget.requestId;
+    setResumeNotice({ target: resumeTarget, state: result });
+    setPendingResumeFocusId(secFilingResumeActionId(resumeTarget, result));
+    setDetail(null);
+    setDetailLoading(false);
+    setDetailLoadFailed(false);
+    if (result === "open") {
+      setQuery("");
+      setExpandedFiling(secFilingIdentity(resumeTarget));
+      requestAnimationFrame(() => document.getElementById(`sec-filing-detail-${secFilingIdentity(resumeTarget)}`)?.scrollIntoView({ block: "nearest" }));
+    } else {
+      setExpandedFiling(null);
+    }
+    onResumeHandled?.(resumeTarget.requestId);
+  }, [resumeTarget, view, loading, loadFailed, now, onResumeHandled]);
+
+  useEffect(() => {
+    if (!pendingResumeFocusId) return;
+    const action = document.getElementById(pendingResumeFocusId);
+    if (!action) return;
+    action.focus({ preventScroll: true });
+    action.scrollIntoView({ block: "nearest" });
+    setPendingResumeFocusId(null);
+  }, [pendingResumeFocusId, expandedFiling, resumeNotice]);
+
+  useEffect(() => {
     const delay = secFilingsFreshnessNextCheckMs(view?.feedUpdatedAt ?? null, now);
     if (delay === null) return;
     const timer = window.setTimeout(() => setNow(Date.now()), delay);
@@ -260,17 +358,20 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   }, [now, view?.feedUpdatedAt]);
 
   const saveIssuer = async (row: SecFilingInboxRow) => {
-    setFollowupWorking(row.cik); setFollowupError(null);
+    const identity = `${row.cik}:${row.accession}`;
+    setFollowupWorking(identity); setFollowupError(null);
     try {
-      const saved = await saveSecIssuerFollowup(row.cik, row.accession);
-      setFollowups((current) => [saved, ...current.filter((item) => item.cik !== saved.cik)]);
-    } catch { setFollowupError(`Could not save ${row.issuer}. Confirm the filing is still in the current SEC inbox, then retry.`); }
+      const existing = followups.find((item) => item.cik === row.cik && item.triggeringAccession === row.accession);
+      const saved = await saveSecFilingResearchTask(row.cik, row.accession, secFilingQuestionValue(leadDrafts[identity], existing));
+      setFollowups((current) => [saved, ...current.filter((item) => item.cik !== saved.cik || item.triggeringAccession !== saved.triggeringAccession)]);
+    } catch { setFollowupError(`Could not save ${row.issuer} filing ${row.accession}. It may have left the current SEC feed, or local storage failed. Your question remains in this field.`); }
     finally { setFollowupWorking(null); }
   };
 
-  const removeIssuer = async (cik: string) => {
-    setFollowupWorking(cik); setFollowupError(null);
-    try { setFollowups(await removeSecIssuerFollowup(cik)); }
+  const removeIssuer = async (cik: string, accession: string) => {
+    const identity = `${cik}:${accession}`;
+    setFollowupWorking(identity); setFollowupError(null);
+    try { setFollowups(await removeSecFilingResearchTask(cik, accession)); }
     catch { setFollowupError("Could not remove the saved issuer lead. Reload and try again."); }
     finally { setFollowupWorking(null); }
   };
@@ -287,6 +388,11 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
       setDetailLoading(false);
     }
   };
+
+  const resumeSavedRow: SecFilingInboxRow | null = resumeNotice && resumeNotice.state !== "open" ? {
+    cik: resumeNotice.target.cik, accession: resumeNotice.target.accession, issuer: resumeNotice.target.issuer, form: "8-K",
+    filedOn: null, acceptedAt: null, feedPublishedAt: null, feedUpdatedAt: null, filingUrl: resumeNotice.target.filingUrl,
+  } : null;
 
   const toggleDetail = (row: SecFilingInboxRow) => {
     const identity = secFilingIdentity(row);
@@ -365,20 +471,32 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
       </header>
 
       {view?.message && <p className={`rounded-md border px-4 py-3 text-sm ${view.state === "failed" || view.state === "unavailable" || view.state === "unsupported" ? "border-amber-300/20 bg-amber-300/[0.05] text-amber-100/80" : "border-white/10 bg-white/[0.025] text-white/60"}`} role="status">{view.message}</p>}
+      {resumeNotice && <div className={`rounded-md border px-4 py-3 text-sm ${resumeNotice.state === "open" ? "border-emerald-300/20 bg-emerald-300/[0.04] text-emerald-100/80" : "border-amber-300/20 bg-amber-300/[0.04] text-amber-100/80"}`} role="status" aria-live="polite">
+        {resumeNotice.state === "open" ? <>Opened the exact filing from your saved task: CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved question is shown with the filing below. Choose “Inspect in Desk” to request SEC document evidence.</>
+          : resumeNotice.state === "rolled_out" ? <>CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession} is no longer in the current SEC feed. Your saved question and receipt lineage remain in My Research.</>
+            : resumeNotice.state === "stale" ? <>The SEC filing feed is stale or not ready, so the current feed cannot confirm CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved task is unchanged.</>
+              : <>The SEC filing feed is unavailable, so the Desk cannot confirm CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved task is unchanged.</>}
+        {resumeNotice.state !== "open" && <> <a href={resumeNotice.target.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="underline underline-offset-2">Open this exact SEC filing</a></>}
+      </div>}
+      {resumeNotice && resumeNotice.state !== "open" && resumeSavedRow && <SavedSecFilingResumeCard target={resumeNotice.target} detail={detail}
+        loading={detailLoading} failed={detailLoadFailed} onInspect={() => void loadDetail(resumeSavedRow)} />}
       {followupError && <p className="rounded-md border border-amber-300/20 bg-amber-300/[0.05] px-4 py-3 text-sm text-amber-100/80" role="alert">{followupError}</p>}
-      {followupsLoadFailed && <SavedIssuerLeadsRetry retrying={followupsLoading} onRetry={() => void reloadFollowups()} />}
+      {followupsLoadFailed && <SavedFilingTasksRetry retrying={followupsLoading} onRetry={() => void reloadFollowups()} />}
       <section className="panel px-4 py-4 sm:px-5" aria-labelledby="sec-followups-title">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 id="sec-followups-title" className="text-sm font-medium text-white/80">Issuer research leads</h2>
-          <span className="text-xs text-white/40">{followups.length} saved · CIK-based, not a security watchlist</span>
+          <h2 id="sec-followups-title" className="text-sm font-medium text-white/80">Saved filing tasks</h2>
+          <span className="text-xs text-white/40">{followups.length} saved filings</span>
         </div>
-        <p className="mt-1 text-xs leading-5 text-white/45">Save an issuer to revisit its filing. This shortlist does not imply a listed security, investment merit, or ongoing monitoring.</p>
-        {followups.length > 0 && <ul className="mt-3 flex flex-col divide-y divide-white/[0.055]" aria-label="Saved issuer research leads">
-          {followups.map((item) => <li key={item.cik} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+        <p className="mt-1 text-xs leading-5 text-white/45">Save each filing with its own research question. A task does not imply a listed security, investment merit, or ongoing monitoring.</p>
+        {followups.length > 0 && <ul className="mt-3 flex flex-col divide-y divide-white/[0.055]" aria-label="Saved SEC filing research tasks">
+          {followups.map((item) => <li key={`${item.cik}:${item.triggeringAccession}`} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
             <span className="min-w-0"><span className="text-white/80">{secIssuerDisplayName(item.issuer)}</span><span className="ml-2 font-mono text-xs text-white/40">CIK {item.cik}</span>
-              <span className="ml-2 text-xs text-white/35">from {item.triggeringAccession}</span></span>
-            <div className="flex items-center gap-3"><a href={item.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="text-xs text-emerald-200/80 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Open saved SEC filing page</a>
-              <button type="button" onClick={() => void removeIssuer(item.cik)} disabled={followupWorking === item.cik} className="text-xs text-white/55 underline-offset-2 hover:text-white hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:opacity-40">{followupWorking === item.cik ? "Removing…" : "Remove"}</button></div>
+              <span className="ml-2 break-all font-mono text-xs text-white/35">Accession {item.triggeringAccession}</span>
+              {item.nextQuestion && <span className="mt-1 block break-words text-xs text-white/65">Next question: {item.nextQuestion}</span>}
+              <span className="mt-1 block break-words text-[10px] text-white/35">Feed receipt {item.feedReceiptId} · observed {item.feedUpdatedAt ?? "unknown"} · retrieved {item.retrievedAt ?? "unknown"}</span>
+            </span>
+            <div className="flex flex-wrap items-center gap-3"><a href={item.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="text-xs text-emerald-200/80 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Resume at SEC filing</a>
+              <button type="button" onClick={() => void removeIssuer(item.cik, item.triggeringAccession)} disabled={followupWorking === `${item.cik}:${item.triggeringAccession}`} className="text-xs text-white/55 underline-offset-2 hover:text-white hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:opacity-40">{followupWorking === `${item.cik}:${item.triggeringAccession}` ? "Removing…" : "Remove"}</button></div>
           </li>)}
         </ul>}
       </section>
@@ -441,14 +559,21 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
                       className="inline-flex w-fit items-center rounded-md border border-emerald-300/25 bg-emerald-300/[0.055] px-3 py-2 text-xs font-medium text-emerald-100/85 hover:bg-emerald-300/[0.11] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-50">
                       {detailLoading && expandedFiling === secFilingIdentity(row) ? "Loading SEC evidence…" : expandedFiling === secFilingIdentity(row) ? "Hide disclosure" : "Inspect in Desk"}
                     </button>
-                    {secIssuerRowAction(row, followups.find((item) => item.cik === row.cik)) === "remove"
-                      ? <button type="button" onClick={() => void removeIssuer(row.cik)} disabled={followupWorking === row.cik} className="inline-flex w-fit items-center rounded-md border border-emerald-300/25 px-3 py-2 text-xs font-medium text-emerald-100/80 hover:bg-emerald-300/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:opacity-40">{followupWorking === row.cik ? "Removing issuer…" : "Remove saved lead"}</button>
-                      : secIssuerRowAction(row, followups.find((item) => item.cik === row.cik)) === "update"
-                        ? <button type="button" onClick={() => void saveIssuer(row)} disabled={followupWorking !== null} className="inline-flex w-fit items-center rounded-md border border-emerald-300/25 px-3 py-2 text-xs font-medium text-emerald-100/80 hover:bg-emerald-300/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:opacity-40">{followupWorking === row.cik ? "Updating lead…" : "Update saved filing"}<span className="sr-only"> to {row.accession}</span></button>
-                      : <button type="button" onClick={() => void saveIssuer(row)} disabled={followupWorking !== null} className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-40">{followupWorking === row.cik ? "Saving issuer…" : "Save issuer lead"}<span className="sr-only"> {secIssuerDisplayName(row.issuer)}, CIK {row.cik}</span></button>}
+                    <div className="grid min-w-0 gap-2 sm:col-span-2">
+                      <label className="grid min-w-0 gap-1 text-[11px] text-white/50" htmlFor={`sec-next-question-${secFilingIdentity(row)}`}>Optional next research question
+                        <textarea id={`sec-next-question-${secFilingIdentity(row)}`} rows={2} maxLength={500} value={secFilingQuestionValue(leadDrafts[`${row.cik}:${row.accession}`], followups.find((item) => item.cik === row.cik && item.triggeringAccession === row.accession))}
+                          onChange={(event) => setLeadDrafts((current) => ({ ...current, [`${row.cik}:${row.accession}`]: event.currentTarget.value }))}
+                          className="w-full min-w-0 resize-y rounded border border-white/10 bg-black/25 px-2.5 py-2 text-xs text-white/80 placeholder:text-white/30 focus:border-emerald-300/40 focus:outline-none" placeholder="What should I verify next?" />
+                      </label>
+                      <button type="button" onClick={() => void saveIssuer(row)} disabled={followupWorking !== null || (leadDrafts[`${row.cik}:${row.accession}`]?.length ?? 0) > 500} className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-40">
+                        {followupWorking === `${row.cik}:${row.accession}` ? "Saving filing task…" : followups.some((item) => item.cik === row.cik && item.triggeringAccession === row.accession) ? "Update saved research task" : "Save filing to My Research"}
+                      </button>
+                    </div>
                     <a href={row.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Open SEC filing page <span className="sr-only"> for {row.issuer}, accession {row.accession}</span></a>
                   </div>
                   {expandedFiling === secFilingIdentity(row) && <div id={`sec-filing-detail-${secFilingIdentity(row)}`} className="min-w-0 rounded-md border border-white/10 bg-black/20 px-3 py-4 sm:col-span-2 sm:px-4" aria-live="polite">
+                    {resumeNotice?.state === "open" && resumeNotice.target.cik === row.cik && resumeNotice.target.accession === row.accession && !detailLoading && !detailLoadFailed && !(detail?.accession === row.accession && detail.cik === row.cik) && <SecFilingInFeedResumeContext
+                      target={resumeNotice.target} onInspect={() => void loadDetail(row)} />}
                     {detailLoading && <p className="text-sm text-white/60" role="status">Checking this exact accession with SEC EDGAR…</p>}
                     {detailLoadFailed && <div className="flex flex-wrap items-center justify-between gap-3" role="alert"><p className="text-sm text-amber-100/80">The Desk could not load SEC evidence. Retry or open the SEC filing page.</p><button type="button" onClick={() => void loadDetail(row)} className="rounded border border-white/15 px-3 py-2 text-xs text-white/75 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Retry SEC evidence</button></div>}
                     {!detailLoading && !detailLoadFailed && detail?.accession === row.accession && detail.cik === row.cik && <SecFilingDetailPanel detail={detail} onRetry={() => void loadDetail(row)} />}
