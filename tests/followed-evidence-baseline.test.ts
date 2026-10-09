@@ -280,7 +280,7 @@ describe("followed-company evidence baseline", () => {
     try {
       expect(db.mentionRow(existingId)).toBeTruthy();
       const upgraded = (db as unknown as { db: DatabaseSync }).db;
-      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
       expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='followed_company_baseline_items'").get())
         .toEqual({ name: "followed_company_baseline_items" });
       const factColumns = new Map((upgraded.prepare("PRAGMA table_info(sec_fundamental_facts)").all() as Array<{ name: string; dflt_value: string | null }>)
@@ -292,11 +292,11 @@ describe("followed-company evidence baseline", () => {
     }
 
     const future = new DatabaseSync(path);
-    future.exec("PRAGMA user_version = 17");
+    future.exec("PRAGMA user_version = 18");
     future.close();
-    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_17");
+    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_18");
     const preserved = new DatabaseSync(path);
-    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
     preserved.close();
   });
 });

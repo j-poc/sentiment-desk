@@ -1,6 +1,6 @@
 ---
 name: verify-sentiment-desk
-description: Verify SEC fundamentals recovery, explicit private-evidence consent, and listed-issuer filtering for Recent Filings.
+description: Verify SEC fundamentals recovery, explicit private-evidence consent, listed-issuer filtering, and source-bound SEC filing research cases.
 ---
 
 # Verify Sentiment Desk
@@ -62,6 +62,6 @@ npm test -- --reporter=dot --maxWorkers=1 --testTimeout=20000 tests/app-private-
 
 ## Feature map
 
-Read [the feature index](./features/README.md) before driving. The map covers selected-company SEC fundamentals recovery, local private-evidence consent, and the Recent Filings active-listing cache. It does not certify live Luna classification quality, investor outcomes, or rendered cross-device journeys.
+Read [the feature index](./features/README.md) before driving. The map covers selected-company SEC fundamentals recovery, local private-evidence consent, the Recent Filings active-listing cache, and the source-bound SEC filing research case. The case needs an isolated real-source run; the fixture helper does not drive it. This skill does not certify live Luna classification quality, investor outcomes, or rendered cross-device journeys.
 
 For verifier upkeep, use `$maintain-verification-skill` to reconcile this recipe and map with the source before relying on a later run.

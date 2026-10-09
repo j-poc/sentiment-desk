@@ -243,6 +243,7 @@ export default function App() {
     snapshot: CompanyResearchBriefResumeSnapshot;
   } | null>(null);
   const [secResumeTarget, setSecResumeTarget] = useState<SecFilingResumeTarget | null>(null);
+  const [secResearchCaseResumeId, setSecResearchCaseResumeId] = useState<string | null>(null);
   const secResumeRequestId = useRef(0);
   const [sourceReviewRevision, setSourceReviewRevision] = useState(0);
   const [tape, setTape] = useState<Mention[]>([]);
@@ -506,6 +507,16 @@ export default function App() {
     setResearchView("filings");
     setSecResumeTarget(secFilingResumeTargetFromTask(task, ++secResumeRequestId.current));
   }, [closeDrawer]);
+  const resumeSecResearchCase = useCallback((caseId: string) => {
+    closeDrawer(false);
+    researchViewTouchedRef.current = true;
+    writeSessionPreference("sentiment-desk-research-view", "filings");
+    setResearchView("filings");
+    setSecResearchCaseResumeId(caseId);
+  }, [closeDrawer]);
+  const secResearchCaseResumeHandled = useCallback((caseId: string) => {
+    setSecResearchCaseResumeId((current) => current === caseId ? null : current);
+  }, []);
   const navigateToCompanyResearch = useCallback((companyId: string) => {
     const next = selectCompanyForResearch({ selectedCompanyId: selectedId, view: researchView }, companyId);
     if (next.selectedCompanyId !== selectedId) {
@@ -2177,6 +2188,8 @@ export default function App() {
           /> : researchView === "filings" ? <SecFilingsInbox
             resumeTarget={secResumeTarget}
             onResumeHandled={(requestId) => setSecResumeTarget((current) => current?.requestId === requestId ? null : current)}
+            resumeResearchCaseId={secResearchCaseResumeId}
+            onResearchCaseResumed={secResearchCaseResumeHandled}
             archiveStatus={firstRunEvidence.state !== "ready" ? "unknown" : firstRunEvidence.eligibleObservationCount > 0 ? "available" : "empty"}
             onOpenOperations={openOperationsFromFilings}
             onBrowseSavedSources={firstRunEvidence.state === "ready" && firstRunEvidence.eligibleObservationCount > 0 ? () => {
@@ -2192,6 +2205,7 @@ export default function App() {
               onReviewChanged={reportResearchReviewChanged}
               onOpenEvidence={openQueuedEvidence}
               onOpenResearchDecision={openQueuedResearchDecision}
+              onOpenSecResearchCase={resumeSecResearchCase}
               onResumeSecTask={resumeSecResearchTask}
             />
           ) : selected ? (

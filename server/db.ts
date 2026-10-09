@@ -32,6 +32,8 @@ import type { SavedSourceCoverageSnapshot } from "../shared/saved-source-coverag
 import { savedSourceTextMatches, type SavedSourceSearchCursor, type SavedSourceSearchPage } from "../shared/saved-source-search.js";
 import type { CompanyResearchDecision, CompanyResearchDecisionQueueItem, CompanyResearchEvidenceRole, CompanyResearchEvidenceRoleChoice, SavedCompanyResearchDecision } from "../shared/company-research-brief.js";
 import type { ListingSnapshot } from "../shared/sec-listing-snapshot.js";
+import type { SavedSecFilingResearchDecision, SecFilingResearchCase, SecFilingResearchFundamentalFact, SecFilingResearchFundamentalsView,
+  SecFilingCaseDecisionQueueItem, SecFilingResearchSubject } from "../shared/sec-filing-research-cases.js";
 import {
   MAX_ACTIVE_ANALYST_RESEARCH_ITEMS,
   MAX_ANALYST_RESEARCH_QUESTION_CHARS,
@@ -250,7 +252,7 @@ function processIsAlive(pid: number): boolean {
 function hasCurrentReadableSchema(db: DatabaseSync): boolean {
   try {
     const version = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-    if (version?.user_version !== 16) return false;
+    if (version?.user_version !== 16 && version?.user_version !== 17) return false;
     const objects = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name));
     if (!["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
       "source_deliveries", "source_ingestions", "followed_company_baselines", "followed_company_baseline_items",
@@ -269,6 +271,29 @@ function hasCurrentReadableSchema(db: DatabaseSync): boolean {
     return false;
   }
 }
+
+const PUBLIC_SEC_RESEARCH_CASE_IDENTITY_GUARD = `
+CREATE TRIGGER public_sec_research_cases_identity_guard
+BEFORE UPDATE ON public_sec_research_cases
+WHEN NEW.id <> OLD.id OR NEW.cik <> OLD.cik OR NEW.triggering_accession <> OLD.triggering_accession
+  OR NEW.filing_symbol <> OLD.filing_symbol OR NEW.filing_issuer <> OLD.filing_issuer OR NEW.filing_url <> OLD.filing_url
+  OR NEW.listing_proof_json <> OLD.listing_proof_json OR NEW.listing_proof_sha256 <> OLD.listing_proof_sha256
+  OR NEW.created_at <> OLD.created_at
+  OR (OLD.identity_status = 'verified' AND (NEW.identity_status <> OLD.identity_status
+    OR NEW.identity_ticker IS NOT OLD.identity_ticker OR NEW.identity_issuer_name IS NOT OLD.identity_issuer_name
+    OR NEW.identity_receipt_url IS NOT OLD.identity_receipt_url OR NEW.identity_retrieved_at IS NOT OLD.identity_retrieved_at
+    OR NEW.identity_sha256 IS NOT OLD.identity_sha256))
+  OR (OLD.identity_status = 'mismatch' AND NEW.identity_status NOT IN ('mismatch','verified'))
+  OR (NEW.identity_status = 'verified' AND (NEW.identity_ticker IS NULL OR NEW.identity_issuer_name IS NULL
+    OR UPPER(NEW.identity_ticker) <> UPPER(NEW.filing_symbol) OR NEW.identity_receipt_url IS NULL
+    OR NEW.identity_retrieved_at IS NULL OR NEW.identity_sha256 IS NULL
+    OR NOT EXISTS (SELECT 1 FROM public_sec_research_identity_receipts r
+      WHERE r.case_id=NEW.id AND r.sha256=NEW.identity_sha256 AND r.url=NEW.identity_receipt_url)))
+  OR (NEW.identity_status = 'mismatch' AND (NEW.identity_ticker IS NOT NULL OR NEW.identity_issuer_name IS NOT NULL
+    OR NEW.identity_receipt_url IS NULL OR NEW.identity_retrieved_at IS NULL OR NEW.identity_sha256 IS NULL
+    OR NOT EXISTS (SELECT 1 FROM public_sec_research_identity_receipts r
+      WHERE r.case_id=NEW.id AND r.sha256=NEW.identity_sha256 AND r.url=NEW.identity_receipt_url)))
+BEGIN SELECT RAISE(ABORT, 'public SEC research case identity is immutable'); END;`;
 
 /**
  * Source observations, Jev judgments, and delivery attempts have separate
@@ -1048,7 +1073,7 @@ export class Desk {
       const probe = new DatabaseSync(canonicalPath, { readOnly: true });
       try {
         schemaVersion = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (schemaVersion > 16) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
+        if (schemaVersion > 17) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
         currentSchema = hasCurrentReadableSchema(probe);
         // v11+ upgrades are additive; older upgrades may rebuild legacy rows,
         // so they retain the full-database startup reserve.
@@ -1083,7 +1108,7 @@ export class Desk {
           const probe = new DatabaseSync(canonicalPath, { readOnly: true });
           try {
             const version = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-            if (version > 16) throw new Error(`unsupported_database_schema_version_${version}`);
+            if (version > 17) throw new Error(`unsupported_database_schema_version_${version}`);
             currentSchema = hasCurrentReadableSchema(probe);
           }
           finally { probe.close(); }
@@ -1129,7 +1154,7 @@ export class Desk {
       this.exec("PRAGMA journal_mode = WAL");
       if (!currentSchema) {
         const version = Number((this.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (version > 16) throw new Error(`unsupported_database_schema_version_${version}`);
+        if (version > 17) throw new Error(`unsupported_database_schema_version_${version}`);
         this.exec(SCHEMA);
         this.migrate();
       }
@@ -1161,6 +1186,121 @@ export class Desk {
         this.exec("ALTER TABLE company_research_decisions ADD COLUMN evidence_roles_json TEXT NOT NULL DEFAULT '[]'");
       }
       this.exec(ANALYST_SOURCE_REVIEW_GUARDS);
+      // Research-only SEC subjects stay outside companies, monitoring tables,
+      // and every private-evidence allowlist. Their identity is the exact
+      // issuer CIK plus the SEC filing that prompted the analyst case.
+      this.exec(`CREATE TABLE IF NOT EXISTS public_sec_research_cases (
+        id TEXT PRIMARY KEY,
+        cik TEXT NOT NULL CHECK (length(cik)=10 AND cik NOT GLOB '*[^0-9]*'),
+        triggering_accession TEXT NOT NULL CHECK (length(triggering_accession)=20),
+        filing_symbol TEXT NOT NULL CHECK (length(filing_symbol) BETWEEN 1 AND 14),
+        filing_issuer TEXT NOT NULL CHECK (length(filing_issuer) BETWEEN 1 AND 512),
+        filing_url TEXT NOT NULL,
+        listing_proof_json TEXT NOT NULL,
+        listing_proof_sha256 TEXT NOT NULL CHECK (length(listing_proof_sha256)=64),
+        identity_status TEXT NOT NULL DEFAULT 'unverified' CHECK (identity_status IN ('unverified','verified','mismatch')),
+        identity_ticker TEXT,
+        identity_issuer_name TEXT,
+        identity_receipt_url TEXT,
+        identity_retrieved_at TEXT,
+        identity_sha256 TEXT CHECK (identity_sha256 IS NULL OR length(identity_sha256)=64),
+        created_at INTEGER NOT NULL CHECK (created_at>=0),
+        UNIQUE(cik, triggering_accession)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS public_sec_research_cases_no_delete BEFORE DELETE ON public_sec_research_cases
+      BEGIN SELECT RAISE(ABORT, 'public SEC research cases are immutable'); END;`);
+      this.exec(`CREATE TABLE IF NOT EXISTS public_sec_research_identity_receipts (
+        case_id TEXT NOT NULL REFERENCES public_sec_research_cases(id),
+        url TEXT NOT NULL,
+        retrieved_at TEXT NOT NULL,
+        body_bytes INTEGER NOT NULL CHECK (body_bytes>0 AND body_bytes<=4194304),
+        sha256 TEXT NOT NULL CHECK (length(sha256)=64),
+        body TEXT NOT NULL,
+        PRIMARY KEY(case_id,sha256)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS public_sec_research_identity_receipts_no_update BEFORE UPDATE ON public_sec_research_identity_receipts
+      BEGIN SELECT RAISE(ABORT, 'public SEC identity receipts are immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS public_sec_research_identity_receipts_no_delete BEFORE DELETE ON public_sec_research_identity_receipts
+      BEGIN SELECT RAISE(ABORT, 'public SEC identity receipts are immutable'); END;`);
+      // Rechecking a prior mismatch is allowed only through a new SEC receipt.
+      // Receipts remain append-only; verified identities remain immutable.
+      this.exec("DROP TRIGGER IF EXISTS public_sec_research_cases_identity_guard");
+      this.exec(PUBLIC_SEC_RESEARCH_CASE_IDENTITY_GUARD);
+      this.exec(`CREATE TABLE IF NOT EXISTS public_sec_case_fundamental_attempts (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES public_sec_research_cases(id),
+        request_key TEXT NOT NULL,
+        requested_at INTEGER NOT NULL CHECK (requested_at>=0),
+        started_at INTEGER NOT NULL CHECK (started_at>=0),
+        completed_at INTEGER,
+        status TEXT NOT NULL CHECK (status IN ('running','ready','partial','empty','failed','blocked','interrupted')),
+        snapshot_id TEXT,
+        error TEXT,
+        UNIQUE(case_id,request_key),
+        CHECK ((status='running' AND completed_at IS NULL) OR (status<>'running' AND completed_at IS NOT NULL))
+      ) STRICT;
+      CREATE UNIQUE INDEX IF NOT EXISTS public_sec_case_one_active_fundamental_attempt
+        ON public_sec_case_fundamental_attempts(case_id) WHERE status='running';
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_fundamental_attempt_terminal_immutable
+      BEFORE UPDATE ON public_sec_case_fundamental_attempts
+      WHEN OLD.status<>'running' OR NEW.status='running' OR NEW.id<>OLD.id OR NEW.case_id<>OLD.case_id
+        OR NEW.request_key<>OLD.request_key OR NEW.requested_at<>OLD.requested_at OR NEW.started_at<>OLD.started_at
+      BEGIN SELECT RAISE(ABORT, 'SEC research case attempt is immutable after terminal outcome'); END;
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_fundamental_attempt_no_delete BEFORE DELETE ON public_sec_case_fundamental_attempts
+      BEGIN SELECT RAISE(ABORT, 'SEC research case attempts are immutable'); END;
+      CREATE TABLE IF NOT EXISTS public_sec_case_fundamental_receipts (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES public_sec_research_cases(id),
+        attempt_id TEXT NOT NULL REFERENCES public_sec_case_fundamental_attempts(id),
+        endpoint TEXT NOT NULL CHECK(endpoint IN ('submissions','companyfacts')),
+        url TEXT NOT NULL,
+        started_at INTEGER NOT NULL CHECK(started_at>=0),
+        retrieved_at INTEGER NOT NULL CHECK(retrieved_at>=started_at),
+        body_bytes INTEGER NOT NULL CHECK(body_bytes>0 AND body_bytes<=33554432),
+        sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+        body TEXT NOT NULL,
+        UNIQUE(attempt_id,endpoint)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_fundamental_receipts_no_update BEFORE UPDATE ON public_sec_case_fundamental_receipts
+      BEGIN SELECT RAISE(ABORT, 'SEC research case receipts are immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_fundamental_receipts_no_delete BEFORE DELETE ON public_sec_case_fundamental_receipts
+      BEGIN SELECT RAISE(ABORT, 'SEC research case receipts are immutable'); END;
+      CREATE TABLE IF NOT EXISTS public_sec_case_fundamental_snapshots (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES public_sec_research_cases(id),
+        attempt_id TEXT NOT NULL UNIQUE REFERENCES public_sec_case_fundamental_attempts(id),
+        cik TEXT NOT NULL CHECK(length(cik)=10 AND cik NOT GLOB '*[^0-9]*'),
+        created_at INTEGER NOT NULL CHECK(created_at>=0),
+        state TEXT NOT NULL CHECK(state IN ('ready','partial','empty')),
+        policy_version TEXT NOT NULL,
+        identity_sha256 TEXT NOT NULL CHECK(length(identity_sha256)=64),
+        submissions_sha256 TEXT NOT NULL CHECK(length(submissions_sha256)=64),
+        companyfacts_sha256 TEXT NOT NULL CHECK(length(companyfacts_sha256)=64),
+        facts_json TEXT NOT NULL,
+        coverage_json TEXT NOT NULL
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_fundamental_snapshots_no_update BEFORE UPDATE ON public_sec_case_fundamental_snapshots
+      BEGIN SELECT RAISE(ABORT, 'SEC research case snapshots are immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_fundamental_snapshots_no_delete BEFORE DELETE ON public_sec_case_fundamental_snapshots
+      BEGIN SELECT RAISE(ABORT, 'SEC research case snapshots are immutable'); END;
+      CREATE TABLE IF NOT EXISTS public_sec_case_research_decisions (
+        id TEXT PRIMARY KEY,
+        request_key TEXT NOT NULL UNIQUE,
+        case_id TEXT NOT NULL REFERENCES public_sec_research_cases(id),
+        as_of_ms INTEGER NOT NULL CHECK(as_of_ms>=0),
+        snapshot_id TEXT NOT NULL REFERENCES public_sec_case_fundamental_snapshots(id),
+        snapshot_key TEXT NOT NULL CHECK(length(snapshot_key)=64),
+        fact_ids_json TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('investigate_further','insufficient_evidence','set_aside')),
+        rationale TEXT NOT NULL CHECK(length(rationale)<=2000),
+        next_check_date TEXT,
+        created_at INTEGER NOT NULL CHECK(created_at>=0)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS public_sec_case_decisions_latest ON public_sec_case_research_decisions(case_id,created_at DESC,id DESC);
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_research_decisions_no_update BEFORE UPDATE ON public_sec_case_research_decisions
+      BEGIN SELECT RAISE(ABORT, 'SEC research case decisions are immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS public_sec_case_research_decisions_no_delete BEFORE DELETE ON public_sec_case_research_decisions
+      BEGIN SELECT RAISE(ABORT, 'SEC research case decisions are immutable'); END;`);
       // Filing tasks use exact issuer-plus-accession identity, independent of the configured watchlist.
       this.exec(`CREATE TABLE IF NOT EXISTS sec_filing_research_tasks (
         cik TEXT NOT NULL CHECK (length(cik) = 10 AND cik NOT GLOB '*[^0-9]*'),
@@ -1189,7 +1329,8 @@ export class Desk {
         .run(this.runtimeId, process.pid, Date.now());
       this.recoverUnfinishedJevAttempts();
       this.recoverUnfinishedFundamentalAttempts();
-      this.exec("PRAGMA user_version = 16");
+      this.recoverUnfinishedSecFilingCaseFundamentalAttempts();
+      this.exec("PRAGMA user_version = 17");
       this.storageEnforcementEnabled = true;
     } catch (error) {
       try { openedDb?.close(); } catch { /* preserve startup failure */ }
@@ -1592,6 +1733,18 @@ export class Desk {
       this.rollbackIfActive();
       throw error;
     }
+  }
+
+  private recoverUnfinishedSecFilingCaseFundamentalAttempts(): void {
+    const count = this.prepare("SELECT COUNT(*) AS count FROM public_sec_case_fundamental_attempts WHERE status='running'")
+      .get() as { count: number };
+    if (Number(count.count) === 0) return;
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      this.prepare(`UPDATE public_sec_case_fundamental_attempts SET status='interrupted',completed_at=?,
+        error='The application stopped before this SEC research-case refresh completed.' WHERE status='running'`).run(Date.now());
+      this.exec("COMMIT");
+    } catch (error) { this.rollbackIfActive(); throw error; }
   }
 
   private releaseScoringReservation(attempt: {
@@ -4626,6 +4779,305 @@ export class Desk {
 
   hasSecFilingResearchTaskStore(): boolean {
     return this.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sec_filing_research_tasks'").get() != null;
+  }
+
+  hasSecFilingResearchCaseStore(): boolean {
+    return this.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_sec_research_cases'").get() != null;
+  }
+
+  secFilingResearchCases(): SecFilingResearchCase[] {
+    return (this.prepare(`SELECT * FROM public_sec_research_cases ORDER BY created_at DESC, id`).all() as Array<Record<string, unknown>>)
+      .map((row) => this.toSecFilingResearchCase(row));
+  }
+
+  secFilingResearchCase(id: string): SecFilingResearchCase | null {
+    const row = this.prepare("SELECT * FROM public_sec_research_cases WHERE id=?").get(id) as Record<string, unknown> | undefined;
+    return row ? this.toSecFilingResearchCase(row) : null;
+  }
+
+  private toSecFilingResearchCase(row: Record<string, unknown>): SecFilingResearchCase {
+    const proof = JSON.parse(String(row.listing_proof_json)) as unknown;
+    if (typeof proof !== "object" || proof === null || Array.isArray(proof)
+      || createHash("sha256").update(JSON.stringify(proof), "utf8").digest("hex") !== row.listing_proof_sha256) {
+      throw new Error("sec_filing_research_case_listing_proof_corrupt");
+    }
+    const identityStatus = String(row.identity_status) as SecFilingResearchCase["identity"]["status"];
+    const receipt = row.identity_receipt_url == null ? null : {
+      url: String(row.identity_receipt_url), retrievedAt: String(row.identity_retrieved_at), sha256: String(row.identity_sha256),
+    };
+    return {
+      kind: "sec_filing_case", id: String(row.id), cik: String(row.cik),
+      triggeringAccession: String(row.triggering_accession), filingSymbol: String(row.filing_symbol),
+      filingIssuer: String(row.filing_issuer), filingUrl: String(row.filing_url),
+      listingProof: proof as SecFilingResearchCase["listingProof"],
+      identity: { status: identityStatus, ticker: row.identity_ticker == null ? null : String(row.identity_ticker),
+        issuerName: row.identity_issuer_name == null ? null : String(row.identity_issuer_name), receipt },
+      createdAt: Number(row.created_at),
+    };
+  }
+
+  enrollSecFilingResearchCase(input: {
+    cik: string; accession: string; filingSymbol: string; filingIssuer: string; filingUrl: string;
+    listingProof: SecFilingResearchCase["listingProof"];
+  }): { item: SecFilingResearchCase; created: boolean } {
+    if (!/^\d{10}$/.test(input.cik) || !/^\d{10}-\d{2}-\d{6}$/.test(input.accession)
+      || !/^[\x21-\x7e]{1,14}$/.test(input.filingSymbol) || !input.filingIssuer.trim() || input.filingIssuer.length > 512
+      || !Array.isArray(input.listingProof.sources) || input.listingProof.sources.length < 1 || input.listingProof.sources.length > 4
+      || !Number.isFinite(Date.parse(input.listingProof.retrievedAt))
+      || !Number.isFinite(Date.parse(input.listingProof.directoryCreatedAt))) throw new Error("invalid_sec_filing_research_case");
+    const url = new URL(input.filingUrl);
+    if (url.protocol !== "https:" || url.hostname !== "www.sec.gov" || url.port || url.username || url.password || url.search || url.hash
+      || !url.pathname.match(new RegExp(`^/Archives/edgar/data/${Number(input.cik)}/${input.accession.replaceAll("-", "")}/${input.accession}-index\\.htm$`))) {
+      throw new Error("invalid_sec_filing_research_case_url");
+    }
+    const proofJson = JSON.stringify(input.listingProof);
+    const proofSha256 = createHash("sha256").update(proofJson, "utf8").digest("hex");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const previous = this.prepare("SELECT id FROM public_sec_research_cases WHERE cik=? AND triggering_accession=?")
+        .get(input.cik, input.accession) as { id: string } | undefined;
+      if (previous) {
+        const item = this.secFilingResearchCase(previous.id);
+        if (!item) throw new Error("sec_filing_research_case_readback_failed");
+        this.exec("COMMIT");
+        return { item, created: false };
+      }
+      const id = randomUUID();
+      this.prepare(`INSERT INTO public_sec_research_cases
+        (id,cik,triggering_accession,filing_symbol,filing_issuer,filing_url,listing_proof_json,listing_proof_sha256,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(id,input.cik,input.accession,input.filingSymbol.toUpperCase(),input.filingIssuer.trim(),url.toString(),proofJson,proofSha256,Date.now());
+      const item = this.secFilingResearchCase(id);
+      if (!item) throw new Error("sec_filing_research_case_readback_failed");
+      this.exec("COMMIT");
+      return { item, created: true };
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  verifySecFilingResearchCaseIdentity(input: { caseId: string; status: "verified" | "mismatch"; ticker: string | null;
+    issuerName: string | null; receipt: { url: string; retrievedAt: string; sha256: string; body: string } }): SecFilingResearchCase {
+    if (!/^[0-9A-F]{8}-[0-9A-F]{4}-[1-8][0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(input.caseId)
+      || (input.status === "verified" && (!input.ticker || !input.issuerName))
+      || !/^https:\/\/www\.sec\.gov\/files\/company_tickers(?:_exchange)?\.json$/.test(input.receipt.url)
+      || !Number.isFinite(Date.parse(input.receipt.retrievedAt)) || !/^[a-f0-9]{64}$/.test(input.receipt.sha256)
+      || Buffer.byteLength(input.receipt.body, "utf8") < 1 || Buffer.byteLength(input.receipt.body, "utf8") > 4 * 1024 * 1024
+      || createHash("sha256").update(input.receipt.body, "utf8").digest("hex") !== input.receipt.sha256) {
+      throw new Error("invalid_sec_filing_research_identity_receipt");
+    }
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.secFilingResearchCase(input.caseId);
+      if (!existing) throw new Error("unknown_sec_filing_research_case");
+      const receipt = { url: input.receipt.url, retrievedAt: input.receipt.retrievedAt, sha256: input.receipt.sha256 };
+      if (existing.identity.status === "verified") {
+        if (existing.identity.status !== input.status || existing.identity.ticker !== input.ticker
+          || existing.identity.issuerName !== input.issuerName || existing.identity.receipt?.sha256 !== receipt.sha256) {
+          throw new Error("sec_filing_research_identity_already_resolved");
+        }
+        this.exec("COMMIT"); return existing;
+      }
+      if (existing.identity.status === input.status && existing.identity.receipt?.sha256 === receipt.sha256) {
+        this.exec("COMMIT"); return existing;
+      }
+      this.prepare(`INSERT OR IGNORE INTO public_sec_research_identity_receipts(case_id,url,retrieved_at,body_bytes,sha256,body)
+        VALUES(?,?,?,?,?,?)`).run(input.caseId,input.receipt.url,input.receipt.retrievedAt,Buffer.byteLength(input.receipt.body,"utf8"),input.receipt.sha256,input.receipt.body);
+      this.prepare(`UPDATE public_sec_research_cases SET identity_status=?,identity_ticker=?,identity_issuer_name=?,
+        identity_receipt_url=?,identity_retrieved_at=?,identity_sha256=? WHERE id=? AND identity_status IN ('unverified','mismatch')`)
+        .run(input.status,input.ticker,input.issuerName,input.receipt.url,input.receipt.retrievedAt,input.receipt.sha256,input.caseId);
+      const item = this.secFilingResearchCase(input.caseId);
+      if (!item) throw new Error("sec_filing_research_case_readback_failed");
+      this.exec("COMMIT"); return item;
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  secFilingResearchIdentityReceipt(caseId: string): { url: string; retrievedAt: string; sha256: string; body: string } | null {
+    const row = this.prepare(`SELECT r.url,r.retrieved_at,r.body_bytes,r.sha256,r.body FROM public_sec_research_cases c
+      JOIN public_sec_research_identity_receipts r ON r.case_id=c.id AND r.sha256=c.identity_sha256
+      WHERE c.id=? AND c.identity_status='verified'`).get(caseId) as
+      { url: string; retrieved_at: string; body_bytes: number; sha256: string; body: string } | undefined;
+    if (!row) return null;
+    if (Buffer.byteLength(row.body,"utf8") !== Number(row.body_bytes) || createHash("sha256").update(row.body,"utf8").digest("hex") !== row.sha256) {
+      throw new Error("sec_filing_research_identity_receipt_corrupt");
+    }
+    return { url: row.url, retrievedAt: row.retrieved_at, sha256: row.sha256, body: row.body };
+  }
+
+  claimSecFilingCaseFundamentalAttempt(input: { caseId: string; requestKey: string; now?: number }):
+    | { kind: "claimed"; attemptId: string }
+    | { kind: "existing"; status: string }
+    | { kind: "active" } {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.requestKey)) throw new Error("invalid_sec_filing_case_request_key");
+    const now = input.now ?? Date.now();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const saved = this.prepare("SELECT status FROM public_sec_case_fundamental_attempts WHERE case_id=? AND request_key=?")
+        .get(input.caseId,input.requestKey) as { status: string } | undefined;
+      if (saved) { this.exec("COMMIT"); return { kind: "existing", status: saved.status }; }
+      const active = this.prepare("SELECT 1 FROM public_sec_case_fundamental_attempts WHERE case_id=? AND status='running'").get(input.caseId);
+      if (active) { this.exec("COMMIT"); return { kind: "active" }; }
+      const attemptId = randomUUID();
+      this.prepare(`INSERT INTO public_sec_case_fundamental_attempts(id,case_id,request_key,requested_at,started_at,status)
+        VALUES(?,?,?,?,?,'running')`).run(attemptId,input.caseId,input.requestKey,now,now);
+      this.exec("COMMIT"); return { kind: "claimed", attemptId };
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  failSecFilingCaseFundamentalAttempt(input: { attemptId: string; error: string; status?: "failed" | "blocked"; completedAt?: number }): void {
+    const changed = this.prepare(`UPDATE public_sec_case_fundamental_attempts SET status=?,completed_at=?,error=?
+      WHERE id=? AND status='running'`).run(input.status ?? "failed",input.completedAt ?? Date.now(),input.error.slice(0,500),input.attemptId);
+    if (Number(changed.changes) !== 1) throw new Error("sec_filing_case_fundamental_attempt_not_running");
+  }
+
+  persistSecFilingCaseFundamentalReceipt(input: { caseId: string; attemptId: string; endpoint: "submissions" | "companyfacts";
+    url: string; startedAt: number; retrievedAt: number; body: string; bodyBytes: number; sha256: string }): void {
+    const row = this.prepare(`SELECT a.status,a.started_at,c.cik FROM public_sec_case_fundamental_attempts a
+      JOIN public_sec_research_cases c ON c.id=a.case_id WHERE a.id=? AND a.case_id=?`).get(input.attemptId,input.caseId) as
+      { status: string; started_at: number; cik: string } | undefined;
+    const url = new URL(input.url);
+    const expectedPath = input.endpoint === "submissions" ? `/submissions/CIK${row?.cik}.json` : `/api/xbrl/companyfacts/CIK${row?.cik}.json`;
+    if (!row || row.status !== "running" || !Number.isSafeInteger(input.startedAt) || input.startedAt < Number(row.started_at)
+      || !Number.isSafeInteger(input.retrievedAt) || input.retrievedAt < input.startedAt || input.bodyBytes < 1 || input.bodyBytes > 32 * 1024 * 1024
+      || Buffer.byteLength(input.body,"utf8") !== input.bodyBytes || createHash("sha256").update(input.body,"utf8").digest("hex") !== input.sha256
+      || !/^[a-f0-9]{64}$/.test(input.sha256) || url.protocol !== "https:" || url.hostname !== "data.sec.gov"
+      || url.pathname !== expectedPath || url.search || url.hash || url.username || url.password) throw new Error("invalid_sec_filing_case_payload_receipt");
+    JSON.parse(input.body);
+    this.prepare(`INSERT INTO public_sec_case_fundamental_receipts
+      (id,case_id,attempt_id,endpoint,url,started_at,retrieved_at,body_bytes,sha256,body) VALUES(?,?,?,?,?,?,?,?,?,?)`)
+      .run(randomUUID(),input.caseId,input.attemptId,input.endpoint,url.toString(),input.startedAt,input.retrievedAt,input.bodyBytes,input.sha256,input.body);
+  }
+
+  saveSecFilingCaseFundamentals(input: { caseId: string; attemptId: string; completedAt: number; state: "ready" | "partial" | "empty";
+    policyVersion: string; facts: readonly SecFilingResearchFundamentalFact[]; coverage: readonly string[] }): string {
+    const identity = this.prepare("SELECT cik,identity_status,identity_sha256 FROM public_sec_research_cases WHERE id=?")
+      .get(input.caseId) as { cik: string; identity_status: string; identity_sha256: string | null } | undefined;
+    const attempt = this.prepare("SELECT status FROM public_sec_case_fundamental_attempts WHERE id=? AND case_id=?").get(input.attemptId,input.caseId) as { status: string } | undefined;
+    const receipts = this.prepare("SELECT endpoint,sha256 FROM public_sec_case_fundamental_receipts WHERE attempt_id=? AND case_id=?")
+      .all(input.attemptId,input.caseId) as Array<{ endpoint: string; sha256: string }>;
+    const hashes = new Map(receipts.map((receipt) => [receipt.endpoint,receipt.sha256]));
+    const submissionsSha256 = hashes.get("submissions");
+    const companyFactsSha256 = hashes.get("companyfacts");
+    if (!identity || identity.identity_status !== "verified" || !identity.identity_sha256 || !attempt || attempt.status !== "running"
+      || !submissionsSha256 || !companyFactsSha256 || !Number.isSafeInteger(input.completedAt)
+      || !input.facts.every((fact) => fact.caseId === input.caseId && fact.cik === identity.cik
+        && fact.companyFactsSha256 === companyFactsSha256 && fact.submissionsSha256 === submissionsSha256)
+      || new Set(input.facts.map((fact) => fact.id)).size !== input.facts.length) throw new Error("invalid_sec_filing_case_fundamentals_snapshot");
+    const snapshotId = randomUUID();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      this.prepare(`INSERT INTO public_sec_case_fundamental_snapshots
+        (id,case_id,attempt_id,cik,created_at,state,policy_version,identity_sha256,submissions_sha256,companyfacts_sha256,facts_json,coverage_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(snapshotId,input.caseId,input.attemptId,identity.cik,input.completedAt,input.state,input.policyVersion,
+          identity.identity_sha256,submissionsSha256,companyFactsSha256,JSON.stringify(input.facts),JSON.stringify(input.coverage));
+      const status = input.state === "ready" ? "ready" : input.state;
+      const changed = this.prepare("UPDATE public_sec_case_fundamental_attempts SET status=?,completed_at=?,snapshot_id=? WHERE id=? AND status='running'")
+        .run(status,input.completedAt,snapshotId,input.attemptId);
+      if (Number(changed.changes) !== 1) throw new Error("sec_filing_case_fundamental_attempt_not_running");
+      this.exec("COMMIT"); return snapshotId;
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  latestSecFilingCaseFundamentals(caseId: string, asOfMs = Number.MAX_SAFE_INTEGER): {
+    snapshotId: string; createdAt: number; state: "ready" | "partial" | "empty"; facts: SecFilingResearchFundamentalFact[]; coverage: string[]; retrievedAt: number;
+  } | null {
+    const snapshot = this.prepare(`SELECT s.id,s.created_at,s.state,s.facts_json,s.coverage_json FROM public_sec_case_fundamental_snapshots s
+      JOIN public_sec_research_cases c ON c.id=s.case_id
+      WHERE s.case_id=? AND c.identity_status='verified' AND s.identity_sha256=c.identity_sha256 AND s.created_at<=?
+      ORDER BY s.created_at DESC,s.id DESC LIMIT 1`).get(caseId,asOfMs) as
+      { id: string; created_at: number; state: "ready" | "partial" | "empty"; facts_json: string; coverage_json: string } | undefined;
+    if (!snapshot) return null;
+    const facts = JSON.parse(snapshot.facts_json) as unknown;
+    const coverage = JSON.parse(snapshot.coverage_json) as unknown;
+    if (!Array.isArray(facts) || !facts.every((fact) => typeof fact === "object" && fact !== null && (fact as { caseId?: unknown }).caseId === caseId)
+      || !Array.isArray(coverage) || !coverage.every((reason) => typeof reason === "string")) throw new Error("sec_filing_case_fundamentals_snapshot_corrupt");
+    return { snapshotId: snapshot.id, createdAt: Number(snapshot.created_at), state: snapshot.state,
+      facts: facts as SecFilingResearchFundamentalFact[], coverage: coverage as string[], retrievedAt: Number(snapshot.created_at) };
+  }
+
+  latestSecFilingCaseFundamentalAttempt(caseId: string): { requestedAt: number; status: string; error: string | null } | null {
+    const row = this.prepare(`SELECT requested_at,status,error FROM public_sec_case_fundamental_attempts WHERE case_id=?
+      ORDER BY requested_at DESC,rowid DESC LIMIT 1`).get(caseId) as { requested_at: number; status: string; error: string | null } | undefined;
+    return row ? { requestedAt: Number(row.requested_at), status: row.status, error: row.error } : null;
+  }
+
+  latestSecFilingCaseDecision(caseId: string): SavedSecFilingResearchDecision | null {
+    const row = this.prepare(`SELECT * FROM public_sec_case_research_decisions WHERE case_id=? ORDER BY created_at DESC,id DESC LIMIT 1`)
+      .get(caseId) as { id: string; request_key: string; case_id: string; as_of_ms: number; snapshot_id: string; snapshot_key: string;
+        fact_ids_json: string; decision: SavedCompanyResearchDecision["decision"]; rationale: string; next_check_date: string | null; created_at: number } | undefined;
+    if (!row) return null;
+    const factIds = JSON.parse(row.fact_ids_json) as unknown;
+    if (!Array.isArray(factIds) || !factIds.every((id) => typeof id === "string")) throw new Error("sec_filing_case_decision_manifest_corrupt");
+    return { id: row.id, requestKey: row.request_key, caseId: row.case_id, asOfMs: Number(row.as_of_ms), snapshotId: row.snapshot_id,
+      snapshotKey: row.snapshot_key, factIds: factIds as string[], decision: row.decision,
+      rationale: row.rationale, nextCheckDate: row.next_check_date, createdAt: Number(row.created_at) };
+  }
+
+  latestSecFilingCaseDecisionQueue(): SecFilingCaseDecisionQueueItem[] {
+    const rows = this.prepare(`SELECT d.case_id,d.id,d.request_key,d.as_of_ms,d.snapshot_id,d.snapshot_key,d.fact_ids_json,d.decision,
+        d.rationale,d.next_check_date,d.created_at,c.cik,c.filing_symbol,c.identity_issuer_name
+      FROM public_sec_case_research_decisions d JOIN public_sec_research_cases c ON c.id=d.case_id
+      WHERE c.identity_status='verified' ORDER BY d.created_at DESC,d.id DESC`).all() as Array<{
+        case_id: string; id: string; request_key: string; as_of_ms: number; snapshot_id: string; snapshot_key: string;
+        fact_ids_json: string; decision: SavedCompanyResearchDecision["decision"]; rationale: string; next_check_date: string | null;
+        created_at: number; cik: string; filing_symbol: string; identity_issuer_name: string;
+      }>;
+    const seen = new Set<string>(); const items: SecFilingCaseDecisionQueueItem[] = [];
+    for (const row of rows) {
+      if (seen.has(row.case_id)) continue;
+      seen.add(row.case_id);
+      const decision = this.latestSecFilingCaseDecision(row.case_id);
+      if (!decision) continue;
+      items.push({ target: { kind: "sec_filing_case", caseId: row.case_id, cik: row.cik,
+        ticker: row.filing_symbol, issuerName: row.identity_issuer_name }, decision, factCount: decision.factIds.length });
+    }
+    return items;
+  }
+
+  saveSecFilingCaseDecision(input: { caseId: string; requestKey: string; asOfMs: number; snapshotId: string; snapshotKey: string;
+    factIds: readonly string[]; decision: SavedCompanyResearchDecision["decision"]; rationale: string; nextCheckDate: string | null }): SavedSecFilingResearchDecision {
+    const rationale = input.rationale.trim();
+    if (!/^[0-9a-f-]{36}$/i.test(input.requestKey) || !Number.isSafeInteger(input.asOfMs) || input.asOfMs < 0
+      || !/^[0-9a-f-]{36}$/i.test(input.snapshotId) || !/^[a-f0-9]{64}$/.test(input.snapshotKey)
+      || !["investigate_further","insufficient_evidence","set_aside"].includes(input.decision)
+      || [...rationale].length > 2_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(rationale)
+      || input.factIds.length > 500 || !input.factIds.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200)
+      || new Set(input.factIds).size !== input.factIds.length
+      || (input.nextCheckDate != null && (() => { const date = new Date(`${input.nextCheckDate}T00:00:00.000Z`);
+        return !/^\d{4}-\d{2}-\d{2}$/.test(input.nextCheckDate) || !Number.isFinite(date.valueOf()) || date.toISOString().slice(0,10) !== input.nextCheckDate; })())) {
+      throw new Error("invalid_sec_filing_case_decision");
+    }
+    const factsJson = JSON.stringify([...input.factIds].sort());
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.latestSecFilingCaseFundamentals(input.caseId, input.asOfMs);
+      const snapshotFactIds = new Set(current?.facts.map((fact) => fact.id) ?? []);
+      if (!current || current.snapshotId !== input.snapshotId || input.factIds.some((id) => !snapshotFactIds.has(id))) {
+        throw new Error("sec_filing_case_snapshot_changed");
+      }
+      const previous = this.prepare("SELECT * FROM public_sec_case_research_decisions WHERE request_key=?").get(input.requestKey) as {
+        id: string; request_key: string; case_id: string; as_of_ms: number; snapshot_id: string; snapshot_key: string;
+        fact_ids_json: string; decision: SavedCompanyResearchDecision["decision"]; rationale: string; next_check_date: string | null; created_at: number;
+      } | undefined;
+      if (previous) {
+        if (previous.case_id !== input.caseId || Number(previous.as_of_ms) !== input.asOfMs || previous.snapshot_id !== input.snapshotId
+          || previous.snapshot_key !== input.snapshotKey || previous.fact_ids_json !== factsJson || previous.decision !== input.decision
+          || previous.rationale !== rationale || previous.next_check_date !== input.nextCheckDate) throw new Error("sec_filing_case_decision_request_key_reused");
+        this.exec("COMMIT");
+        return { id: previous.id, requestKey: previous.request_key, caseId: previous.case_id, asOfMs: Number(previous.as_of_ms),
+          snapshotId: previous.snapshot_id, snapshotKey: previous.snapshot_key, factIds: JSON.parse(previous.fact_ids_json) as string[],
+          decision: previous.decision, rationale: previous.rationale,
+          nextCheckDate: previous.next_check_date, createdAt: Number(previous.created_at) };
+      }
+      const count = this.prepare("SELECT COUNT(*) AS count FROM public_sec_case_research_decisions").get() as { count: number };
+      if (Number(count.count) >= MAX_STORED_COMPANY_RESEARCH_DECISIONS) throw new Error("sec_filing_case_decision_limit_exceeded");
+      const id = randomUUID(); const createdAt = Date.now();
+      this.prepare(`INSERT INTO public_sec_case_research_decisions
+        (id,request_key,case_id,as_of_ms,snapshot_id,snapshot_key,fact_ids_json,decision,rationale,next_check_date,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id,input.requestKey,input.caseId,input.asOfMs,input.snapshotId,input.snapshotKey,factsJson,
+          input.decision,rationale,input.nextCheckDate,createdAt);
+      this.exec("COMMIT");
+      return { id, requestKey: input.requestKey, caseId: input.caseId, asOfMs: input.asOfMs, snapshotId: input.snapshotId,
+        snapshotKey: input.snapshotKey, factIds: JSON.parse(factsJson) as string[],
+        decision: input.decision, rationale, nextCheckDate: input.nextCheckDate, createdAt };
+    } catch (error) { this.rollbackIfActive(); throw error; }
   }
 
   secFilingResearchTasks(): Array<{ cik: string; issuer: string; triggeringAccession: string; filingUrl: string;

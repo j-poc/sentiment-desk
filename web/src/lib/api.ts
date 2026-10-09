@@ -12,6 +12,13 @@ import type { SecFilingDetail, SecFilingsInboxView, SecFilingResearchTask } from
 import type { SavedSourceCoverageSnapshot } from "../../../shared/saved-source-coverage.js";
 import type { SavedSourceSearchCursor, SavedSourceSearchPage } from "../../../shared/saved-source-search.js";
 import type { CompanyResearchBriefResponse, CompanyResearchBriefResumeSnapshot, CompanyResearchDecision, CompanyResearchDecisionQueueItem, CompanyResearchEvidenceRoleChoice } from "../../../shared/company-research-brief.js";
+import type {
+  SecFilingCaseDecisionQueueItem,
+  SecFilingResearchCase,
+  SecFilingResearchCaseDetail,
+  SaveSecFilingResearchDecisionInput,
+  SecFilingResearchBriefResponse,
+} from "../../../shared/sec-filing-research-cases.js";
 export type { CompanyResearchDecisionQueueItem } from "../../../shared/company-research-brief.js";
 
 /** Shared identity guard used before applying any selected-company response. */
@@ -62,6 +69,44 @@ export function inspectSecFiling(cik: string, accession: string): Promise<SecFil
   return requestJSON<SecFilingDetail>("/api/sec-filings-inbox/evidence", {
     method: "POST", body: JSON.stringify({ cik, accession, confirmUse: true }),
   });
+}
+
+export async function getSecFilingResearchCases(signal?: AbortSignal): Promise<SecFilingResearchCase[]> {
+  return (await getJSON<{ items: SecFilingResearchCase[] }>("/api/sec-filing-research-cases", signal)).items;
+}
+
+export function createSecFilingResearchCase(cik: string, accession: string): Promise<{ case: SecFilingResearchCase; created: boolean }> {
+  return requestJSON<{ case: SecFilingResearchCase; created: boolean }>("/api/sec-filing-research-cases", {
+    method: "POST", body: JSON.stringify({ cik, accession }),
+  });
+}
+
+export function getSecFilingResearchCase(id: string, signal?: AbortSignal): Promise<SecFilingResearchCaseDetail> {
+  return getJSON<SecFilingResearchCaseDetail>(`/api/sec-filing-research-cases/${encodeURIComponent(id)}`, signal);
+}
+
+export async function verifySecFilingResearchCaseIdentity(id: string): Promise<SecFilingResearchCase> {
+  const response = await requestJSON<{ case: SecFilingResearchCase }>(
+    `/api/sec-filing-research-cases/${encodeURIComponent(id)}/verify-identity`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+  return response.case;
+}
+
+export function refreshSecFilingResearchCaseFundamentals(id: string, requestKey: string): Promise<SecFilingResearchCaseDetail> {
+  return requestJSON<SecFilingResearchCaseDetail>(`/api/sec-filing-research-cases/${encodeURIComponent(id)}/fundamentals/refresh`, {
+    method: "POST", body: JSON.stringify({ requestKey }),
+  });
+}
+
+export function saveSecFilingResearchCaseDecision(id: string, input: SaveSecFilingResearchDecisionInput): Promise<SecFilingResearchBriefResponse> {
+  return requestJSON<SecFilingResearchBriefResponse>(`/api/sec-filing-research-cases/${encodeURIComponent(id)}/research-brief/decisions`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
+export async function getSecFilingResearchCaseDecisionQueue(signal?: AbortSignal): Promise<{ items: SecFilingCaseDecisionQueueItem[] }> {
+  return getJSON<{ items: SecFilingCaseDecisionQueueItem[] }>("/api/research-queue/sec-filing-cases", signal);
 }
 
 export async function getSecFilingResearchTasks(signal?: AbortSignal): Promise<SecFilingResearchTask[]> {

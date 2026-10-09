@@ -39,9 +39,13 @@ import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
 import type { CategoricalBucketCursor } from "./types.js";
 import type { Company } from "./types.js";
 import { PrivateEvidenceLimitError, type PrivateEvidenceStore } from "./private-evidence-store.js";
+import { ExternalRequestPausedError } from "./external-request-gate.js";
+import { ProviderRateLimitError } from "./provider-cooldown.js";
 import { comparePersistedFundamentalFacts } from "./company-fundamentals.js";
 import { compileCompanyResearchBrief } from "./company-research-brief.js";
 import type { CompanyResearchBriefResponse, CompanyResearchDecision } from "../shared/company-research-brief.js";
+import type { SecFilingResearchBriefResponse, SecFilingResearchCase, SecFilingResearchCaseDetail,
+  SecFilingResearchFundamentalFact, SavedSecFilingResearchDecision } from "../shared/sec-filing-research-cases.js";
 
 /**
  * HTTP surface: read APIs, an explicitly confirmed single-item Jev retry, and
@@ -132,6 +136,14 @@ const secFilingsInboxActivationSchema = z.object({ confirmUse: z.literal(true) }
 const secFilingResearchTaskSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/),
   nextQuestion: z.string().max(500).optional() }).strict();
 const secFilingDetailSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/), confirmUse: z.literal(true) }).strict();
+const secFilingResearchCaseEnrollSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/) }).strict();
+const secFilingCaseFundamentalsRefreshSchema = z.object({ requestKey: z.string().uuid() }).strict();
+const secFilingCaseDecisionSchema = z.object({
+  requestKey: z.string().uuid(), asOfMs: z.number().int().nonnegative(), snapshotKey: z.string().regex(/^[a-f0-9]{64}$/),
+  factIds: z.array(z.string().min(1).max(200)).max(500),
+  decision: z.enum(["investigate_further", "insufficient_evidence", "set_aside"]),
+  rationale: z.string().max(2_000), nextCheckDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+}).strict();
 const analystResearchReviewSchema = z.object({
   disposition: z.enum(["investigate", "dismissed"]),
   nextQuestion: z.string().max(MAX_ANALYST_RESEARCH_QUESTION_CHARS),
@@ -271,6 +283,55 @@ function companyResearchBriefResponse(deps: AppDeps, companyId: string, asOfMs =
     decisionStorageAvailable: decisionStorage.available,
     decisionStorageUnavailableReason: decisionStorage.unavailableReason,
   };
+}
+
+function secFilingCaseBriefResponse(deps: AppDeps, caseId: string, asOfMs = Date.now()): SecFilingResearchBriefResponse | null {
+  const researchCase = deps.db.secFilingResearchCase(caseId);
+  if (!researchCase || researchCase.identity.status !== "verified" || !researchCase.identity.ticker || !researchCase.identity.issuerName) return null;
+  const snapshot = deps.db.latestSecFilingCaseFundamentals(caseId, asOfMs);
+  if (!snapshot) return null;
+  const internalFacts = snapshot.facts.map((fact) => ({ ...fact, companyId: caseId,
+    companyFactsDeliveryId: fact.companyFactsSha256, submissionsDeliveryId: fact.submissionsSha256 }));
+  const resolved = comparePersistedFundamentalFacts(internalFacts);
+  const reasons = [...snapshot.coverage, ...resolved.coverage,
+    "This research-only case includes SEC CompanyFacts only. It has no sentiment, public-web aggregation, peer comparison, market-cap screen, or private-note evidence."];
+  const comparable = resolved.comparisons.filter((item) => item.state === "comparable" && item.currentFactId && item.priorFactId)
+    .sort((a,b) => {
+      const aEnd = resolved.facts.find((fact) => fact.id === a.currentFactId)?.endDate ?? "";
+      const bEnd = resolved.facts.find((fact) => fact.id === b.currentFactId)?.endDate ?? "";
+      return bEnd.localeCompare(aEnd) || a.metric.localeCompare(b.metric);
+    })[0];
+  const currentFact = comparable ? resolved.facts.find((fact) => fact.id === comparable.currentFactId) : null;
+  const priorFact = comparable ? resolved.facts.find((fact) => fact.id === comparable.priorFactId) : null;
+  const nextResearchQuestion = comparable && currentFact && priorFact ? {
+    question: `What source evidence explains the reported ${currentFact.metric.replaceAll("_", " ")} from ${priorFact.endDate} to ${currentFact.endDate}?`,
+    metric: currentFact.metric, currentFactId: currentFact.id, priorFactId: priorFact.id,
+  } : null;
+  const displayFacts: SecFilingResearchFundamentalFact[] = resolved.facts.map(({ companyId: _companyId,
+    companyFactsDeliveryId: _companyFactsDeliveryId, submissionsDeliveryId: _submissionsDeliveryId, ...fact }) => {
+    const sourceFact = snapshot.facts.find((candidate) => candidate.id === fact.id)!;
+    return { ...fact, caseId, companyFactsSha256: sourceFact.companyFactsSha256, submissionsSha256: sourceFact.submissionsSha256 };
+  });
+  const evidence = { snapshotId: snapshot.snapshotId,
+    subject: { kind: "sec_filing_case" as const, caseId, cik: researchCase.cik, ticker: researchCase.identity.ticker,
+      issuerName: researchCase.identity.issuerName }, coverage: { sec: snapshot.state === "ready" ? "complete" as const
+        : snapshot.state === "empty" ? "empty" as const : "partial" as const, reasons }, comparisons: resolved.comparisons,
+    nextResearchQuestion, interpretationLimits: ["This is a source-linked analyst research aid, not investment advice or a buy/sell recommendation.",
+      "Reported changes do not establish their cause, materiality, or future performance.",
+      "No configured-company sentiment, private notes, market capitalization, or broader public-web observations are included."] };
+  const brief = { schemaVersion: 1 as const, ...evidence, asOfMs, facts: displayFacts };
+  const snapshotKey = createHash("sha256").update(JSON.stringify(evidence), "utf8").digest("hex");
+  const storage = deps.db.storageCapacity();
+  const decision: SavedSecFilingResearchDecision | null = deps.db.latestSecFilingCaseDecision(caseId);
+  return { brief, snapshotKey, decision, decisionStorageAvailable: deps.db.hasSecFilingResearchCaseStore() && storage.writesAllowed,
+    decisionStorageUnavailableReason: storage.writesAllowed ? null : storage.reason ?? "Local database writes are paused." };
+}
+
+function secFilingResearchCaseDetailResponse(deps: AppDeps, caseId: string): SecFilingResearchCaseDetail | null {
+  const item = deps.db.secFilingResearchCase(caseId);
+  if (!item) return null;
+  const fundamentals = deps.companyFundamentals?.readResearchCase(caseId) ?? null;
+  return { case: item, fundamentals, brief: secFilingCaseBriefResponse(deps, caseId) };
 }
 
 function privateEvidenceUnavailable(c: Context, reason = "private_evidence_unavailable") {
@@ -710,6 +771,135 @@ export function createApp(deps: AppDeps): Hono {
       }
       return privateEvidenceJson(c, { error: "company_research_decision_save_failed" }, 503);
     }
+  });
+
+  app.get("/api/sec-filing-research-cases", (c) => {
+    if (!deps.db.hasSecFilingResearchCaseStore()) return c.json({ error: "sec_filing_research_case_store_unavailable" }, 503);
+    try { return c.json({ items: deps.db.secFilingResearchCases() }); }
+    catch { return c.json({ error: "sec_filing_research_case_read_failed" }, 503); }
+  });
+
+  app.post("/api/sec-filing-research-cases", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true)) return c.json({ error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
+    if (!deps.db.hasSecFilingResearchCaseStore()) return c.json({ error: "sec_filing_research_case_store_unavailable" }, 503);
+    if (!deps.db.storageCapacity().writesAllowed) return c.json({ error: "sec_filing_research_case_storage_paused" }, 503);
+    if (!deps.secFilingsInbox) return c.json({ error: "sec_filings_inbox_unavailable" }, 503);
+    const input = secFilingResearchCaseEnrollSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_sec_filing_research_case" }, 400);
+    let current: Awaited<ReturnType<SecFilingsInbox["read"]>>;
+    try { current = await deps.secFilingsInbox.read(); }
+    catch { return c.json({ error: "sec_feed_unavailable" }, 503); }
+    if (current.state !== "ready" || current.freshness !== "current") return c.json({ error: "sec_feed_not_current" }, 409);
+    const row = current.rows.find((item) => item.cik === input.data.cik && item.accession === input.data.accession && item.form === "8-K");
+    if (!row || !/^\d{10}$/.test(row.cik) || !row.listing || !row.filingUrl) return c.json({ error: "filing_not_in_current_verified_view" }, 404);
+    const listingRetrievedMs = Date.parse(row.listing.directoryRetrievedAt);
+    const listingCreatedMs = Date.parse(row.listing.directoryCreatedAt);
+    const now = Date.now();
+    if (!Number.isFinite(listingRetrievedMs) || !Number.isFinite(listingCreatedMs)
+      || now < listingRetrievedMs || now - listingRetrievedMs > 24 * 60 * 60 * 1000
+      || now < listingCreatedMs || now - listingCreatedMs > 24 * 60 * 60 * 1000
+      || !Array.isArray(row.listing.directories) || row.listing.directories.length < 1
+      || row.listing.directories.some((source) => !source.source || !Number.isFinite(Date.parse(source.createdAt))
+        || !Number.isFinite(Date.parse(source.retrievedAt)) || now < Date.parse(source.retrievedAt)
+        || now - Date.parse(source.retrievedAt) > 24 * 60 * 60 * 1000)) {
+      return c.json({ error: "listing_proof_stale_or_invalid" }, 409);
+    }
+    const proofWithoutHash = {
+      retrievedAt: row.listing.directoryRetrievedAt,
+      directoryCreatedAt: row.listing.directoryCreatedAt,
+      sources: row.listing.directories.map((source) => ({ source: source.source, createdAt: source.createdAt, retrievedAt: source.retrievedAt })),
+    };
+    const proof: SecFilingResearchCase["listingProof"] = {
+      ...proofWithoutHash,
+      sha256: createHash("sha256").update(JSON.stringify(proofWithoutHash), "utf8").digest("hex"),
+    };
+    try {
+      const saved = deps.db.enrollSecFilingResearchCase({ cik: row.cik, accession: row.accession,
+        filingSymbol: row.listing.symbol, filingIssuer: row.issuer, filingUrl: row.filingUrl, listingProof: proof });
+      return c.json({ case: saved.item, created: saved.created }, saved.created ? 201 : 200);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("invalid_sec_filing_research_case")) return c.json({ error: "filing_identity_invalid" }, 409);
+      return c.json({ error: "sec_filing_research_case_save_failed" }, 503);
+    }
+  });
+
+  app.get("/api/sec-filing-research-cases/:id", (c) => {
+    if (!deps.db.hasSecFilingResearchCaseStore()) return c.json({ error: "sec_filing_research_case_store_unavailable" }, 503);
+    try {
+      const detail = secFilingResearchCaseDetailResponse(deps, c.req.param("id"));
+      if (!detail) return c.json({ error: "unknown_sec_filing_research_case" }, 404);
+      return c.json(detail);
+    } catch { return c.json({ error: "sec_filing_research_case_read_failed" }, 503); }
+  });
+
+  app.post("/api/sec-filing-research-cases/:id/verify-identity", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true)) return c.json({ error: "unsafe_external_request_origin" }, 403);
+    if (!deps.db.hasSecFilingResearchCaseStore()) return c.json({ error: "sec_filing_research_case_store_unavailable" }, 503);
+    if (!deps.db.storageCapacity().writesAllowed) return c.json({ error: "sec_filing_research_case_storage_paused" }, 503);
+    if (!deps.companyFundamentals) return c.json({ error: "sec_identity_verification_unavailable" }, 503);
+    try { return c.json({ case: await deps.companyFundamentals.verifyResearchCaseIdentity(c.req.param("id")) }); }
+    catch (error) {
+      if (error instanceof Error && error.message === "unknown_sec_filing_research_case") return c.json({ error: "unknown_sec_filing_research_case" }, 404);
+      if (error instanceof ExternalRequestPausedError) return c.json({ error: "sec_external_requests_paused" }, 503);
+      if (error instanceof ProviderRateLimitError) return c.json({ error: "sec_rate_limited", retryAfterMs: error.retryAfterMs ?? null }, 429);
+      return c.json({ error: "sec_identity_verification_unavailable" }, 503);
+    }
+  });
+
+  app.post("/api/sec-filing-research-cases/:id/fundamentals/refresh", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true)) return c.json({ error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
+    if (!deps.db.hasSecFilingResearchCaseStore()) return c.json({ error: "sec_filing_research_case_store_unavailable" }, 503);
+    if (!deps.db.storageCapacity().writesAllowed) return c.json({ error: "sec_filing_research_case_storage_paused" }, 503);
+    if (!deps.companyFundamentals) return c.json({ error: "sec_companyfacts_unavailable" }, 503);
+    const input = secFilingCaseFundamentalsRefreshSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: "invalid_sec_filing_case_fundamentals_refresh" }, 400);
+    const researchCase = deps.db.secFilingResearchCase(c.req.param("id"));
+    if (!researchCase) return c.json({ error: "unknown_sec_filing_research_case" }, 404);
+    if (researchCase.identity.status === "mismatch") return c.json({ error: "sec_filing_case_identity_mismatch" }, 409);
+    if (researchCase.identity.status !== "verified") return c.json({ error: "sec_filing_case_identity_unverified" }, 409);
+    try {
+      await deps.companyFundamentals.refreshResearchCase(researchCase.id, input.data.requestKey);
+      const detail = secFilingResearchCaseDetailResponse(deps, researchCase.id);
+      return detail ? c.json(detail) : c.json({ error: "unknown_sec_filing_research_case" }, 404);
+    } catch { return c.json({ error: "sec_companyfacts_refresh_unavailable" }, 503); }
+  });
+
+  app.post("/api/sec-filing-research-cases/:id/research-brief/decisions", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true)) return privateEvidenceJson(c, { error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return privateEvidenceJson(c, { error: "json_content_type_required" }, 415);
+    if (!deps.db.hasSecFilingResearchCaseStore()) return privateEvidenceJson(c, { error: "sec_filing_research_case_store_unavailable" }, 503);
+    if (!deps.db.storageCapacity().writesAllowed) return privateEvidenceJson(c, { error: "sec_filing_case_decision_storage_paused" }, 503);
+    const input = secFilingCaseDecisionSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return privateEvidenceJson(c, { error: "invalid_sec_filing_case_decision" }, 400);
+    const caseId = c.req.param("id");
+    const researchCase = deps.db.secFilingResearchCase(caseId);
+    if (!researchCase) return privateEvidenceJson(c, { error: "unknown_sec_filing_research_case" }, 404);
+    if (researchCase.identity.status !== "verified") return privateEvidenceJson(c, { error: researchCase.identity.status === "mismatch"
+      ? "sec_filing_case_identity_mismatch" : "sec_filing_case_identity_unverified" }, 409);
+    const current = secFilingCaseBriefResponse(deps, caseId, input.data.asOfMs);
+    if (!current) return privateEvidenceJson(c, { error: "sec_filing_case_research_brief_unavailable" }, 409);
+    if (current.snapshotKey !== input.data.snapshotKey) return privateEvidenceJson(c, { error: "sec_filing_case_snapshot_changed" }, 409);
+    if (JSON.stringify([...current.brief.facts.map((fact) => fact.id)].sort()) !== JSON.stringify([...input.data.factIds].sort())
+      || new Set(input.data.factIds).size !== input.data.factIds.length) return privateEvidenceJson(c, { error: "invalid_sec_filing_case_fact_manifest" }, 400);
+    try {
+      const decision = deps.db.saveSecFilingCaseDecision({ caseId, ...input.data,
+        snapshotId: current.brief.snapshotId!, factIds: current.brief.facts.map((fact) => fact.id) });
+      return privateEvidenceJson(c, { ...current, decision });
+    } catch (error) {
+      if (error instanceof Error && error.message === "sec_filing_case_snapshot_changed") return privateEvidenceJson(c, { error: error.message }, 409);
+      if (error instanceof Error && error.message === "sec_filing_case_decision_request_key_reused") return privateEvidenceJson(c, { error: "request_key_reused" }, 409);
+      if (error instanceof Error && error.message === "sec_filing_case_decision_limit_exceeded") return privateEvidenceJson(c, { error: error.message }, 409);
+      if (error instanceof Error && error.message === "invalid_sec_filing_case_decision") return privateEvidenceJson(c, { error: error.message }, 400);
+      return privateEvidenceJson(c, { error: "sec_filing_case_decision_save_failed" }, 503);
+    }
+  });
+
+  app.get("/api/research-queue/sec-filing-cases", (c) => {
+    if (!deps.db.hasSecFilingResearchCaseStore()) return privateEvidenceJson(c, { error: "sec_filing_research_case_store_unavailable" }, 503);
+    try { return privateEvidenceJson(c, { items: deps.db.latestSecFilingCaseDecisionQueue() }); }
+    catch { return privateEvidenceJson(c, { error: "sec_filing_case_decision_queue_unavailable" }, 503); }
   });
 
   app.get("/api/sec-filings-inbox", async (c) => {

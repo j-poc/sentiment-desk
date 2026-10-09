@@ -2,20 +2,85 @@ import { useEffect, useState } from "react";
 import type { AnalystSourceReview } from "../../../shared/analyst-research.js";
 import type { SecFilingResearchTask } from "../../../shared/sec-filings-inbox.js";
 import type { AnalystResearchQueueItem, CompanyResearchDecisionQueueItem } from "../lib/api.js";
-import { getAnalystResearchQueue, getCompanyResearchDecisionQueue, getSecFilingResearchTasks, removeSecFilingResearchTask, saveSecFilingResearchTask, updateAnalystSourceReview } from "../lib/api.js";
+import { getAnalystResearchQueue, getCompanyResearchDecisionQueue, getSecFilingResearchCaseDecisionQueue, getSecFilingResearchCases, getSecFilingResearchTasks, removeSecFilingResearchTask, saveSecFilingResearchTask, updateAnalystSourceReview } from "../lib/api.js";
 import { AnalystResearchQueueView, CompanyResearchDecisionQueueView, type DecisionQueueState, type QueueState } from "./AnalystResearchQueueView.js";
+import type { SecFilingResearchCase } from "../../../shared/sec-filing-research-cases.js";
+
+function savedAtLabel(value: number): string {
+  return Number.isSafeInteger(value) && Math.abs(value) <= 8_640_000_000_000_000
+    ? new Date(value).toISOString()
+    : "time not verified";
+}
+
+function SavedSecResearchCases({ refreshRevision, onOpen }: { refreshRevision: number; onOpen: (caseId: string) => void }) {
+  const [cases, setCases] = useState<SecFilingResearchCase[]>([]);
+  const [decisions, setDecisions] = useState<Map<string, { decision: string; nextCheckDate: string | null; createdAt: number }>>(new Map());
+  const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    setState("loading");
+    void Promise.all([
+      getSecFilingResearchCases(controller.signal),
+      getSecFilingResearchCaseDecisionQueue(controller.signal),
+    ]).then(([loadedCases, queue]) => {
+      if (!active) return;
+      setCases(loadedCases);
+      setDecisions(new Map(queue.items.map((item) => [item.target.caseId, {
+        decision: item.decision.decision,
+        nextCheckDate: item.decision.nextCheckDate,
+        createdAt: item.decision.createdAt,
+      }])));
+      setState("ready");
+    }).catch(() => {
+      if (!active || controller.signal.aborted) return;
+      setState("failed");
+    });
+    return () => { active = false; controller.abort(); };
+  }, [refreshRevision, revision]);
+
+  return <section className="panel min-w-0" aria-labelledby="saved-sec-cases-heading">
+    <div className="panel-head">
+      <h2 id="saved-sec-cases-heading" className="micro m-0 p-0">PUBLIC SEC RESEARCH CASES</h2>
+      <span className="tabnum text-[10px] text-white/40">{state === "ready" ? `${cases.length} saved` : state === "loading" ? "loading" : "unavailable"}</span>
+    </div>
+    {state === "loading" && <p className="px-4 py-5 text-xs text-white/45" role="status">Reading saved SEC research cases…</p>}
+    {state === "failed" && <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-4" role="alert"><p className="text-xs text-amber-100/75">SEC research cases could not be read. Existing decisions remain on disk.</p><button type="button" onClick={() => setRevision((value) => value + 1)} className="rounded border border-white/15 px-2.5 py-1.5 text-xs text-white/75 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Retry</button></div>}
+    {state === "ready" && cases.length === 0 && <p className="px-4 py-5 text-xs leading-5 text-white/45">No SEC research cases yet. Open one from a fresh filing with current listing evidence in Recent Filings.</p>}
+    {state === "ready" && cases.length > 0 && <ul className="divide-y divide-white/[0.055]">
+      {cases.map((item) => {
+        const decision = decisions.get(item.id);
+        const name = item.identity.issuerName ?? item.filingIssuer;
+        const ticker = item.identity.ticker ?? item.filingSymbol;
+        return <li key={item.id} className="flex min-w-0 flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0">
+            <p className="break-words text-xs font-medium text-white/80">{name} <span className="font-mono text-white/45">{ticker}</span></p>
+            <p className="mt-1 break-all font-mono text-[10px] text-white/40">CIK {item.cik} · {item.triggeringAccession} · identity {item.identity.status}</p>
+            {decision ? <p className="mt-1 text-[10px] text-emerald-100/60">{decision.decision.replaceAll("_", " ")} · saved {savedAtLabel(decision.createdAt)}{decision.nextCheckDate ? ` · next check ${decision.nextCheckDate}` : ""}</p>
+              : <p className="mt-1 text-[10px] text-white/40">No analyst decision saved</p>}
+          </div>
+          <button type="button" onClick={() => onOpen(item.id)} className="rounded border border-sky-300/20 px-3 py-2 text-xs font-medium text-sky-100/80 hover:bg-sky-300/[0.07] focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-200">Resume SEC case</button>
+        </li>;
+      })}
+    </ul>}
+  </section>;
+}
 
 export function AnalystResearchQueue({
   refreshRevision,
   onReviewChanged,
   onOpenEvidence,
   onOpenResearchDecision,
+  onOpenSecResearchCase,
   onResumeSecTask,
 }: {
   refreshRevision: number;
   onReviewChanged: (review: AnalystSourceReview) => void;
   onOpenEvidence: (item: AnalystResearchQueueItem) => void;
   onOpenResearchDecision: (item: CompanyResearchDecisionQueueItem) => void;
+  onOpenSecResearchCase: (caseId: string) => void;
   onResumeSecTask: (item: SecFilingResearchTask) => void;
 }) {
   const [items, setItems] = useState<AnalystResearchQueueItem[]>([]);
@@ -91,6 +156,7 @@ export function AnalystResearchQueue({
       onRetry={() => setDecisionRevision((current) => current + 1)}
       onOpen={onOpenResearchDecision}
     />
+    <SavedSecResearchCases refreshRevision={refreshRevision} onOpen={onOpenSecResearchCase} />
     <AnalystResearchQueueView
       items={items}
       state={state}

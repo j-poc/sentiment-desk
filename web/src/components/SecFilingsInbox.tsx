@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { activateSecFilingsInbox, getSecFilingsInbox, getSecFilingResearchTasks, inspectSecFiling, removeSecFilingResearchTask, saveSecFilingResearchTask } from "../lib/api.js";
+import { activateSecFilingsInbox, createSecFilingResearchCase, getSecFilingsInbox, getSecFilingResearchCase, getSecFilingResearchCases, getSecFilingResearchTasks, inspectSecFiling, removeSecFilingResearchTask, saveSecFilingResearchTask } from "../lib/api.js";
 import { secFilingResumeActionId, type SecFilingResumeTarget } from "../lib/sec-filing-resume.js";
 import { secFilingIdentity, secFilingsFreshnessNextCheckMs, secFilingsSourceFreshness, secIssuerDisplayName, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecFilingResearchTask } from "../../../shared/sec-filings-inbox.js";
+import type { SecFilingResearchCase } from "../../../shared/sec-filing-research-cases.js";
+import { SecFilingResearchCasePanel } from "./SecFilingResearchCasePanel.js";
 
 function utc(value: string | null, dateOnly = false): string {
   if (!value) return dateOnly ? "Filing date not supplied" : "Not supplied";
@@ -166,7 +168,7 @@ export function retainLastAcceptedFilings(
   };
 }
 
-function hasFreshListingEvidence(view: SecFilingsInboxView, now: number): boolean {
+export function hasFreshListingEvidence(view: SecFilingsInboxView, now: number): boolean {
   const createdAt = view.listingDirectoryCreatedAt ? Date.parse(view.listingDirectoryCreatedAt) : NaN;
   const validSources = (sources: NonNullable<SecFilingsInboxView["listingDirectories"]>) => {
     if (sources.length !== 2) return false;
@@ -315,12 +317,14 @@ export function secFilingQuestionValue(draft: string | undefined, saved: SecFili
   return draft ?? saved?.nextQuestion ?? "";
 }
 
-export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiveStatus = "unknown", resumeTarget = null, onResumeHandled }: {
+export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiveStatus = "unknown", resumeTarget = null, onResumeHandled, resumeResearchCaseId = null, onResearchCaseResumed }: {
   onBrowseSavedSources?: () => void;
   onOpenOperations?: () => void;
   archiveStatus?: "available" | "empty" | "unknown";
   resumeTarget?: SecFilingResumeTarget | null;
   onResumeHandled?: (requestId: number) => void;
+  resumeResearchCaseId?: string | null;
+  onResearchCaseResumed?: (id: string) => void;
 }) {
   const [view, setView] = useState<SecFilingsInboxView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -334,6 +338,11 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const [followupsLoadFailed, setFollowupsLoadFailed] = useState(false);
   const [followupsLoading, setFollowupsLoading] = useState(false);
   const [leadDrafts, setLeadDrafts] = useState<Record<string, string>>({});
+  const [researchCases, setResearchCases] = useState<SecFilingResearchCase[]>([]);
+  const [researchCasesLoadFailed, setResearchCasesLoadFailed] = useState(false);
+  const [researchCaseWorking, setResearchCaseWorking] = useState<string | null>(null);
+  const [activeResearchCase, setActiveResearchCase] = useState<SecFilingResearchCase | null>(null);
+  const [researchCaseError, setResearchCaseError] = useState<string | null>(null);
   const [expandedFiling, setExpandedFiling] = useState<string | null>(null);
   const [detail, setDetail] = useState<SecFilingDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -364,17 +373,48 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
     }
   }, []);
 
+  const reloadResearchCases = useCallback(async (signal?: AbortSignal) => {
+    try {
+      setResearchCases(await getSecFilingResearchCases(signal));
+      setResearchCasesLoadFailed(false);
+    } catch {
+      if (!signal?.aborted) setResearchCasesLoadFailed(true);
+    }
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     const controller = new AbortController();
     void reload(controller.signal);
     void reloadFollowups(controller.signal);
+    void reloadResearchCases(controller.signal);
     const poll = window.setInterval(() => {
       if (shouldStartSecFilingsPoll(activationInFlight.current)) void reload();
     }, 30_000);
     const clock = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => { mounted.current = false; latestInboxRequest.current += 1; controller.abort(); window.clearInterval(poll); window.clearInterval(clock); };
-  }, [reload, reloadFollowups]);
+  }, [reload, reloadFollowups, reloadResearchCases]);
+
+  useEffect(() => {
+    if (!resumeResearchCaseId) return;
+    const controller = new AbortController();
+    let active = true;
+    void getSecFilingResearchCase(resumeResearchCaseId, controller.signal).then((detail) => {
+      if (!active) return;
+      setActiveResearchCase(detail.case);
+      setResearchCaseError(null);
+      requestAnimationFrame(() => {
+        const heading = document.getElementById(`sec-case-${detail.case.id}`);
+        heading?.scrollIntoView({ block: "start" });
+        heading?.focus({ preventScroll: true });
+      });
+      onResearchCaseResumed?.(resumeResearchCaseId);
+    }).catch(() => {
+      if (!active || controller.signal.aborted) return;
+      setResearchCaseError("The saved SEC research case could not be resumed. Retry the local read; no provider request was sent.");
+    });
+    return () => { active = false; controller.abort(); };
+  }, [resumeResearchCaseId, onResearchCaseResumed]);
 
   useEffect(() => {
     if (!resumeTarget || handledResumeRequest.current === resumeTarget.requestId) return;
@@ -429,6 +469,31 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
     try { setFollowups(await removeSecFilingResearchTask(cik, accession)); }
     catch { setFollowupError("Could not remove the saved issuer lead. Reload and try again."); }
     finally { setFollowupWorking(null); }
+  };
+
+  const openResearchCase = async (row: SecFilingInboxRow) => {
+    const identity = secFilingIdentity(row);
+    if (!view || view.state !== "ready" || view.freshness !== "current" || !hasFreshListingEvidence(view, now)
+      || !row.listing || !view.rows.some((candidate) => secFilingIdentity(candidate) === identity && isFilingRow(candidate))) {
+      setResearchCaseError("This filing is no longer backed by a fresh current listing and SEC feed. Refresh Recent Filings before opening a case.");
+      return;
+    }
+    setResearchCaseWorking(identity);
+    setResearchCaseError(null);
+    try {
+      const result = await createSecFilingResearchCase(row.cik, row.accession);
+      setResearchCases((current) => [result.case, ...current.filter((item) => item.id !== result.case.id)]);
+      setActiveResearchCase(result.case);
+      requestAnimationFrame(() => {
+        const heading = document.getElementById(`sec-case-${result.case.id}`);
+        heading?.scrollIntoView({ block: "start" });
+        heading?.focus({ preventScroll: true });
+      });
+    } catch {
+      setResearchCaseError("The SEC research case could not be opened. The filing remains in the inbox; check feed freshness and local storage, then retry.");
+    } finally {
+      setResearchCaseWorking(null);
+    }
   };
 
   const loadDetail = async (row: SecFilingInboxRow) => {
@@ -525,6 +590,9 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
           </span>
         </div>
       </header>
+      {activeResearchCase && <SecFilingResearchCasePanel initialCase={activeResearchCase} onClose={() => setActiveResearchCase(null)} />}
+      {researchCaseError && <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-amber-300/20 bg-amber-200/[0.04] p-3 text-xs text-amber-100/80" role="alert"><span>{researchCaseError}</span><button type="button" onClick={() => setResearchCaseError(null)} className="rounded border border-white/15 px-2.5 py-1.5 text-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Dismiss</button></div>}
+      {researchCasesLoadFailed && <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-white/[0.08] px-3 py-2 text-[11px] text-white/45"><span>Saved SEC cases could not be listed. Opening a current filing is still safe and reuses its existing case.</span><button type="button" onClick={() => void reloadResearchCases()} className="rounded border border-white/15 px-2 py-1 text-white/65 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Retry case list</button></div>}
 
       {view?.message && <p className={`rounded-md border px-4 py-3 text-sm ${view.state === "failed" || view.state === "unavailable" || view.state === "unsupported" ? "border-amber-300/20 bg-amber-300/[0.05] text-amber-100/80" : "border-white/10 bg-white/[0.025] text-white/60"}`} role="status">{view.message}</p>}
       {view && secListingVerificationSummary(view) && <p className="rounded-md border border-amber-300/20 bg-amber-300/[0.045] px-4 py-3 text-xs leading-5 text-amber-100/75" role="status">{secListingVerificationSummary(view)}</p>}
@@ -623,9 +691,12 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
                           onChange={(event) => setLeadDrafts((current) => ({ ...current, [`${row.cik}:${row.accession}`]: event.currentTarget.value }))}
                           className="w-full min-w-0 resize-y rounded border border-white/10 bg-black/25 px-2.5 py-2 text-xs text-white/80 placeholder:text-white/30 focus:border-emerald-300/40 focus:outline-none" placeholder="What should I verify next?" />
                       </label>
-                      <button type="button" onClick={() => void saveIssuer(row)} disabled={followupWorking !== null || (leadDrafts[`${row.cik}:${row.accession}`]?.length ?? 0) > 500} className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-40">
+                    <button type="button" onClick={() => void saveIssuer(row)} disabled={followupWorking !== null || (leadDrafts[`${row.cik}:${row.accession}`]?.length ?? 0) > 500} className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-40">
                         {followupWorking === `${row.cik}:${row.accession}` ? "Saving filing task…" : followups.some((item) => item.cik === row.cik && item.triggeringAccession === row.accession) ? "Update saved research task" : "Save filing to My Research"}
                       </button>
+                      {row.listing && <button type="button" onClick={() => void openResearchCase(row)} disabled={researchCaseWorking !== null || view?.state !== "ready" || view.freshness !== "current" || !hasFreshListingEvidence(view, now)} title={view?.state !== "ready" || view.freshness !== "current" || !hasFreshListingEvidence(view, now) ? "Open a case only from a fresh SEC feed and current exchange-listing proof." : undefined} className="inline-flex w-fit items-center rounded-md border border-sky-300/20 bg-sky-300/[0.045] px-3 py-2 text-xs font-medium text-sky-100/80 hover:bg-sky-300/[0.09] focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-40">
+                        {researchCaseWorking === secFilingIdentity(row) ? "Opening case…" : researchCases.some((item) => item.cik === row.cik && item.triggeringAccession === row.accession) ? "Open research case" : "Start SEC research case"}
+                      </button>}
                     </div>
                     <a href={row.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="inline-flex w-fit items-center rounded-md border border-white/10 px-3 py-2 text-xs font-medium text-white/70 hover:border-emerald-300/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Open SEC filing page <span className="sr-only"> for {row.issuer}, accession {row.accession}</span></a>
                   </div>

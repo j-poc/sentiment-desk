@@ -4,6 +4,7 @@ import { Desk, type SecFundamentalFactInput, type SecFundamentalPayloadInput } f
 import { StorageCapacityError } from "./storage-capacity.js";
 import { clearProviderRateLimit, paceProviderRequest, parseRetryAfterMs, providerCoolingDown, ProviderRateLimitError, recordProviderRateLimit } from "./provider-cooldown.js";
 import type { Company } from "./types.js";
+import type { SecFilingResearchCase, SecFilingResearchFundamentalFact, SecFilingResearchFundamentalsView } from "../shared/sec-filing-research-cases.js";
 import type {
   CompanyFundamentalsView,
   FundamentalComparison,
@@ -163,6 +164,33 @@ function parseCikDirectory(body: unknown, ticker: string): { cik: string; title:
     ? `The SEC directory has no current CIK mapping for ${ticker}.`
     : `The SEC directory has multiple CIK mappings for ${ticker}; issuer identity is ambiguous.`);
   return unique[0]!;
+}
+
+function parseOfficialTickerExchangeDirectory(body: unknown): Array<{ cik: string; ticker: string; name: string }> {
+  const root = record(body);
+  const fields = array(root?.fields);
+  const rows = array(root?.data);
+  if (!root || Object.keys(root).length !== 2 || !fields || !rows || fields.length !== 4 || rows.length > 100_000
+    || fields.some((field) => typeof field !== "string") || new Set(fields).size !== fields.length
+    || !["cik", "name", "ticker", "exchange"].every((field) => fields.includes(field))) {
+    throw new SecFundamentalsError("SEC exchange ticker directory had an invalid response shape.");
+  }
+  const column = Object.fromEntries(fields.map((field, index) => [field as string, index]));
+  const entries: Array<{ cik: string; ticker: string; name: string }> = [];
+  for (const raw of rows) {
+    const row = array(raw);
+    if (!row || row.length !== fields.length) throw new SecFundamentalsError("SEC exchange ticker directory contained a malformed row.");
+    const rawCik = string(row[column.cik!]);
+    const ticker = string(row[column.ticker!])?.trim().toUpperCase();
+    const name = string(row[column.name!])?.trim();
+    const exchange = row[column.exchange!];
+    if (!rawCik || !/^\d{1,10}$/.test(rawCik) || !ticker || !/^[A-Z0-9.\-]{1,14}$/.test(ticker)
+      || !name || name.length > 512 || (exchange !== null && (typeof exchange !== "string" || exchange.length > 80))) {
+      throw new SecFundamentalsError("SEC exchange ticker directory contained an invalid identity row.");
+    }
+    entries.push({ cik: rawCik.padStart(10, "0"), ticker, name });
+  }
+  return entries;
 }
 
 interface SubmissionRow {
@@ -683,6 +711,118 @@ export class CompanyFundamentals {
       staleReason: stale ? staleReasons.join(" ") : null,
       latestAttemptAt: latestAttempt?.requestedAt ?? null, retrievedAt,
     };
+  }
+
+  readResearchCase(caseId: string): SecFilingResearchFundamentalsView {
+    const researchCase = this.db.secFilingResearchCase(caseId);
+    if (!researchCase) throw new Error("unknown_sec_filing_research_case");
+    const snapshot = this.db.latestSecFilingCaseFundamentals(caseId);
+    const attempt = this.db.latestSecFilingCaseFundamentalAttempt(caseId);
+    const identityBlocked = researchCase.identity.status !== "verified";
+    const checkedAt = this.now();
+    const latestAcceptedAt = snapshot?.facts.reduce<number | null>((latest, fact) =>
+      Number.isSafeInteger(fact.acceptedAt) ? Math.max(latest ?? fact.acceptedAt!, fact.acceptedAt!) : latest, null) ?? null;
+    const stale = snapshot != null && (checkedAt - snapshot.retrievedAt > FRESH_FOR_MS
+      || latestAcceptedAt != null && checkedAt - latestAcceptedAt > OBSERVATION_FRESH_FOR_MS);
+    const facts = snapshot?.facts ?? [];
+    const internalFacts = facts.map((fact) => ({ ...fact, companyId: caseId,
+      companyFactsDeliveryId: fact.companyFactsSha256, submissionsDeliveryId: fact.submissionsSha256 }));
+    const calculated = comparePersistedFundamentalFacts(internalFacts);
+    const coverage = [...(snapshot?.coverage ?? []), ...calculated.coverage];
+    if (identityBlocked) coverage.push(researchCase.identity.status === "mismatch"
+      ? "SEC ticker/CIK identity did not match the selected listed filing; CompanyFacts are withheld."
+      : "Verify the SEC ticker mapping against this filing before requesting or displaying CompanyFacts.");
+    if (stale) coverage.push("The saved SEC response or newest filing facts are outside the current freshness window; refresh before relying on them.");
+    const externalBlocked = !this.externalRequestsEnabled || !this.secCompanyFactsEnabled || !this.userAgent
+      || providerCoolingDown(this.db, "sec", this.now()) || !this.db.externalRequestAllowed();
+    const blockedReason = identityBlocked ? researchCase.identity.status === "mismatch"
+      ? "SEC identity verification failed; facts remain withheld." : "SEC identity verification is required before CompanyFacts can be requested."
+      : !this.externalRequestsEnabled ? "External SEC requests are disabled; saved facts remain available."
+        : !this.secCompanyFactsEnabled ? "Selected issuer facts require the configured SEC CompanyFacts request scope."
+          : !this.userAgent ? "The SEC request identity is not configured for this Sentiment Desk process."
+            : providerCoolingDown(this.db, "sec", this.now()) ? "The SEC provider cooldown is active."
+              : !this.db.externalRequestAllowed() ? "Local storage capacity is paused; SEC requests are not sent."
+                : attempt?.status === "running" ? "A CompanyFacts refresh for this research case is already running." : null;
+    const state: SecFilingResearchFundamentalsView["state"] = identityBlocked || externalBlocked && !snapshot ? "blocked"
+      : stale ? "stale" : snapshot ? snapshot.state : ["failed", "interrupted", "blocked"].includes(attempt?.status ?? "") ? "failed" : "idle";
+    return {
+      kind: "sec_filing_case_fundamentals", caseId, state, periodComparisonPolicyVersion: PERIOD_COMPARISON_POLICY_VERSION,
+      snapshotId: snapshot?.snapshotId ?? null, facts, comparisons: calculated.comparisons, points: derivePoints(internalFacts),
+      coverage, refreshAllowed: blockedReason == null, refreshBlockedReason: blockedReason,
+      lastRefreshError: ["failed", "interrupted", "blocked"].includes(attempt?.status ?? "") ? attempt?.error ?? null : null, staleReason: stale ? coverage.at(-1)! : null,
+      latestAttemptAt: attempt?.requestedAt ?? null, retrievedAt: snapshot?.retrievedAt ?? null,
+    };
+  }
+
+  async refreshResearchCase(caseId: string, requestKey: string): Promise<SecFilingResearchFundamentalsView> {
+    const researchCase = this.db.secFilingResearchCase(caseId);
+    if (!researchCase) throw new Error("unknown_sec_filing_research_case");
+    const previous = this.db.latestSecFilingCaseFundamentalAttempt(caseId);
+    const state = this.readResearchCase(caseId);
+    if (previous?.status === "running") return state;
+    if (state.refreshBlockedReason) return state;
+    if (!this.db.prepareExternalWork()) return { ...state, state: state.snapshotId ? state.state : "blocked", refreshAllowed: false,
+      refreshBlockedReason: "Local storage capacity is paused; SEC requests are not sent." };
+    const claim = this.db.claimSecFilingCaseFundamentalAttempt({ caseId, requestKey, now: this.now() });
+    if (claim.kind === "existing") return this.readResearchCase(caseId);
+    if (claim.kind === "active") return { ...this.readResearchCase(caseId), refreshBlockedReason: "Another CompanyFacts refresh for this research case is already running.", refreshAllowed: false };
+    const attemptId = claim.attemptId;
+    try {
+      const identityReceipt = this.db.secFilingResearchIdentityReceipt(caseId);
+      if (!identityReceipt) throw new SecFundamentalsError("Verified SEC identity receipt is unavailable.");
+      const officialEntries = parseOfficialTickerExchangeDirectory(parseLosslessJson(identityReceipt.body));
+      if (officialEntries.filter((entry) => entry.ticker === researchCase.filingSymbol.toUpperCase()).length !== 1
+        || officialEntries.filter((entry) => entry.ticker === researchCase.filingSymbol.toUpperCase() && entry.cik === researchCase.cik).length !== 1) {
+        throw new SecFundamentalsError("Saved SEC identity receipt no longer verifies the selected issuer and ticker.");
+      }
+      const submissionsResult = await this.requestJson(`${SEC_DATA}/submissions/CIK${researchCase.cik}.json`,this.userAgent,SUBMISSIONS_MAX_BYTES);
+      this.db.persistSecFilingCaseFundamentalReceipt({ caseId,attemptId,endpoint:"submissions",...submissionsResult.response });
+      const submissions = parseRecentSubmissions(submissionsResult.body,researchCase.cik);
+      const factsResult = await this.requestJson(`${SEC_DATA}/api/xbrl/companyfacts/CIK${researchCase.cik}.json`,this.userAgent,COMPANYFACTS_MAX_BYTES);
+      this.db.persistSecFilingCaseFundamentalReceipt({ caseId,attemptId,endpoint:"companyfacts",...factsResult.response });
+      const parsed = parseCompanyFacts(factsResult.body,researchCase.cik,submissions,factsResult.response.retrievedAt);
+      const facts: SecFilingResearchFundamentalFact[] = parsed.facts.map((fact) => ({
+        id: randomUUID(), caseId, cik: researchCase.cik, ...fact, responseSha256: factsResult.response.sha256,
+        companyFactsSha256: factsResult.response.sha256, submissionsSha256: submissionsResult.response.sha256,
+      }));
+      const coverage = parsed.coverage;
+      const snapshotState = facts.length === 0 ? coverage.length ? "partial" : "empty" : coverage.length ? "partial" : "ready";
+      this.db.saveSecFilingCaseFundamentals({ caseId,attemptId,completedAt:this.now(),state:snapshotState,
+        policyVersion:POLICY_VERSION,facts,coverage });
+      clearProviderRateLimit(this.db,"sec");
+    } catch (error) {
+      if (error instanceof ProviderRateLimitError && !providerCoolingDown(this.db,"sec",this.now())) {
+        recordProviderRateLimit({ db:this.db,provider:"sec",minDelayMs:1_000,retryAfterMs:error.retryAfterMs,now:this.now() });
+      }
+      try { this.db.failSecFilingCaseFundamentalAttempt({ attemptId,error:friendlyError(error),completedAt:this.now() }); }
+      catch { /* a terminal result may already have been recorded */ }
+      return this.readResearchCase(caseId);
+    }
+    return this.readResearchCase(caseId);
+  }
+
+  async verifyResearchCaseIdentity(caseId: string): Promise<SecFilingResearchCase> {
+    const existing = this.db.secFilingResearchCase(caseId);
+    if (!existing) throw new Error("unknown_sec_filing_research_case");
+    if (existing.identity.status === "verified") return existing;
+    try {
+      const result = await this.requestJson(`${SEC_WEB}/files/company_tickers_exchange.json`, this.userAgent, DIRECTORY_MAX_BYTES);
+      const entries = parseOfficialTickerExchangeDirectory(result.body);
+      const sameSymbol = entries.filter((entry) => entry.ticker === existing.filingSymbol.toUpperCase());
+      const exact = sameSymbol.filter((entry) => entry.cik === existing.cik);
+      const verified = sameSymbol.length === 1 && exact.length === 1;
+      return this.db.verifySecFilingResearchCaseIdentity({
+        caseId,
+        status: verified ? "verified" : "mismatch",
+        ticker: verified ? exact[0]!.ticker : null,
+        issuerName: verified ? exact[0]!.name : null,
+        receipt: { url: result.response.url, retrievedAt: new Date(result.response.retrievedAt).toISOString(),
+          sha256: result.response.sha256, body: result.response.body },
+      });
+    } catch (error) {
+      console.warn(`[desk] SEC research-case identity verification failed: ${friendlyError(error)}`);
+      throw error;
+    }
   }
 
   async refresh(companyId: string, requestKey: string): Promise<FundamentalRefreshResult> {

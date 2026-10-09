@@ -6,13 +6,15 @@ import type {
   PersistedFundamentalFact,
   PersistedFundamentalPoint,
 } from "../../../shared/company-fundamentals.js";
+type FundamentalDisplayFact = Omit<PersistedFundamentalFact,
+  "companyId" | "companyFactsDeliveryId" | "submissionsDeliveryId">;
 export type { FundamentalComparison, FundamentalMetricKey, FundamentalsState, PersistedFundamentalFact, PersistedFundamentalPoint } from "../../../shared/company-fundamentals.js";
 
 export interface CompanyFundamentalsProps {
   companyName: string;
   ticker: string;
   state: FundamentalsState;
-  facts: readonly PersistedFundamentalFact[];
+  facts: readonly FundamentalDisplayFact[];
   comparisons: readonly FundamentalComparison[];
   points: readonly PersistedFundamentalPoint[];
   coverage: readonly string[];
@@ -50,11 +52,11 @@ function filedDateLabel(value: number | null): string {
   return Number.isNaN(date.valueOf()) ? "Unparseable date" : dateLabel(date.toISOString().slice(0, 10));
 }
 
-function periodRange(fact: PersistedFundamentalFact): string {
+function periodRange(fact: FundamentalDisplayFact): string {
   return fact.startDate ? `${dateLabel(fact.startDate)} – ${dateLabel(fact.endDate)}` : `as of ${dateLabel(fact.endDate)}`;
 }
 
-function periodLengthDays(fact: PersistedFundamentalFact): number | null {
+function periodLengthDays(fact: FundamentalDisplayFact): number | null {
   if (!fact.startDate) return null;
   const start = Date.parse(`${fact.startDate}T00:00:00.000Z`);
   const end = Date.parse(`${fact.endDate}T00:00:00.000Z`);
@@ -64,8 +66,8 @@ function periodLengthDays(fact: PersistedFundamentalFact): number | null {
 
 function comparisonPeriodContext(
   alignment: FundamentalComparison["periodAlignment"],
-  current: PersistedFundamentalFact,
-  prior: PersistedFundamentalFact,
+  current: FundamentalDisplayFact,
+  prior: FundamentalDisplayFact,
 ): string | null {
   if (alignment == null) return null;
   const currentDays = periodLengthDays(current);
@@ -117,7 +119,7 @@ function compactAxisValue(value: string, unit: string): string {
   return unit.toUpperCase() === "USD" ? `$${number}` : `${number} ${unit}`;
 }
 
-function reportedPrecisionLabel(status: PersistedFundamentalFact["reportedPrecisionStatus"], decimals: string | null, unit: string): string {
+function reportedPrecisionLabel(status: FundamentalDisplayFact["reportedPrecisionStatus"], decimals: string | null, unit: string): string {
   if (status === "missing" && decimals === null) return "SEC precision metadata is unavailable in this saved fact.";
   if (status !== "declared" || decimals === null) return "SEC precision metadata is invalid or unsupported; comparisons are withheld.";
   if (decimals === "INF") return "SEC decimals=INF (declared exact in XBRL).";
@@ -242,7 +244,7 @@ function stateMessage(state: FundamentalsState, staleReason?: string | null): st
   }
 }
 
-const PERIOD_DURATION_PRIORITY: Record<PersistedFundamentalFact["durationClass"], number> = {
+const PERIOD_DURATION_PRIORITY: Record<FundamentalDisplayFact["durationClass"], number> = {
   quarter: 0,
   ytd_q2: 1,
   ytd_q3: 2,
@@ -250,20 +252,20 @@ const PERIOD_DURATION_PRIORITY: Record<PersistedFundamentalFact["durationClass"]
   unknown: 4,
 };
 
-function compareFactPeriods(a: PersistedFundamentalFact, b: PersistedFundamentalFact): number {
+function compareFactPeriods(a: FundamentalDisplayFact, b: FundamentalDisplayFact): number {
   return b.endDate.localeCompare(a.endDate)
     || PERIOD_DURATION_PRIORITY[a.durationClass] - PERIOD_DURATION_PRIORITY[b.durationClass]
     || (b.startDate ?? "").localeCompare(a.startDate ?? "");
 }
 
 function comparisonForFact(
-  fact: PersistedFundamentalFact,
+  fact: FundamentalDisplayFact,
   comparisons: readonly FundamentalComparison[],
 ): FundamentalComparison | undefined {
   return comparisons.find((comparison) => comparison.metric === fact.metric && comparison.currentFactId === fact.id);
 }
 
-function periodKindLabel(fact: PersistedFundamentalFact): string {
+function periodKindLabel(fact: FundamentalDisplayFact): string {
   switch (fact.durationClass) {
     case "quarter": return "Quarter";
     case "ytd_q2":
@@ -275,7 +277,7 @@ function periodKindLabel(fact: PersistedFundamentalFact): string {
 
 export function CompanyFundamentals(props: CompanyFundamentalsProps) {
   const { companyName, ticker, state, facts, comparisons, points, coverage, refreshAllowed, refreshBlockedReason, lastRefreshError, staleReason, onRefresh } = props;
-  const factsByMetric = new Map<FundamentalMetricKey, PersistedFundamentalFact[]>();
+  const factsByMetric = new Map<FundamentalMetricKey, FundamentalDisplayFact[]>();
   for (const fact of facts) {
     if (!/^-?\d+(?:\.\d+)?$/.test(fact.value)) continue;
     const group = factsByMetric.get(fact.metric) ?? [];

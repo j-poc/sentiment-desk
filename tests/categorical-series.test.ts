@@ -130,7 +130,7 @@ describe("Luna categorical trend and source bucket", () => {
 
     const reopened = openDesk(path);
     const raw = (reopened as unknown as { db: DatabaseSync }).db;
-    expect(raw.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+    expect(raw.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
     expect(raw.prepare("SELECT profile_sha256, attempt_id FROM categorical_classifications WHERE observation_id = ?")
       .get(sourceId)).toEqual({ profile_sha256: null, attempt_id: null });
 
