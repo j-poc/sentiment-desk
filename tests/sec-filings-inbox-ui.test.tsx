@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { secFilingArchiveCikPath, secIssuerDisplayName } from "../shared/sec-filings-inbox.js";
-import { SavedFilingTasksRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFilingQuestionValue, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, secListingVerificationSummary, shouldOfferSavedArchiveSearch, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
+import { SavedFilingTasksRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, isSecFilingsActivationCoolingDown, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFilingQuestionValue, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, secListingVerificationSummary, shouldOfferSavedArchiveSearch, shouldOfferSecFilingsActivation, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
 import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingsFreshnessNextCheckMs, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecFilingResearchTask } from "../shared/sec-filings-inbox.js";
 
 const currentListing = { symbol: "ISSR", exchange: "Nasdaq", securityName: "Issuer One Inc.", directoryCreatedAt: "2026-10-08T11:00:00.000Z", directoryRetrievedAt: "2026-10-08T11:01:00.000Z",
@@ -12,6 +12,33 @@ const currentListing = { symbol: "ISSR", exchange: "Nasdaq", securityName: "Issu
   ] };
 
 describe("first-run SEC filing browse surface", () => {
+  it("offers the explicit directory check when rows are withheld for unverified listings", () => {
+    const view: SecFilingsInboxView = {
+      state: "listing_unverified", freshness: "current", rows: [], receiptId: "receipt-1",
+      retrievedAt: "2026-10-08T23:32:05.737Z", feedUpdatedAt: "2026-10-08T23:32:05.000Z",
+      jobStatus: "succeeded", canActivate: true, nextRefreshAt: "2026-10-08T23:47:06.184Z",
+      message: null, withheldCount: 39,
+      listingVerificationGap: "39 SEC filings were withheld pending current exchange-listing verification.",
+    };
+    expect(shouldOfferSecFilingsActivation(view)).toBe(true);
+    expect(shouldOfferSecFilingsActivation({ ...view, canActivate: false })).toBe(false);
+    expect(shouldOfferSecFilingsActivation({ ...view, state: "listing_unverified", canActivate: true })).toBe(true);
+  });
+
+  it("does not let the SEC feed refresh cooldown block a listing-only verification", () => {
+    const now = Date.parse("2026-10-08T23:46:44.000Z");
+    const view: SecFilingsInboxView = {
+      state: "listing_unverified", freshness: "current", rows: [], receiptId: "receipt-1",
+      retrievedAt: "2026-10-08T23:32:05.737Z", feedUpdatedAt: "2026-10-08T23:32:05.000Z",
+      jobStatus: "succeeded", canActivate: true, nextRefreshAt: "2026-10-08T23:47:06.184Z",
+      message: null, withheldCount: 39,
+      listingVerificationGap: "39 SEC filings were withheld pending current exchange-listing verification.",
+    };
+    expect(isSecFilingsActivationCoolingDown(view, now)).toBe(false);
+    expect(isSecFilingsActivationCoolingDown({ ...view, state: "ready" }, now)).toBe(true);
+    expect(isSecFilingsActivationCoolingDown({ ...view, nextRefreshAt: null }, now)).toBe(false);
+  });
+
   it("ages source freshness from the SEC feed clock while the saved snapshot remains visible", () => {
     const observedAt = Date.parse("2026-10-08T11:00:00.000Z");
     const current: SecFilingsInboxView = {

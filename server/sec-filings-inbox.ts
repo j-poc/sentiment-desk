@@ -374,6 +374,15 @@ export class SecFilingsInbox {
     try { connection = this.connection(); }
     catch { return this.unavailable(); }
     try {
+      // Explicit activation already paid for current exchange directories. Reuse a
+      // usable Hub receipt even when new collection is no longer configured.
+      // readHubReceipt revalidates the authenticated receipt, revision, clocks,
+      // record identities, and private-display-only rights before this is returned.
+      const accepted = await this.readHubReceipt();
+      if (accepted.state === "ready" && accepted.freshness === "current") {
+        return this.applyListingGate(accepted);
+      }
+
       const sources = object(await this.get(new URL("/api/v1/sources", connection.baseUrl), connection.token));
       const source = (Array.isArray(sources?.implemented) ? sources.implemented : []).map(object).find((entry) => entry?.id === DATASET);
       if (!source) return this.empty("unsupported", "The connected Hub does not yet provide the SEC 8-K feed.");
@@ -454,7 +463,7 @@ export class SecFilingsInbox {
   private applyListingGate(view: SecFilingsInboxView): SecFilingsInboxView {
     const snapshot = this.listingSnapshot;
     if (!snapshot) return { ...view, state: view.rows.length ? "listing_unverified" : view.state, rows: [], withheldCount: view.rows.length,
-      listingVerificationGap: view.rows.length ? `${view.rows.length} SEC filing${view.rows.length === 1 ? " was" : "s were"} withheld because current Nasdaq Trader listing files could not be verified; the local app session has no directory snapshot. ${view.canActivate ? "Activate Recent Filings to check both official directories." : "The listing check is paused. Enable external requests and approve both sec_latest_filings_8k and nasdaq_symbol_directories in both source lists."}` : "Current exchange-listing directories have not been verified in this app session.",
+      listingVerificationGap: view.rows.length ? `${view.rows.length} SEC filing${view.rows.length === 1 ? " was" : "s were"} withheld because current Nasdaq Trader listing files could not be verified; the local app session has no directory snapshot. ${view.canActivate ? "Choose Verify current listings to check both official directories." : "The listing check is paused. Enable external requests and approve both sec_latest_filings_8k and nasdaq_symbol_directories in both source lists."}` : "Current exchange-listing directories have not been verified in this app session.",
       listingDirectoryCreatedAt: null, listingDirectoryRetrievedAt: null, listingDirectories: [] };
     const now = this.options.now?.() ?? Date.now();
     const age = now - Date.parse(snapshot.createdAt);

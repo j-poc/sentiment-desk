@@ -47,12 +47,12 @@ const currentProfile = {
   consumer: "sentiment-desk", cadence_seconds: 900, enabled: true,
 };
 
-function responseFor({ records = [validRow], job = "succeeded", updatedAt = "2026-10-05T12:00:00Z", rights = {} } = {}) {
+function responseFor({ records = [validRow], job = "succeeded", updatedAt = "2026-10-05T12:00:00Z", rights = {}, configured = true } = {}) {
   return vi.fn<typeof fetch>(async (input) => {
     const url = String(input);
     if (url === "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt") return new Response(listingFile("nasdaq"), { status: 200 });
     if (url === "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt") return new Response(listingFile("other"), { status: 200 });
-    if (url.endsWith("/api/v1/sources")) return Response.json({ implemented: [{ id: "sec.latest_filings_8k", configured: true }] });
+    if (url.endsWith("/api/v1/sources")) return Response.json({ implemented: [{ id: "sec.latest_filings_8k", configured }] });
     if (url.endsWith("/api/v1/state?include_results=false")) return Response.json({ profiles: [{
       profile: currentProfile, latest_job: { status: job, updated_at: updatedAt },
       last_accepted_job: { receipt_id: "receipt-1", revision: 1 }, result_matches_current_revision: true,
@@ -295,6 +295,31 @@ describe("real SEC filings inbox Hub boundary", () => {
     expect(fetcher.mock.calls.some(([input]) => String(input).includes("nasdaqtrader.com"))).toBe(false);
   });
 
+  it("returns a current accepted receipt after explicit listing verification without enqueueing another SEC refresh", async () => {
+    const current = structuredClone(validRow);
+    current.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
+    const fetcher = responseFor({ records: [current] });
+    const activated = await makeInbox(fetcher).activate();
+
+    expect(activated).toMatchObject({ state: "ready", freshness: "current", receiptId: "receipt-1" });
+    expect(activated.rows).toHaveLength(1);
+    expect(activated.rows[0]).toMatchObject({ accession: "0000000320-25-000001", listing: { symbol: "EXMP", exchange: "Nasdaq" } });
+    expect(activated.listingVerificationGap).toBeNull();
+    expect(fetcher.mock.calls.some(([input, init]) => String(input).includes("/refresh") || init?.method === "POST")).toBe(false);
+  });
+
+  it("reuses a current private-display receipt when Hub acquisition is unconfigured", async () => {
+    const current = structuredClone(validRow);
+    current.attributes.feed_updated_at = "2026-10-05T12:04:00Z";
+    const fetcher = responseFor({ records: [current], configured: false });
+    const activated = await makeInbox(fetcher).activate();
+
+    expect(activated).toMatchObject({ state: "ready", freshness: "current", receiptId: "receipt-1" });
+    expect(activated.rows).toHaveLength(1);
+    expect(activated.listingVerificationGap).toBeNull();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
   it("keeps the issuer, EDGAR login CIK, and archive-path CIK distinct", async () => {
     // Real SEC Form 8-K example: VICOR Corp is issuer CIK 0000751978, while
     // accession 0001193125-26-370420 was filed under login CIK 0001193125.
@@ -420,6 +445,11 @@ describe("real SEC filings inbox Hub boundary", () => {
     expect(recent.state).toBe("rate_limited");
     expect(recent.nextRefreshAt).toBe("2026-10-05T12:10:00.000Z");
     expect(recentFetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+
+    const staleFetcher = responseFor({ updatedAt: "2026-10-05T11:55:00Z" });
+    const stale = await makeInbox(staleFetcher, Date.parse("2026-10-06T00:00:00Z")).activate();
+    expect(stale.state).toBe("pending");
+    expect(staleFetcher.mock.calls.some(([input, init]) => String(input).includes("/refresh") && init?.method === "POST")).toBe(true);
   });
 
   it("does not contact the Hub when the global and source gates are closed", async () => {

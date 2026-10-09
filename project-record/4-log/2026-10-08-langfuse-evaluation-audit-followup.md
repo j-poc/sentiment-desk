@@ -394,6 +394,55 @@ This repair improves the reliability of one deterministic recovery evaluator;
 it does not change the classifier-quality, benchmark, investor-value, or
 whole-build verdicts above.
 
+## Primary SEC listing action and full-build recheck — 2026-10-09
+
+The first primary-app filing check exposed a dead end: the server said listing
+verification was available, but the `listing_unverified` state hid its action.
+After the action was exposed, the SEC feed's independent 15-minute refresh
+cooldown still disabled it even though listing verification can reuse a current
+accepted SEC receipt and only fetches the two public Nasdaq Trader directories.
+
+- Added a regression for the missing action and a separate cooldown predicate:
+  `listing_unverified` can explicitly verify exchange listings while SEC feed
+  refresh cadence continues to apply to SEC refresh states. The action is named
+  “Verify current listings,” and the server's recovery copy uses the same name.
+- Focused SEC inbox and UI tests passed **43/43**. The full repository suite
+  passed **1,062/1,062** across 123 files; typecheck, production build, and
+  `git diff --check` passed. The production web build retains its existing
+  approximately 882.49 kB minified main-chunk advisory. The full suite prints a
+  guard message from `scripts/evaluate-jev-labels.ts` when its persisted report
+  differs from current inputs; Vitest still completed successfully.
+- In the primary UI on a task-created temporary SQLite database, only
+  `sec_latest_filings_8k` and `nasdaq_symbol_directories` were enabled. The
+  active profile had no OpenAI key; health reported OpenAI GPT-6 Luna disabled,
+  zero classifier requests, Jev disabled, and Opportunity Radar disabled. The
+  listing button was available during the SEC cadence cooldown. Clicking it
+  rendered **29** current-listed 8-K rows and withheld **10** unmatched or
+  ambiguous rows. Both Nasdaq directory creation clocks and retrieval clocks
+  appeared in the UI. The accepted SEC feed receipt was
+  `4c940987-85e2-4729-9bdb-a7ddaece3d1d`, updated at
+  `2026-10-08T23:47:09Z`; directory files were retrieved at
+  `2026-10-08T23:49:18Z`.
+- Attempting to inspect the first listed filing, Trinity Capital Inc. (CIK
+  `0001786108`, accession `0001193125-26-418097`), ended at “Retry SEC evidence.”
+  No filing task was saved, no model call occurred, and no private note or
+  synthetic application record was created. Criterion 22 therefore remains
+  unverified until an inspection, save, restart, and exact-task resume succeed.
+- The fresh independent whole-product review remains **FAIL — 4.5/10**: 12
+  PASS, 17 UNVERIFIED, 3 BLOCKED, 1 FAIL. It credits the live 29/10 listing
+  view but does not upgrade the full SEC journey. Missing Luna output and a
+  rights-qualified benchmark, tickerless small-cap discovery, AlphaSense
+  comparison, intended-user outcomes, SEC/task resume journeys, and the 4,700
+  legacy-row provider-usage reconciliation remain open.
+- The Sentiment Desk server was stopped after the browser verification. At the
+  follow-up check, `:5174` had been reused by a different local application;
+  it must not be treated as this product's runtime. Current source changes are
+  still uncommitted at the time of this entry. The refreshed live-data ETL JSON
+  is generated evidence and is not part of the source checkpoint.
+
+This closes the two observed listing-action dead ends, not the complete
+Sentiment Desk objective or its remaining product and live-operations gates.
+
 ## Selected private-note analysis and current ETL recheck — 2026-10-08
 
 The user confirmed that optional private notes about configured public issuers

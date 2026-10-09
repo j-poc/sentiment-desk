@@ -113,6 +113,17 @@ export function shouldStartSecFilingsPoll(activationInFlight: boolean): boolean 
   return !activationInFlight;
 }
 
+export function shouldOfferSecFilingsActivation(view: SecFilingsInboxView | null): boolean {
+  return view?.canActivate === true
+    && ["not_configured", "ready", "stale", "empty", "failed", "rate_limited", "listing_unverified"].includes(view.state);
+}
+
+export function isSecFilingsActivationCoolingDown(view: SecFilingsInboxView | null, now = Date.now()): boolean {
+  if (!view || view.state === "listing_unverified" || !view.nextRefreshAt) return false;
+  const nextRefreshAt = Date.parse(view.nextRefreshAt);
+  return Number.isFinite(nextRefreshAt) && nextRefreshAt > now;
+}
+
 export function shouldOfferSavedArchiveSearch(archiveStatus: "available" | "empty" | "unknown", hasAction: boolean): boolean {
   return archiveStatus === "available" && hasAction;
 }
@@ -478,11 +489,12 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   };
 
   const cooldown = view?.nextRefreshAt ? Math.max(0, Date.parse(view.nextRefreshAt) - now) : 0;
-  const showActivate = view?.canActivate === true
-    && ["not_configured", "ready", "stale", "empty", "failed", "rate_limited"].includes(view.state);
+  const activationCoolingDown = isSecFilingsActivationCoolingDown(view, now);
+  const showActivate = shouldOfferSecFilingsActivation(view);
   const showDeskFallback = shouldShowDeskFallback(view?.state ?? null, view?.rows.length ?? 0, loadFailed, view?.canActivate === false);
   const actionLabel = view?.state === "not_configured" ? "Enable real SEC feed"
-    : view?.state === "failed" ? "Retry SEC feed"
+    : view?.state === "listing_unverified" ? "Verify current listings"
+      : view?.state === "failed" ? "Retry SEC feed"
       : view?.state === "rate_limited" || cooldown > 0 ? "Refresh available later" : "Refresh filings";
 
   return (
@@ -503,7 +515,7 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
             </button>
           )}
           {showActivate && (
-            <button type="button" onClick={() => void activate()} disabled={working || loading || cooldown > 0}
+            <button type="button" onClick={() => void activate()} disabled={working || loading || activationCoolingDown}
               className="rounded-md border border-emerald-300/30 bg-emerald-300/[0.09] px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-300/[0.15] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-not-allowed disabled:opacity-45">
               {working ? "Contacting local Hub…" : actionLabel}
             </button>
