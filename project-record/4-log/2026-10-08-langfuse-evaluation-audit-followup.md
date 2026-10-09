@@ -436,9 +436,11 @@ accepted SEC receipt and only fetches the two public Nasdaq Trader directories.
   legacy-row provider-usage reconciliation remain open.
 - The Sentiment Desk server was stopped after the browser verification. At the
   follow-up check, `:5174` had been reused by a different local application;
-  it must not be treated as this product's runtime. Current source changes are
-  still uncommitted at the time of this entry. The refreshed live-data ETL JSON
-  is generated evidence and is not part of the source checkpoint.
+  it must not be treated as this product's runtime. Source and regression tests
+  were checkpointed as `d04e4b63ecc35a7ed0a467bab3a4be7ca42b25ae` on
+  `origin/codex/real-data-rebuild`, confirmed by `git ls-remote`. The refreshed
+  live-data ETL JSON is generated evidence and is not part of that source
+  checkpoint; its code-bound gate remains to be rerun.
 
 This closes the two observed listing-action dead ends, not the complete
 Sentiment Desk objective or its remaining product and live-operations gates.
