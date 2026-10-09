@@ -445,6 +445,50 @@ accepted SEC receipt and only fetches the two public Nasdaq Trader directories.
 This closes the two observed listing-action dead ends, not the complete
 Sentiment Desk objective or its remaining product and live-operations gates.
 
+## Code-bound ETL verification recovery — 2026-10-09
+
+The code-bound gate initially failed because the dedicated
+`sentiment-desk-verify` Colima profile was stopped and the configured local
+Public Data Hub on loopback port 8766 was not running. The Hub's existing
+installation descriptor selected the `public-data-hub-sec-atom` worktree and
+its existing private state directory. Before restarting it, the Hub state had
+no queued or running jobs and only four enabled public profiles: SEC 8-K, ECB
+FX, Treasury yields, and World Bank indicators. The supervisor was started
+against that exact installation without source, profile, credential, or code
+edits; its existing scheduled public feeds refreshed, making the current SEC
+receipt available. No Citrini runtime or profile was started or changed.
+
+- The SEC receipt verifier then passed using its local read-only API path: 39
+  current rows, source feed update `2026-10-09T06:47:07.000Z`, retrieval
+  `2026-10-09T06:47:07.933Z`. The verifier itself made no upstream request.
+- The isolated keyless Compose smoke passed with only Google News RSS, Yahoo
+  Finance RSS, GDELT, Yahoo quotes, and Yahoo charts enabled. A direct run
+  returned 27 real quotes for 24 configured companies, 40 chart points, and a
+  real Yahoo Finance RSS observation; the persisted observation and chart
+  receipt survived container recreation. Host-published loopback API checks
+  returned HTTP 200 before and after recreation. Jev and GPT-6 Luna were
+  disabled, classifier request count was zero, and the temporary Compose data
+  volume was removed on completion.
+- `live_data_etl_gate.py verify` passed **10/10 checks** at
+  `2026-10-09T06:50:55Z` with code fingerprint
+  `e6c37e3ae6185be9a063cd312191a53aabcbbad7163bf478b9b51be352f0976e`.
+- The project verification skill passed its isolated recovery/consent run
+  (`09f052d5-15d7-4156-8724-7f236fca0a4c`), its helper TypeScript config
+  passed, and focused private-evidence UI/API tests passed **13/13**. These
+  local fixture checks verify consent and persistence only; they are not Luna
+  output or classifier-quality evidence.
+- Full-product acceptance remains open. The latest independent whole-build
+  review before this evidence refresh was **FAIL — 4.5/10** (12 PASS, 17
+  UNVERIFIED, 3 BLOCKED, 1 FAIL). This ETL refresh does not resolve the missing
+  no-ticker small-cap discovery workflow, actual GPT-6 Luna output and
+  rights-qualified benchmark, AlphaSense comparison, intended-user outcomes,
+  complete filing inspect/save/resume journey, or 4,700-row provider-usage
+  reconciliation. The current 39-row receipt has not yet been rendered through
+  the app UI or inspected into a saved filing task.
+
+The full ETL checks pass again against real public data and current source
+receipts. That is a meaningful verification recovery, not product completion.
+
 ## Selected private-note analysis and current ETL recheck — 2026-10-08
 
 The user confirmed that optional private notes about configured public issuers
