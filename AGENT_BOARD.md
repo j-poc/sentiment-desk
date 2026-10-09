@@ -1,5 +1,38 @@
 # Sentiment Desk Agent Board
 
+## SEC filing-to-research workflow — 2026-10-09
+
+The rendered Recent Filings workflow now verifies listed-company membership,
+opens the exact real SEC accession, and saves a source-linked research task
+that remains visible after restart. Inspecting Trinity Capital exposed a real
+SEC schema mismatch: the submissions `cik` was a zero-padded string, which the
+adapter rejected. The parser now accepts strictly validated string and numeric
+forms; the exact observed accession is retained as a regression. A separate
+private-note review also showed same-titled notes were ambiguous in consent;
+the note chooser and Luna confirmation now expose source/date and exact item
+identity. The main user database was not used, and no model or private-content
+request was made.
+
+- Focused SEC/private-consent regression: 31/31; the current full suite passes
+  123 files / 1,065 tests. Typecheck, production build, helper TypeScript
+  check, and diff check pass. The existing Vite bundle size advisory remains.
+- Project recovery verifier passes as run
+  `41c8c5bb-3ebb-457a-95b3-07932f994b1a`. Current live-data ETL verifier passes
+  10/10 at `2026-10-09T07:18:02Z`; the authorized keyless live smoke passed
+  with classifiers disabled.
+- The retained investor-UI recovery replay passes 26/26. The new exact-note
+  confirmation regression distinguishes same-titled notes by source/date/ID,
+  hash prefix, and sanitized preview; selecting note 2 only dispatches note 2.
+  No private note or real Luna request was used.
+- Independent whole-build acceptance remains **FAIL**. The fresh filing UI
+  closes the inbox and task-persistence checks; the full candidate-discovery
+  and research workflow, exact-task resume after feed rollover, live Luna
+  qualification on real private evidence, AlphaSense/investor outcomes, and
+  legacy usage reconciliation remain open. Keep Opportunity Radar disabled.
+
+See `project-record/4-log/2026-10-09-sec-filings-rendered-inspection.md` and
+the current `.engineering-evidence/alignment-review.json` for detailed proof.
+
 ## Evaluation integrity and filing-to-research handoff — 2026-10-08
 
 Completed two scoped usability/evidence repairs. Luna offline run schema v2 now

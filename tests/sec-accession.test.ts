@@ -57,6 +57,43 @@ describe("fetchFilingByAccession", () => {
     expect(filing?.metadataRetrievedAt).toBeGreaterThan(0);
   });
 
+  it("accepts the zero-padded string CIK in the observed SEC submissions response", async () => {
+    // This shape is trimmed from data.sec.gov/submissions/CIK0001786108.json
+    // retrieved 2026-10-09; expectations are derived from its exact accession row.
+    const observedResponse = {
+      cik: "0001786108",
+      filings: { recent: {
+        form: ["8-K"],
+        filingDate: ["2026-10-08"],
+        reportDate: ["2026-10-08"],
+        acceptanceDateTime: ["2026-10-09T01:30:13.000Z"],
+        accessionNumber: ["0001193125-26-418097"],
+        primaryDocument: ["trin-20261008.htm"],
+        items: ["7.01,9.01"],
+      } },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(observedResponse)));
+
+    const filing = await fetchFilingByAccession({
+      cik: "0001786108", archiveCikPath: "1786108", accessionNo: "0001193125-26-418097",
+      userAgent: "test-contact@example.com",
+    });
+
+    expect(filing).toMatchObject({
+      cik: "0001786108", accessionNo: "0001193125-26-418097", formType: "8-K", items: ["7.01", "9.01"],
+      filedAt: Date.parse("2026-10-08T00:00:00.000Z"), reportDate: "2026-10-08",
+      acceptanceAt: Date.parse("2026-10-09T01:30:13.000Z"),
+      primaryDocUrl: "https://www.sec.gov/Archives/edgar/data/1786108/000119312526418097/trin-20261008.htm",
+    });
+  });
+
+  it("rejects nonnumeric string CIKs instead of coercing them", async () => {
+    const payload = submissions() as Record<string, unknown>;
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ...payload, cik: "0001310488x" })));
+
+    await expect(fetchFilingByAccession(opts)).rejects.toThrow("issuer CIK did not match");
+  });
+
   it("uses the filing index archive CIK independently from issuer and accession CIK", async () => {
     const accession = "0001193125-26-370420";
     const root = submissions({

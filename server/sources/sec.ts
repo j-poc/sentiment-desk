@@ -203,8 +203,15 @@ function parseExact8K(body: unknown, requestedCik: string, archiveCikPath: strin
   }
   const root = body as Record<string, unknown>;
   const bodyCik = root.cik;
-  if (typeof bodyCik !== "number" || !Number.isSafeInteger(bodyCik) || bodyCik <= 0
-    || String(bodyCik).padStart(10, "0") !== requestedCik) {
+  // SEC submissions currently serializes the top-level CIK as a zero-padded
+  // string (for example "0001786108"). Older/other native responses used a
+  // JSON number, so accept either representation after strict normalization.
+  const normalizedBodyCik = typeof bodyCik === "number" && Number.isSafeInteger(bodyCik) && bodyCik > 0
+    ? String(bodyCik).padStart(10, "0")
+    : typeof bodyCik === "string" && /^\d{1,10}$/.test(bodyCik) && Number(bodyCik) > 0
+      ? bodyCik.padStart(10, "0")
+      : null;
+  if (normalizedBodyCik !== requestedCik) {
     throw new Error("SEC submissions issuer CIK did not match the requested CIK");
   }
   const filings = root.filings;

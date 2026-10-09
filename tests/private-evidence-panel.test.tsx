@@ -31,7 +31,10 @@ function response(body: unknown, status = 200): Response {
   } as Response;
 }
 
-const note = {
+const note: {
+  id: string; companyId: string; title: string; sourceLabel: string; fileName: string | null;
+  asOfDate: string | null; importedAt: number; sha256: string;
+} = {
   id: "note-1", companyId: "issuer-1", title: "Order backlog memo", sourceLabel: "Owner research", fileName: null,
   asOfDate: null, importedAt: 1_791_441_000_000, sha256: "a".repeat(64),
 };
@@ -113,7 +116,7 @@ describe("private evidence panel", () => {
     await openPanel();
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>("button[aria-label='Open private note: Order backlog memo']")!.click();
+      container.querySelector<HTMLButtonElement>("li button")!.click();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -141,7 +144,7 @@ describe("private evidence panel", () => {
     await openPanel();
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>("button[aria-label='Open private note: Order backlog memo']")!.click();
+      container.querySelector<HTMLButtonElement>("li button")!.click();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -167,7 +170,7 @@ describe("private evidence panel", () => {
     await openPanel();
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>("button[aria-label='Open private note: Order backlog memo']")!.click();
+      container.querySelector<HTMLButtonElement>("li button")!.click();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -184,6 +187,11 @@ describe("private evidence panel", () => {
     expect(disclosure).toContain("Order backlog memo");
     expect(disclosure).toContain("Public Issuer (PUB)");
     expect(disclosure).toContain("OpenAI gpt-6-luna");
+    expect(disclosure).toContain("Source: Owner research");
+    expect(disclosure).toContain("User-asserted date: not provided");
+    expect(disclosure).toContain("Note ID: note-1");
+    expect(disclosure).toContain(`Content SHA-256 prefix: ${"a".repeat(12)}`);
+    expect(disclosure).toContain("Text preview: “Saved private research text.”");
     expect(disclosure).toContain("API retention is unverified.");
     expect(disclosure).toContain("Continue with this item only?");
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -201,7 +209,7 @@ describe("private evidence panel", () => {
     await openPanel();
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>("button[aria-label='Open private note: Order backlog memo']")!.click();
+      container.querySelector<HTMLButtonElement>("li button")!.click();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -222,5 +230,47 @@ describe("private evidence panel", () => {
     expect(JSON.parse(String((dispatch?.[1] as RequestInit).body))).toEqual({ confirmExternalProcessing: true });
     expect(container.textContent).toContain("OpenAI may have processed the request");
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("distinguishes same-title notes and confirms the exact item selected for Luna", async () => {
+    const duplicate = { ...note, id: "note-2", sourceLabel: "Supplier call", asOfDate: "2026-10-06" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(noteList([note, duplicate], true)))
+      .mockResolvedValueOnce(response({ ...duplicate, content: "Supplier confirmed\n\u202ecomponent backlog eased this week.", savedAnalysis: null }))
+      .mockResolvedValueOnce(response({ status: "outcome_unknown", payloadSha256: "c".repeat(64), requestBytes: 512,
+        startedAt: 1_791_441_000_000, savedAt: null, errorCode: "transport_unknown", record: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await openPanel();
+
+    const noteButtons = Array.from(container.querySelectorAll<HTMLButtonElement>("li button"));
+    expect(noteButtons).toHaveLength(2);
+    expect(noteButtons[0]?.getAttribute("aria-label")).toContain("Owner research");
+    expect(noteButtons[1]?.getAttribute("aria-label")).toContain("Supplier call");
+    expect(noteButtons[1]?.getAttribute("aria-label")).toContain("as of 2026-10-06");
+    expect(noteButtons[1]?.getAttribute("aria-label")).toContain("ID note-2");
+
+    await act(async () => {
+      noteButtons[1]!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("Analyze this selected note"))!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const consent = confirmMock.mock.calls[0]?.[0] ?? "";
+    expect(consent).toContain("Title: “Order backlog memo”");
+    expect(consent).toContain("Source: Supplier call");
+    expect(consent).toContain("User-asserted date: 2026-10-06");
+    expect(consent).toContain("Note ID: note-2");
+    expect(consent).toContain("Text preview: “Supplier confirmed �component backlog eased this week.”");
+    expect(consent).not.toContain("Supplier confirmed\n");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/note-2/analyze"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/note-1/analyze"))).toBe(false);
   });
 });

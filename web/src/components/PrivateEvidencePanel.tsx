@@ -95,6 +95,16 @@ function formatImportedAt(value: number): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : "Import time unavailable";
 }
 
+function safeDisclosureText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/gu, "�");
+}
+
+function consentPreview(value: string): string {
+  const compact = safeDisclosureText(value.replace(/\s+/gu, " ")).trim();
+  const points = Array.from(compact);
+  return points.length > 180 ? `${points.slice(0, 180).join("")}…` : compact;
+}
+
 async function validateFile(file: File): Promise<string> {
   if (!ACCEPTED_FILE.test(file.name)) throw new Error("Choose a UTF-8 .txt, .md, or .csv file.");
   if (file.name.length > 128) throw new Error("The imported file name exceeds the 128 character limit.");
@@ -185,7 +195,7 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
   }
 
   async function remove(item: PrivateEvidenceMeta) {
-    const safeTitle = item.title.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/gu, "�");
+    const safeTitle = safeDisclosureText(item.title);
     const accepted = window.confirm(
       `Delete the private note “${safeTitle}” for ${companyName} (${ticker}) from this device?\n\n` +
       "This cannot be undone. The note will not be sent to OpenAI. Continue with this item only?",
@@ -202,9 +212,19 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
   async function analyzeSelected() {
     if (!selected || !list?.analysis.enabled || selected.savedAnalysis) return;
     const disclosure = list.analysis.dataControls.disclosure;
-    const safeTitle = selected.title.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/gu, "�");
+    const safeTitle = safeDisclosureText(selected.title);
+    const safeSourceLabel = safeDisclosureText(selected.sourceLabel);
+    const safeNoteId = safeDisclosureText(selected.id);
+    const preview = consentPreview(selected.content);
     const accepted = window.confirm(
-      `Send the selected private note “${safeTitle}” for ${companyName} (${ticker}) to OpenAI ${list.analysis.model}?\n\n` +
+      `Send this selected private note to OpenAI ${list.analysis.model}?\n\n` +
+      `Issuer: ${companyName} (${ticker})\n` +
+      `Title: “${safeTitle}”\n` +
+      `Source: ${safeSourceLabel}\n` +
+      `User-asserted date: ${selected.asOfDate ?? "not provided"}\n` +
+      `Note ID: ${safeNoteId}\n` +
+      `Content SHA-256 prefix: ${selected.sha256.slice(0, 12)}\n` +
+      `Text preview: “${preview}”\n\n` +
       `This sends the note and its issuer identity for one private analysis. It does not create a public sentiment score or alter public charts. The result is saved in this local private store.\n\n${disclosure}\n\n` +
       `Continue with this item only?`,
     );
@@ -238,7 +258,7 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
           {!list.analysis.enabled && <p role="status">New GPT-6 Luna private-note analysis is currently blocked: {analysisGateMessage(list.analysis.blockedReason)} Any earlier attempt or saved result remains unchanged.</p>}
           {list.items.length === 0 ? <p>No private notes saved for this issuer.</p> : <ul aria-label="Saved private notes">
             {list.items.map((item) => <li key={item.id}>
-              <button type="button" onClick={() => void selectEvidence(item)} disabled={busy} aria-label={`Open private note: ${item.title}`}>{item.title}</button>
+              <button type="button" onClick={() => void selectEvidence(item)} disabled={busy} aria-label={`Open private note: ${safeDisclosureText(item.title)} · ${safeDisclosureText(item.sourceLabel)} · ${item.asOfDate ? `as of ${item.asOfDate}` : "date not provided"} · ID ${safeDisclosureText(item.id)}`}>{item.title}</button>
               <span> · {item.sourceLabel} · imported {formatImportedAt(item.importedAt)}{item.asOfDate ? ` · as of ${item.asOfDate}` : ""}</span>
             </li>)}
           </ul>}
@@ -249,7 +269,7 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
             ? "Stored locally · a GPT-6 Luna attempt was previously recorded for this item; see its saved outcome below."
             : "Private · stored locally · not sent for model analysis"} · {selected.sourceLabel}{selected.fileName ? ` · ${selected.fileName}` : ""}</p>
           <p>Imported {formatImportedAt(selected.importedAt)}{selected.asOfDate ? ` · user asserted as of ${selected.asOfDate}` : ""}</p>
-          <p>SHA-256: <code>{selected.sha256}</code></p>
+          <p>Note ID: <code>{selected.id}</code> · SHA-256: <code>{selected.sha256}</code></p>
           <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{selected.content}</pre>
           {!selected.savedAnalysis && list?.analysis.enabled && <button type="button" disabled={busy} onClick={() => void analyzeSelected()}>Analyze this selected note with {list.analysis.model}</button>}
           {selected.savedAnalysis?.status === "in_progress" && <p role="status">A prior analysis attempt has no saved result. The app will not retry it automatically; check OpenAI usage before deciding what to do.</p>}
