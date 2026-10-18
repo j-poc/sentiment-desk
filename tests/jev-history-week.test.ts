@@ -76,6 +76,28 @@ describe("saved Jev UTC week archive", () => {
     }
   });
 
+  it("keeps weak same-name Apple rows out of watchlist and historical Jev series", () => {
+    const apple: Company = { id: "apple", name: "Apple", ticker: "AAPL", sector: "Technology",
+      aliases: ["Apple", "iPhone"], color: "#123456", ambiguous: true };
+    const db = new TestDesk(":memory:");
+    db.seedCompanies([apple]);
+    const weakAt = monday + 60 * 60_000;
+    const weak = db.insertObservation({ ...raw("broad-apple", weakAt,
+      "Dow Jones Futures: AI Stocks Rebound; SpaceX, Verizon, Delta, Apple Early Movers"), companyId: apple.id,
+      snippet: "Futures rise after AI stocks rebound. A SpaceX spectrum buy hit Verizon, AT&T and T-Mobile." });
+    db.markScored(weak.observationId, score(weakAt), false);
+    const strongAt = monday + 2 * 60 * 60_000;
+    const strong = db.insertObservation({ ...raw("apple-stock", strongAt, "Apple stock falls after earnings"), companyId: apple.id });
+    db.markScored(strong.observationId, score(strongAt), false);
+
+    try {
+      expect(db.scoredMentions(0, monday + weekMs, apple.id).map((row) => row.id)).toEqual([strong.observationId]);
+      expect(db.jevHistoryWeeks(apple.id, monday)?.items.map((row) => row.id)).toEqual([strong.observationId]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("selects only eligible real saved scores, observes half-open boundaries, and skips invalid newer weeks", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-jev-week-"));
     directories.push(directory);

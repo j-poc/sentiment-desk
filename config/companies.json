@@ -24,7 +24,8 @@
         "iPhone",
         "Tim Cook",
         "Macbook",
-        "App Store"
+        "App Store",
+        "AppleCare"
       ],
       "color": "#cbd5e1",
       "ambiguous": true,
@@ -132,6 +133,7 @@
         "Instinct"
       ],
       "color": "#fb923c",
+      "ambiguous": true,
       "listingStatus": "publicly_listed"
     },
     {

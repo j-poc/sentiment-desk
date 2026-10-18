@@ -378,11 +378,43 @@ describe("hasStrongIdentity (namesake guard)", () => {
       }),
     ).toBe(false);
   });
-  it("accepts ticker, corporate suffix, alias, or scoped sources", () => {
+  it("requires content evidence for ambiguous issuers even in ticker-scoped feeds", () => {
     expect(hasStrongIdentity({ company: apple, title: "Apple (AAPL) could be overpriced", snippet: "", scoped: false })).toBe(true);
     expect(hasStrongIdentity({ company: apple, title: "Apple Inc suppliers rally", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: apple, title: "Apple stock falls after earnings", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: apple, title: "Apple juice manufacturers report revenue growth", snippet: "", scoped: false })).toBe(false);
     expect(hasStrongIdentity({ company: apple, title: "iPhone demand signals mixed", snippet: "", scoped: false })).toBe(true);
-    expect(hasStrongIdentity({ company: apple, title: "Apple sauce recall", snippet: "", scoped: true })).toBe(true);
+    expect(hasStrongIdentity({
+      company: apple,
+      title: "Is AT&T (T) Ready for a Starlink World After Its Latest Fiber and iPhone Duo Moves?",
+      snippet: "AT&T introduced Apple's new iPhone Duo while expanding its wireless and fiber coverage.",
+      scoped: false,
+    })).toBe(false);
+    expect(hasStrongIdentity({
+      company: apple,
+      title: "Why Apple (AAPL) Stock Is Trading Lower Today",
+      snippet: "Shares of Apple moved after its latest earnings update.",
+      scoped: false,
+    })).toBe(true);
+    expect(hasStrongIdentity({
+      company: apple,
+      title: "AT&T (T) and Apple (AAPL) announce a distribution partnership",
+      snippet: "The companies plan to expand their business relationship.",
+      scoped: false,
+    })).toBe(true);
+    expect(hasStrongIdentity({
+      company: apple,
+      title: "Apple growers report revenue losses after frost",
+      snippet: "Fruit harvest volumes declined.",
+      scoped: false,
+    })).toBe(false);
+    expect(hasStrongIdentity({ company: apple, title: "Apple sauce recall", snippet: "", scoped: true })).toBe(false);
+    expect(hasStrongIdentity({
+      company: apple,
+      title: "Dow Jones Futures: AI Stocks Rebound; SpaceX, Verizon, Delta, Apple Early Movers",
+      snippet: "Futures rise after AI stocks rebound. A SpaceX spectrum buy hit Verizon, AT&T and T-Mobile.",
+      scoped: true,
+    })).toBe(false);
   });
   it("passes unambiguous companies unconditionally", () => {
     expect(
@@ -393,6 +425,30 @@ describe("hasStrongIdentity (namesake guard)", () => {
         scoped: false,
       }),
     ).toBe(true);
+  });
+  it("does not mistake the medical AMD acronym for Advanced Micro Devices", () => {
+    const amd = {
+      name: "AMD",
+      ticker: "AMD",
+      aliases: ["AMD", "Advanced Micro Devices", "Lisa Su", "Ryzen", "Instinct"],
+      ambiguous: true,
+    };
+    expect(hasStrongIdentity({
+      company: amd,
+      title: "How Investors Are Reacting To Bausch + Lomb (BLCO) FDA Backs Dry AMD Study",
+      snippet: "FDA backs a dry age-related macular degeneration study.",
+      scoped: false,
+    })).toBe(false);
+    expect(hasStrongIdentity({
+      company: amd,
+      title: "Bausch + Lomb stock rises on dry AMD trial",
+      snippet: "Investors await the eye-disease study results.",
+      scoped: true,
+    })).toBe(false);
+    expect(hasStrongIdentity({ company: amd, title: "$AMD shares rise after earnings", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: amd, title: "Advanced Micro Devices expands Instinct production", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: amd, title: "AMD unveils MI500 accelerators", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({ company: amd, title: "AMD warns of weaker demand", snippet: "", scoped: false })).toBe(true);
   });
   it("ignores the production Apple self-alias but preserves actual issuer evidence", () => {
     const config = JSON.parse(readFileSync(new URL("../config/companies.json", import.meta.url), "utf8")) as {
@@ -410,6 +466,12 @@ describe("hasStrongIdentity (namesake guard)", () => {
       scoped: false,
     })).toBe(false);
     expect(hasStrongIdentity({ company, title: "AAPL shares rise after earnings", snippet: "", scoped: false })).toBe(true);
+    expect(hasStrongIdentity({
+      company,
+      title: "Apple Weighed Replacing 5,000 AppleCare Employees With AI",
+      snippet: "",
+      scoped: false,
+    })).toBe(true);
     expect(hasStrongIdentity({ company, title: "iPhone demand signals mixed", snippet: "", scoped: false })).toBe(true);
   });
 });
