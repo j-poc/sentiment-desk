@@ -28,6 +28,54 @@ function score(at: number): MentionScore {
 }
 
 describe("saved Jev UTC week archive", () => {
+  it("opens and pages the chart's exact issuer-qualified bucket without including weak matches", async () => {
+    const apple: Company = { id: "apple", name: "Apple", ticker: "AAPL", sector: "Technology",
+      aliases: ["Apple", "iPhone"], color: "#123456", ambiguous: true };
+    const db = new TestDesk(":memory:");
+    db.seedCompanies([apple]);
+    const at = monday + 60 * 60_000;
+    const weak = db.insertObservation({ ...raw("weak-bucket", at,
+      "Dow Jones Futures: AI Stocks Rebound; SpaceX, Verizon, Delta, Apple Early Movers"), companyId: apple.id,
+      snippet: "Futures rise after AI stocks rebound. A SpaceX spectrum buy hit Verizon, AT&T and T-Mobile." });
+    db.markScored(weak.observationId, { ...score(at), impact: -90 }, false);
+    const strongIds = ["Apple (AAPL) stock falls after earnings", "Apple (AAPL) raises its revenue outlook"].map((title, index) => {
+      const inserted = db.insertObservation({ ...raw(`strong-bucket-${index}`, at + index + 1, title), companyId: apple.id });
+      db.markScored(inserted.observationId, score(at + index + 1), false);
+      return inserted.observationId;
+    });
+    const pipeline = new Pipeline({ db, judge: null, provider: "typesafe", hub: new Hub(),
+      health: new HealthTracker(false, false, "jev-latest"), engineLabel: "jev-latest", inputPricePerMTok: 0,
+      concurrency: 1, allowedCollectors: new Set(), externalRequestsEnabled: false,
+      dailyBudget: { utcDay: () => "2026-10-04", maxRequests: 0, maxRequestBytes: 1_000 } });
+    const app = createApp({ db, dbPath: ":memory:", pipeline, market: {} as AppDeps["market"], hub: new Hub(),
+      health: new HealthTracker(false, false, "unconfigured", false, false, false, false),
+      version: "test", webRoot: "missing", deliverySources: [] });
+    try {
+      const point = pipeline.jevHistoryWeek(apple.id, monday)?.points.find(item => item.scoredRecordCount > 0);
+      expect(point?.scoredRecordCount).toBe(2);
+      const params = new URLSearchParams({ from: String(point!.bucketStartAtMs), through: String(point!.bucketEndAtMs),
+        archiveWeek: String(monday), snapshot: point!.bucketSnapshotKey!, limit: "1" });
+      const url = `/api/companies/apple/score-bucket?${params}`;
+      const firstResponse = await app.request(url);
+      expect(firstResponse.status).toBe(200);
+      const first = await firstResponse.json();
+      expect(first).toMatchObject({ recordCount: 2, matchingRecordCount: 2, weightedMeanImpact: 50 });
+      expect(first.items.map((item: { id: string }) => item.id)).toEqual([strongIds[1]]);
+      expect(first.nextCursor).not.toBeNull();
+      const nextResponse = await app.request(`${url}&cursor=${encodeURIComponent(JSON.stringify(first.nextCursor))}`);
+      expect(nextResponse.status).toBe(200);
+      const next = await nextResponse.json();
+      expect(next.items.map((item: { id: string }) => item.id)).toEqual([strongIds[0]]);
+      expect(next.nextCursor).toBeNull();
+      const negativeResponse = await app.request(`${url}&impactBin=1`);
+      expect(negativeResponse.status).toBe(200);
+      expect(await negativeResponse.json()).toMatchObject({ recordCount: 2, matchingRecordCount: 0, items: [] });
+    } finally {
+      pipeline.stop();
+      db.close();
+    }
+  });
+
   it("selects only eligible real saved scores, observes half-open boundaries, and skips invalid newer weeks", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-jev-week-"));
     directories.push(directory);

@@ -3750,6 +3750,12 @@ export class Desk {
     if (impactBin != null && (!Number.isInteger(impactBin) || impactBin < 0 || impactBin >= 20)) {
       throw new Error("invalid_score_bucket_impact_bin");
     }
+    const eligibleFilter = `company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
+      AND scored_at >= ? AND scored_at < ? AND scored_at - scored_at = 0
+      AND impact BETWEEN -100 AND 100 AND weight >= 0 AND weight - weight = 0
+      AND EXISTS (SELECT 1 FROM companies c WHERE c.id = mentions.company_id
+        AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous,
+          mentions.title, mentions.snippet, mentions.scoped) = 1)`;
     this.exec("BEGIN");
     try {
       const eligible = this.prepare(
@@ -3757,8 +3763,7 @@ export class Desk {
                 publisher_published_at AS publisherPublishedAt,
                 aggregator_published_at AS aggregatorPublishedAt,
                 provider_observed_at AS providerObservedAt, delivery_id AS deliveryId FROM mentions
-         WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
-           AND scored_at >= ? AND scored_at < ? AND impact BETWEEN -100 AND 100 AND weight >= 0
+         WHERE ${eligibleFilter}
          ORDER BY scored_at, id`,
       ).all(companyId, fromMs, throughMs) as unknown as Array<{
         id: string; scoredAt: number; impact: number; weight: number; title: string; timeBasis: string;
@@ -3803,8 +3808,7 @@ export class Desk {
       const impactParams = impactBin == null ? [] : [impactFrom!, impactThrough!];
       const rows = this.prepare(
         `SELECT * FROM mentions
-         WHERE company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored'
-           AND scored_at >= ? AND scored_at < ? AND impact BETWEEN -100 AND 100 AND weight >= 0
+         WHERE ${eligibleFilter}
            ${impactClause} ${cursorClause}
          ORDER BY scored_at DESC, id DESC LIMIT ?`,
       ).all(companyId, fromMs, throughMs, ...impactParams, ...cursorParams, limit + 1) as unknown as MentionRow[];
@@ -4178,14 +4182,17 @@ export class Desk {
     eventType: string;
     takeaway: string;
   }> {
-    const companyClause = companyId == null ? "" : " AND company_id = ?";
+    const companyClause = companyId == null ? "" : " AND m.company_id = ?";
     const params = companyId == null ? [sinceMs, asOfMs] : [sinceMs, asOfMs, companyId];
+    const identitySql = "desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)";
+    const realMentionFilter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
     const rows = this.db
       .prepare(
-        `SELECT id, company_id, scored_at, impact, weight, event_type, takeaway FROM mentions
-         WHERE ${REAL_MENTION_FILTER} AND status = 'scored' AND scored_at IS NOT NULL
-           AND scored_at >= ? AND scored_at <= ? AND impact IS NOT NULL${companyClause}
-         ORDER BY scored_at, id`,
+        `SELECT m.id, m.company_id, m.scored_at, m.impact, m.weight, m.event_type, m.takeaway FROM mentions m
+         JOIN companies c ON c.id = m.company_id
+         WHERE ${realMentionFilter} AND ${identitySql} = 1 AND m.status = 'scored' AND m.scored_at IS NOT NULL
+           AND m.scored_at >= ? AND m.scored_at <= ? AND m.impact IS NOT NULL${companyClause}
+         ORDER BY m.scored_at, m.id`,
       )
       .all(...params) as unknown as Array<{
         id: string;
@@ -4218,20 +4225,23 @@ export class Desk {
   } | null {
     const weekMs = 7 * 24 * 60 * 60_000;
     const epochMondayOffsetMs = 3 * 24 * 60 * 60_000;
-    const weekExpr = `CAST((scored_at + ${epochMondayOffsetMs}) / ${weekMs} AS INTEGER) * ${weekMs} - ${epochMondayOffsetMs}`;
-    const eligible = `company_id = ? AND ${REAL_MENTION_FILTER} AND status = 'scored' AND scored_at IS NOT NULL
-      AND scored_at - scored_at = 0 AND impact BETWEEN -100 AND 100 AND weight >= 0 AND weight - weight = 0`;
-    const nav = this.prepare(`SELECT ${weekExpr} AS weekStartMs, MAX(scored_at) AS latestAt FROM mentions WHERE ${eligible} GROUP BY weekStartMs ORDER BY weekStartMs DESC`).all(companyId) as Array<{ weekStartMs: number; latestAt: number }>;
+    const weekExpr = `CAST((m.scored_at + ${epochMondayOffsetMs}) / ${weekMs} AS INTEGER) * ${weekMs} - ${epochMondayOffsetMs}`;
+    const identitySql = "desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)";
+    const realMentionFilter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
+    const eligible = `m.company_id = ? AND ${realMentionFilter} AND ${identitySql} = 1 AND m.status = 'scored' AND m.scored_at IS NOT NULL
+      AND m.scored_at - m.scored_at = 0 AND m.impact BETWEEN -100 AND 100 AND m.weight >= 0 AND m.weight - m.weight = 0`;
+    const joins = "FROM mentions m JOIN companies c ON c.id = m.company_id";
+    const nav = this.prepare(`SELECT ${weekExpr} AS weekStartMs, MAX(m.scored_at) AS latestAt ${joins} WHERE ${eligible} GROUP BY weekStartMs ORDER BY weekStartMs DESC`).all(companyId) as Array<{ weekStartMs: number; latestAt: number }>;
     if (!nav.length) return null;
     const latestWeekStartMs = nav[0]!.weekStartMs;
     const weekStartMs = requestedWeekStartMs ?? latestWeekStartMs;
     const currentIndex = nav.findIndex((row) => row.weekStartMs === weekStartMs);
     if (currentIndex < 0) return null;
     const throughMs = weekStartMs + weekMs;
-    const rows = this.prepare(`SELECT id, company_id AS companyId, scored_at AS availableAt, impact, weight, scored_at AS scoredAt,
-      event_type AS eventType, takeaway, title, time_basis AS timeBasis, publisher_published_at AS publisherPublishedAt,
-      aggregator_published_at AS aggregatorPublishedAt, provider_observed_at AS providerObservedAt, delivery_id AS deliveryId
-      FROM mentions WHERE ${eligible} AND scored_at >= ? AND scored_at < ? ORDER BY scored_at, id`)
+    const rows = this.prepare(`SELECT m.id, m.company_id AS companyId, m.scored_at AS availableAt, m.impact, m.weight, m.scored_at AS scoredAt,
+      m.event_type AS eventType, m.takeaway, m.title, m.time_basis AS timeBasis, m.publisher_published_at AS publisherPublishedAt,
+      m.aggregator_published_at AS aggregatorPublishedAt, m.provider_observed_at AS providerObservedAt, m.delivery_id AS deliveryId
+      ${joins} WHERE ${eligible} AND m.scored_at >= ? AND m.scored_at < ? ORDER BY m.scored_at, m.id`)
       .all(companyId, weekStartMs, throughMs) as Array<{
         id: string; companyId: string; availableAt: number; impact: number; weight: number; scoredAt: number; eventType: string; takeaway: string;
         title: string; timeBasis: string; publisherPublishedAt: number | null; aggregatorPublishedAt: number | null;
