@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AlertDeliveryStatus, DeskHealthDisclosure, HealthPanel } from "../web/src/components/HealthPanel.js";
 import type { HealthDTO, SourceHealth } from "../web/src/lib/api.js";
-import { operationsAttentionCount } from "../web/src/lib/operations-attention.js";
+import { operationsAttentionCount, operationsStatusSummary } from "../web/src/lib/operations-attention.js";
 
 const sourceHealth: SourceHealth = {
   enabled: false,
@@ -163,7 +163,66 @@ describe("HealthPanel source approval disclosure", () => {
     const html = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health }));
 
     expect(html).toContain("4 signals");
-    expect(html).toContain("external requests enabled");
+    expect(html).toContain("0/2 data feeds current · Jev paused");
+  });
+
+  it("summarizes collector freshness separately from Luna readiness", () => {
+    const health: HealthDTO = {
+      ...blockedHealth,
+      health: {
+        ...blockedHealth.health,
+        classifier: {
+          ...sourceHealth, provider: "openai_luna", model: "gpt-6-luna", configured: false,
+          accountingRoute: "chatgpt_plan", blockedReason: "Connect a ChatGPT plan to enable GPT-6 Luna.",
+        },
+      },
+      deliveryHealth: ["current", "current", "current", "failed"].map((state, index) => ({
+        collector: (["google_news_rss", "yahoo_finance_rss", "yahoo_quote", "yahoo_chart"] as const)[index]!,
+        enabled: true,
+        state: state as "current" | "failed",
+        intervalSeconds: 300,
+        targetCount: 24,
+        coverageCount: state === "current" ? 24 : 23,
+        latestDeliveryAt: 1_790_000_000_000,
+        latestResult: state === "failed" ? "failed" : "success",
+        latestItemCount: 1,
+        latestError: state === "failed" ? "timeout" : null,
+        adapterVersion: "test-v1",
+        latestIngestionRequired: false,
+        latestIngestionState: null,
+        latestIngestionExpectedCount: null,
+        latestIngestionProcessedCount: null,
+        latestIngestionInsertedCount: null,
+        latestObservationAt: null,
+        latestObservationBasis: null,
+        latestObservationRetrievedAt: null,
+      })),
+    };
+
+    const summary = operationsStatusSummary(health);
+    const html = renderToStaticMarkup(createElement(DeskHealthDisclosure, { health }));
+
+    expect(summary).toBe("3/4 data feeds current · Luna paused · ChatGPT plan not connected");
+    expect(html).toContain(summary);
+    expect(summary).not.toContain("external requests enabled");
+  });
+
+  it("does not call a successful ingestion with missing source time an absent stored item", () => {
+    const html = renderToStaticMarkup(createElement(HealthPanel, { health: {
+      ...blockedHealth,
+      deliveryHealth: [{
+        collector: "google_news_rss", enabled: true, state: "current", intervalSeconds: 300,
+        targetCount: 24, coverageCount: 24, latestDeliveryAt: 1_790_000_000_000,
+        latestResult: "success", latestItemCount: 10, latestError: null, adapterVersion: "rss-v1",
+        latestIngestionRequired: true, latestIngestionState: "success", latestIngestionExpectedCount: 2,
+        latestIngestionProcessedCount: 2, latestIngestionInsertedCount: 2, latestObservationAt: null,
+        latestObservationBasis: null, latestObservationRetrievedAt: 1_790_000_000_100,
+      }],
+    } }));
+
+    expect(html).toContain("source time unavailable");
+    expect(html).toContain("2 saved");
+    expect(html).not.toContain("no stored item");
   });
 
   it("keeps the last failed delivery outcome visible while saved-data mode pauses the collector", () => {

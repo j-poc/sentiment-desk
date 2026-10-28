@@ -1,3 +1,7 @@
+vi.mock("../server/sec-acquisition.js", () => ({
+  requestSecResponse: (url: string) => globalThis.fetch(url),
+  secRetrievedAt: () => new Date().toISOString(),
+}));
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

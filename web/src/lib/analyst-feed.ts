@@ -2,7 +2,7 @@ import type { AnalystResearchDisposition, AnalystResearchDispositionChange } fro
 
 export type ResearchDispositionOverrides = ReadonlyMap<string, AnalystResearchDispositionChange>;
 
-export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed" | "history" | "identity_review";
+export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed" | "history" | "identity_review" | "relevance_review";
 
 export function includesWeakIssuerMatches(filter: MentionFeedFilter): boolean {
   return filter === "offtarget" || filter === "failed" || filter === "history" || filter === "identity_review";

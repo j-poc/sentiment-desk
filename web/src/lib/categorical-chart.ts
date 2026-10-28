@@ -78,7 +78,7 @@ export function aggregateCategoricalTrend(
   }
   const total = points.reduce((sum, point) => sum + point.counts.total, 0);
   const expected = COUNT_KEYS.reduce((sum, key) => sum + result.counts[key], 0);
-  if (total !== expected || total !== result.eligibleObservationCount
+  if (total !== expected || total !== result.plottedObservationCount
     || COUNT_KEYS.some((key) => points.reduce((sum, point) => sum + point.counts[key], 0) !== result.counts[key])
     || points.some((point) => COUNT_KEYS.reduce((sum, key) => sum + point.counts[key], 0) !== point.counts.total)) {
     throw new Error("Displayed categorical intervals do not reconcile to the saved trend");

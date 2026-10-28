@@ -7,52 +7,46 @@ describe("first-run evidence states", () => {
     expect(renderToStaticMarkup(<FirstRunEvidenceBrief state="error" />)).toContain("cannot determine whether this is a first run");
     expect(renderToStaticMarkup(<FirstRunEvidenceBrief state="error" localObservationArrived />)).toBe("");
     expect(renderToStaticMarkup(<FirstRunEvidenceBrief state="ready" eligibleObservationCount={1} secCollectorEnabled={false} jevSecScoringEnabled={false} />)).toBe("");
-    const markup = renderToStaticMarkup(<FirstRunEvidenceBrief state="ready" eligibleObservationCount={0} secCollectorEnabled={false} jevSecScoringEnabled={false} onOpenOperations={() => undefined} onOpenDisclosures={() => undefined} />);
+    const markup = renderToStaticMarkup(<FirstRunEvidenceBrief state="ready" eligibleObservationCount={0} secCollectorEnabled={false} jevSecScoringEnabled={false} onOpenDisclosures={() => undefined} onOpenOperations={() => undefined} />);
     expect(markup).toContain("No eligible saved observations");
-    expect(markup).toContain("Start with real saved evidence");
-    expect(markup).toContain("no archived samples or demonstration results");
-    expect(markup).toContain("External requests remain under explicit operator controls");
-    expect(markup).toContain("Open Sources &amp; operations");
+    expect(markup).toContain("No saved evidence to start from");
+    expect(markup).toContain("empty result is not neutral sentiment");
+    expect(markup).toContain("fixed company list; tickerless small-cap discovery is not available yet");
+    expect(markup).toContain("Recent SEC filings are for browsing, not research leads or evidence of investment merit");
+    expect(markup).toContain("no demo records fill the gap");
+    expect(markup).not.toMatch(/Data connections|operator controls|external requests/);
     expect(markup).toContain("Browse recent SEC filings");
+    expect(markup).toContain("Review update availability");
+    expect(markup).toContain("Start by browsing filings or checking which source updates are available");
     expect(markup).not.toMatch(/Tesla|TSLA|Archived SEC|jev-1\.13/);
+    expect(markup).not.toMatch(/companies? (?:worth|to) (?:investigating|buying)|promising issuers|opportunities/);
     expect(markup).not.toContain("example");
   });
 
   it("explains why a selected company has no chart and keeps the state truthful", () => {
-    const markup = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="empty" secCollectorEnabled={false} classifierSecClassificationEnabled={false} />);
+    const markup = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="empty" />);
     expect(markup).toContain("Apple · AAPL");
     expect(markup).toContain("no company trend to chart");
     expect(markup).toContain("eligible saved source observations");
     expect(markup).toContain("does not substitute archived samples or demonstration data");
-    expect(markup).toContain("Next step:");
-    expect(markup).not.toContain("Next step: Next:");
-    expect(markup).toContain("approve SEC collection");
-    expect(markup).toContain("<details");
+    expect(markup).toContain("source links, publication times and collection times");
+    expect(markup).not.toMatch(/request scope|source-use approval|operator controls|API key|ChatGPT plan/);
   });
 
   it("keeps the empty chart hidden when the saved-history check is unresolved", () => {
-    const checking = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="checking" secCollectorEnabled={false} />);
-    expect(checking).toContain("checking local history");
+    const checking = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="checking" />);
+    expect(checking).toContain("checking this company’s recent source history");
     expect(checking).not.toContain("No eligible saved source observations");
-    const unavailable = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="unavailable" secCollectorEnabled={false} />);
-    expect(unavailable).toContain("Chart availability is unknown");
+    const unavailable = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="unavailable" />);
+    expect(unavailable).toContain("Chart temporarily unavailable");
     expect(unavailable).toContain("retry automatically");
     expect(unavailable).not.toContain("No eligible saved source observations");
   });
 
-  it("does not confuse another collector allowlist with SEC Luna readiness", () => {
-    const markup = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="empty" secCollectorEnabled={true} classifierSecClassificationEnabled={false} />);
-    expect(markup).toContain("enable Luna for SEC filings");
-    expect(markup).toContain("SEC collection is enabled");
-    expect(markup).toContain("SEC source allowlist");
-  });
-
-  it("directs new Luna installations to the selected provider while preserving historical Jev semantics", () => {
-    const markup = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="empty" secCollectorEnabled={true} classifierSecClassificationEnabled={false} classifierBlockedReason="OpenAI API key missing" />);
-    expect(markup).toContain("enable Luna for SEC filings");
-    expect(markup).toContain("dollar limits");
-    expect(markup).toContain("OpenAI API key missing");
-    expect(markup).not.toContain("enable Jev for SEC");
-    expect(markup).toContain("separate from historical Jev probabilities");
+  it("keeps provider and collector setup out of the selected-company empty state", () => {
+    const markup = renderToStaticMarkup(<FirstRunNoLocalData company="Apple" ticker="AAPL" state="empty" />);
+    expect(markup).toContain("No chart data yet");
+    expect(markup).toContain("Apple · AAPL");
+    expect(markup).not.toMatch(/ChatGPT|API key|request scope|source-use approval|collector allowlist|external requests/);
   });
 });

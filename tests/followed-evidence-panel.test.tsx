@@ -115,6 +115,25 @@ describe("followed evidence baseline panel", () => {
     expect(html).not.toContain("Published before baseline · retrieved after");
   });
 
+  it("shows exact repeated headline text as a review aid without calling it independent confirmation", () => {
+    const page: FollowedEvidencePage = {
+      companyId: "acme",
+      baseline: { id: "fixture-baseline", companyId: "acme", version: 1, capturedAt: baselineAt, eligibleObservationCount: 0, policyVersion: "receipt-ingestion-success/1" },
+      asOfAt: baselineAt + 10_000,
+      eligibleObservationsNow: 2,
+      withheldFromBaseline: 0,
+      newEvidenceCount: 2,
+      items: [item, { ...item, id: "fixture-observation-2", title: `  ${item.title.toUpperCase()} `, publisherName: "Associated Press" }],
+      nextCursor: null,
+    };
+    const html = renderToStaticMarkup(createElement(FollowedEvidenceBaselineView, { ...baseProps, page }));
+    expect(html).toContain("2 newly eligible saved source records");
+    expect(html).toContain("2 recorded publisher labels");
+    expect(html).toContain("1 exact headline text group repeat in the loaded rows");
+    expect(html).toContain("do not establish independent confirmation");
+    expect(html).not.toContain("material change");
+  });
+
   it("renders failed refresh separately from loading and confirms native keyboard controls", () => {
     const loading = renderToStaticMarkup(createElement(FollowedEvidenceBaselineView, { ...baseProps, page: null, loading: true }));
     expect(loading).toContain("Loading the saved comparison");

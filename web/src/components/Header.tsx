@@ -1,47 +1,6 @@
-import type { HealthDTO } from "../lib/api.js";
-import { clockTime, fmtCost } from "../lib/format.js";
+import { clockTime } from "../lib/format.js";
 
-function engineChip(health: HealthDTO | null) {
-  if (!health) return null;
-  if (!health.health.externalRequestsEnabled) {
-    return (
-      <span className="whitespace-nowrap rounded-md border border-amber-300/25 bg-amber-300/[0.07] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-[0.04em] text-amber-200/90 sm:px-2 sm:tracking-[0.12em]" title="All provider and model requests are paused; the desk is serving saved local data.">
-        SAVED DATA ONLY
-      </span>
-    );
-  }
-  const classifier = health.health.classifier ?? health.health.jev;
-  const engine = health.health.classifier?.provider === "openai_luna" ? "LUNA" : "JEV";
-  if (classifier.enabled) {
-    return (
-      <span className="flex whitespace-nowrap items-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.07] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-[0.08em] text-emerald-300 sm:px-2 sm:tracking-[0.14em]">
-        <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />
-        {engine} ENABLED
-      </span>
-    );
-  }
-  return (
-    <span
-      className="whitespace-nowrap rounded-md border border-amber-300/25 bg-amber-300/[0.07] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-[0.04em] text-amber-200/90 sm:px-2 sm:tracking-[0.12em]"
-      title={health.health.classifier?.blockedReason ?? "Classifier dispatch is unavailable. Check credentials, account approval, approved sources and daily budgets."}
-    >
-      {engine} PAUSED
-    </span>
-  );
-}
-
-export function Header({
-  connected,
-  health,
-  totalMentions,
-  clock,
-}: {
-  connected: boolean | null;
-  health: HealthDTO | null;
-  totalMentions: number;
-  clock: number;
-}) {
-  const usage = health?.usage;
+export function Header({ totalMentions, clock }: { totalMentions: number; clock: number }) {
   return (
     <header className="flex h-[46px] shrink-0 items-center gap-2 border-b border-desk-line bg-black/50 px-2 backdrop-blur sm:gap-4 sm:px-4">
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-2.5">
@@ -53,40 +12,11 @@ export function Header({
         <div className="whitespace-nowrap text-[10px] font-semibold tracking-[0.1em] sm:text-[12px] sm:tracking-[0.24em]">SENTIMENT DESK</div>
       </div>
 
-      {engineChip(health)}
-
       <div className="ml-auto flex items-center gap-2 text-[9px] text-white/45 sm:gap-5 sm:text-[11px]">
-        {health?.health.classifier?.provider === "openai_luna" && health.classifierUsage ? (
-          <span className="tabnum hidden md:inline" title="Estimated input plus output cost of responses with recorded usage; reserved cost also covers unknown outcomes. These are local controls, not provider invoice or balance evidence.">
-            Luna est. {health.classifierUsage.estimatedCostUsd == null ? "unknown" : fmtCost(health.classifierUsage.estimatedCostUsd)} · {health.classifierUsage.requests} requests today
-          </span>
-        ) : usage && (
-          <span
-            className="tabnum hidden md:inline"
-            title="Input-cost estimate for judgments with identified source provenance; excludes unknown-source history and failed or retried requests. Not an invoice."
-          >
-            Jev historical input est. {fmtCost(usage.estimatedInputCostUsd)} · {usage.judgedItems} source-identified judgments today
-          </span>
-        )}
         <span className="tabnum hidden sm:inline">
-          {totalMentions} source {totalMentions === 1 ? "record" : "records"} retrieved in 24h
+          {totalMentions.toLocaleString()} source {totalMentions === 1 ? "record" : "records"} retrieved in 24h
         </span>
-        <span
-          role="status"
-          aria-label={connected == null ? "App connecting" : connected ? "App connected" : "App disconnected"}
-          aria-live="polite"
-          aria-atomic="true"
-          className="header-connectivity-status flex shrink-0 whitespace-nowrap items-center gap-1 font-medium tracking-[0.04em] sm:gap-1.5 sm:tracking-wider"
-          title={connected == null
-            ? "Connecting to the local desk; source collection status is shown separately."
-            : connected
-              ? "The local desk event stream is connected; source collection status is shown separately."
-              : "The local desk event stream is disconnected. Saved data may remain available while automatic reconnection is attempted."}
-        >
-          <span className={`h-1.5 w-1.5 rounded-full ${connected == null ? "bg-amber-300" : connected ? "live-dot bg-emerald-400" : "bg-red-400"}`} />
-          <span className="header-connectivity-label">{connected == null ? "APP CONNECTING" : connected ? "APP CONNECTED" : "APP DISCONNECTED"}</span>
-        </span>
-        <span className="tabnum hidden w-16 text-right sm:inline">{clockTime(clock)}</span>
+        <span className="tabnum w-16 text-right sm:inline">{clockTime(clock)}</span>
       </div>
     </header>
   );

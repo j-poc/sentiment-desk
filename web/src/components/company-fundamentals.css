@@ -65,6 +65,27 @@
 .cf-evidence[open] > summary { margin-bottom:9px; }
 .cf-next-question > a { color:rgba(110,231,183,.84); font-size:9px; text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
 .cf-next-question > a:focus-visible { outline:2px solid rgba(110,231,183,.9); outline-offset:3px; }
+.cf-assessment { display:grid; min-width:0; gap:10px; border:1px solid rgba(110,231,183,.18); border-radius:8px; background:rgba(16,185,129,.025); padding:12px; }
+.cf-assessment h3 { margin:2px 0 4px; color:rgba(241,245,249,.9); font-size:13px; font-weight:600; }
+.cf-assessment > div:first-child > p:last-child,.cf-assessment-disclosure { margin:0; max-width:100ch; color:rgba(203,213,225,.55); font-size:10px; line-height:1.55; }
+.cf-assessment-provider { display:grid; width:min(100%,280px); gap:4px; color:rgba(203,213,225,.68); font-size:10px; }
+.cf-assessment-provider select { min-height:36px; border:1px solid rgba(255,255,255,.13); border-radius:5px; background:#111614; padding:5px 8px; color:#e5e7eb; }
+.cf-assessment-facts { display:grid; max-height:220px; gap:5px; overflow:auto; border:1px solid rgba(255,255,255,.08); border-radius:6px; padding:8px; }
+.cf-assessment-facts legend { padding:0 4px; color:rgba(203,213,225,.76); font-size:10px; }
+.cf-assessment-facts label,.cf-assessment-confirm { display:flex; align-items:flex-start; gap:7px; color:rgba(203,213,225,.68); font-size:10px; line-height:1.5; }
+.cf-assessment-facts input,.cf-assessment-confirm input { margin-top:2px; accent-color:#6ee7b7; }
+.cf-assessment-facts strong { color:rgba(241,245,249,.88); }
+.cf-assessment-preview { border-top:1px solid rgba(255,255,255,.07); padding-top:6px; color:rgba(203,213,225,.68); font-size:10px; }
+.cf-assessment-preview summary { width:fit-content; cursor:pointer; color:#a7f3d0; }
+.cf-assessment-preview ul,.cf-assessment-result ul { margin:6px 0; padding-left:18px; }
+.cf-assessment-preview li,.cf-assessment-result li { margin:4px 0; overflow-wrap:anywhere; }
+.cf-assessment-preview a,.cf-assessment-result a { margin-left:4px; color:#a7f3d0; text-decoration:underline; text-underline-offset:2px; }
+.cf-assessment-send { justify-self:start; min-height:36px; border:1px solid rgba(110,231,183,.28); border-radius:5px; background:rgba(16,185,129,.08); padding:6px 10px; color:#d1fae5; font-size:10px; }
+.cf-assessment-send:disabled { cursor:not-allowed; opacity:.42; }
+.cf-assessment-status { margin:0; color:#fcd34d; font-size:10px; line-height:1.5; }
+.cf-assessment-result { display:grid; gap:8px; border-top:1px solid rgba(110,231,183,.14); padding-top:10px; color:rgba(203,213,225,.7); font-size:10px; line-height:1.55; }
+.cf-assessment-result h4 { margin:0; color:rgba(241,245,249,.9); font-size:12px; font-weight:500; }
+.cf-assessment-result p { margin:0; }
 @media (max-width:560px) {
   .company-fundamentals { gap:9px; padding:11px 10px; }
   .cf-header { flex-wrap:wrap; }

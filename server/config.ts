@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -38,10 +39,29 @@ export function boundedNonNegativeInt(v: string | undefined, maximum: number): n
   return Number.isSafeInteger(n) && n >= 0 && n <= maximum ? n : 0;
 }
 
-export function boundedUsdMicros(v: string | undefined, maximumUsd: number): number {
-  if (v === undefined || !/^\d+(?:\.\d{1,6})?$/.test(v.trim())) return 0;
-  const micros = Number(v) * 1_000_000;
-  return Number.isSafeInteger(micros) && micros >= 0 && micros <= maximumUsd * 1_000_000 ? micros : 0;
+export function parseChatGPTPlanBudget(env: NodeJS.ProcessEnv): { maxRequestsPerDay: number; maxRequestBytesPerDay: number } {
+  return {
+    maxRequestsPerDay: env.CHATGPT_PLAN_MAX_REQUESTS_PER_DAY === undefined
+      ? 100
+      : boundedNonNegativeInt(env.CHATGPT_PLAN_MAX_REQUESTS_PER_DAY, 100),
+    maxRequestBytesPerDay: env.CHATGPT_PLAN_MAX_REQUEST_BYTES_PER_DAY === undefined
+      ? 1_638_400
+      : boundedNonNegativeInt(env.CHATGPT_PLAN_MAX_REQUEST_BYTES_PER_DAY, 1_638_400),
+  };
+}
+
+export function parseChatGPTPlanLocalOrigin(value: string | undefined, fallback: string): string {
+  if (value === undefined || value.trim() === "") return fallback;
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new Error("CHATGPT_PLAN_LOCAL_ORIGIN must be an exact loopback HTTP origin."); }
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  const loopback = hostname === "localhost" || hostname === "::1"
+    || (isIP(hostname) === 4 && hostname.split(".")[0] === "127");
+  if (url.protocol !== "http:" || !loopback || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("CHATGPT_PLAN_LOCAL_ORIGIN must be an exact loopback HTTP origin.");
+  }
+  return url.origin;
 }
 
 export function parseClassificationProvider(value: string | undefined): "openai_luna" {
@@ -68,14 +88,23 @@ const externalSourceCollectorSchema = z.enum([
   "x",
 ]);
 
+const DEFAULT_PUBLIC_SEC_COLLECTORS = "sec_edgar,sec_company_facts";
+
 export function parseExternalSourceCollectors(value: string | undefined): Set<CollectorId> {
   const collectors = z.array(externalSourceCollectorSchema).parse(
-    (value ?? "")
+    (value === undefined ? DEFAULT_PUBLIC_SEC_COLLECTORS : value)
       .split(",")
       .map((collector) => collector.trim())
       .filter(Boolean),
   );
   return new Set(collectors satisfies CollectorId[]);
+}
+
+const DEFAULT_OPENAI_ALLOWED_COLLECTORS = "google_news_rss,yahoo_finance_rss";
+
+/** Luna may process the two approved public RSS feeds by default; request and rights gates still apply. */
+export function parseOpenAILunaAllowedCollectors(value: string | undefined): Set<CollectorId> {
+  return parseExternalSourceCollectors(value?.trim() ? value : DEFAULT_OPENAI_ALLOWED_COLLECTORS);
 }
 
 /** Operator attestation gate, kept separate from the request allowlist. */
@@ -96,17 +125,30 @@ export function secContactUserAgent(raw: string | undefined): string {
   return "";
 }
 
+export function parseSecUserAgent(value: string | undefined): string {
+  const userAgent = secContactUserAgent(value);
+  if (!userAgent) return "";
+  const email = userAgent.match(/[^\s@]+@([^\s@]+\.[^\s@]+)/)?.[1]?.toLowerCase();
+  if (!email || email === "example.com" || email === "example.org" || email === "example.net"
+    || email.endsWith(".example") || email.endsWith(".invalid") || email.endsWith(".test")) return "";
+  return userAgent;
+}
+
 export const config = {
   classificationProvider: parseClassificationProvider(process.env.CLASSIFICATION_PROVIDER),
-  /** Provider and model requests require an explicit opt-in; false serves saved data only. */
+  /** Every network request requires an explicit operator opt-in. */
   externalRequestsEnabled: parseExternalRequestsEnabled(process.env.EXTERNAL_REQUESTS_ENABLED),
-  /** Empty by default: external request opt-in still needs a per-source allowlist. */
+  /** A fresh local desk requests only public SEC records unless another source is explicitly configured. */
   externalSourceCollectors: parseExternalSourceCollectors(process.env.EXTERNAL_SOURCE_COLLECTORS),
-  /** Empty by default: each requested source also needs a separate operator approval flag. */
+  /** The same SEC-only default allows issuer facts and filings; other sources require separate use review. */
   sourceRightsApprovedCollectors: parseSourceRightsApprovedCollectors(process.env.SOURCE_RIGHTS_APPROVED_COLLECTORS),
   /** Native runs stay loopback-only; container images override this for port publishing. */
   host: process.env.HOST?.trim() || "127.0.0.1",
   port: int(process.env.PORT, 8787),
+  chatgptPlanLocalOrigin: parseChatGPTPlanLocalOrigin(
+    process.env.CHATGPT_PLAN_LOCAL_ORIGIN,
+    `http://127.0.0.1:${int(process.env.PORT, 8787)}`,
+  ),
   publicDataHubInstallationFile: process.env.DESK_HUB_INSTALLATION_FILE?.trim()
     || path.join(homedir(), ".codex", "references", "sentiment-desk-public-data-hub-installation.json"),
   dbPath: process.env.DB_PATH?.trim() || path.resolve("data/desk.db"),
@@ -116,15 +158,10 @@ export const config = {
     model: process.env.TYPESAFE_MODEL?.trim() || "jev-latest",
   },
   openai: {
-    apiKey: process.env.OPENAI_API_KEY?.trim() || "",
     model: "gpt-6-luna",
     timeoutMs: 30_000,
-    accountUseApproved: parseExplicitBoolean(process.env.OPENAI_ACCOUNT_USE_APPROVED),
-    privateEvidenceAnalysisEnabled: parseExplicitBoolean(process.env.OPENAI_PRIVATE_EVIDENCE_ANALYSIS_ENABLED),
-    allowedCollectors: new Set<CollectorId>(parseExternalSourceCollectors(process.env.OPENAI_ALLOWED_COLLECTORS)),
-    maxRequestsPerDay: boundedNonNegativeInt(process.env.OPENAI_MAX_REQUESTS_PER_DAY, 100),
-    maxRequestBytesPerDay: boundedNonNegativeInt(process.env.OPENAI_MAX_REQUEST_BYTES_PER_DAY, 400_000),
-    maxDailyCostMicros: boundedUsdMicros(process.env.OPENAI_MAX_DAILY_COST_USD, 100),
+    allowedCollectors: parseOpenAILunaAllowedCollectors(process.env.OPENAI_ALLOWED_COLLECTORS),
+    ...parseChatGPTPlanBudget(process.env),
   },
   xBearer: process.env.X_BEARER_TOKEN?.trim() || "",
   /** Finnhub free tier: per-symbol news + EPS surprises + earnings calendar. */
@@ -136,12 +173,8 @@ export const config = {
   redditClientId: process.env.REDDIT_CLIENT_ID?.trim() || "",
   redditClientSecret: process.env.REDDIT_CLIENT_SECRET?.trim() || "",
   pollRedditSeconds: int(process.env.POLL_REDDIT_SECONDS, 180),
-  /**
-   * SEC fair-access policy wants a User-Agent that identifies the requester.
-   * Do not send SEC requests until the operator supplies a descriptive
-   * identifier with contact information.
-   */
-  secUserAgent: secContactUserAgent(process.env.SEC_USER_AGENT),
+  /** SEC requests stay disabled until the operator supplies a real contact-bearing identifier. */
+  secUserAgent: parseSecUserAgent(process.env.SEC_USER_AGENT),
   pollSecSeconds: int(process.env.POLL_SEC_SECONDS, 90),
   pollRssSeconds: int(process.env.POLL_RSS_SECONDS, 180),
   /** Webhook (Discord/Slack-style JSON) pinged on fresh, high-strength events. */
@@ -161,6 +194,7 @@ export const config = {
 };
 
 export function parseExternalRequestsEnabled(value: string | undefined): boolean {
+  if (value === undefined) return false;
   return parseExplicitBoolean(value);
 }
 

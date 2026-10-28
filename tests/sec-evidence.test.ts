@@ -1,3 +1,7 @@
+vi.mock("../server/sec-acquisition.js", () => ({
+  requestSecResponse: (url: string) => globalThis.fetch(url),
+  secRetrievedAt: () => new Date().toISOString(),
+}));
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TestDesk as Desk } from "./test-desk.js";
 import { fetchFilingEvidence, type SecFiling } from "../server/sources/sec.js";

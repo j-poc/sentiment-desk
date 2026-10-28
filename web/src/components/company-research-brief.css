@@ -8,6 +8,18 @@
 .crb-coverage span { border:1px solid rgba(255,255,255,.07); border-radius:5px; padding:4px 7px; color:rgba(203,213,225,.75); font-size:10px; overflow-wrap:anywhere; }
 .crb-coverage strong { color:rgba(167,243,208,.9); font-weight:600; }
 .crb-review-progress { margin:0; color:rgba(148,163,184,.7); font-size:10px; line-height:1.45; }
+.crb-follow-up { display:grid; min-width:0; gap:6px; border:1px solid rgba(251,191,36,.2); border-radius:8px; background:rgba(251,191,36,.035); padding:10px; }
+.crb-follow-up-head { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
+.crb-follow-up-head .micro { margin:0; color:rgba(252,211,77,.72); }
+.crb-follow-up-head > strong { color:rgba(254,243,199,.9); font-size:12px; }
+.crb-follow-up > p,.crb-follow-up > small { margin:0; color:rgba(203,213,225,.76); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
+.crb-follow-up ol { display:grid; min-width:0; gap:6px; margin:0; padding:0; list-style:none; }
+.crb-follow-up li { display:grid; min-width:0; gap:3px; border-top:1px solid rgba(255,255,255,.07); padding-top:6px; }
+.crb-follow-up-metric { display:flex; min-width:0; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; color:rgba(241,245,249,.9); font-size:11px; }
+.crb-follow-up-metric span { color:rgba(254,243,199,.9); font-family:var(--font-mono); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.crb-follow-up li p { margin:0; color:rgba(203,213,225,.72); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
+.crb-follow-up-links { display:flex; min-width:0; flex-wrap:wrap; gap:4px 12px; }
+.crb-follow-up-links a { color:#7dd3fc; font-size:10px; text-decoration:underline; text-decoration-color:rgba(125,211,252,.5); text-underline-offset:2px; overflow-wrap:anywhere; }
 .crb-question { border:1px solid rgba(52,211,153,.2); border-radius:8px; background:rgba(52,211,153,.035); padding:10px; }
 .crb-question p:not(.micro) { margin:6px 0; color:rgba(241,245,249,.92); font-size:13px; line-height:1.55; }
 .crb-question small { color:rgba(148,163,184,.72); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }

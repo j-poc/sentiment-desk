@@ -95,12 +95,12 @@ describe("Luna category presentation", () => {
   it("uses the selected provider's retry gates even when legacy Jev is enabled", () => {
     const classifier = {
       provider: "openai_luna" as const, model: "gpt-6-luna", configured: false,
-      enabled: false, blockedReason: "OpenAI API key missing", ok: 0, fail: 0,
+      enabled: false, accountingRoute: "chatgpt_plan" as const, blockedReason: "ChatGPT plan not connected", ok: 0, fail: 0,
       lastOkAt: null, lastErrorAt: null, lastError: null,
     };
     const blocked = retryAvailabilityFor({ externalRequestsEnabled: true, health: { jev: { enabled: true }, classifier } });
     expect(blocked.kind).toBe("unavailable");
-    if (blocked.kind === "unavailable") expect(blocked.reason).toContain("OpenAI API key missing");
+    if (blocked.kind === "unavailable") expect(blocked.reason).toContain("ChatGPT plan not connected");
     const enabled = retryAvailabilityFor({ externalRequestsEnabled: true, health: { jev: { enabled: false }, classifier: { ...classifier, configured: true, enabled: true, blockedReason: null } } });
     expect(enabled).toEqual({ kind: "available", providerLabel: "Luna", providerName: "OpenAI" });
   });

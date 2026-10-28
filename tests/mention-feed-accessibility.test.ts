@@ -78,6 +78,18 @@ describe("mention feed disclosure states", () => {
     expect(markup).toContain("not an independently validated materiality finding");
   });
 
+  it("withholds issuer sentiment when the source match is uncertain", () => {
+    const markup = renderToStaticMarkup(createElement(MentionCard, {
+      m: { ...savedScore("uncertain-issuer", "negative"), issuerIdentityStrong: false },
+    }));
+
+    expect(markup).toContain("Issuer match uncertain");
+    expect(markup).not.toContain("Historical Jev impact");
+    expect(markup).not.toContain("NEGATIVE");
+    expect(markup).not.toContain("impact -70");
+    expect(markup).not.toContain("Categorical judgment");
+  });
+
   it("shows a title and retained-link issuer caution before opening the retained WMT/McDonald's row", () => {
     const mention = {
       ...savedScore("wmt-mcdonalds", "positive"),

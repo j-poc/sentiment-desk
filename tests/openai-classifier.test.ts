@@ -174,7 +174,9 @@ describe("OpenAI Luna categorical classifier", () => {
     expect(saved.classification?.disposition).toBe(expectedDisposition);
     const classifiedAt = saved.classification?.classifiedAt;
     if (classifiedAt == null) throw new Error("Expected the completed classifier result to persist its classification time");
-    expect(db.categoricalTrendSnapshot("acme", 24, classifiedAt).counts.total).toBe(0);
+    // The chart is retrospective by validated source time. Classification that
+    // becomes available at this instant still belongs in its earlier source-time bucket.
+    expect(db.categoricalTrendSnapshot("acme", 24, classifiedAt).counts.total).toBe(1);
     const counts = db.categoricalTrendSnapshot("acme", 24, classifiedAt + 1).counts;
     expect(counts.total).toBe(1);
     expect(expectedDisposition === "review_required" ? counts.reviewRequired : counts.excluded).toBe(1);

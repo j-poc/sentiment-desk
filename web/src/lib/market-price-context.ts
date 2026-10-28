@@ -1,6 +1,5 @@
 import type { PricePoint } from "./api.js";
 import { isValidUtcMilliseconds } from "./chart-time.js";
-import type { CategoricalChartSnapshot } from "./chart-view-preference.js";
 
 export const MARKET_PRICE_GAP_BREAK_MS = 6 * 60 * 60 * 1000;
 
@@ -77,15 +76,4 @@ export function shouldShowMarketPriceContext(
   // Real price observations remain useful context regardless of whether the
   // independent sentiment classifier has loaded, failed, or found records.
   return chartView === "luna" && companyId != null;
-}
-
-/** Put a real saved price chart first when there is no current Luna series to read. */
-export function shouldLeadWithMarketPriceContext(
-  snapshot: CategoricalChartSnapshot | null,
-  points: PricePoint[],
-): boolean {
-  if (prepareMarketPriceSeries(points).state !== "ready") return false;
-  if (snapshot == null) return true;
-  if (snapshot.eligibleObservationCount === 0) return true;
-  return snapshot.status !== "ready" && snapshot.eligibleObservationCount == null;
 }

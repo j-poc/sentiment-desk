@@ -1,4 +1,4 @@
-export type ResearchView = "desk" | "sources" | "filings" | "radar" | "queue";
+export type ResearchView = "desk" | "sources" | "filings" | "issuers" | "radar" | "queue";
 
 export type ResearchNavigationState = {
   selectedCompanyId: string | null;

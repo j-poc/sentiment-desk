@@ -1,7 +1,7 @@
 import type { Mention, MentionPage } from "./api.js";
 
 export function mentionWindowHours(filter: string, selectedHours: number): number {
-  return filter === "failed" || filter === "history" || filter === "identity_review" ? 0 : selectedHours;
+  return filter === "failed" || filter === "history" || filter === "identity_review" || filter === "relevance_review" ? 0 : selectedHours;
 }
 
 export function mentionPageParams(

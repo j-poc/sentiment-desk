@@ -7,11 +7,13 @@ import { z } from "zod";
 import { withReadDeadline } from "./bounded-read.js";
 import type { ScoreBucketCoverage } from "../../../shared/score-bucket-coverage.js";
 import type { CompanyFundamentalsView, FundamentalRefreshResult } from "../../../shared/company-fundamentals.js";
+import type { CompanyAssessmentReadback, CompanyAssessmentResult } from "../../../shared/company-evidence-assessment.js";
 import type { AnalystResearchDisposition, AnalystResearchDispositionChange, AnalystSourceReview } from "../../../shared/analyst-research.js";
 import type { SecFilingDetail, SecFilingsInboxView, SecFilingResearchTask } from "../../../shared/sec-filings-inbox.js";
 import type { SavedSourceCoverageSnapshot } from "../../../shared/saved-source-coverage.js";
 import type { SavedSourceSearchCursor, SavedSourceSearchPage } from "../../../shared/saved-source-search.js";
 import type { CompanyResearchBriefResponse, CompanyResearchBriefResumeSnapshot, CompanyResearchDecision, CompanyResearchDecisionQueueItem, CompanyResearchEvidenceRoleChoice } from "../../../shared/company-research-brief.js";
+import type { SecIssuerDirectoryView, SecIssuerResearchSubject } from "../../../shared/sec-issuer-directory.js";
 import type {
   SecFilingCaseDecisionQueueItem,
   SecFilingResearchCase,
@@ -28,6 +30,15 @@ export function isCurrentCompanySelection(requestCompanyId: string, selectedComp
 
 export async function getCompanyFundamentals(companyId: string, signal?: AbortSignal): Promise<CompanyFundamentalsView> {
   return getJSON<CompanyFundamentalsView>(`/api/companies/${encodeURIComponent(companyId)}/fundamentals`, signal);
+}
+
+export function requestCompanyEvidenceAssessment(companyId:string,input:{cik:string;factIds:string[];provider:"openai"|"google_gemini";confirmSend:boolean;paidServiceAttested:boolean;usageReviewAcknowledged:boolean}):Promise<CompanyAssessmentResult>{
+  return requestJSON<CompanyAssessmentResult>(`/api/companies/${encodeURIComponent(companyId)}/evidence-assessment`,{method:"POST",body:JSON.stringify(input)});
+}
+
+export function getCompanyEvidenceAssessment(companyId:string,provider:"openai"|"google_gemini",signal?:AbortSignal):Promise<CompanyAssessmentReadback|null>{
+  const query=new URLSearchParams({provider});
+  return getJSON<CompanyAssessmentReadback|null>(`/api/companies/${encodeURIComponent(companyId)}/evidence-assessment?${query}`,signal);
 }
 
 export async function refreshCompanyFundamentals(
@@ -57,6 +68,37 @@ export function saveCompanyResearchDecision(companyId: string, input: {
 
 export function getSecFilingsInbox(signal?: AbortSignal): Promise<SecFilingsInboxView> {
   return getJSON<SecFilingsInboxView>("/api/sec-filings-inbox", signal);
+}
+
+export function getSecIssuerDirectory(query = "", signal?: AbortSignal): Promise<SecIssuerDirectoryView> {
+  const suffix = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+  return getJSON<SecIssuerDirectoryView>(`/api/sec-issuer-directory${suffix}`, signal);
+}
+
+export function refreshSecIssuerDirectory(): Promise<SecIssuerDirectoryView> {
+  return requestJSON<SecIssuerDirectoryView>("/api/sec-issuer-directory/refresh", {
+    method: "POST", body: JSON.stringify({ confirmUse: true }),
+  });
+}
+
+export async function getSecIssuerResearchSubjects(signal?: AbortSignal): Promise<SecIssuerResearchSubject[]> {
+  return (await getJSON<{ items: SecIssuerResearchSubject[] }>("/api/sec-issuer-research-subjects", signal)).items;
+}
+
+export function saveSecIssuerResearchSubject(entry: { cik: string; ticker: string; name: string; exchange: string | null }): Promise<{ item: SecIssuerResearchSubject; created: boolean }> {
+  return requestJSON<{ item: SecIssuerResearchSubject; created: boolean }>("/api/sec-issuer-research-subjects", {
+    method: "POST", body: JSON.stringify(entry),
+  });
+}
+
+export function refreshCompanyUpdates(companyId: string): Promise<{
+  companyId: string;
+  completedAt: number;
+  sources: Array<{ collector: "google_news_rss" | "yahoo_finance_rss"; state: "updated" | "empty" | "unavailable" | "failed"; found: number; saved: number }>;
+}> {
+  return requestJSON(`/api/companies/${encodeURIComponent(companyId)}/updates/refresh`, {
+    method: "POST", body: JSON.stringify({ confirmPublicSourceRequest: true }),
+  });
 }
 
 export function activateSecFilingsInbox(): Promise<SecFilingsInboxView> {
@@ -213,9 +255,10 @@ export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off
 export interface CategoricalClassification {
   attemptId: string | null;
   provider: "openai_luna";
+  accountingRoute?: "api_key" | "chatgpt_plan";
   modelRequested: string;
   modelReturned: string | null;
-  serviceTierRequested: "default";
+  serviceTierRequested: "default" | null;
   serviceTier: string | null;
   promptVersion: string;
   promptSha256: string;
@@ -245,6 +288,25 @@ export interface CategoricalClassification {
   classifiedAt: number;
 }
 
+export interface ProviderCategoricalEvidence {
+  provider: "google_gemini";
+  modelRequested: "gemini-3.8-flash";
+  modelReturned: "gemini-3.8-flash";
+  attemptId: string;
+  sourceSha256: string;
+  sentiment: Sentiment | null;
+  eventType: string | null;
+  takeaway: string | null;
+  about: boolean | null;
+  material: boolean | null;
+  investorRelevant: boolean | null;
+  evidenceSufficient: boolean;
+  summary: string | null;
+  supportingExcerpt: string | null;
+  disposition: "classified" | "excluded" | "review_required";
+  classifiedAt: number;
+}
+
 export interface CategoricalTrendCounts {
   positive: number;
   neutral: number;
@@ -264,7 +326,7 @@ export interface CategoricalTrendPoint {
 export interface CategoricalTrendLineage {
   promptVersion: string;
   promptSha256: string;
-  profileSha256: string;
+  profileSha256: string | null;
   schemaVersion: string;
   schemaSha256: string;
   count: number;
@@ -276,13 +338,17 @@ export interface CategoricalTrendResult {
   fromMs: number;
   throughMs: number;
   bucketMs: number;
-  timeBasis: "classification_available_at";
+  timeBasis: "validated_source_time";
   countBasis: "immutable_source_observation";
   snapshotGeneration: string;
   snapshotKey: string;
+  classifierProvider?: "google_gemini";
+  classifierModel?: "gemini-3.8-flash";
   points: CategoricalTrendPoint[];
   counts: CategoricalTrendCounts;
   eligibleObservationCount: number;
+  plottedObservationCount: number;
+  untimedObservationCount: number;
   candidateClassificationCount: number;
   withheldInvalidCount: number;
   latestClassifiedAt: number | null;
@@ -290,7 +356,7 @@ export interface CategoricalTrendResult {
 }
 
 export interface CategoricalBucketCursor {
-  classifiedAt: number;
+  sourceTimeAt: number;
   id: string;
 }
 
@@ -352,6 +418,7 @@ export interface Mention {
   title: string;
   snippet: string;
   issuerIdentityStrong?: boolean;
+  companyBusinessRelevant?: boolean;
   publishedAt: number | null;
   aggregatorPublishedAt?: number | null;
   providerObservedAt: number | null;
@@ -367,6 +434,7 @@ export interface Mention {
   usageCheckRequired: boolean;
   score: MentionScore | null;
   classification?: CategoricalClassification | null;
+  providerCategorical?: ProviderCategoricalEvidence;
   analystResearchDisposition?: "investigate" | "dismissed" | null;
   analystResearchDispositionUpdatedAt?: number | null;
   error: string | null;
@@ -378,6 +446,7 @@ export interface MentionPage {
   nextCursor: { orderAt: number; ingestedAt: number; id: string } | null;
   setAsideCount: number;
   issuerIdentityReviewCount: number;
+  investorRelevanceReviewCount?: number;
 }
 
 /** Read one page of retained company history; this route never starts collection. */
@@ -453,6 +522,7 @@ export interface JevAttemptSummary {
   cachedInputTokens?: number | null;
   cacheWriteInputTokens?: number | null;
   serviceTierRequested?: "default";
+  accountingRoute?: "api_key" | "chatgpt_plan" | "typesafe";
   serviceTier?: string | null;
   reasoningTokens?: number | null;
   totalTokens?: number | null;
@@ -755,6 +825,14 @@ export interface HealthDTO {
     reservedCostUsd: number;
     unknownOutcomes: number;
   };
+  chatgptPlanUsage?: {
+    requests: number;
+    reservedRequests: number;
+    requestBytes: number;
+    unknownOutcomes: number;
+    classifiedItems: number;
+  };
+  chatgptPlanLimits?: { dailyRequestLimit: number; dailyByteLimit: number } | null;
   alertDelivery: {
     configured: boolean;
     enabled: boolean;
@@ -792,6 +870,7 @@ export interface HealthDTO {
       provider: "openai_luna" | "typesafe";
       model: string;
       configured: boolean;
+      accountingRoute: "api_key" | "chatgpt_plan" | null;
       blockedReason: string | null;
     };
   };
@@ -893,21 +972,24 @@ const categoricalCountsSchema = z.object({
 const categoricalTrendSchema = z.object({
   companyId: z.string().min(1), windowHours: z.number().int().min(1).max(168),
   fromMs: z.number().int().nonnegative(), throughMs: z.number().int().positive(), bucketMs: z.literal(900000),
-  timeBasis: z.literal("classification_available_at"), countBasis: z.literal("immutable_source_observation"),
+  timeBasis: z.literal("validated_source_time"), countBasis: z.literal("immutable_source_observation"),
   snapshotGeneration: z.string().uuid(), snapshotKey: z.string().min(1).max(2048),
+  classifierProvider: z.literal("google_gemini").optional(), classifierModel: z.literal("gemini-3.8-flash").optional(),
   points: z.array(z.object({ bucketStartMs: z.number().int().nonnegative(), fromMs: z.number().int().nonnegative(), throughMs: z.number().int().positive(), counts: categoricalCountsSchema }).strict()),
   counts: categoricalCountsSchema,
-  eligibleObservationCount: z.number().int().nonnegative(), candidateClassificationCount: z.number().int().nonnegative(),
+  eligibleObservationCount: z.number().int().nonnegative(), plottedObservationCount: z.number().int().nonnegative(),
+  untimedObservationCount: z.number().int().nonnegative(), candidateClassificationCount: z.number().int().nonnegative(),
   withheldInvalidCount: z.number().int().nonnegative(), latestClassifiedAt: z.number().int().nonnegative().nullable(),
-  lineages: z.array(z.object({ promptVersion: z.string().min(1), promptSha256: z.string().regex(/^[a-f0-9]{64}$/), profileSha256: z.string().regex(/^[a-f0-9]{64}$/), schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/), count: z.number().int().positive() }).strict()),
+  lineages: z.array(z.object({ promptVersion: z.string().min(1), promptSha256: z.string().regex(/^[a-f0-9]{64}$/), profileSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(), schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/), count: z.number().int().positive() }).strict()),
 }).strict().superRefine((result, context) => {
-  if (result.counts.total !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Trend totals do not match eligible observations" });
+  if (result.counts.total !== result.plottedObservationCount) context.addIssue({ code: "custom", message: "Trend totals do not match plotted observations" });
   if (result.counts.positive + result.counts.neutral + result.counts.negative + result.counts.reviewRequired + result.counts.excluded !== result.counts.total) {
     context.addIssue({ code: "custom", message: "Trend categories do not reconcile to the total" });
   }
+  if (result.eligibleObservationCount !== result.plottedObservationCount + result.untimedObservationCount) context.addIssue({ code: "custom", message: "Timed and untimed observations do not reconcile" });
   if (result.candidateClassificationCount - result.withheldInvalidCount !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Candidate and withheld counts do not reconcile" });
   if (result.lineages.reduce((sum, lineage) => sum + lineage.count, 0) !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Lineage counts do not reconcile" });
-  if (result.points.reduce((sum, point) => sum + point.counts.total, 0) !== result.eligibleObservationCount) context.addIssue({ code: "custom", message: "Bucket counts do not reconcile" });
+  if (result.points.reduce((sum, point) => sum + point.counts.total, 0) !== result.plottedObservationCount) context.addIssue({ code: "custom", message: "Bucket counts do not reconcile" });
   const expectedPointCount = Math.floor((result.throughMs - 1) / result.bucketMs)
     - Math.floor(result.fromMs / result.bucketMs) + 1;
   if (result.points.length !== expectedPointCount || result.points.some((point, index) => {
@@ -934,7 +1016,13 @@ const categoricalMentionSchema = z.object({
     schemaVersion: z.string().min(1), schemaSha256: z.string().regex(/^[a-f0-9]{64}$/),
     disposition: z.enum(["classified", "review_required", "excluded"]),
     sentiment: z.enum(["positive", "neutral", "negative"]).nullable(), classifiedAt: z.number().int().nonnegative(),
-  }).passthrough(),
+  }).passthrough().nullable().optional(),
+  providerCategorical: z.object({
+    provider: z.literal("google_gemini"), modelRequested: z.literal("gemini-3.8-flash"), modelReturned: z.literal("gemini-3.8-flash"),
+    attemptId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    sentiment: z.enum(["positive", "neutral", "negative"]).nullable(), disposition: z.enum(["classified", "review_required", "excluded"]),
+    classifiedAt: z.number().int().nonnegative(),
+  }).passthrough().optional(),
 }).passthrough();
 
 const categoricalBucketSchema = z.object({
@@ -942,7 +1030,7 @@ const categoricalBucketSchema = z.object({
   bucketStartMs: z.number().int().nonnegative(), bucketDurationMs: z.union([z.literal(900000), z.literal(1800000), z.literal(3600000), z.literal(10800000), z.literal(21600000)]),
   fromMs: z.number().int().nonnegative(), throughMs: z.number().int().positive(),
   counts: categoricalCountsSchema, items: z.array(categoricalMentionSchema),
-  nextCursor: z.object({ classifiedAt: z.number().int().nonnegative(), id: z.string().min(1).max(200) }).strict().nullable(),
+  nextCursor: z.object({ sourceTimeAt: z.number().int().nonnegative(), id: z.string().min(1).max(200) }).strict().nullable(),
 }).strict();
 
 export async function getCategoricalTrend(companyId: string, hours: number): Promise<CategoricalTrendResult> {
@@ -952,15 +1040,28 @@ export async function getCategoricalTrend(companyId: string, hours: number): Pro
   return categoricalTrendSchema.parse(result) as CategoricalTrendResult;
 }
 
+export async function getGoogleGeminiCategoricalTrend(companyId: string, hours: number): Promise<CategoricalTrendResult> {
+  const result = await withReadDeadline((signal) => getJSON<unknown>(
+    `/api/companies/${encodeURIComponent(companyId)}/google-gemini-categorical-series?hours=${encodeURIComponent(String(hours))}`, signal,
+  ));
+  const parsed = categoricalTrendSchema.parse(result) as CategoricalTrendResult;
+  if (parsed.classifierProvider !== "google_gemini" || parsed.classifierModel !== "gemini-3.8-flash") {
+    throw new Error("Google Gemini chart lineage did not match the selected provider");
+  }
+  return parsed;
+}
+
 export async function getCategoricalBucket(input: {
   companyId: string; snapshotKey: string; bucketStartMs: number; bucketDurationMs?: number; limit: number; cursor?: CategoricalBucketCursor | null;
+  provider?: "openai_luna" | "google_gemini";
 }): Promise<CategoricalBucketEvidencePage> {
   const bucketDurationMs = input.bucketDurationMs ?? 900_000;
-  if (![900_000, 1_800_000, 3_600_000, 10_800_000, 21_600_000].includes(bucketDurationMs)) throw new Error("Unsupported Luna bucket duration");
+  if (![900_000, 1_800_000, 3_600_000, 10_800_000, 21_600_000].includes(bucketDurationMs)) throw new Error("Unsupported categorical bucket duration");
   const params = new URLSearchParams({ snapshot: input.snapshotKey, at: String(input.bucketStartMs), span: String(bucketDurationMs), limit: String(input.limit) });
   if (input.cursor) params.set("cursor", JSON.stringify(input.cursor));
+  const bucketPath = input.provider === "google_gemini" ? "google-gemini-categorical-bucket" : "categorical-bucket";
   const result = await withReadDeadline((signal) => getJSON<unknown>(
-    `/api/companies/${encodeURIComponent(input.companyId)}/categorical-bucket?${params}`, signal,
+    `/api/companies/${encodeURIComponent(input.companyId)}/${bucketPath}?${params}`, signal,
   ));
   return categoricalBucketSchema.parse(result) as unknown as CategoricalBucketEvidencePage;
 }

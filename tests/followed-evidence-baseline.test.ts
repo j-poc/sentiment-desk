@@ -27,15 +27,15 @@ afterEach(() => {
 
 function observationInput(id: string, times: {
   publishedAt: number | null; retrievedAt: number; providerObservedAt?: number | null;
-}, deliveryId?: string): RawMention {
+}, deliveryId?: string, targetCompany: Company = company, content?: { title?: string; snippet?: string }): RawMention {
   return {
-    companyId: company.id,
+    companyId: targetCompany.id,
     kind: "finnhub",
     sourceName: "Test publisher",
     sourceUrl: `https://publisher.example/research/${id}`,
     tier: "major",
-    title: `Source item ${id}`,
-    snippet: `Isolated database fixture ${id}`,
+    title: content?.title ?? `Source item ${id}`,
+    snippet: content?.snippet ?? `Isolated database fixture ${id}`,
     publishedAt: times.publishedAt,
     retrievedAt: times.retrievedAt,
     providerObservedAt: times.providerObservedAt ?? undefined,
@@ -53,11 +53,14 @@ function persistReceiptBackedObservation(db: Desk, id: string, options: {
   ingestionStatus?: "success" | "partial" | "failed";
   publishedAt?: number | null;
   retrievedAt?: number;
+  companyRecord?: Company;
+  title?: string;
+  snippet?: string;
 } = {}): string {
   const now = Date.now();
   const deliveryId = db.recordDelivery({
     collector: "finnhub",
-    companyId: company.id,
+    companyId: options.companyRecord?.id ?? company.id,
     requestKey: `fixture-${id}`,
     startedAt: now - 10,
     completedAt: now - 5,
@@ -71,7 +74,7 @@ function persistReceiptBackedObservation(db: Desk, id: string, options: {
     publishedAt: options.publishedAt === undefined ? now - 1 : options.publishedAt,
     retrievedAt: options.retrievedAt ?? now - 1,
     providerObservedAt: now - 2,
-  }, deliveryId));
+  }, deliveryId, options.companyRecord ?? company, { title: options.title, snippet: options.snippet }));
   db.finishDeliveryIngestion(deliveryId, {
     status: options.ingestionStatus ?? "success",
     processedCount: 1,
@@ -108,6 +111,38 @@ function persistReceiptWithoutRequiredIngestion(db: Desk, id: string): string {
 }
 
 describe("followed-company evidence baseline", () => {
+  it("withholds ambiguous-ticker medical matches from saved baselines and follow-up evidence", () => {
+    const amd: Company = {
+      id: "amd", name: "AMD", ticker: "AMD", sector: "Semiconductors",
+      aliases: ["AMD", "Advanced Micro Devices", "Ryzen"], color: "#fb923c", ambiguous: true,
+    };
+    const db = new Desk(":memory:");
+    db.seedCompanies([amd]);
+    try {
+      const valid = persistReceiptBackedObservation(db, "amd-issuer", {
+        companyRecord: amd, title: "$AMD shares rise after earnings", snippet: "Advanced Micro Devices reported results.",
+      });
+      const medicalAcronym = persistReceiptBackedObservation(db, "dry-amd-study", {
+        companyRecord: amd, title: "How investors react to Bausch + Lomb dry AMD study", snippet: "FDA backs a macular degeneration trial.",
+      });
+
+      const captured = db.captureFollowedCompanyBaseline({ companyId: amd.id, captureKey: randomUUID(), expectedBaselineId: null });
+      expect(captured.baseline.eligibleObservationCount).toBe(1);
+      const raw = (db as unknown as { db: DatabaseSync }).db;
+      expect(raw.prepare("SELECT observation_id AS id FROM followed_company_baseline_items WHERE baseline_id = ?")
+        .all(captured.baseline.id)).toEqual([{ id: valid }]);
+      expect(raw.prepare("SELECT observation_id AS id FROM followed_company_baseline_items WHERE baseline_id = ?")
+        .all(captured.baseline.id)).not.toContainEqual({ id: medicalAcronym });
+
+      expect(db.followedCompanyEvidence({ companyId: amd.id, limit: 10, cursor: null })).toMatchObject({
+        baseline: { eligibleObservationCount: 1 }, eligibleObservationsNow: 1, withheldFromBaseline: 1,
+        newEvidenceCount: 0, items: [],
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("captures exact receipt-backed terminal ingestion IDs and labels late evidence without judging materiality", () => {
     vi.useFakeTimers();
     const t0 = Date.parse("2026-10-04T08:00:00.000Z");
@@ -280,7 +315,7 @@ describe("followed-company evidence baseline", () => {
     try {
       expect(db.mentionRow(existingId)).toBeTruthy();
       const upgraded = (db as unknown as { db: DatabaseSync }).db;
-      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
       expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='followed_company_baseline_items'").get())
         .toEqual({ name: "followed_company_baseline_items" });
       const factColumns = new Map((upgraded.prepare("PRAGMA table_info(sec_fundamental_facts)").all() as Array<{ name: string; dflt_value: string | null }>)
@@ -292,11 +327,11 @@ describe("followed-company evidence baseline", () => {
     }
 
     const future = new DatabaseSync(path);
-    future.exec("PRAGMA user_version = 18");
+    future.exec("PRAGMA user_version = 21");
     future.close();
-    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_18");
+    expect(() => new Desk(path, migrationLimits)).toThrow("unsupported_database_schema_version_21");
     const preserved = new DatabaseSync(path);
-    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+    expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
     preserved.close();
   });
 });

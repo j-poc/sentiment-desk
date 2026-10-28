@@ -26,11 +26,12 @@ globalThis.fetch = async (input, init) => {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw);
   if (!["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
-    const query = Object.fromEntries(["interval", "range"].flatMap((key) => {
+    const query = Object.fromEntries(["interval", "range", "action", "type", "company", "dateb", "owner", "count", "output"].flatMap((key) => {
       const value = url.searchParams.get(key);
       return value == null ? [] : [[key, value]];
     }));
-    fs.appendFileSync(process.env.NETWORK_GUARD_LOG, JSON.stringify({ origin: url.origin, pathname: url.pathname, query }) + "\\n");
+    const method = input instanceof Request ? input.method : init?.method ?? "GET";
+    fs.appendFileSync(process.env.NETWORK_GUARD_LOG, JSON.stringify({ origin: url.origin, pathname: url.pathname, method, query }) + "\\n");
     throw new Error("offline-startup verifier blocked an external fetch");
   }
   return originalFetch(input, init);
@@ -41,6 +42,7 @@ globalThis.fetch = async (input, init) => {
 interface GuardedAttempt {
   origin: string;
   pathname: string;
+  method: string;
   query: Record<string, string>;
 }
 
@@ -87,13 +89,19 @@ function matchesCollectorRequest(collector: typeof sourceCollectors[number], att
   }
 }
 
+function matchesSecLatestFilingsRequest(attempt: GuardedAttempt): boolean {
+  return attempt.origin === "https://www.sec.gov" && attempt.pathname === "/cgi-bin/browse-edgar"
+    && attempt.method === "GET" && attempt.query.action === "getcurrent" && attempt.query.type === "8-K"
+    && attempt.query.company === "" && attempt.query.dateb === "" && attempt.query.owner === "include"
+    && attempt.query.count === "40" && attempt.query.output === "atom";
+}
+
 async function verifyCollectorGate(
   repo: string,
   companiesPath: string,
   collector: typeof sourceCollectors[number],
   options: {
     sourceRightsApproved?: boolean;
-    luna?: { apiKey: string; allowedCollectors: string; accountApproved: boolean; maxDailyCostUsd: string; expectedEnabled: boolean };
   } = {},
 ): Promise<void> {
   const directory = mkdtempSync(path.join(tmpdir(), `sentiment-desk-allowlist-${collector}-`));
@@ -124,18 +132,18 @@ async function verifyCollectorGate(
       SOURCE_RIGHTS_APPROVED_COLLECTORS: options.sourceRightsApproved === false ? ""
         : collector === "nasdaq_symbol_directories" ? "sec_latest_filings_8k,nasdaq_symbol_directories" : collector,
       CLASSIFICATION_PROVIDER: "openai_luna",
-      OPENAI_API_KEY: options.luna?.apiKey ?? "",
-      OPENAI_ACCOUNT_USE_APPROVED: options.luna?.accountApproved ? "true" : "false",
-      OPENAI_ALLOWED_COLLECTORS: options.luna?.allowedCollectors ?? "",
-      OPENAI_MAX_REQUESTS_PER_DAY: options.luna ? "1" : "0",
-      OPENAI_MAX_REQUEST_BYTES_PER_DAY: options.luna ? "40000" : "0",
-      OPENAI_MAX_DAILY_COST_USD: options.luna?.maxDailyCostUsd ?? "0",
+      // A legacy API key must never substitute for the user's ChatGPT-plan grant.
+      OPENAI_API_KEY: "ignored-offline-verifier-value",
+      OPENAI_ALLOWED_COLLECTORS: "",
+      CHATGPT_PLAN_MAX_REQUESTS_PER_DAY: "0",
+      CHATGPT_PLAN_MAX_REQUEST_BYTES_PER_DAY: "0",
       TYPESAFE_ACCOUNT_USE_APPROVED: "false",
       TYPESAFE_API_KEY: "offline-verifier-unused",
       TYPESAFE_ALLOWED_COLLECTORS: collector,
       TYPESAFE_MAX_REQUESTS_PER_DAY: "10",
       TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: "100000",
-      SEC_USER_AGENT: "Offline verifier verifier@example.invalid",
+      // The outbound-fetch guard intercepts every external call in these subprocesses.
+      SEC_USER_AGENT: "Offline verifier verifier@iana.org",
       FINNHUB_API_KEY: "offline-verifier-unused",
       REDDIT_CLIENT_ID: "offline-verifier-unused",
       REDDIT_CLIENT_SECRET: "offline-verifier-unused",
@@ -210,11 +218,14 @@ async function verifyCollectorGate(
     assert.equal(counters.jev?.enabled, false,
       "retired Jev dispatch must remain disabled while Luna is the selected classifier");
 
-    const selectedClassifier = (health.health as { classifier?: { provider: string; enabled: boolean } }).classifier;
+    const selectedClassifier = (health.health as { classifier?: { provider: string; enabled: boolean; configured?: boolean; accountingRoute?: string; blockedReason?: string | null } }).classifier;
     assert.ok(selectedClassifier, "the selected classifier must be disclosed");
     assert.equal(selectedClassifier.provider, "openai_luna");
-    assert.equal(selectedClassifier.enabled, options.luna?.expectedEnabled ?? false);
-    if (options.luna) assert.equal(counters.jev?.enabled, false, "Luna selection must never enable a TypeSafe fallback");
+    assert.equal(selectedClassifier.accountingRoute, "chatgpt_plan");
+    assert.equal(selectedClassifier.configured, false, "a dummy legacy API key cannot create a ChatGPT-plan grant");
+    assert.equal(selectedClassifier.enabled, false, "offline source probes cannot dispatch Luna without OAuth");
+    assert.match(selectedClassifier.blockedReason ?? "", /ChatGPT plan|external requests|local ChatGPT-plan|secure ChatGPT credentials/i);
+    assert.equal(counters.jev?.enabled, false, "Luna selection must never enable a TypeSafe fallback");
 
     if (collector === "nasdaq_symbol_directories") {
       const response = await fetch(`http://127.0.0.1:${port}/api/sec-filings-inbox/activate`, {
@@ -241,12 +252,22 @@ async function verifyCollectorGate(
         : [];
       if (sourceIsApproved && (collector === "nasdaq_symbol_directories"
         ? attempts.filter((attempt) => matchesCollectorRequest(collector, attempt)).length === 2
+          && attempts.filter(matchesSecLatestFilingsRequest).length === 1
         : attempts.some((attempt) => matchesCollectorRequest(collector, attempt)))) break;
       await delay(100);
     }
     if (sourceIsApproved) {
       assert.ok(attempts.some((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} never reached its guarded request path`);
-      assert.ok(attempts.every((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} allowlist leaked requests to another source: ${JSON.stringify(attempts)}`);
+      if (collector === "nasdaq_symbol_directories") {
+        assert.equal(attempts.filter((attempt) => matchesCollectorRequest(collector, attempt)).length, 2,
+          "Recent Filings must fetch exactly the two bounded current listing directories");
+        assert.equal(attempts.filter(matchesSecLatestFilingsRequest).length, 1,
+          "Recent Filings must fetch exactly one bounded SEC Atom 8-K feed");
+        assert.ok(attempts.every((attempt) => matchesCollectorRequest(collector, attempt) || matchesSecLatestFilingsRequest(attempt)),
+          `joint SEC/Nasdaq approval leaked a request to another source: ${JSON.stringify(attempts)}`);
+      } else {
+        assert.ok(attempts.every((attempt) => matchesCollectorRequest(collector, attempt)), `${collector} allowlist leaked requests to another source: ${JSON.stringify(attempts)}`);
+      }
     } else {
     assert.equal(attempts.length, 0, `${collector} attempted a request without explicit source-use approval`);
     }
@@ -293,9 +314,9 @@ async function main(): Promise<void> {
     writeNetworkGuard(guardPath);
     const port = await availablePort();
     const env = { ...process.env };
-    delete env.EXTERNAL_REQUESTS_ENABLED;
     delete env.NODE_OPTIONS;
     Object.assign(env, {
+      EXTERNAL_REQUESTS_ENABLED: "false",
       DB_PATH: dbPath,
       COMPANIES_PATH: companiesPath,
       DESK_HUB_INSTALLATION_FILE: path.join(directory, "disabled-hub-installation.json"),
@@ -303,19 +324,17 @@ async function main(): Promise<void> {
       PORT: String(port),
       NETWORK_GUARD_LOG: guardLog,
       CLASSIFICATION_PROVIDER: "openai_luna",
-      OPENAI_API_KEY: "unused-offline-verification-key",
-      OPENAI_ACCOUNT_USE_APPROVED: "true",
+      OPENAI_API_KEY: "ignored-offline-verifier-value",
       OPENAI_ALLOWED_COLLECTORS: "sec_edgar",
-      OPENAI_MAX_REQUESTS_PER_DAY: "1",
-      OPENAI_MAX_REQUEST_BYTES_PER_DAY: "40000",
-      OPENAI_MAX_DAILY_COST_USD: "1",
+      CHATGPT_PLAN_MAX_REQUESTS_PER_DAY: "0",
+      CHATGPT_PLAN_MAX_REQUEST_BYTES_PER_DAY: "0",
       TYPESAFE_API_KEY: "unused-offline-verification-key",
       TYPESAFE_ALLOWED_COLLECTORS: "sec_edgar",
       TYPESAFE_MAX_REQUESTS_PER_DAY: "10",
       TYPESAFE_MAX_REQUEST_BYTES_PER_DAY: "100000",
       EXTERNAL_SOURCE_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,sec_latest_filings_8k,nasdaq_symbol_directories,finnhub,reddit,x",
       SOURCE_RIGHTS_APPROVED_COLLECTORS: "google_news_rss,yahoo_finance_rss,yahoo_quote,yahoo_chart,gdelt_doc_api,sec_edgar,sec_latest_filings_8k,nasdaq_symbol_directories,finnhub,reddit,x",
-      TYPESAFE_ACCOUNT_USE_APPROVED: "true",
+      TYPESAFE_ACCOUNT_USE_APPROVED: "false",
       SEC_USER_AGENT: "Offline verifier offline@example.invalid",
       FINNHUB_API_KEY: "unused-offline-verification-key",
       REDDIT_CLIENT_ID: "unused-offline-verification-id",
@@ -391,13 +410,7 @@ async function main(): Promise<void> {
     await verifyCollectorGate(repo, singleCompanyPath, "finnhub", { sourceRightsApproved: false });
     await verifyCollectorGate(repo, singleCompanyPath, "nasdaq_symbol_directories", { sourceRightsApproved: false });
     await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar");
-    const lunaGate = { apiKey: "unused-offline-verification-key", allowedCollectors: "sec_edgar", accountApproved: true, maxDailyCostUsd: "1", expectedEnabled: true };
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, apiKey: "", expectedEnabled: false } });
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, accountApproved: false, expectedEnabled: false } });
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, allowedCollectors: "google_news_rss", expectedEnabled: false } });
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: { ...lunaGate, maxDailyCostUsd: "0", expectedEnabled: false } });
-    await verifyCollectorGate(repo, singleCompanyPath, "sec_edgar", { luna: lunaGate });
-    console.log(`PASS: fresh default startup served ${companies.length} configured companies; the global-off default made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, including both on-demand Nasdaq directories behind the joint SEC/Nasdaq gate; a missing source approval made zero fetches, and the selected classifier stays GPT-6 Luna even when the retired Jev adapter is separately configured. Luna gates required a key, account approval, approved source overlap and a nonzero dollar cap, with no TypeSafe fallback. All outbound fetches were intercepted before network access.`);
+    console.log(`PASS: fresh explicitly paused startup served ${companies.length} configured companies and made zero fetch attempts. Separate guarded processes proved all ${sourceCollectors.length} source request paths need matching source-use approval, including both on-demand Nasdaq directories behind the joint SEC/Nasdaq gate; a missing source approval made zero fetches. A dummy legacy API-key variable did not create a ChatGPT-plan connection or enable Luna, and the retired Jev adapter stayed disabled. All outbound fetches were intercepted before network access.`);
   } finally {
     try {
       if (child && exitResult == null) {

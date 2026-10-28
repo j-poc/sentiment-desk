@@ -32,6 +32,17 @@ function statusLabel(item: FollowedEvidenceItem): string {
   return item.status.replaceAll("_", " ");
 }
 
+function exactHeadlineRepeats(items: FollowedEvidenceItem[]): Array<{ title: string; count: number }> {
+  const counts = new Map<string, { title: string; count: number }>();
+  for (const item of items) {
+    const key = item.title.trim().toLocaleLowerCase().replace(/\s+/gu, " ");
+    const existing = counts.get(key);
+    if (existing) existing.count += 1;
+    else counts.set(key, { title: item.title, count: 1 });
+  }
+  return [...counts.values()].filter((item) => item.count > 1).sort((left, right) => right.count - left.count || left.title.localeCompare(right.title));
+}
+
 function pageUrl(companyId: string, cursor?: FollowedEvidencePage["nextCursor"]): string {
   const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
   if (cursor) params.set("cursor", JSON.stringify(cursor));
@@ -213,6 +224,8 @@ export function FollowedEvidenceBaselineView({
   onOpenEvidence: (item: FollowedEvidenceItem) => void;
 }) {
   const headingId = `followed-evidence-${companyId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const repeatedHeadlines = page?.baseline ? exactHeadlineRepeats(page.items) : [];
+  const recordedPublishers = new Set((page?.baseline ? page.items : []).map((item) => item.publisherName.trim()).filter(Boolean));
   return (
     <section className="panel followed-evidence-panel" aria-labelledby={headingId} aria-busy={loading || captureBusy}>
       <div className="followed-evidence-heading">
@@ -263,8 +276,14 @@ export function FollowedEvidenceBaselineView({
           {page.baseline && (
             <>
               <p className="followed-evidence-explainer">
-                Items below became eligible after this saved baseline. Some may have been retrieved earlier but were still being ingested at capture; those are labeled separately. This is not a materiality or trading signal.
+                Items below became eligible after this saved baseline. Some may have been retrieved earlier but were still being ingested at capture; those are labeled separately. Review them against the company's reported fundamentals and prior baseline. This is not a materiality or trading signal.
               </p>
+              <aside className="followed-evidence-triage" aria-label="Saved evidence change summary">
+                <strong>{page.newEvidenceCount} newly eligible saved source record{page.newEvidenceCount === 1 ? "" : "s"}</strong>
+                <span>{page.items.length} loaded · {recordedPublishers.size} recorded publisher label{recordedPublishers.size === 1 ? "" : "s"}</span>
+                {repeatedHeadlines.length > 0 && <span>{repeatedHeadlines.length} exact headline text group{repeatedHeadlines.length === 1 ? "" : "s"} repeat in the loaded rows</span>}
+                <p>Publisher labels and repeated text are review aids. They do not establish independent confirmation, support, contradiction, materiality, or price impact.</p>
+              </aside>
               {page.newEvidenceCount === 0 && (
                 <p className="followed-evidence-message" role="status">
                   No newly eligible, receipt-verified source evidence is saved after this baseline. Older or unverified history is not treated as a new change.

@@ -19,6 +19,7 @@ function createFixture(
   loopback = true,
   privateEvidenceCompanyIds = new Set(configuredPublicCompanies.map((company) => company.id)),
   privateEvidenceAnalysis?: AppDeps["privateEvidenceAnalysis"],
+  chatgptPlan?: AppDeps["chatgptPlan"],
 ) {
   const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-private-api-"));
   directories.push(directory);
@@ -34,6 +35,7 @@ function createFixture(
     version: "test", deliverySources: [], privateEvidence: store, privateEvidenceEnabled: loopback,
     privateEvidenceCompanyIds,
     privateEvidenceAnalysis,
+    chatgptPlan,
   });
   return { app, db, store };
 }
@@ -144,6 +146,8 @@ describe("private evidence API boundary", () => {
 
   it("sends only the selected note after explicit confirmation and keeps the result private and idempotent", async () => {
     let calls = 0;
+    const authorizePrivateAnalysis = vi.fn(async () => true);
+    const activatePublicClassifier = vi.fn(async () => true);
     const { app, db, store } = createFixture(true, undefined, {
       enabled: true, blockedReason: null,
       analyze: async (company, evidence, attempt) => {
@@ -153,6 +157,24 @@ describe("private evidence API boundary", () => {
         expect(attempt.begin({ payloadSha256: "a".repeat(64), evidenceSha256: evidence.sha256, requestBytes: 900 })).toBe(true);
         return analysisResult(company.id, evidence);
       },
+    }, {
+      loopbackBound: true,
+      localOrigin: "http://localhost",
+      redirectUri: "http://localhost/auth/callback",
+      auth: {
+        isConnected: vi.fn(async () => true),
+        beginAuthorization: vi.fn(async () => ({ flowId: "flow", authorizationUrl: "https://auth.invalid" })),
+        completeCallback: vi.fn(async () => ({ ok: true, message: "connected" })),
+        disconnect: vi.fn(async () => ({ revoked: true })),
+      },
+      responses: { checkModelAccess: vi.fn(async () => ({ modelAvailable: true })) },
+      enabled: () => false,
+      modelAvailable: () => true,
+      blockedReason: () => "Public classification is paused.",
+      sources: [], dailyRequestLimit: 3, dailyByteLimit: 65_536,
+      activate: activatePublicClassifier,
+      deactivate: vi.fn(),
+      authorizePrivateAnalysis,
     });
     try {
       const savedResponse = await app.request(`/api/companies/${encodeURIComponent(companyA.id)}/private-evidence`, {
@@ -163,6 +185,7 @@ describe("private evidence API boundary", () => {
       const noConfirmation = await app.request(path, { method: "POST", headers: localHeaders(), body: JSON.stringify({}) });
       expect(noConfirmation.status).toBe(400);
       expect(calls).toBe(0);
+      expect(authorizePrivateAnalysis).not.toHaveBeenCalled();
       const analyzed = await app.request(path, {
         method: "POST", headers: localHeaders(), body: JSON.stringify({ confirmExternalProcessing: true }),
       });
@@ -170,6 +193,8 @@ describe("private evidence API boundary", () => {
       expect(analyzed.headers.get("cache-control")).toBe("no-store");
       expect(await analyzed.json()).toMatchObject({ status: "complete", record: { modelRequested: "gpt-6-luna", companyId: companyA.id, analysis: { sentiment: "positive" } } });
       expect(calls).toBe(1);
+      expect(authorizePrivateAnalysis).toHaveBeenCalledOnce();
+      expect(activatePublicClassifier).not.toHaveBeenCalled();
       const repeated = await app.request(path, {
         method: "POST", headers: localHeaders(), body: JSON.stringify({ confirmExternalProcessing: true }),
       });

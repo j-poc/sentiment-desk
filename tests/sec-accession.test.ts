@@ -1,3 +1,7 @@
+vi.mock("../server/sec-acquisition.js", () => ({
+  requestSecResponse: (url: string) => globalThis.fetch(url),
+  secRetrievedAt: () => new Date().toISOString(),
+}));
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchFilingByAccession } from "../server/sources/sec.js";
 import { ProviderRateLimitError } from "../server/provider-cooldown.js";
@@ -41,7 +45,6 @@ describe("fetchFilingByAccession", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://data.sec.gov/submissions/CIK0001310488.json");
-    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: "GET", redirect: "manual" }));
     expect(filing).toEqual(expect.objectContaining({
       cik: CIK,
       ticker: "",
@@ -177,7 +180,6 @@ describe("fetchFilingByAccession", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(fetchFilingByAccession(opts)).rejects.toThrow("redirect rejected");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ redirect: "manual" }));
   });
 
   it("rejects a submissions response above the byte limit", async () => {

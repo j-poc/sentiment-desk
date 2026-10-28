@@ -11,6 +11,7 @@ export const MAX_PRIVATE_EVIDENCE_TOTAL_BYTES = 8 * 1024 * 1024;
 export const MAX_PRIVATE_EVIDENCE_REQUEST_BYTES = 800 * 1024;
 
 export const PRIVATE_EVIDENCE_ANALYSIS_MODEL = "gpt-6-luna" as const;
+export const CHATGPT_PLAN_USAGE_URL = "https://chatgpt.com/settings/usage" as const;
 
 const safeLabel = z.string().trim().min(1).max(120).refine(
   (value) => !/[\u0000-\u001f\u007f]/u.test(value),
@@ -81,7 +82,7 @@ export const privateEvidenceAnalysisUsageSchema = z.object({
   estimatedCostUsd: z.number().finite().nonnegative(),
 }).strict();
 
-export const privateEvidenceAnalysisRecordSchema = z.object({
+const privateEvidenceAnalysisCommonShape = {
   companyId: z.string().min(1),
   evidenceId: z.string().uuid(),
   evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -89,8 +90,6 @@ export const privateEvidenceAnalysisRecordSchema = z.object({
   requestBytes: z.number().int().positive(),
   modelRequested: z.literal("gpt-6-luna"),
   modelReturned: z.literal("gpt-6-luna"),
-  serviceTierRequested: z.literal("default"),
-  serviceTier: z.literal("default"),
   promptVersion: z.string().min(1).max(100),
   promptSha256: z.string().regex(/^[a-f0-9]{64}$/),
   schemaVersion: z.string().min(1).max(100),
@@ -99,10 +98,17 @@ export const privateEvidenceAnalysisRecordSchema = z.object({
   profileSha256: z.string().regex(/^[a-f0-9]{64}$/),
   responseId: z.string().min(1).max(200),
   responseSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  usage: privateEvidenceAnalysisUsageSchema,
   analysis: privateEvidenceAnalysisContentSchema,
   latencyMs: z.number().int().nonnegative(),
   httpStatus: z.literal(200),
+};
+
+/** Historical API-key records retain their original detailed data-control receipt. */
+const privateEvidenceApiRecordSchema = z.object({
+  ...privateEvidenceAnalysisCommonShape,
+  serviceTierRequested: z.literal("default"),
+  serviceTier: z.literal("default"),
+  usage: privateEvidenceAnalysisUsageSchema,
   dataControls: z.object({
     endpoint: z.literal("https://api.openai.com/v1/responses"),
     responseObjectStorage: z.literal(false),
@@ -116,8 +122,47 @@ export const privateEvidenceAnalysisRecordSchema = z.object({
   }).strict(),
 }).strict();
 
+/** Plan-based records state only what the transport can observe or guarantee. */
+const privateEvidencePlanRecordSchema = z.object({
+  ...privateEvidenceAnalysisCommonShape,
+  accountingRoute: z.literal("chatgpt_plan"),
+  entitySha256: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  serviceTierRequested: z.null(),
+  serviceTier: z.string().max(64).nullable(),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative(),
+    cachedInputTokens: z.null(),
+    cacheWriteInputTokens: z.null(),
+    outputTokens: z.number().int().nonnegative(),
+    reasoningTokens: z.null(),
+    totalTokens: z.number().int().nonnegative(),
+    estimatedCostUsd: z.null(),
+  }).strict(),
+  dataControls: z.object({
+    route: z.literal("chatgpt_plan"),
+    endpoint: z.literal("https://api.openai.com/v1/responses"),
+    responseObjectStorageRequested: z.literal(false),
+    retention: z.literal("unknown"),
+    trainingUse: z.literal("unknown"),
+    remainingPlanAllowance: z.null(),
+    usageUrl: z.literal(CHATGPT_PLAN_USAGE_URL),
+    dataControlsUrl: z.literal("https://help.openai.com/en/articles/7730893-data-usage-for-openai-models"),
+    disclosure: z.string().min(1).max(2_000),
+  }).strict(),
+}).strict();
+
+// Stored API-key rows predate accountingRoute. Keep reading them while making
+// every new plan row explicit and impossible to confuse with API billing.
+export const privateEvidenceAnalysisRecordSchema = z.union([
+  privateEvidenceApiRecordSchema,
+  privateEvidencePlanRecordSchema,
+]);
+
 export type PrivateEvidenceAnalysisContent = z.infer<typeof privateEvidenceAnalysisContentSchema>;
 export type PrivateEvidenceAnalysisRecord = z.infer<typeof privateEvidenceAnalysisRecordSchema>;
+export type PrivateEvidenceApiAnalysisRecord = z.infer<typeof privateEvidenceApiRecordSchema>;
+export type PrivateEvidencePlanAnalysisRecord = z.infer<typeof privateEvidencePlanRecordSchema>;
 
 export interface PrivateEvidenceList {
   items: PrivateEvidenceMetadata[];

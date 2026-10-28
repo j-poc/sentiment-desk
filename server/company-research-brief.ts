@@ -1,5 +1,5 @@
 import type { FundamentalMetricKey, PersistedFundamentalFact } from "../shared/company-fundamentals.js";
-import type { CompanyResearchBrief, CompanyResearchBriefInput } from "../shared/company-research-brief.js";
+import type { CompanyResearchBrief, CompanyResearchBriefInput, FundamentalChangeLead } from "../shared/company-research-brief.js";
 import { classifyPeriodAlignment, decimalComparison } from "./company-fundamentals.js";
 
 const METRIC_LABEL: Record<FundamentalMetricKey, string> = {
@@ -84,18 +84,40 @@ export function compileCompanyResearchBrief(input: CompanyResearchBriefInput): C
   const observationState = observations.length === 0 ? "empty" : input.coverage.publicObservations === "complete" ? "complete" : "partial";
   const coverage: CompanyResearchBrief["coverage"] = { sec: secState, publicObservations: observationState, reasons: [...input.coverage.reasons] };
 
-  let nextResearchQuestion: CompanyResearchBrief["nextResearchQuestion"] = null;
+  const fundamentalLeads: FundamentalChangeLead[] = [];
   for (const metric of ["revenue", "operating_income", "net_income", "operating_cash_flow"] as const) {
     const pair = validComparable(input, metric, eligibleFactIds);
     if (!pair || !eligibleFactIds.has(pair.current.id) || !eligibleFactIds.has(pair.prior.id)) continue;
-    nextResearchQuestion = {
+    const direction = pair.comparison.delta!.startsWith("-") ? "reported_decrease" : "reported_increase";
+    const directionText = direction === "reported_decrease" ? "decrease" : "increase";
+    fundamentalLeads.push({
       metric,
+      direction,
+      delta: pair.comparison.delta!,
+      percentChange: pair.comparison.percentChange,
       currentFactId: pair.current.id,
       priorFactId: pair.prior.id,
-      question: `Which filing, segment, or operating item could explain the reported ${METRIC_LABEL[metric]} difference of ${pair.comparison.delta} ${pair.current.unit}${pair.comparison.percentChange == null ? "" : ` (${pair.comparison.percentChange}%)`} from ${pair.prior.endDate} to ${pair.current.endDate}, and what evidence supports or challenges that explanation?`,
-    };
-    break;
+      currentPeriodEnd: pair.current.endDate,
+      priorPeriodEnd: pair.prior.endDate,
+      currentAccession: pair.current.accession,
+      priorAccession: pair.prior.accession,
+      question: `What filing, segment, or operating item explains the reported difference of ${pair.comparison.delta} ${pair.current.unit}${pair.comparison.percentChange == null ? "" : ` (${pair.comparison.percentChange}%)`} in ${METRIC_LABEL[metric]}—a reported ${directionText}—from ${pair.prior.endDate} to ${pair.current.endDate}? Did it recur, and what filing evidence challenges that explanation?`,
+    });
   }
+
+  const nextLead = fundamentalLeads[0];
+  const nextResearchQuestion: CompanyResearchBrief["nextResearchQuestion"] = nextLead ? {
+    metric: nextLead.metric,
+    currentFactId: nextLead.currentFactId,
+    priorFactId: nextLead.priorFactId,
+    question: nextLead.question,
+  } : null;
+  const measureCount = fundamentalLeads.length;
+  const researchFollowUp: CompanyResearchBrief["researchFollowUp"] = fundamentalLeads.length > 0
+    ? { state: "indicated", leads: fundamentalLeads,
+      explanation: `${measureCount} comparable SEC-reported measure${measureCount === 1 ? "" : "s"} ${measureCount === 1 ? "has" : "have"} different reported values. Inspect the linked filings and source leads to decide whether any difference merits more work.` }
+    : { state: "undetermined", leads: [],
+      explanation: "The saved snapshot does not contain a validated comparable metric difference. This is not evidence that the business did not change." };
 
   return {
     schemaVersion: 1,
@@ -106,11 +128,13 @@ export function compileCompanyResearchBrief(input: CompanyResearchBriefInput): C
     facts,
     comparisons,
     observations,
+    researchFollowUp,
     nextResearchQuestion,
     missingEvidenceReason: nextResearchQuestion ? null : "No valid comparable SEC metric with two same-company, same-unit facts in this as-of snapshot.",
     interpretationLimits: [
       "Saved observations are leads for research; inclusion does not establish material support or counterevidence.",
       "Sentiment labels do not establish factual support, source independence, company quality, or research-worthiness.",
+      "A reported fundamental difference creates a follow-up lead only; the Desk does not infer whether it is favorable, material, recurring, or important to valuation.",
       "Coverage describes only the supplied eligible saved records and is not a claim about the entire public web.",
     ],
   };

@@ -20,6 +20,13 @@ const ROLES: ReadonlyArray<{ value: CompanyResearchEvidenceRole; label: string }
   { value: "challenges_assessment", label: "Challenges my assessment" },
   { value: "context_only", label: "Context only" },
 ];
+const DURATION_LABELS = {
+  annual: "Annual duration",
+  quarter: "Quarter duration",
+  ytd_q2: "Year to date through Q2",
+  ytd_q3: "Year to date through Q3",
+  unknown: "Reported duration",
+} as const;
 const METRICS: Record<string, string> = {
   revenue: "Revenue", operating_income: "Operating income", net_income: "Net income", operating_cash_flow: "Operating cash flow",
 };
@@ -60,9 +67,15 @@ function percentUnavailableLabel(reason: string | null): string {
 }
 
 function factPeriodLabel(fact: NonNullable<CompanyResearchBriefResponse["brief"]>["facts"][number]): string {
-  const period = fact.startDate ? `${fact.startDate}–${fact.endDate}` : `As of ${fact.endDate}`;
-  const basis = fact.startDate ? `${fact.durationClass} duration` : "instant";
-  return `${basis} · ${period}`;
+  return `${factPeriodBasis(fact)} · ${factPeriodRange(fact)}`;
+}
+
+function factPeriodBasis(fact: NonNullable<CompanyResearchBriefResponse["brief"]>["facts"][number]): string {
+  return fact.startDate ? DURATION_LABELS[fact.durationClass] : "Instant";
+}
+
+function factPeriodRange(fact: NonNullable<CompanyResearchBriefResponse["brief"]>["facts"][number]): string {
+  return fact.startDate ? `${fact.startDate}–${fact.endDate}` : `As of ${fact.endDate}`;
 }
 
 function newRoles(response: CompanyResearchBriefResponse | null): Record<string, CompanyResearchEvidenceRole> {
@@ -93,6 +106,7 @@ function CompanyResearchBriefForCompany({ companyId, companyName, ticker, resume
   const [loadState, setLoadState] = useState<"loading" | "ready" | "failed" | "resume_mismatch">("loading");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "failed">("idle");
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [checkingSaveAvailability, setCheckingSaveAvailability] = useState(false);
   const [decision, setDecision] = useState<CompanyResearchDecision>("insufficient_evidence");
   const [rationale, setRationale] = useState("");
   const [nextCheckDate, setNextCheckDate] = useState("");
@@ -170,6 +184,30 @@ function CompanyResearchBriefForCompany({ companyId, companyName, ticker, resume
     }
   }
 
+  async function checkSaveAvailability() {
+    const current = response;
+    if (!current || loadState !== "ready" || checkingSaveAvailability) return;
+    setCheckingSaveAvailability(true);
+    setSaveMessage(null);
+    try {
+      const latest = await getCompanyResearchBrief(companyId, undefined, current.brief.asOfMs);
+      if (latest.brief.company.companyId !== companyId || latest.snapshotKey !== current.snapshotKey) {
+        setSaveMessage("The evidence view changed. Reload the brief before saving this decision.");
+        return;
+      }
+      setResponse((value) => value && value.snapshotKey === current.snapshotKey
+        ? { ...value, decisionStorageAvailable: latest.decisionStorageAvailable, decisionStorageUnavailableReason: latest.decisionStorageUnavailableReason }
+        : value);
+      setSaveMessage(latest.decisionStorageAvailable
+        ? "Saving is available again. Your draft is unchanged."
+        : "Decision saving is still temporarily unavailable. Your draft is unchanged.");
+    } catch {
+      setSaveMessage("Saving availability could not be checked. Your draft is unchanged. Try again later.");
+    } finally {
+      setCheckingSaveAvailability(false);
+    }
+  }
+
   async function save() {
     if (!response || !response.decisionStorageAvailable || saveState === "saving") return;
     const evidenceRoles: CompanyResearchEvidenceRoleChoice[] = response.brief.observations.map((item) => ({
@@ -206,11 +244,11 @@ function CompanyResearchBriefForCompany({ companyId, companyName, ticker, resume
           decisionStorageAvailable: false,
           decisionStorageUnavailableReason: "Local storage became unavailable while saving.",
         } : current);
-        setSaveMessage("Storage is paused. Your decision draft is still here. Free disk space if needed, then reload this brief to recheck saving.");
+        setSaveMessage("Decision saving is temporarily unavailable. Your draft is still here. Try again later.");
       } else {
         setSaveMessage(error instanceof ApiRequestError && error.status === 409
           ? "This evidence snapshot changed. Reload the brief before saving your decision."
-          : "The decision could not be saved. Your draft is still here; retry when local storage is available.");
+          : "The decision could not be saved. Your draft is still here. Try again later.");
       }
     }
   }
@@ -267,6 +305,39 @@ function CompanyResearchBriefForCompany({ companyId, companyName, ticker, resume
           Your evidence tags · {evidenceRoleCounts.supports} support · {evidenceRoleCounts.challenges} challenge · {evidenceRoleCounts.context} context · {evidenceRoleCounts.notReviewed} not reviewed
         </p>
 
+        <section className="crb-follow-up" aria-label="Fundamental research follow-up">
+          <div className="crb-follow-up-head">
+            <p className="micro">FUNDAMENTAL FOLLOW-UP</p>
+            <strong>{brief.researchFollowUp.state === "indicated"
+              ? `${brief.researchFollowUp.leads.length} reported change${brief.researchFollowUp.leads.length === 1 ? "" : "s"} to review`
+              : "Follow-up status undetermined"}</strong>
+          </div>
+          <p>{brief.researchFollowUp.explanation}</p>
+          {brief.researchFollowUp.leads.length > 0 && <ol aria-label="Comparable SEC fundamental changes">
+            {brief.researchFollowUp.leads.map((lead) => {
+              const current = brief.facts.find((fact) => fact.id === lead.currentFactId);
+              const prior = brief.facts.find((fact) => fact.id === lead.priorFactId);
+              if (!current || !prior) return null;
+              const currentLink = safeHttpsUrl(current.sourceUrl);
+              const priorLink = safeHttpsUrl(prior.sourceUrl);
+              const direction = lead.direction === "reported_decrease" ? "reported decrease" : "reported increase";
+              return <li key={`${lead.metric}-${lead.currentFactId}-${lead.priorFactId}`}>
+                <div className="crb-follow-up-metric">
+                  <strong>{METRICS[lead.metric] ?? lead.metric} · {direction}</strong>
+                  <span>{lead.delta} {current.unit}{lead.percentChange == null ? "" : ` · ${lead.percentChange}%`}</span>
+                </div>
+                <p>{factPeriodBasis(current)} · {factPeriodRange(prior)} → {factPeriodRange(current)} · {prior.form} / {current.form}</p>
+                <p>{lead.question}</p>
+                <div className="crb-follow-up-links">
+                  {priorLink && <a href={priorLink} target="_blank" rel="noreferrer">Prior filing {prior.accession}</a>}
+                  {currentLink && <a href={currentLink} target="_blank" rel="noreferrer">Current filing {current.accession}</a>}
+                </div>
+              </li>;
+            })}
+          </ol>}
+          <small>This is a diligence lead from reported values. It does not mean the change is favorable, material, recurring, or investment-worthy.</small>
+        </section>
+
         {brief.nextResearchQuestion ? <aside className="crb-question" aria-label="Next research question">
           <p className="micro">NEXT RESEARCH QUESTION · {METRICS[brief.nextResearchQuestion.metric] ?? brief.nextResearchQuestion.metric}</p>
           <p>{brief.nextResearchQuestion.question}</p>
@@ -320,9 +391,10 @@ function CompanyResearchBriefForCompany({ companyId, companyName, ticker, resume
             {decisionForDisplay.nextCheckDate && <p>Next check: {decisionForDisplay.nextCheckDate}</p>}
           </details>
         </>}
-        {response?.decisionStorageAvailable === false && <p className="crb-state crb-warning" role="status">
-          Decision saving is unavailable. {response.decisionStorageUnavailableReason ?? "Local writes are paused."} Your draft stays on this page; reload this brief to recheck saving after resolving the storage issue.
-        </p>}
+        {response?.decisionStorageAvailable === false && <div className="crb-state crb-warning" role="status">
+          <p>Decision saving is temporarily unavailable. Your draft stays on this page.</p>
+          <button type="button" disabled={checkingSaveAvailability} onClick={() => void checkSaveAvailability()}>{checkingSaveAvailability ? "Checking…" : "Check saving availability"}</button>
+        </div>}
         <form className="crb-decision" onSubmit={(event) => { event.preventDefault(); void save(); }}>
           <div className="crb-decision-head"><div><p className="micro">ANALYST DECISION</p><h3>What should happen next?</h3></div>
             {hasMatchingSavedDecision && <span>Saved {clock(decisionForDisplay!.createdAt)}</span>}

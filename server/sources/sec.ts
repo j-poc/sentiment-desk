@@ -1,15 +1,13 @@
+import {requestSecResponse, secRetrievedAt} from "../sec-acquisition.js";
 import type { EventType } from "../rubric.js";
-import { paceProviderRequest, parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
+import { parseRetryAfterMs, ProviderRateLimitError } from "../provider-cooldown.js";
 import { createHash } from "node:crypto";
 import type { SecDocumentAttempt, SecDocumentContext, SecDocumentRole, SecItem202Link } from "../types.js";
 import { ExternalRequestPausedError } from "../external-request-gate.js";
 
 /**
- * SEC EDGAR as a first-class source. No third-party library needed: EDGAR is
- * free, official, and the submissions API carries acceptanceDateTime with
- * second precision, which is better provenance than any news feed. The fair-
- * access rule is a declared User-Agent with contact info; keep the pacing
- * well under the 10 req/s ceiling.
+ * SEC EDGAR acquisition is owned by the shared SEC service. Native parsers
+ * preserve acceptanceDateTime, issuer identity, document lineage and admission.
  *
  * 8-K items map onto the desk's event taxonomy, so a filing arrives already
  * typed: Item 2.02 is results, Item 5.02 is leadership, Item 4.02 is the
@@ -39,11 +37,7 @@ export interface SecFiling {
 
 /** ticker -> CIK, from the official directory. */
 export async function fetchTickerCikMap(userAgent: string): Promise<Map<string, string>> {
-  await paceProviderRequest("sec", 125);
-  const res = await fetch(`${SEC_WWW}/files/company_tickers.json`, {
-    headers: { "user-agent": userAgent, accept: "application/json" },
-    signal: AbortSignal.timeout(20_000),
-  });
+  const res = await requestSecResponse(`${SEC_WWW}/files/company_tickers.json`, {maxBytes: 2_000_000, timeoutMs: 20_000, ttlSeconds: 86400});
   if (res.status === 429) throw new ProviderRateLimitError("sec", parseRetryAfterMs(res.headers.get("retry-after")), "SEC ticker directory HTTP 429");
   if (!res.ok) throw new Error(`SEC ticker directory HTTP ${res.status}`);
   const body: unknown = await res.json();
@@ -146,11 +140,7 @@ export async function fetchRecent8Ks(opts: {
   userAgent: string;
   timeoutMs?: number;
 }): Promise<SecFiling[]> {
-  await paceProviderRequest("sec", 125);
-  const res = await fetch(`${SEC_BASE}/submissions/CIK${opts.cik}.json`, {
-    headers: { "user-agent": opts.userAgent, accept: "application/json" },
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
-  });
+  const res = await requestSecResponse(`${SEC_BASE}/submissions/CIK${opts.cik}.json`, {maxBytes: SEC_SUBMISSIONS_MAX_BYTES, timeoutMs: opts.timeoutMs ?? 15_000, ttlSeconds: 60});
   if (res.status === 429) throw new ProviderRateLimitError("sec", parseRetryAfterMs(res.headers.get("retry-after")), `SEC submissions HTTP 429 for ${opts.ticker}`);
   if (!res.ok) throw new Error(`SEC submissions HTTP ${res.status} for ${opts.ticker}`);
   return parseRecent8Ks((await res.json()) as SubmissionsBody, opts.cik, opts.ticker, opts.sinceMs);
@@ -332,13 +322,7 @@ export async function fetchFilingByAccession(opts: {
   }
   if (!opts.userAgent.trim()) throw new Error("SEC lookup requires a User-Agent");
 
-  await paceProviderRequest("sec", 125);
-  const response = await fetch(`${SEC_BASE}/submissions/CIK${cik}.json`, {
-    method: "GET",
-    redirect: "manual",
-    headers: { "user-agent": opts.userAgent, accept: "application/json" },
-    signal: AbortSignal.timeout(SEC_SUBMISSIONS_TIMEOUT_MS),
-  });
+  const response = await requestSecResponse(`${SEC_BASE}/submissions/CIK${cik}.json`, {maxBytes: SEC_SUBMISSIONS_MAX_BYTES, timeoutMs: SEC_SUBMISSIONS_TIMEOUT_MS, ttlSeconds: 60});
   if (response.status === 429) {
     try { await response.body?.cancel(); } catch { /* release provider response */ }
     throw new ProviderRateLimitError("sec", parseRetryAfterMs(response.headers.get("retry-after")), `SEC submissions HTTP 429 for ${providerLabel}`);
@@ -657,11 +641,10 @@ export interface SecFilingEvidence {
 type SecFetchedDocument = SecDocumentAttempt & { documentHtml?: string; retryAfterMs?: number };
 async function requestSecDocument(url: string, role: SecDocumentRole, userAgent: string, htmlRequired = true, visibleOnly = false): Promise<SecFetchedDocument> {
   const startedAt = Date.now();
-  await paceProviderRequest("sec", 125);
   let observedStatus: number | null = null;
   let cancelResponseBody: (() => Promise<void>) | undefined;
   try {
-    const response = await fetch(url, { redirect: "manual", headers: { "user-agent": userAgent, accept: "text/html" }, signal: AbortSignal.timeout(SEC_DOCUMENT_TIMEOUT) });
+    const response = await requestSecResponse(url, {maxBytes: SEC_DOCUMENT_LIMIT, timeoutMs: SEC_DOCUMENT_TIMEOUT, ttlSeconds: 2592000});
     observedStatus = response.status;
     cancelResponseBody = async () => { try { await response.body?.cancel(); } catch { /* best-effort release of an unread response */ } };
     if (response.status === 429) { await cancelResponseBody(); return { role, url, startedAt, completedAt: Date.now(), retrievedAt: null, httpStatus: 429, outcome: "rate_limited", bodyBytes: null, bodySha256: null, excerpt: "", errorCode: "http_429", retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")) ?? undefined }; }
@@ -676,7 +659,7 @@ async function requestSecDocument(url: string, role: SecDocumentRole, userAgent:
     while (true) { const { done, value } = await reader.read(); if (done) break; bytes += value.length; if (bytes > SEC_DOCUMENT_LIMIT) { await reader.cancel(); return { role, url, startedAt, completedAt: Date.now(), retrievedAt: null, httpStatus: response.status, outcome: "invalid", bodyBytes: bytes, bodySha256: null, excerpt: "", errorCode: "body_too_large" }; } chunks.push(value); }
     const body = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
     const documentHtml = new TextDecoder().decode(body);
-    const retrievedAt = Date.now(), excerpt = extractPrimaryDocText(visibleOnly ? visibleMarkupForExcerpt(documentHtml) : documentHtml);
+    const retrievedAt = Date.parse(secRetrievedAt(response)), excerpt = extractPrimaryDocText(visibleOnly ? visibleMarkupForExcerpt(documentHtml) : documentHtml);
     return { role, url, startedAt, completedAt: Date.now(), retrievedAt, httpStatus: response.status, outcome: excerpt ? "success" : "empty", bodyBytes: body.length, bodySha256: createHash("sha256").update(body).digest("hex"), excerpt, errorCode: null, documentHtml };
   } catch (error) {
     await cancelResponseBody?.();

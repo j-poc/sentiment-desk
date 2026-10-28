@@ -66,6 +66,11 @@ describe("selected-company public research brief API", () => {
     const weak = saveReceiptVerifiedObservation(db, {
       companyId: apple.id, id: "weak-apple", title: "Apple pie festival returns to town", retrievedAt: now - 80, publishedAt: now - 180,
     });
+    const consumerOffer = saveReceiptVerifiedObservation(db, {
+      companyId: apple.id, id: "apple-macbook-consumer-offer",
+      title: "Save an incredible $500 on the powerful 2026 Apple MacBook Pro on Amazon",
+      retrievedAt: now - 70, publishedAt: now - 170,
+    });
     db.insertObservation({
       companyId: apple.id, kind: "rss", sourceName: "Unlinked", sourceUrl: "https://example.com/unlinked",
       tier: "major", title: "AAPL unlinked historical lead", snippet: "No receipt.", publishedAt: now - 50,
@@ -88,6 +93,7 @@ describe("selected-company public research brief API", () => {
       expect(result.brief.coverage.publicObservations).toBe("partial");
       expect(result.brief.coverage.reasons.join(" ")).toMatch(/withheld/);
       expect(result.brief.observations.map((item) => item.id)).not.toContain(weak);
+      expect(result.brief.observations.map((item) => item.id)).not.toContain(consumerOffer);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally { db.close(); }
   });

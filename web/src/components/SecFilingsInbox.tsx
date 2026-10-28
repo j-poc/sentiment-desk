@@ -11,6 +11,11 @@ function utc(value: string | null, dateOnly = false): string {
   return `${new Date(value).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC")}`;
 }
 
+function utcClock(value: string): string {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? `${new Date(timestamp).toISOString().slice(11, 16)} UTC` : "time unavailable";
+}
+
 function age(value: string | null, now: number): string {
   if (!value) return "time unavailable";
   const elapsed = Math.max(0, now - Date.parse(value));
@@ -24,28 +29,37 @@ function age(value: string | null, now: number): string {
 function isFilingRow(value: SecFilingInboxRow): boolean { return value.form === "8-K"; }
 
 const stateLabel: Record<SecFilingsInboxView["state"], string> = {
-  ready: "Saved feed available",
-  stale: "Saved snapshot is old",
-  empty: "Verified empty feed",
-  pending: "Collection in progress",
-  rate_limited: "Refresh is rate-limited",
-  failed: "Refresh failed",
-  not_configured: "Feed not enabled",
-  unsupported: "Feed not supported by this Hub",
-  unavailable: "Hub unavailable",
+  ready: "Filing updates available",
+  stale: "Saved filing list may be out of date",
+  empty: "No recent filings",
+  pending: "Updating filing list",
+  rate_limited: "Try again later",
+  failed: "Latest update did not complete",
+  not_configured: "Filing updates unavailable",
+  unsupported: "Filing updates unavailable",
+  unavailable: "Filing updates unavailable",
   listing_unverified: "Issuer listing needs verification",
 };
 
 export function secFreshnessLabel(freshness: SecFilingsInboxView["freshness"]): string {
-  return freshness === "current" ? "Source freshness current"
-    : freshness === "stale" ? "Source update is stale" : "Source freshness unknown";
+  return freshness === "current" ? "Source updated recently"
+    : freshness === "stale" ? "Source may be out of date" : "Source update time unavailable";
 }
 
 export function secListingVerificationSummary(view: SecFilingsInboxView): string | null {
   if (!view.listingVerificationGap || (view.rows.length === 0 && (view.withheldCount ?? 0) === 0)) return null;
-  const clocks = view.listingDirectories?.map((directory) => `${directory.source.split("/").at(-1)} created ${utc(directory.createdAt)} / retrieved ${utc(directory.retrievedAt)}`).join(" · ");
-  const aggregate = view.listingDirectoryCreatedAt ? `Directory created ${utc(view.listingDirectoryCreatedAt)}; retrieved ${utc(view.listingDirectoryRetrievedAt ?? null)}.` : "";
-  return `Current exchange-listing verification · ${view.withheldCount ?? 0} withheld. ${view.listingVerificationGap}${aggregate ? ` ${aggregate}` : ""}${clocks ? ` ${clocks}` : ""}`;
+  const count = view.withheldCount ?? 0;
+  const aggregate = view.listingDirectoryCreatedAt
+    ? `Listing information updated ${utc(view.listingDirectoryCreatedAt)} and checked ${utc(view.listingDirectoryRetrievedAt ?? null)}.`
+    : "";
+  return `${count} SEC filing${count === 1 ? " was" : "s were"} held because the company's active listing could not be confirmed. ${aggregate}`.trim();
+}
+
+export function secListingDirectoryClockLabels(view: SecFilingsInboxView): string[] {
+  return (view.listingDirectories ?? []).map((directory) => {
+    const file = directory.source.split("/").filter(Boolean).at(-1) ?? "listing source";
+    return `${file} created ${utc(directory.createdAt)} · checked ${utc(directory.retrievedAt)}`;
+  });
 }
 
 export function secInboxStatusLabel(view: SecFilingsInboxView, now = Date.now()): string {
@@ -64,16 +78,14 @@ export function shouldShowDeskFallback(
 }
 
 export function secInboxEmptyMessage(query: string, state: SecFilingsInboxView["state"] | undefined, savedRowCount: number): string {
-  if (savedRowCount > 0) return query.trim() ? "No filings in this saved SEC snapshot match your filter." : "No filings are available in this snapshot.";
-  if (query.trim()) return "Load a saved SEC filing snapshot before filtering it.";
-  if (state === "empty") return "The SEC feed returned no Form 8-K filings in its latest 40-item window. Form 8-K/A amendments are not included.";
-  if (state === "not_configured") return "Enable the SEC 8-K feed to load current filings.";
-  if (state === "unsupported") return "This Public Data Hub does not support the SEC 8-K feed yet.";
-  if (state === "unavailable") return "Reconnect the local Public Data Hub to load SEC filings.";
-  if (state === "listing_unverified") return "No SEC rows are shown because the app could not confirm a unique current listed-security match. Read the verification notice for the available next step.";
-  if (state === "failed") return "The latest SEC collection failed and there is no accepted snapshot to show. Retry the feed to try again.";
-  if (state === "pending") return "The first SEC filing collection is in progress.";
-  return "No saved SEC filing snapshot is available yet.";
+  if (savedRowCount > 0) return query.trim() ? "No filings in the saved list match your filter." : "No filings are available in the saved list.";
+  if (query.trim()) return "No filing data is available to filter yet.";
+  if (state === "empty") return "No Form 8-K filings appeared in the latest 40 SEC items. Form 8-K/A amendments are not included.";
+  if (state === "not_configured" || state === "unsupported" || state === "unavailable") return "Current filing updates are unavailable. Try again later; saved filings remain available when present.";
+  if (state === "listing_unverified") return "No filings are shown until the issuer’s current exchange listing can be confirmed.";
+  if (state === "failed") return "The latest filing update did not complete. Try again; saved filings remain available when present.";
+  if (state === "pending") return "The filing list is being updated.";
+  return "No saved SEC filing information is available yet.";
 }
 
 export function deskFallbackMessage(
@@ -83,32 +95,31 @@ export function deskFallbackMessage(
   archiveStatus: "available" | "empty" | "unknown" = "unknown",
 ): string {
   const archiveNextStep = archiveStatus === "available"
-    ? "Search the saved archive for historical leads; those results are not current coverage."
+    ? "Search saved filings for historical leads; those results are not current coverage."
     : archiveStatus === "empty"
-      ? "This Desk has no eligible saved evidence to search yet."
-      : "Saved archive availability has not been confirmed, so no archive search is offered.";
+      ? "No saved SEC filings are available to search yet."
+      : "Saved SEC filing search is currently unavailable.";
   if (loadFailed || (state === "unavailable" && !detail)) {
-    return `${loadFailed ? "The Desk could not confirm" : "The Desk cannot reach"} its registered local Public Data Hub status. Check that Hub service, then choose Check Hub again. ${archiveNextStep}`;
+    return `The filing status could not be read. Try again later. ${archiveNextStep}`;
   }
   if (state === "unsupported") {
-    return `${detail || "The filing feed is not supported by the current Hub configuration."} Configure the SEC 8-K feed in the Hub, then check again. ${archiveNextStep}`;
+    return `Recent SEC filings are unavailable in this view right now. ${archiveNextStep}`;
   }
   if (state === "stale") {
-    return `${detail || "The saved SEC snapshot is stale."} Refresh is paused for this Desk. Open Sources & operations to check the source gate and recovery step.`;
+    return `The saved SEC filing list is out of date. Existing saved research remains available. ${archiveNextStep}`;
   }
   if (state === "not_configured") {
-    return `The SEC 8-K feed is not enabled for this Desk. ${archiveNextStep}`;
+    return `Recent SEC filing updates are unavailable right now. ${archiveNextStep}`;
   }
   if (state === "failed") {
-    return `The last SEC filing collection failed. Retry the SEC feed after checking Hub status. ${archiveNextStep}`;
+    return `The latest SEC filing update did not complete. Saved filings remain unchanged. ${archiveNextStep}`;
   }
-  if (state === "unavailable" && detail) {
-    return `${detail} ${archiveNextStep}`;
-  }
+  if (state === "unavailable" && detail) return `Current SEC filings could not be loaded. Try again later. ${archiveNextStep}`;
   if (state === "listing_unverified") {
-    return `${detail || "SEC rows are withheld until a unique current listed-security match is confirmed."} ${archiveNextStep}`;
+    const withheld = detail?.match(/^(\d+)\b/)?.[1];
+    return `${withheld ? `${withheld} SEC filings are` : "SEC filings are"} withheld until the issuer’s current listing can be confirmed. ${archiveNextStep}`;
   }
-  return `The no-ticker filing feed is unavailable. ${archiveNextStep}`;
+  return `Recent SEC filings are unavailable right now. ${archiveNextStep}`;
 }
 
 export function shouldStartSecFilingsPoll(activationInFlight: boolean): boolean {
@@ -117,7 +128,7 @@ export function shouldStartSecFilingsPoll(activationInFlight: boolean): boolean 
 
 export function shouldOfferSecFilingsActivation(view: SecFilingsInboxView | null): boolean {
   return view?.canActivate === true
-    && ["not_configured", "ready", "stale", "empty", "failed", "rate_limited", "listing_unverified"].includes(view.state);
+    && ["not_configured", "ready", "stale", "empty", "failed", "rate_limited", "listing_unverified", "unavailable", "unsupported"].includes(view.state);
 }
 
 export function isSecFilingsActivationCoolingDown(view: SecFilingsInboxView | null, now = Date.now()): boolean {
@@ -142,9 +153,9 @@ export function SecFilingsRecoveryActions({ archiveStatus, onBrowseSavedSources,
         Search saved archive
       </button>
     )}
-    {(showOperations || archiveStatus !== "available") && onOpenOperations && (
+    {showOperations && onOpenOperations && (
       <button type="button" onClick={onOpenOperations} className="w-fit rounded-md border border-white/15 px-3 py-2 text-sm font-medium text-white/75 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">
-        Open Sources &amp; operations
+        View update details
       </button>
     )}
   </div>;
@@ -202,7 +213,7 @@ export function markSecFilingsRequestFailure(
   if (!hasFreshListingEvidence(current, now)) {
     const withheldCount = current.rows.length + (current.withheldCount ?? 0);
     return { ...current, state: "listing_unverified", rows: [], withheldCount,
-    listingVerificationGap: `${withheldCount} SEC filing${withheldCount === 1 ? " remains" : "s remain"} withheld because fresh current exchange-listing evidence is unavailable. ${current.canActivate ? "Retry the explicit listing check." : "Enable external requests and approve both SEC 8-K and Nasdaq directory sources in both source lists."}`,
+    listingVerificationGap: `${withheldCount} SEC filing${withheldCount === 1 ? " remains" : "s remain"} withheld because current exchange-listing evidence is unavailable. ${current.canActivate ? "Try the current listing check again." : "These filings will stay hidden until the issuer’s current listing can be confirmed."}`,
     freshness: secFilingsSourceFreshness(current.feedUpdatedAt, now), message };
   }
   return {
@@ -225,17 +236,18 @@ export async function reloadSecFilingsInbox(
   setLoading: InboxBooleanUpdate,
   signal?: AbortSignal,
   isCurrent: () => boolean = () => true,
+  now = Date.now(),
 ): Promise<void> {
   try {
     const result = await fetch(signal);
     if (!isCurrent()) return;
-    setView((current) => isCurrent() ? retainLastAcceptedFilings(current, result) : current);
+    setView((current) => isCurrent() ? retainLastAcceptedFilings(current, result, now) : current);
     setLoadFailed((current) => isCurrent() ? false : current);
   } catch {
     if (!isCurrent()) return;
     setView((current) => {
       return isCurrent() ? markSecFilingsRequestFailure(current,
-        "Could not confirm the latest saved SEC feed status. Showing the last accepted snapshot, if available.") : current;
+        "Could not confirm the latest saved SEC feed status. Showing the last accepted snapshot, if available.", now) : current;
     });
     setLoadFailed((current) => isCurrent() ? true : current);
   } finally {
@@ -275,7 +287,7 @@ export function SavedSecFilingResumeCard({ target, detail, loading, failed, onIn
         <h2 id="saved-sec-resume-heading" className="text-sm font-medium text-white/80">{secIssuerDisplayName(target.issuer)} · saved filing</h2>
         <p className="mt-1 break-all font-mono text-[11px] text-white/45">CIK {target.cik} · accession {target.accession}</p>
         {target.nextQuestion && <p className="mt-2 break-words text-xs leading-5 text-white/70"><span className="text-white/45">Research question: </span>{target.nextQuestion}</p>}
-        <p className="mt-1 break-words text-[10px] text-white/35">Saved feed receipt {target.feedReceiptId} · observed {target.feedUpdatedAt ?? "unknown"} · retrieved {target.retrievedAt ?? "unknown"}</p>
+        <p className="mt-1 break-words text-[10px] text-white/35">Source updated {target.feedUpdatedAt ?? "time unavailable"} · retrieved {target.retrievedAt ?? "time unavailable"}</p>
       </div>
       <button id={secFilingResumeActionId(target, "rolled_out")} type="button" onClick={onInspect} disabled={loading} aria-controls="saved-sec-resume-evidence"
         className="inline-flex w-fit items-center rounded-md border border-emerald-300/25 bg-emerald-300/[0.055] px-3 py-2 text-xs font-medium text-emerald-100/85 hover:bg-emerald-300/[0.11] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-50">
@@ -557,7 +569,8 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
   const activationCoolingDown = isSecFilingsActivationCoolingDown(view, now);
   const showActivate = shouldOfferSecFilingsActivation(view);
   const showDeskFallback = shouldShowDeskFallback(view?.state ?? null, view?.rows.length ?? 0, loadFailed, view?.canActivate === false);
-  const actionLabel = view?.state === "not_configured" ? "Enable real SEC feed"
+  const actionLabel = view?.state === "unavailable" || view?.state === "unsupported" ? "Try filing updates"
+    : view?.state === "not_configured" ? "Try SEC updates"
     : view?.state === "listing_unverified" ? "Verify current listings"
       : view?.state === "failed" ? "Retry SEC feed"
       : view?.state === "rate_limited" || cooldown > 0 ? "Refresh available later" : "Refresh filings";
@@ -568,25 +581,25 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
         <div className="min-w-0">
           <p className="micro text-emerald-300/75">REAL SEC DISCLOSURES · NO TICKER REQUIRED</p>
           <h1 id="sec-filings-title" className="mt-1 text-xl font-semibold text-white/90 sm:text-2xl">Recent 8-K filings</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/55">
-            Browse up to the SEC feed’s latest 40 Form 8-K filings. Inspect a selected disclosure here, with its exact SEC source text and filing clocks; Form 8-K/A amendments are not included. This is not a complete issuer universe, a small-cap screen, or a ranked opportunity list.
+          <p className="mt-2 max-w-2xl text-xs leading-5 text-white/55 sm:text-sm sm:leading-6">
+            Up to 40 recent SEC Form 8-K filings. This is not a complete issuer universe, a small-cap screen, or a ranked list; 8-K/A amendments are excluded.
           </p>
-          <p className="mt-2 text-xs leading-5 text-white/40">Inspecting fetches one issuer metadata record and at most two linked SEC documents for the filing you choose. No text is sent to Luna or saved by this view.</p>
+          <p className="mt-1 text-[11px] leading-4 text-white/40">Inspecting fetches one issuer record and up to two linked SEC documents. No filing text is sent to Luna or saved here.</p>
         </div>
         <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
-          {(loadFailed || view?.state === "unavailable" || view?.state === "unsupported") && (
+          {(loadFailed || ((view?.state === "unavailable" || view?.state === "unsupported") && view.canActivate !== true)) && (
             <button type="button" disabled={loading || working} onClick={() => { setLoading(true); void reload(); }} className="rounded border border-white/15 px-2.5 py-1.5 text-xs text-white/65 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-wait disabled:opacity-50">
-              {view?.state === "unsupported" ? "Check Hub configuration again" : "Check Hub again"}
+              {view?.state === "unsupported" ? "Check saved feed configuration again" : "Retry saved feed read"}
             </button>
           )}
           {showActivate && (
             <button type="button" onClick={() => void activate()} disabled={working || loading || activationCoolingDown}
               className="rounded-md border border-emerald-300/30 bg-emerald-300/[0.09] px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-300/[0.15] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:cursor-not-allowed disabled:opacity-45">
-              {working ? "Contacting local Hub…" : actionLabel}
+              {working ? "Checking SEC filing sources…" : actionLabel}
             </button>
           )}
           <span className="text-xs text-white/45" role="status" aria-live="polite">
-            {loading ? "Checking saved feed…" : loadFailed ? "Desk could not read the feed status" : view ? secInboxStatusLabel(view) : "Feed status unavailable"}
+            {loading ? "Checking recent filings…" : loadFailed ? "Filing status could not be read" : view ? secInboxStatusLabel(view) : "Filing status unavailable"}
           </span>
         </div>
       </header>
@@ -594,20 +607,28 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
       {researchCaseError && <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-amber-300/20 bg-amber-200/[0.04] p-3 text-xs text-amber-100/80" role="alert"><span>{researchCaseError}</span><button type="button" onClick={() => setResearchCaseError(null)} className="rounded border border-white/15 px-2.5 py-1.5 text-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Dismiss</button></div>}
       {researchCasesLoadFailed && <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-white/[0.08] px-3 py-2 text-[11px] text-white/45"><span>Saved SEC cases could not be listed. Opening a current filing is still safe and reuses its existing case.</span><button type="button" onClick={() => void reloadResearchCases()} className="rounded border border-white/15 px-2 py-1 text-white/65 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Retry case list</button></div>}
 
-      {view?.message && <p className={`rounded-md border px-4 py-3 text-sm ${view.state === "failed" || view.state === "unavailable" || view.state === "unsupported" ? "border-amber-300/20 bg-amber-300/[0.05] text-amber-100/80" : "border-white/10 bg-white/[0.025] text-white/60"}`} role="status">{view.message}</p>}
-      {view && secListingVerificationSummary(view) && <p className="rounded-md border border-amber-300/20 bg-amber-300/[0.045] px-4 py-3 text-xs leading-5 text-amber-100/75" role="status">{secListingVerificationSummary(view)}</p>}
+      {view?.message && !showDeskFallback && <p className={`rounded-md border px-4 py-3 text-sm ${view.state === "failed" || view.state === "unavailable" || view.state === "unsupported" ? "border-amber-300/20 bg-amber-300/[0.05] text-amber-100/80" : "border-white/10 bg-white/[0.025] text-white/60"}`} role="status">{view.message}</p>}
+      {view && secListingVerificationSummary(view) && (
+        <details className="rounded-md border border-amber-300/20 bg-amber-300/[0.045] px-3 py-2 text-xs text-amber-100/75">
+          <summary className="cursor-pointer list-none leading-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200">
+            Listing check: {view.withheldCount ?? 0} filings withheld; unmatched issuers excluded.
+            <span className="ml-2 text-amber-100/55">Why and source clocks</span>
+          </summary>
+          <p className="mt-2 border-t border-amber-100/10 pt-2 leading-5" role="status">{secListingVerificationSummary(view)}</p>
+        </details>
+      )}
       {resumeNotice && <div className={`rounded-md border px-4 py-3 text-sm ${resumeNotice.state === "open" ? "border-emerald-300/20 bg-emerald-300/[0.04] text-emerald-100/80" : "border-amber-300/20 bg-amber-300/[0.04] text-amber-100/80"}`} role="status" aria-live="polite">
         {resumeNotice.state === "open" ? <>Opened the exact filing from your saved task: CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved question is shown with the filing below. Choose “Inspect in Desk” to request SEC document evidence.</>
-          : resumeNotice.state === "rolled_out" ? <>CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession} is no longer in the current SEC feed. Your saved question and receipt lineage remain in My Research.</>
-            : resumeNotice.state === "stale" ? <>The SEC filing feed is stale or not ready, so the current feed cannot confirm CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved task is unchanged.</>
-              : <>The SEC filing feed is unavailable, so the Desk cannot confirm CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved task is unchanged.</>}
+          : resumeNotice.state === "rolled_out" ? <>CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession} is no longer in the recent filings. Your saved question remains in My Research.</>
+            : resumeNotice.state === "stale" ? <>The latest SEC filing information may be out of date, so it cannot confirm CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession}. Your saved task is unchanged.</>
+              : <>Current SEC filing information is unavailable, so CIK {resumeNotice.target.cik}, accession {resumeNotice.target.accession} cannot be confirmed. Your saved task is unchanged.</>}
         {resumeNotice.state !== "open" && <> <a href={resumeNotice.target.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="underline underline-offset-2">Open this exact SEC filing</a></>}
       </div>}
       {resumeNotice && resumeNotice.state !== "open" && resumeSavedRow && <SavedSecFilingResumeCard target={resumeNotice.target} detail={detail}
         loading={detailLoading} failed={detailLoadFailed} onInspect={() => void loadDetail(resumeSavedRow)} />}
       {followupError && <p className="rounded-md border border-amber-300/20 bg-amber-300/[0.05] px-4 py-3 text-sm text-amber-100/80" role="alert">{followupError}</p>}
       {followupsLoadFailed && <SavedFilingTasksRetry retrying={followupsLoading} onRetry={() => void reloadFollowups()} />}
-      <section className="panel px-4 py-4 sm:px-5" aria-labelledby="sec-followups-title">
+      {followups.length > 0 && <section className="panel px-4 py-4 sm:px-5" aria-labelledby="sec-followups-title">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 id="sec-followups-title" className="text-sm font-medium text-white/80">Saved filing tasks</h2>
           <span className="text-xs text-white/40">{followups.length} saved filings</span>
@@ -618,43 +639,53 @@ export function SecFilingsInbox({ onBrowseSavedSources, onOpenOperations, archiv
             <span className="min-w-0"><span className="text-white/80">{secIssuerDisplayName(item.issuer)}</span><span className="ml-2 font-mono text-xs text-white/40">CIK {item.cik}</span>
               <span className="ml-2 break-all font-mono text-xs text-white/35">Accession {item.triggeringAccession}</span>
               {item.nextQuestion && <span className="mt-1 block break-words text-xs text-white/65">Next question: {item.nextQuestion}</span>}
-              <span className="mt-1 block break-words text-[10px] text-white/35">Feed receipt {item.feedReceiptId} · observed {item.feedUpdatedAt ?? "unknown"} · retrieved {item.retrievedAt ?? "unknown"}</span>
+              <span className="mt-1 block break-words text-[10px] text-white/35">Source updated {item.feedUpdatedAt ?? "time unavailable"} · retrieved {item.retrievedAt ?? "time unavailable"}</span>
             </span>
             <div className="flex flex-wrap items-center gap-3"><a href={item.filingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="text-xs text-emerald-200/80 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Resume at SEC filing</a>
               <button type="button" onClick={() => void removeIssuer(item.cik, item.triggeringAccession)} disabled={followupWorking === `${item.cik}:${item.triggeringAccession}`} className="text-xs text-white/55 underline-offset-2 hover:text-white hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 disabled:opacity-40">{followupWorking === `${item.cik}:${item.triggeringAccession}` ? "Removing…" : "Remove"}</button></div>
           </li>)}
         </ul>}
-      </section>
+      </section>}
       {showDeskFallback && (
         <div className="flex flex-col gap-3 rounded-md border border-white/10 bg-white/[0.025] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-white/60">{view?.state === "not_configured"
+          <p className="text-sm text-white/60" role="status">{view?.state === "not_configured"
             ? deskFallbackMessage(view.state, false, null, archiveStatus)
             : deskFallbackMessage(view?.state ?? null, loadFailed, view?.message, archiveStatus)}</p>
           <SecFilingsRecoveryActions archiveStatus={archiveStatus} onBrowseSavedSources={onBrowseSavedSources} onOpenOperations={onOpenOperations}
             showOperations={view?.state === "stale" || view?.state === "unavailable" || view?.state === "unsupported" || view?.state === "not_configured"} />
         </div>
       )}
-      {view && (view.retrievedAt || view.nextRefreshAt) && (
-        <div className="flex flex-wrap gap-x-5 gap-y-1 px-1 text-xs text-white/45">
-          {view.feedUpdatedAt && <span>SEC source updated {age(view.feedUpdatedAt, now)} · {utc(view.feedUpdatedAt)} · not a filing time</span>}
-          {!view.feedUpdatedAt && <span>SEC source update time: not supplied</span>}
-          {view.retrievedAt && <span>Hub retrieved this saved snapshot {age(view.retrievedAt, now)} · {utc(view.retrievedAt)}</span>}
-          {view.nextRefreshAt && Date.parse(view.nextRefreshAt) > now && <span>Next manual refresh after {utc(view.nextRefreshAt)}</span>}
+      {view && (view.retrievedAt || view.nextRefreshAt || view.listingDirectories?.length) && (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-1 text-[11px] leading-4 text-white/45">
+          {view.feedUpdatedAt ? <span>SEC source updated {age(view.feedUpdatedAt, now)} · not a filing time</span> : <span>SEC source update time unavailable</span>}
+          {view.retrievedAt && <span>Filing list retrieved {age(view.retrievedAt, now)}</span>}
+          {view.nextRefreshAt && Date.parse(view.nextRefreshAt) > now && <span>Refresh after {utcClock(view.nextRefreshAt)}</span>}
+          <details className="w-full">
+            <summary className="w-fit cursor-pointer text-white/55 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Exact source timestamps</summary>
+            <div className="mt-1 flex flex-col gap-1 pb-1">
+              {view.feedUpdatedAt && <span>SEC source updated {utc(view.feedUpdatedAt)} · not a filing time</span>}
+              {view.retrievedAt && <span>Filing list retrieved {utc(view.retrievedAt)}</span>}
+              {view.nextRefreshAt && <span>Next manual refresh after {utc(view.nextRefreshAt)}</span>}
+              {secListingDirectoryClockLabels(view).map((label) => <span key={label}>{label}</span>)}
+            </div>
+          </details>
         </div>
       )}
 
       <div className="panel overflow-hidden">
-        <div className="flex flex-col gap-3 border-b border-desk-line px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-          <div>
+        <div className="flex flex-col gap-2 border-b border-desk-line px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3">
+          <div className="min-w-0">
             <h2 className="text-sm font-medium text-white/80">Filing inbox</h2>
-            <p className="mt-1 text-xs text-white/45">The saved feed does not always supply filing dates or EDGAR acceptance times. Inspect a filing to fetch the official metadata and document text.</p>
+            <p className="mt-0.5 text-[11px] text-white/45">Filing and acceptance times may be missing from feed data.</p>
           </div>
-          <label className="flex items-center gap-2">
-            <span className="sr-only">Filter filings by issuer, CIK, or accession</span>
-            <input value={query} onChange={(event) => setQuery(event.currentTarget.value)} type="search" maxLength={120}
-              placeholder="Filter issuer, CIK, accession" className="w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/80 placeholder:text-white/30 focus:border-emerald-300/40 focus:outline-none sm:w-64" />
-          </label>
-          <span className="text-xs text-white/40" aria-live="polite">Showing {rows.length} of {view?.rows.length ?? 0} filings</span>
+          <div className="flex min-w-0 items-center gap-2 sm:shrink-0">
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">Filter filings by issuer, CIK, or accession</span>
+              <input value={query} onChange={(event) => setQuery(event.currentTarget.value)} type="search" maxLength={120}
+                placeholder="Filter issuer, CIK, accession" className="w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/80 placeholder:text-white/30 focus:border-emerald-300/40 focus:outline-none sm:w-64" />
+            </label>
+            <span className="shrink-0 text-[11px] text-white/40" aria-live="polite">{rows.length}/{view?.rows.length ?? 0}</span>
+          </div>
         </div>
 
         {loading && !view ? <p className="px-5 py-10 text-center text-sm text-white/45" role="status">Reading the saved SEC feed…</p>

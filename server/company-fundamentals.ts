@@ -1,3 +1,4 @@
+import {requestSecResponse, secRetrievedAt} from "./sec-acquisition.js";
 import { createHash, randomUUID } from "node:crypto";
 import { ExternalRequestPausedError } from "./external-request-gate.js";
 import { Desk, type SecFundamentalFactInput, type SecFundamentalPayloadInput } from "./db.js";
@@ -14,6 +15,21 @@ import type {
   PersistedFundamentalFact,
   PersistedFundamentalPoint,
 } from "../shared/company-fundamentals.js";
+import { decimalComparison, exactDecimalIsPositive, interpretReportedDifference, isValidReportedDecimals, normalizeExactDecimal } from "../shared/financial-decimal.js";
+export { decimalComparison, interpretReportedDifference, normalizeExactDecimal } from "../shared/financial-decimal.js";
+import { addOneCalendarYear, classifyPeriodAlignment, type FundamentalPeriodFact } from "../shared/fundamental-periods.js";
+export { addOneCalendarYear, classifyPeriodAlignment, type FundamentalPeriodFact } from "../shared/fundamental-periods.js";
+import {
+  MAX_SEC_ISSUER_DIRECTORY_SEARCH_ROWS,
+  parseSecIssuerDirectoryEntries,
+  SEC_ISSUER_DIRECTORY_FRESH_FOR_MS,
+  SEC_ISSUER_DIRECTORY_REFRESH_INTERVAL_MS,
+  SEC_ISSUER_DIRECTORY_URL,
+  SecIssuerDirectoryParseError,
+  type SecIssuerDirectoryEntry,
+  type SecIssuerDirectorySnapshot,
+  type SecIssuerDirectoryView,
+} from "../shared/sec-issuer-directory.js";
 
 const SEC_DATA = "https://data.sec.gov";
 const SEC_WEB = "https://www.sec.gov";
@@ -21,13 +37,13 @@ const POLICY_VERSION = "sec-fundamentals/3";
 const FRESH_FOR_MS = 24 * 60 * 60 * 1_000;
 const OBSERVATION_FRESH_FOR_MS = 365 * 24 * 60 * 60 * 1_000;
 const DIRECTORY_MAX_BYTES = 4 * 1024 * 1024;
+const SEC_ISSUER_DIRECTORY_MAX_BYTES = 16 * 1024 * 1024;
 const SUBMISSIONS_MAX_BYTES = 8 * 1024 * 1024;
 const COMPANYFACTS_MAX_BYTES = 32 * 1024 * 1024;
 const SEC_TIMEOUT_MS = 15_000;
 const FACTS_PER_METRIC_LIMIT = 48;
 const FACT_VINTAGES_PER_PERIOD_LIMIT = 10;
 const PERIOD_COMPARISON_POLICY_VERSION = "sec-period-comparison/2";
-const DAY_MS = 86_400_000;
 
 export interface CompanyFundamentalsOptions {
   db: Desk;
@@ -86,66 +102,7 @@ function epochFromDate(value: string): number | null {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
-/** Expand an exact JSON decimal token, including exponent notation, to plain base-10 text. */
-export function normalizeExactDecimal(raw: unknown): string | null {
-  if (typeof raw !== "string" || raw.length > 96) return null;
-  const match = raw.match(/^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/);
-  if (!match) return null;
-  const sign = match[1] === "-" ? "-" : "";
-  const integer = match[2]!;
-  const fraction = match[3] ?? "";
-  const exponent = Number(match[4] ?? "0");
-  if (!Number.isSafeInteger(exponent) || exponent < -40 || exponent > 40) return null;
-  const digits = `${integer}${fraction}`;
-  const decimalAt = integer.length + exponent;
-  let normalized: string;
-  if (decimalAt <= 0) normalized = `0.${"0".repeat(-decimalAt)}${digits}`;
-  else if (decimalAt >= digits.length) normalized = `${digits}${"0".repeat(decimalAt - digits.length)}`;
-  else normalized = `${digits.slice(0, decimalAt)}.${digits.slice(decimalAt)}`;
-  const [wholeRaw, fractionRaw = ""] = normalized.split(".");
-  const whole = wholeRaw!.replace(/^0+(?=\d)/, "");
-  const decimal = fractionRaw.replace(/0+$/, "");
-  const magnitude = decimal ? `${whole}.${decimal}` : whole;
-  if (magnitude.length > 80) return null;
-  return /^0(?:\.0*)?$/.test(magnitude) ? "0" : `${sign}${magnitude}`;
-}
-
-function decimalParts(value: string): { units: bigint; scale: number } | null {
-  const normalized = normalizeExactDecimal(value);
-  if (normalized == null) return null;
-  const negative = normalized.startsWith("-");
-  const magnitude = negative ? normalized.slice(1) : normalized;
-  const [whole, fraction = ""] = magnitude.split(".");
-  const units = BigInt(`${whole}${fraction}`) * (negative ? -1n : 1n);
-  return { units, scale: fraction.length };
-}
-
-function decimalText(units: bigint, scale: number): string {
-  const negative = units < 0n;
-  const digits = (negative ? -units : units).toString().padStart(scale + 1, "0");
-  const whole = scale === 0 ? digits : digits.slice(0, -scale);
-  const fraction = scale === 0 ? "" : digits.slice(-scale).replace(/0+$/, "");
-  const result = fraction ? `${whole}.${fraction}` : whole;
-  return /^0(?:\.0*)?$/.test(result) ? "0" : `${negative ? "-" : ""}${result}`;
-}
-
-export function decimalComparison(current: string, prior: string): { delta: string; percentChange: string | null } | null {
-  const currentParts = decimalParts(current);
-  const priorParts = decimalParts(prior);
-  if (!currentParts || !priorParts) return null;
-  const scale = Math.max(currentParts.scale, priorParts.scale);
-  const currentUnits = currentParts.units * 10n ** BigInt(scale - currentParts.scale);
-  const priorUnits = priorParts.units * 10n ** BigInt(scale - priorParts.scale);
-  const deltaUnits = currentUnits - priorUnits;
-  if (priorUnits <= 0n) return { delta: decimalText(deltaUnits, scale), percentChange: null };
-  const numerator = deltaUnits * 10_000n;
-  let quotient = numerator / priorUnits;
-  const remainder = numerator % priorUnits;
-  if ((remainder < 0n ? -remainder : remainder) * 2n >= priorUnits) quotient += numerator < 0n ? -1n : 1n;
-  return { delta: decimalText(deltaUnits, scale), percentChange: decimalText(quotient, 2) };
-}
-
-function parseCikDirectory(body: unknown, ticker: string): { cik: string; title: string } {
+function parseCikDirectory(body: unknown, ticker: string, expectedCik?: string): { cik: string; title: string } {
   const root = record(body);
   if (!root) throw new SecFundamentalsError("The SEC ticker directory had an invalid response shape.");
   const matches: Array<{ cik: string; title: string }> = [];
@@ -160,37 +117,32 @@ function parseCikDirectory(body: unknown, ticker: string): { cik: string; title:
     matches.push({ cik: cikRaw.padStart(10, "0"), title });
   }
   const unique = [...new Map(matches.map((item) => [item.cik, item])).values()];
+  if (expectedCik) {
+    const exact = unique.filter((item) => item.cik === expectedCik);
+    if (exact.length === 1) return exact[0]!;
+    throw new SecFundamentalsError(exact.length === 0
+      ? `The SEC ticker directory no longer maps ${ticker} to the saved research issuer CIK ${expectedCik}.`
+      : `The SEC ticker directory has multiple entries for the saved research issuer CIK ${expectedCik}.`);
+  }
   if (unique.length !== 1) throw new SecFundamentalsError(unique.length === 0
     ? `The SEC directory has no current CIK mapping for ${ticker}.`
     : `The SEC directory has multiple CIK mappings for ${ticker}; issuer identity is ambiguous.`);
   return unique[0]!;
 }
 
-function parseOfficialTickerExchangeDirectory(body: unknown): Array<{ cik: string; ticker: string; name: string }> {
-  const root = record(body);
-  const fields = array(root?.fields);
-  const rows = array(root?.data);
-  if (!root || Object.keys(root).length !== 2 || !fields || !rows || fields.length !== 4 || rows.length > 100_000
-    || fields.some((field) => typeof field !== "string") || new Set(fields).size !== fields.length
-    || !["cik", "name", "ticker", "exchange"].every((field) => fields.includes(field))) {
-    throw new SecFundamentalsError("SEC exchange ticker directory had an invalid response shape.");
-  }
-  const column = Object.fromEntries(fields.map((field, index) => [field as string, index]));
-  const entries: Array<{ cik: string; ticker: string; name: string }> = [];
-  for (const raw of rows) {
-    const row = array(raw);
-    if (!row || row.length !== fields.length) throw new SecFundamentalsError("SEC exchange ticker directory contained a malformed row.");
-    const rawCik = string(row[column.cik!]);
-    const ticker = string(row[column.ticker!])?.trim().toUpperCase();
-    const name = string(row[column.name!])?.trim();
-    const exchange = row[column.exchange!];
-    if (!rawCik || !/^\d{1,10}$/.test(rawCik) || !ticker || !/^[A-Z0-9.\-]{1,14}$/.test(ticker)
-      || !name || name.length > 512 || (exchange !== null && (typeof exchange !== "string" || exchange.length > 80))) {
-      throw new SecFundamentalsError("SEC exchange ticker directory contained an invalid identity row.");
+function parseOfficialTickerExchangeDirectory(body: unknown): SecIssuerDirectoryEntry[] {
+  try { return parseSecIssuerDirectoryEntries(body); }
+  catch (error) {
+    if (error instanceof SecIssuerDirectoryParseError) {
+      const message = error.code === "invalid_shape"
+        ? "SEC exchange ticker directory had an invalid response shape."
+        : error.code === "malformed_row"
+          ? "SEC exchange ticker directory contained a malformed row."
+          : "SEC exchange ticker directory contained an invalid identity row.";
+      throw new SecFundamentalsError(message);
     }
-    entries.push({ cik: rawCik.padStart(10, "0"), ticker, name });
+    throw error;
   }
-  return entries;
 }
 
 interface SubmissionRow {
@@ -268,44 +220,6 @@ export function parseReportedDecimals(value: unknown): { value: string | null; s
   const exponent = Number(value);
   if (!Number.isSafeInteger(exponent) || exponent < -18 || exponent > 18) return { value: null, status: "invalid" };
   return { value: String(exponent), status: "declared" };
-}
-
-function validReportedDecimals(value: string): boolean {
-  if (value === "INF") return true;
-  if (!/^-?(?:0|[1-9]\d?)$/.test(value)) return false;
-  const exponent = Number(value);
-  return Number.isSafeInteger(exponent) && exponent >= -18 && exponent <= 18;
-}
-
-/** Classify arithmetic between returned values against each filing's reported accuracy. */
-export function interpretReportedDifference(
-  delta: string,
-  currentDecimals: string,
-  priorDecimals: string,
-): "change_exceeds_precision" | "within_reported_precision" | "no_reported_difference" | null {
-  if (!validReportedDecimals(currentDecimals) || !validReportedDecimals(priorDecimals)) return null;
-  const deltaParts = decimalParts(delta);
-  if (!deltaParts) return null;
-  const quantum = (reportedDecimals: string): { units: bigint; scale: number } => {
-    if (reportedDecimals === "INF") return { units: 0n, scale: 0 };
-    const exponent = Number(reportedDecimals);
-    return exponent < 0
-      ? { units: 10n ** BigInt(-exponent), scale: 0 }
-      : { units: 1n, scale: exponent };
-  };
-  const currentQuantum = quantum(currentDecimals);
-  const priorQuantum = quantum(priorDecimals);
-  const commonScale = Math.max(deltaParts.scale, currentQuantum.scale, priorQuantum.scale);
-  const deltaUnits = deltaParts.units * 10n ** BigInt(commonScale - deltaParts.scale);
-  const currentUncertainty = currentQuantum.units * 10n ** BigInt(commonScale - currentQuantum.scale);
-  const priorUncertainty = priorQuantum.units * 10n ** BigInt(commonScale - priorQuantum.scale);
-  // SEC allows decimals to describe rounding or truncation, so use the full
-  // precision quantum for each reported value instead of assuming half-quantum rounding.
-  const conservativeBound = currentUncertainty + priorUncertainty;
-  const magnitude = deltaUnits < 0n ? -deltaUnits : deltaUnits;
-  if (conservativeBound > 0n && magnitude <= conservativeBound) return "within_reported_precision";
-  if (conservativeBound === 0n && deltaUnits === 0n) return "no_reported_difference";
-  return "change_exceeds_precision";
 }
 
 function durationClass(startDate: string | null, endDate: string): PersistedFundamentalFact["durationClass"] {
@@ -465,46 +379,6 @@ export function companyFactsPeriodIdentity(fact: Pick<PersistedFundamentalFact, 
 
 const comparisonKey = companyFactsPeriodIdentity;
 
-export type FundamentalPeriodFact = Pick<PersistedFundamentalFact,
-  "companyId" | "cik" | "metric" | "taxonomy" | "concept" | "unit" | "startDate" | "endDate"
-  | "durationClass" | "form" | "accession" | "acceptedAt" | "amended">;
-
-function utcDay(date: string | null): number | null {
-  if (date == null || isoDate(date) == null) return null;
-  return Date.parse(`${date}T00:00:00.000Z`);
-}
-
-export function classifyPeriodAlignment(
-  prior: FundamentalPeriodFact,
-  current: FundamentalPeriodFact,
-): FundamentalPeriodAlignment | null {
-  if (prior.companyId !== current.companyId || prior.cik !== current.cik
-    || prior.metric !== current.metric || prior.taxonomy !== current.taxonomy
-    || prior.concept !== current.concept || prior.unit !== current.unit
-    || prior.durationClass === "unknown" || prior.durationClass !== current.durationClass
-    || prior.form !== current.form || !prior.accession || prior.accession !== current.accession
-    || prior.acceptedAt == null || prior.acceptedAt !== current.acceptedAt
-    || prior.amended || current.amended) return null;
-
-  const priorStart = utcDay(prior.startDate);
-  const priorEnd = utcDay(prior.endDate);
-  const currentStart = utcDay(current.startDate);
-  const currentEnd = utcDay(current.endDate);
-  if (priorStart == null || priorEnd == null || currentStart == null || currentEnd == null
-    || priorEnd < priorStart || currentEnd < currentStart
-    || currentStart <= priorStart || currentEnd <= priorEnd) return null;
-
-  if (addOneCalendarYear(prior.startDate) === current.startDate
-    && addOneCalendarYear(prior.endDate) === current.endDate) return "calendar_anniversary";
-
-  const startShift = (currentStart - priorStart) / DAY_MS;
-  const endShift = (currentEnd - priorEnd) / DAY_MS;
-  if (startShift !== endShift || ![364, 371].includes(startShift)
-    || currentEnd - currentStart !== priorEnd - priorStart) return null;
-  if (current.durationClass === "annual" && currentStart - priorEnd !== DAY_MS) return null;
-  return startShift === 364 ? "same_filing_52_week" : "same_filing_53_week";
-}
-
 function resolvedFacts(facts: readonly PersistedFundamentalFact[], coverage: string[]): PersistedFundamentalFact[] {
   const groups = new Map<string, PersistedFundamentalFact[]>();
   for (const fact of facts) {
@@ -543,15 +417,6 @@ export function comparePersistedFundamentalFacts(inputFacts: readonly PersistedF
   return { facts, comparisons: facts.map((fact) => comparisonFor(fact, facts)), coverage };
 }
 
-export function addOneCalendarYear(date: string | null): string | null {
-  if (!date || epochFromDate(date) == null) return null;
-  const [year, month, day] = date.split("-").map(Number);
-  const targetYear = year! + 1;
-  const targetMonth = month! - 1;
-  const finalDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
-  return `${targetYear}-${String(month).padStart(2, "0")}-${String(Math.min(day!, finalDay)).padStart(2, "0")}`;
-}
-
 function comparisonFor(fact: PersistedFundamentalFact, facts: readonly PersistedFundamentalFact[]): FundamentalComparison {
   if (fact.amended) return { metric: fact.metric, state: "not_comparable", periodAlignment: null, currentFactId: fact.id, priorFactId: null, delta: null, percentChange: null, changeInterpretation: "withheld", reason: "The current fact comes from an amended filing; review the filing before comparing." };
   if (fact.durationClass === "unknown" || fact.startDate == null || fact.acceptedAt == null) {
@@ -573,7 +438,7 @@ function comparisonFor(fact: PersistedFundamentalFact, facts: readonly Persisted
   }
   const { prior, alignment: periodAlignment } = priorCandidates[0]!;
   const precisionMetadataValid = (candidate: PersistedFundamentalFact): boolean => candidate.reportedPrecisionStatus === "declared"
-    ? candidate.reportedDecimals != null && validReportedDecimals(candidate.reportedDecimals)
+    ? candidate.reportedDecimals != null && isValidReportedDecimals(candidate.reportedDecimals)
     : candidate.reportedDecimals === null && (candidate.reportedPrecisionStatus === "missing" || candidate.reportedPrecisionStatus === "invalid");
   if (!precisionMetadataValid(fact) || !precisionMetadataValid(prior)
     || fact.reportedPrecisionStatus === "invalid" || prior.reportedPrecisionStatus === "invalid") {
@@ -604,7 +469,7 @@ function comparisonFor(fact: PersistedFundamentalFact, facts: readonly Persisted
   else reasonParts.push("Both XBRL inputs declare decimals=INF; the calculation uses values as declared in those filings.");
   if (!precisionKnown) reasonParts.push("Percentage change is withheld because the SEC source precision metadata is unavailable.");
   else if (!bothInputsDeclaredExact && !precisionWithinBound) reasonParts.push("Percentage change is withheld because one or both SEC amounts have finite reported precision.");
-  else if (percentChange === null && !precisionWithinBound && decimalParts(prior.value)!.units <= 0n) reasonParts.push("Percentage change is withheld because the prior value is zero or negative.");
+  else if (percentChange === null && !precisionWithinBound && exactDecimalIsPositive(prior.value) === false) reasonParts.push("Percentage change is withheld because the prior value is zero or negative.");
   return { metric: fact.metric, state: "comparable", periodAlignment, currentFactId: fact.id, priorFactId: prior.id,
     delta: calculation.delta, percentChange, changeInterpretation, reason: reasonParts.length ? reasonParts.join(" ") : null };
 }
@@ -638,17 +503,18 @@ export class CompanyFundamentals {
   private readonly externalRequestsEnabled: boolean;
   private readonly secCompanyFactsEnabled: boolean;
   private readonly userAgent: string;
-  private readonly fetcher: typeof fetch;
+  private readonly fetcher: typeof fetch | undefined;
   private readonly now: () => number;
   private readonly inflight = new Map<string, Promise<FundamentalRefreshResult>>();
   private inflightCompanyId: string | null = null;
+  private issuerDirectoryInFlight: Promise<SecIssuerDirectoryView> | null = null;
 
   constructor(options: CompanyFundamentalsOptions) {
     this.db = options.db;
     this.externalRequestsEnabled = options.externalRequestsEnabled;
     this.secCompanyFactsEnabled = options.secCompanyFactsEnabled;
     this.userAgent = options.userAgent;
-    this.fetcher = options.fetcher ?? globalThis.fetch;
+    this.fetcher = options.fetcher;
     this.now = options.now ?? Date.now;
   }
 
@@ -673,6 +539,114 @@ export class CompanyFundamentals {
   private hasSavedFacts(companyId: string): boolean {
     const snapshot = this.db.latestCompanyFundamentals(companyId);
     return snapshot != null && resolvedFacts(snapshot.facts, snapshot.coverage).length > 0;
+  }
+
+  private issuerDirectoryBlockedReason(): string | null {
+    if (!this.externalRequestsEnabled) return "External requests are disabled.";
+    if (!this.secCompanyFactsEnabled) return "Issuer discovery needs the separate sec_company_facts request scope and matching source-use approval.";
+    if (!this.userAgent) return "The SEC request identity is not configured for this Sentiment Desk process.";
+    if (providerCoolingDown(this.db, "sec", this.now())) return "The SEC provider cooldown is active.";
+    if (!this.db.externalRequestAllowed()) return "Local storage capacity is paused; SEC requests are not sent.";
+    return null;
+  }
+
+  readIssuerDirectory(query = ""): SecIssuerDirectoryView {
+    const normalizedQuery = query.trim().slice(0, 100);
+    const snapshot = this.db.readSecIssuerDirectorySnapshot();
+    const now = this.now();
+    const retrievedAt = snapshot ? Date.parse(snapshot.retrievedAt) : NaN;
+    const validClock = Number.isFinite(retrievedAt) && retrievedAt <= now;
+    const freshness: SecIssuerDirectoryView["freshness"] = snapshot == null || !validClock ? "unknown"
+      : now - retrievedAt <= SEC_ISSUER_DIRECTORY_FRESH_FOR_MS ? "current" : "stale";
+    const lowerQuery = normalizedQuery.toLocaleLowerCase("en-US");
+    const matches = snapshot && validClock && lowerQuery.length >= 2
+      ? snapshot.entries.filter((entry) => entry.ticker.toLocaleLowerCase("en-US").includes(lowerQuery)
+        || entry.name.toLocaleLowerCase("en-US").includes(lowerQuery) || entry.cik.includes(normalizedQuery))
+        .sort((left, right) => {
+          const rank = (entry: SecIssuerDirectoryEntry) => entry.ticker.toLocaleLowerCase("en-US") === lowerQuery || entry.cik === normalizedQuery ? 0
+            : entry.ticker.toLocaleLowerCase("en-US").startsWith(lowerQuery) ? 1
+              : entry.name.toLocaleLowerCase("en-US").startsWith(lowerQuery) ? 2 : 3;
+          return rank(left) - rank(right) || left.name.localeCompare(right.name) || left.ticker.localeCompare(right.ticker);
+        }).slice(0, MAX_SEC_ISSUER_DIRECTORY_SEARCH_ROWS)
+      : [];
+    const lastAttempt = Number(this.db.getKv("sec-issuer-directory:last-attempt") ?? NaN);
+    const nextRefreshAt = Number.isSafeInteger(lastAttempt) && lastAttempt >= 0
+      ? new Date(lastAttempt + SEC_ISSUER_DIRECTORY_REFRESH_INTERVAL_MS).toISOString() : null;
+    const refreshCooldown = nextRefreshAt != null && Date.parse(nextRefreshAt) > now;
+    const blockedReason = this.issuerDirectoryBlockedReason();
+    const state: SecIssuerDirectoryView["state"] = !snapshot ? "not_loaded"
+      : !validClock ? "failed"
+      : freshness === "stale" ? "stale" : snapshot.entries.length === 0 ? "empty" : "ready";
+    const message = !snapshot
+      ? blockedReason ?? "Search is waiting for an explicit SEC directory check. SEC does not report the directory's source update time; the app will show when it was retrieved."
+      : !validClock ? "The saved directory has an invalid retrieval clock and is withheld from search. Check SEC again."
+        : lowerQuery.length < 2 ? "Enter at least two characters to search by issuer name, ticker, or CIK."
+          : freshness === "stale" ? "The saved SEC mapping is older than 24 hours. Results remain searchable with a stale label; refresh to check the current mapping."
+            : null;
+    return {
+      state, freshness, query: normalizedQuery, rows: matches,
+      receipt: snapshot ? { source: snapshot.source, retrievedAt: snapshot.retrievedAt, sha256: snapshot.sha256, rowCount: snapshot.entries.length } : null,
+      canRefresh: blockedReason == null && !refreshCooldown,
+      nextRefreshAt,
+      message: refreshCooldown && blockedReason == null ? `SEC directory checks are limited to one attempt every 15 minutes. Next check after ${nextRefreshAt}.` : message,
+    };
+  }
+
+  refreshIssuerDirectory(): Promise<SecIssuerDirectoryView> {
+    if (this.issuerDirectoryInFlight) return this.issuerDirectoryInFlight;
+    const operation = this.acquireIssuerDirectory().finally(() => {
+      if (this.issuerDirectoryInFlight === operation) this.issuerDirectoryInFlight = null;
+    });
+    this.issuerDirectoryInFlight = operation;
+    return operation;
+  }
+
+  private async acquireIssuerDirectory(): Promise<SecIssuerDirectoryView> {
+    const now = this.now();
+    const blockedReason = this.issuerDirectoryBlockedReason();
+    if (blockedReason) return { ...this.readIssuerDirectory(), state: "unavailable", canRefresh: false, message: blockedReason };
+    const lastAttempt = Number(this.db.getKv("sec-issuer-directory:last-attempt") ?? NaN);
+    const nextAllowedAt = Number.isSafeInteger(lastAttempt) && lastAttempt >= 0
+      ? lastAttempt + SEC_ISSUER_DIRECTORY_REFRESH_INTERVAL_MS : null;
+    if (nextAllowedAt != null && now < nextAllowedAt) {
+      return { ...this.readIssuerDirectory(), state: "rate_limited", canRefresh: false,
+        nextRefreshAt: new Date(nextAllowedAt).toISOString(),
+        message: `SEC directory checks are limited to one attempt every 15 minutes. The saved snapshot remains available until ${new Date(nextAllowedAt).toISOString()}.` };
+    }
+    if (!this.db.prepareExternalWork()) {
+      return { ...this.readIssuerDirectory(), state: "unavailable", canRefresh: false, message: "Local storage capacity is paused; SEC requests are not sent." };
+    }
+    try { this.db.setKv("sec-issuer-directory:last-attempt", String(now)); }
+    catch { return { ...this.readIssuerDirectory(), state: "unavailable", canRefresh: false, message: "The SEC request attempt could not be saved, so no request was sent." }; }
+    try {
+      const result = await this.requestJson(SEC_ISSUER_DIRECTORY_URL, this.userAgent, SEC_ISSUER_DIRECTORY_MAX_BYTES);
+      const entries = parseOfficialTickerExchangeDirectory(result.body);
+      const snapshot: SecIssuerDirectorySnapshot = {
+        source: SEC_ISSUER_DIRECTORY_URL,
+        retrievedAt: new Date(result.response.retrievedAt).toISOString(),
+        sha256: result.response.sha256,
+        sourceBody: result.response.body,
+        entries,
+      };
+      this.db.saveSecIssuerDirectorySnapshot(snapshot);
+      clearProviderRateLimit(this.db, "sec");
+      this.db.logEvent("info", "sec-issuer-directory", `Saved ${entries.length} SEC ticker/exchange mappings for explicit issuer search.`);
+      return this.readIssuerDirectory();
+    } catch (error) {
+      if (error instanceof ProviderRateLimitError && !providerCoolingDown(this.db, "sec", this.now())) {
+        recordProviderRateLimit({ db: this.db, provider: "sec", minDelayMs: 15 * 60_000, retryAfterMs: error.retryAfterMs, now: this.now() });
+      }
+      const rateLimited = error instanceof ProviderRateLimitError || providerCoolingDown(this.db, "sec", this.now());
+      const prior = this.readIssuerDirectory();
+      const message = error instanceof StorageCapacityError
+        ? "The SEC response was not saved because local storage capacity is paused; the prior snapshot was retained."
+        : error instanceof SecFundamentalsError ? `${error.message} The prior snapshot was retained.`
+          : rateLimited ? "The SEC rate-limited this check; the prior snapshot was retained. Wait for the provider cooldown before retrying."
+            : "The SEC issuer directory could not be refreshed; the prior snapshot was retained.";
+      this.db.logEvent("warn", "sec-issuer-directory", message);
+      return { ...prior, state: rateLimited ? "rate_limited" : "failed", canRefresh: false,
+        nextRefreshAt: new Date(now + SEC_ISSUER_DIRECTORY_REFRESH_INTERVAL_MS).toISOString(), message };
+    }
   }
 
   read(companyId: string): CompanyFundamentalsView {
@@ -872,20 +846,20 @@ export class CompanyFundamentals {
     if (!this.externalRequestsEnabled || !this.secCompanyFactsEnabled || !this.userAgent || !this.db.externalRequestAllowed()) {
       throw new ExternalRequestPausedError();
     }
-    await paceProviderRequest("sec", 125);
     if (!this.db.prepareExternalWork()) throw new ExternalRequestPausedError();
     const startedAt = this.now();
     let response: Response;
     try {
-      response = await this.fetcher(url, {
+      response = await (this.fetcher ? this.fetcher(url, {
         method: "GET", redirect: "error", signal: AbortSignal.timeout(SEC_TIMEOUT_MS),
         headers: { "user-agent": userAgent, accept: "application/json" },
-      });
+      }) : requestSecResponse(url, {maxBytes, timeoutMs: SEC_TIMEOUT_MS, ttlSeconds: url.includes("/files/") ? 86400 : 60}));
     } catch (error) {
       if (error instanceof ExternalRequestPausedError) throw error;
       if (error instanceof TypeError && /redirect/i.test(error.message)) throw new SecFundamentalsError("SEC redirected the request; this adapter does not follow redirects.");
       throw error;
     }
+    if (response.url && response.url !== url) throw new SecFundamentalsError("SEC returned a different endpoint URL; the response is not saved.");
     if (response.status === 429) {
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
       recordProviderRateLimit({ db: this.db, provider: "sec", minDelayMs: 1_000, retryAfterMs, now: this.now() });
@@ -925,7 +899,7 @@ export class CompanyFundamentals {
     let body: unknown;
     try { body = parseLosslessJson(text); }
     catch { throw new SecFundamentalsError("SEC returned malformed JSON."); }
-    const retrievedAt = this.now();
+    const retrievedAt = this.fetcher ? this.now() : Date.parse(secRetrievedAt(response));
     return { response: { url, startedAt, retrievedAt, body: text, bodyBytes: buffer.byteLength, sha256: digest }, body, itemCount: 1 };
   }
 
@@ -936,7 +910,8 @@ export class CompanyFundamentals {
       const directoryPayload = { endpoint: "ticker_directory" as const, ...directoryResult.response, itemCount: directoryResult.itemCount };
       this.db.persistCompanyFundamentalPayloadReceipt({ attemptId, companyId: company.id, payload: directoryPayload });
       payloads.push(directoryPayload);
-      const identity = parseCikDirectory(directoryResult.body, company.ticker);
+      const researchSubject = this.db.secIssuerResearchSubject(company.id);
+      const identity = parseCikDirectory(directoryResult.body, company.ticker, researchSubject?.cik);
 
       const submissionsResult = await this.requestJson(`${SEC_DATA}/submissions/CIK${identity.cik}.json`, this.userAgent, SUBMISSIONS_MAX_BYTES);
       const submissionsResponsePayload = { endpoint: "submissions" as const, ...submissionsResult.response, itemCount: submissionsResult.itemCount };

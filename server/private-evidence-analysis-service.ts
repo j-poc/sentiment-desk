@@ -1,32 +1,36 @@
 import type { Company } from "./types.js";
 import type { PrivateEvidenceItem, PrivateEvidenceAnalysisRecord } from "../shared/private-evidence.js";
 import type { Desk } from "./db.js";
-import { ExternalRequestPausedError } from "./external-request-gate.js";
 import {
-  PrivateEvidenceAnalyzer,
-  preparePrivateEvidenceAnalysisRequest,
-  type PreparedPrivateEvidenceAnalysisRequest,
+  PrivateEvidenceAnalysisError,
+  type PrivateEvidenceAnalysisInput,
 } from "./private-evidence-analysis.js";
+import {
+  ChatGPTPlanPrivateEvidenceAnalyzer,
+  prepareChatGPTPlanPrivateEvidenceRequest,
+  type PreparedChatGPTPlanPrivateEvidenceRequest,
+} from "./chatgpt-plan-private-evidence.js";
 
 export type PrivateEvidenceAnalysisAttempt = {
   begin: (prepared: { payloadSha256: string; evidenceSha256: string; requestBytes: number }) => boolean;
   cancelBeforeDispatch: (payloadSha256: string) => void;
 };
 
+type PlanAnalyzer = Pick<ChatGPTPlanPrivateEvidenceAnalyzer, "configured" | "analyzePrepared">;
+
 export interface PrivateEvidenceAnalysisServiceOptions {
   loopbackBound: boolean;
   privateStoreReady: boolean;
   externalRequestsEnabled: boolean;
-  featureEnabled: boolean;
-  apiKey: string;
-  accountUseApproved: boolean;
+  planConnected: () => boolean;
+  modelAvailable: () => boolean | null;
+  planProviderPaused?: () => boolean;
   maxRequestsPerDay: number;
   maxRequestBytesPerDay: number;
-  maxDailyCostMicros: number;
-  db: Pick<Desk, "externalRequestAllowed" | "storageCapacity" | "reserveOpenAIEvaluationBudget">;
-  analyzer?: Pick<PrivateEvidenceAnalyzer, "configured" | "analyzePrepared">;
+  db: Pick<Desk, "externalRequestAllowed" | "storageCapacity" | "reserveChatGPTPlanAuxiliaryRequest" | "markChatGPTPlanAuxiliaryRequestDispatched" | "finishChatGPTPlanAuxiliaryRequest">;
+  analyzer?: PlanAnalyzer;
   utcDay?: () => string;
-}
+};
 
 export interface PrivateEvidenceAnalysisService {
   readonly enabled: boolean;
@@ -34,17 +38,15 @@ export interface PrivateEvidenceAnalysisService {
   analyze: (company: Company, evidence: PrivateEvidenceItem, attempt: PrivateEvidenceAnalysisAttempt) => Promise<PrivateEvidenceAnalysisRecord>;
 }
 
-function unavailableReason(options: PrivateEvidenceAnalysisServiceOptions, analyzer: Pick<PrivateEvidenceAnalyzer, "configured" | "analyzePrepared">): string | null {
+function unavailableReason(options: PrivateEvidenceAnalysisServiceOptions): string | null {
   if (!options.loopbackBound) return "private_evidence_requires_loopback_binding";
   if (!options.privateStoreReady) return "private_evidence_storage_unavailable";
   if (!options.externalRequestsEnabled) return "external_requests_are_disabled";
-  if (!options.featureEnabled) return "private_note_analysis_is_disabled_by_operator";
-  if (options.apiKey.trim() === "") return "openai_api_key_is_missing";
-  if (!options.accountUseApproved) return "openai_account_use_is_not_approved";
-  if (options.maxRequestsPerDay <= 0 || options.maxRequestBytesPerDay <= 0 || options.maxDailyCostMicros <= 0) {
-    return "shared_openai_daily_budgets_are_disabled";
-  }
-  if (analyzer.configured === false) return "openai_api_key_is_missing";
+  if (!options.planConnected()) return "chatgpt_plan_not_connected";
+  if (options.planProviderPaused?.()) return "chatgpt_plan_provider_paused";
+  if (options.modelAvailable() === false) return "chatgpt_plan_model_unavailable";
+  if (options.maxRequestsPerDay <= 0 || options.maxRequestBytesPerDay <= 0) return "chatgpt_plan_local_limits_disabled";
+  if (!options.analyzer || options.analyzer.configured === false) return "chatgpt_plan_analyzer_unavailable";
   try {
     if (!options.db.storageCapacity().writesAllowed) return "private_evidence_storage_read_only";
     if (!options.db.externalRequestAllowed()) return "external_requests_are_paused";
@@ -58,42 +60,72 @@ function codedError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
 }
 
-export function createPrivateEvidenceAnalysisService(options: PrivateEvidenceAnalysisServiceOptions): PrivateEvidenceAnalysisService {
-  const analyzer = options.analyzer ?? new PrivateEvidenceAnalyzer({ apiKey: options.apiKey });
-  const service: PrivateEvidenceAnalysisService = {
-    get enabled() { return unavailableReason(options, analyzer) === null; },
-    get blockedReason() { return unavailableReason(options, analyzer); },
-    async analyze(company, evidence, attempt) {
-      if (unavailableReason(options, analyzer) !== null) throw codedError("private_evidence_analysis_disabled");
+function failureOutcome(error: unknown, dispatched: boolean): "not_sent" | "rejected" | "unknown" {
+  if (!dispatched) return "not_sent";
+  if (error instanceof PrivateEvidenceAnalysisError) {
+    if (error.category === "not_configured" && !error.outcomeUnknown) return "not_sent";
+    if (error.category === "provider_outcome_unknown" || error.category === "transport_unknown" || error.outcomeUnknown) return "unknown";
+    if (error.category === "http_rejected" || error.category === "refused" || error.category === "invalid_response" ||
+        error.category === "ungrounded_output" || error.category === "response_unreadable") return "rejected";
+  }
+  return "unknown";
+}
 
-      const prepared = preparePrivateEvidenceAnalysisRequest({ company, evidence });
-      if (!attempt.begin({ payloadSha256: prepared.payloadSha256, evidenceSha256: prepared.evidenceSha256, requestBytes: prepared.requestBytes })) {
+export function createPrivateEvidenceAnalysisService(options: PrivateEvidenceAnalysisServiceOptions): PrivateEvidenceAnalysisService {
+  const service: PrivateEvidenceAnalysisService = {
+    get enabled() { return unavailableReason(options) === null; },
+    get blockedReason() { return unavailableReason(options); },
+    async analyze(company, evidence, attempt) {
+      if (unavailableReason(options) !== null) throw codedError("private_evidence_analysis_disabled");
+
+      const input: PrivateEvidenceAnalysisInput = { company, evidence };
+      const prepared = prepareChatGPTPlanPrivateEvidenceRequest(input);
+      if (!attempt.begin({ payloadSha256: prepared.request.payloadSha256, evidenceSha256: prepared.evidenceSha256, requestBytes: prepared.request.requestBytes })) {
         throw codedError("private_evidence_analysis_attempt_already_recorded");
       }
-      let reservation: ReturnType<Desk["reserveOpenAIEvaluationBudget"]>;
+      let reservation: ReturnType<Desk["reserveChatGPTPlanAuxiliaryRequest"]>;
+      const utcDay = (options.utcDay ?? (() => new Date().toISOString().slice(0, 10)))();
       try {
-        reservation = options.db.reserveOpenAIEvaluationBudget({
-          utcDay: (options.utcDay ?? (() => new Date().toISOString().slice(0, 10)))(),
-          requests: 1,
-          requestBytes: prepared.requestBytes,
-          costMicros: prepared.reservedCostMicros,
+        reservation = options.db.reserveChatGPTPlanAuxiliaryRequest({
+          utcDay,
+          requestBytes: prepared.request.requestBytes,
           maxRequests: options.maxRequestsPerDay,
           maxRequestBytes: options.maxRequestBytesPerDay,
-          maxDailyCostMicros: options.maxDailyCostMicros,
         });
       } catch (error) {
-        attempt.cancelBeforeDispatch(prepared.payloadSha256);
+        attempt.cancelBeforeDispatch(prepared.request.payloadSha256);
         throw error;
       }
       if (!reservation.reserved) {
-        attempt.cancelBeforeDispatch(prepared.payloadSha256);
-        throw codedError(reservation.reason === "exhausted"
+        attempt.cancelBeforeDispatch(prepared.request.payloadSha256);
+        throw codedError(reservation.reason === "exhausted" || reservation.reason === "closed"
           ? "private_evidence_analysis_budget_exhausted" : "private_evidence_analysis_storage_read_only");
       }
+
+      let dispatched = false;
       try {
-        return await analyzer.analyzePrepared(prepared) as PrivateEvidenceAnalysisRecord;
+        const result = await options.analyzer!.analyzePrepared(prepared, () => {
+          const marked = options.db.markChatGPTPlanAuxiliaryRequestDispatched(reservation.id);
+          dispatched = marked;
+          return marked;
+        });
+        if (!options.db.finishChatGPTPlanAuxiliaryRequest(reservation.id, "completed")) {
+          throw codedError("private_evidence_analysis_usage_receipt_failed");
+        }
+        return result;
       } catch (error) {
-        if (error instanceof ExternalRequestPausedError) throw codedError("private_evidence_analysis_external_requests_paused");
+        const outcome = failureOutcome(error, dispatched);
+        if (outcome === "not_sent") {
+          // The note store's unique in-progress attempt represents consent to
+          // one dispatch. Release it when plan/catalog preflight proves that
+          // no POST occurred, so the user can retry after reconnecting.
+          attempt.cancelBeforeDispatch(prepared.request.payloadSha256);
+        }
+        try { options.db.finishChatGPTPlanAuxiliaryRequest(reservation.id, outcome); }
+        catch { /* startup recovery converts any durable in-flight reservation to a closed unknown outcome */ }
+        if (error instanceof PrivateEvidenceAnalysisError && error.category === "not_configured" && !dispatched) {
+          throw codedError("private_evidence_analysis_disabled");
+        }
         throw error;
       }
     },
@@ -101,4 +133,4 @@ export function createPrivateEvidenceAnalysisService(options: PrivateEvidenceAna
   return service;
 }
 
-export type { PreparedPrivateEvidenceAnalysisRequest };
+export type { PreparedChatGPTPlanPrivateEvidenceRequest };

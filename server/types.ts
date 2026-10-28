@@ -121,9 +121,11 @@ export type MentionStatus = "pending" | "scoring" | "retrying" | "scored" | "off
 
 export interface CategoricalClassification {
   provider: "openai_luna";
+  /** Provider account/billing path, separate from the model identity. */
+  accountingRoute?: "api_key" | "chatgpt_plan";
   modelRequested: string;
   modelReturned: string | null;
-  serviceTierRequested: "default";
+  serviceTierRequested: "default" | null;
   serviceTier: string | null;
   promptVersion: string;
   promptSha256: string;
@@ -154,8 +156,12 @@ export interface CategoricalClassification {
 }
 
 export interface CategoricalClassificationDTO extends CategoricalClassification {
+  /** Which persisted request ledger supplies this receipt. */
+  receiptOrigin?: "scoring" | "explicit_byok";
   /** Null only for legacy rows created before attempts were linked. */
   attemptId: string | null;
+  /** Explicit persisted provider account/billing route for this classification. */
+  accountingRoute: "api_key" | "chatgpt_plan";
 }
 
 export interface CategoricalTrendCounts {
@@ -177,7 +183,7 @@ export interface CategoricalTrendPoint {
 export interface CategoricalTrendLineage {
   promptVersion: string;
   promptSha256: string;
-  profileSha256: string;
+  profileSha256: string | null;
   schemaVersion: string;
   schemaSha256: string;
   count: number;
@@ -189,21 +195,45 @@ export interface CategoricalTrendResult {
   fromMs: number;
   throughMs: number;
   bucketMs: number;
-  timeBasis: "classification_available_at";
+  timeBasis: "validated_source_time";
   countBasis: "immutable_source_observation";
   snapshotGeneration: string;
   snapshotKey: string;
   points: CategoricalTrendPoint[];
   counts: CategoricalTrendCounts;
   eligibleObservationCount: number;
+  plottedObservationCount: number;
+  untimedObservationCount: number;
   candidateClassificationCount: number;
   withheldInvalidCount: number;
   latestClassifiedAt: number | null;
   lineages: CategoricalTrendLineage[];
+  /** Present only for provider-specific chart lanes; the legacy Luna route remains unchanged. */
+  classifierProvider?: "google_gemini";
+  classifierModel?: "gemini-3.8-flash";
+}
+
+export interface ProviderCategoricalEvidence {
+  provider: "google_gemini";
+  modelRequested: "gemini-3.8-flash";
+  modelReturned: "gemini-3.8-flash";
+  attemptId: string;
+  sourceSha256: string;
+  sentiment: "negative" | "neutral" | "positive" | null;
+  eventType: string | null;
+  takeaway: string | null;
+  about: boolean | null;
+  material: boolean | null;
+  investorRelevant: boolean | null;
+  evidenceSufficient: boolean;
+  summary: string | null;
+  supportingExcerpt: string | null;
+  disposition: "classified" | "excluded" | "review_required";
+  classifiedAt: number;
 }
 
 export interface CategoricalBucketCursor {
-  classifiedAt: number;
+  sourceTimeAt: number;
   id: string;
 }
 
@@ -262,6 +292,8 @@ export interface MentionDTO {
   snippet: string;
   /** Present on selected-company saved-history/feed rows; false marks a retained weak text match. */
   issuerIdentityStrong?: boolean;
+  /** Deterministic company-business relevance; false records remain available in saved history. */
+  companyBusinessRelevant?: boolean;
   /** Source-declared event time, null when the source did not provide one. */
   publishedAt: number | null;
   aggregatorPublishedAt?: number | null;
@@ -279,6 +311,8 @@ export interface MentionDTO {
   usageCheckRequired: boolean;
   score: MentionScore | null;
   classification?: CategoricalClassificationDTO | null;
+  /** Explicit BYOK categorical lineage; kept separate from Jev and GPT-6 Luna fields. */
+  providerCategorical?: ProviderCategoricalEvidence;
   analystResearchDisposition?: "investigate" | "dismissed" | null;
   analystResearchDispositionUpdatedAt?: number | null;
   error: string | null;

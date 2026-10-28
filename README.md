@@ -1,16 +1,28 @@
 # Sentiment Desk
 
-Sentiment Desk is a private, single-user research product that can collect from
-explicitly enabled public-source adapters. It starts in saved-data-only mode;
-live requests require per-source configuration. The repository is visible for
-inspection and is not a hosted multi-user data service.
+Sentiment Desk has a local research app and an authenticated cloud research
+app. Local mode is single-user. Cloud mode keeps company research workspaces
+private to each signed-in account and shares published SEC source data.
 
-**OpenAI GPT-6 Luna** is selected for new per-item sentiment and event
-classification. It uses strict categorical Structured Outputs through Responses;
-it does not supply Jev probability vectors or a numeric impact index. Missing
-credentials, account/source approvals or finite request, byte and dollar budgets
-leave observations pending. No automatic TypeSafe fallback is permitted.
-[Official model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna).
+Cloud mode starts from saved data and retrieves shared SEC records on explicit
+refresh. Local mode can retrieve public SEC issuer, filing, and CompanyFacts
+records out of the box; other external collectors remain disabled by default.
+Every model request still requires a per-item or per-company review and send
+action. Local provider keys are stored in the operating system credential
+store. Cloud company assessments accept OpenAI or Gemini keys for one request
+and do not save them in application storage.
+
+Local source classification supports three separate provider choices. OpenAI
+uses GPT-6 Luna and Gemini uses Gemini 3.8 Flash for categorical source
+classification. TypeSafe Jev keeps its own sentiment rubric and result history.
+The local app stores each provider key in the operating system credential store.
+Saving or verifying a key does not classify a source. You choose a saved source,
+review what will be sent, and authorize each model request.
+
+Cloud company evidence assessments support OpenAI GPT-6 Luna and Gemini 3.8
+Flash. The user supplies a key for the individual request. TypeSafe Jev remains
+a source-level workflow and is not a company-fundamentals assessment. These
+provider paths do not silently substitute one model for another.
 
 Existing genuine Jev judgments remain unchanged under their historical profile.
 Luna categories are stored separately and never become synthetic probabilities,
@@ -43,15 +55,15 @@ inspection; it has no autonomous trading authority.
   watchlist, and selected-company header. Price charts plot only actual
   provider observations inside the selected time window; missing periods are
   left empty and an out-of-window latest quote is never carried forward.
-- **Judgment**: Luna requests require `OPENAI_API_KEY`, account-use attestation,
-  approved source overlap, and positive finite daily request, serialized-byte and
-  estimated-dollar limits. Preparation records prompt/schema/profile and exact
-  request hashes. Each result retains actual provider/model/response identity,
-  source support and usage; missing evidence is review-required, not neutral.
-  Transport-unknown requests are not resubmitted automatically and retain their
-  worst-case reservation. Cost estimates are not provider invoices or balances.
-  Historical Jev judgments remain readable, but new classification dispatch is
-  Luna-only. The retired TypeSafe route cannot be selected for new inputs.
+- **Judgment**: local OpenAI and Gemini requests use source-level categorical
+  outputs. TypeSafe Jev uses its separate source-level rubric and probability
+  fields. Provider keys, source approvals, external-request gates, and local
+  daily request and byte limits apply before a request can run. The app records
+  provider, model, source identity, and request outcome. It does not claim to
+  know provider billing or account quota. Uncertain delivery is not retried
+  automatically. Cloud company assessments use selected SEC facts and filing
+  metadata; filing text is not sent. Their citations identify supplied records,
+  but do not independently prove that every model interpretation is correct.
 
 ## The terminal
 
@@ -75,7 +87,7 @@ The selected-company workspace links company, history and source evidence:
   filters work with each profile. Luna shows supported categories and source
   quotations; Jev shows its actual probability-derived fields. The drawer links
   the saved collection URL and records source/model request provenance.
-- **Sources & operations**: selected-provider gates, source failures, pending
+- **Data connections & operations**: selected-provider gates, source failures, pending
   alert delivery and estimated/reserved usage. Failed health refresh preserves
   the last received evidence and remains visible.
 - **First run**: the product reports only history and readiness in the current
@@ -99,7 +111,9 @@ npm install
 cp .env.example .env
 ```
 
-Start the local API in one terminal. It uses saved real data only by default:
+Start the local API in one terminal. A fresh local install can retrieve official
+SEC issuer, filing, and company facts without a separate backend account or API
+key. Non-SEC sources remain off unless separately configured:
 
 ```bash
 npm run dev
@@ -112,54 +126,58 @@ local server:
 npm run dev:web
 ```
 
-To enable the new classifier, configure an OpenAI API key locally and explicitly
-set `OPENAI_ACCOUNT_USE_APPROVED=true`, a matching `OPENAI_ALLOWED_COLLECTORS`
-entry and finite `OPENAI_MAX_REQUESTS_PER_DAY`,
-`OPENAI_MAX_REQUEST_BYTES_PER_DAY` and `OPENAI_MAX_DAILY_COST_USD` values.
-External requests and source rights must be enabled separately. All defaults
-keep dispatch off. Do not paste keys in Git, logs or issue descriptions.
+For local model access, open **Model API Keys**, enter a key for OpenAI, Gemini,
+or TypeSafe Jev, and save it. The app clears the input after saving. Verify the
+provider connection, then choose a saved source and review the request before
+you send it. TypeSafe Jev results remain separate from OpenAI and Gemini
+classifications.
 
-`CLASSIFICATION_PROVIDER=typesafe` is rejected. Existing Jev judgments remain
-available under their saved historical semantics, but the application does
-not send new input to TypeSafe or silently move failed Jev work to Luna.
+External requests are off by default. To enable SEC reads, explicitly set
+`EXTERNAL_REQUESTS_ENABLED=true` and configure `SEC_USER_AGENT` with a real
+operator/product identifier and contact email. You can pause all external
+requests with `EXTERNAL_REQUESTS_ENABLED=false`. Model access does not enable
+additional collectors. Local request and byte limits remain in effect for
+provider calls.
 
 The SEC's [EDGAR reuse FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions)
-states public filing content is free to access and reuse, subject to SEC
-policies and fair-access limits. This is the only currently documented narrow
-source path for a first real-source classification evaluation; configure a descriptive
-`SEC_USER_AGENT`, set `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` to collect only
-EDGAR filings, and separately set `OPENAI_ALLOWED_COLLECTORS=sec_edgar` for
-Luna. Effective forwarding is the intersection of request, rights and
-provider lists, so a provider-only collector setting
-cannot forward retained records from a source that is currently disabled.
-Real-source Luna classification quality remains unvalidated. Isolated fixture
-checks establish logic only; retained historical Jev judgments do not qualify
-the new Luna profile. The frozen
+allows reuse of public filing data subject to SEC policies and fair-access
+limits. The local example enables only `sec_edgar` and `sec_company_facts`; set
+a valid SEC User-Agent before enabling requests. Add another collector only after reviewing
+its source terms and setting both `EXTERNAL_SOURCE_COLLECTORS` and
+`SOURCE_RIGHTS_APPROVED_COLLECTORS`. Local BYOK source assessments use a
+separate per-item consent flow; the `OPENAI_ALLOWED_COLLECTORS` list is for the
+automatic ChatGPT-plan pipeline.
+
+Real-source classification quality remains unvalidated. Fixture checks
+establish logic only; saved Jev judgments do not qualify the OpenAI or Gemini
+profiles. The frozen
 labeling, sampling, metrics, and pass/fail rules are in
 [`sentiment-desk-completion.md`](project-record/3-project-specs/sentiment-desk-completion.md).
-A source allowlist is a technical control, not proof of rights. New Luna
-classification remains off until direct OpenAI API access, provider-specific
-permissions, and finite account spending limits are configured.
+A source allowlist is a technical control, not proof of rights. The separate
+ChatGPT-plan classifier remains unavailable until its account connection,
+model access, source approvals, external-request opt-in, and local request/byte
+limits are ready. The BYOK flow uses the key saved for the selected provider.
+Sentiment Desk does not expose provider account balance or add API billing.
 
 ```bash
-npm run dev                # saved real data only by default on :8787
+npm run dev                # local API on :8787; network requests remain off by default
 ```
 
-After applicable source and account terms are confirmed, explicitly opt in to
-live provider traffic and add only the cleared source to both source lists:
+To pause public-source traffic, set `EXTERNAL_REQUESTS_ENABLED=false`. To add a
+source, confirm its applicable terms and include it in both source lists in
+`.env`:
 
 ```bash
-EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar npm run dev
+EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar,sec_company_facts SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar,sec_company_facts npm run dev
 ```
 
-Set a descriptive `SEC_USER_AGENT` in `.env` before using the SEC-only example.
-SEC ticker-directory lookup runs after the local API is available; transient
-failures are recorded in delivery health and retried on the SEC polling cadence.
-The global opt-in pauses every external request by default; even after it is
-enabled, only collectors listed in both `EXTERNAL_SOURCE_COLLECTORS` and
-`SOURCE_RIGHTS_APPROVED_COLLECTORS` can poll or fetch charts. The second list is
-an operator attestation, not independent verification of rights. Credentials
-alone do not enable a collector. Luna has its own account,
+The local defaults allow only official SEC sources and leave
+`SEC_USER_AGENT` blank. Configure a real contact-bearing value and explicitly
+enable external requests before SEC lookups can run. Transient failures are
+recorded in delivery health and retried on the SEC polling cadence. Only collectors listed in both
+`EXTERNAL_SOURCE_COLLECTORS` and `SOURCE_RIGHTS_APPROVED_COLLECTORS` can poll or
+fetch charts. The second list is an operator attestation, not independent
+verification of rights. Credentials alone do not enable another collector. Luna has its own account,
 source, request/byte/USD controls described above. Keep publisher feeds and Yahoo quote/chart
 endpoints out of the approval list until their exact use rights are established.
 
@@ -193,15 +211,16 @@ npm start                  # one process serves API + UI on :8787
 ## Rebuild and run with real data
 
 Docker Compose builds the server and dashboard from source and stores SQLite
-history in a named volume. It defaults to saved-data-only mode. After applicable
-source and account terms are confirmed, set `EXTERNAL_REQUESTS_ENABLED=true`
-and matching source-by-source request and approval lists. For example,
+history in a named volume. Local server defaults allow official SEC records
+only. To pause source requests, set `EXTERNAL_REQUESTS_ENABLED=false`; to add a
+collector, review its source terms and set matching request and approval lists. For example,
 `EXTERNAL_SOURCE_COLLECTORS=sec_edgar` plus
 `SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar` enables SEC filings only; SEC
-still requires a valid `SEC_USER_AGENT`. Luna remains disabled until its own key,
-account/source flags and positive finite request/byte/USD caps are configured.
-`CLASSIFICATION_PROVIDER=typesafe` is rejected; persisted Jev classifications
-remain read-only historical records.
+still requires a valid `SEC_USER_AGENT`. The ChatGPT-plan classifier remains
+paused until its account connection, source approvals, external-request switch,
+and finite local request/byte limits are ready. `CLASSIFICATION_PROVIDER=typesafe`
+remains rejected for that legacy pipeline. The separate **TypeSafe Jev** BYOK
+workflow accepts a user key and keeps its results in separate history.
 Optional Finnhub, Reddit, and X credentials do not enable those sources unless
 both their request and approval entries are present.
 
@@ -215,10 +234,10 @@ are active. Its raw directory snapshot is held in memory only.
 docker compose up --build
 ```
 
-To explicitly enable live source polling:
+For an explicit SEC-only launch:
 
 ```bash
-EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar docker compose up --build
+EXTERNAL_REQUESTS_ENABLED=true EXTERNAL_SOURCE_COLLECTORS=sec_edgar,sec_company_facts SOURCE_RIGHTS_APPROVED_COLLECTORS=sec_edgar,sec_company_facts docker compose up --build
 ```
 
 Docker Compose 2.24 or newer is required for optional `.env` loading ([Compose
@@ -234,9 +253,10 @@ use `docker compose logs -f sentiment-desk`.
 
 The application has no synthetic-data runtime. All displayed mentions must
 come from configured source collectors, and all sentiment/event judgments
-must come from the recorded provider. New categorical judgments use Luna;
-historical Jev probabilities retain their own provenance. Unconfigured judgments stay pending; generated fixtures
-are confined to automated tests and frozen evaluations. Existing simulation
+must come from the recorded provider. Local categorical judgments use the
+selected OpenAI or Gemini provider. TypeSafe Jev results keep their separate
+provenance. Unconfigured judgments stay pending; generated fixtures are
+confined to automated tests and frozen evaluations. Existing simulation
 rows from older versions remain stored for auditability but are excluded from
 the UI, aggregates, retry queue, and usage totals. EDGAR filings without
 retrievable document text are reported as partial delivery and never scored
@@ -253,20 +273,74 @@ recreates the container, then removes only its temporary volume.
 
 ## Configuration
 
+### Hosted core
+
+The hosted investor workflows use the same PostgreSQL schema locally and in
+production. The browser bundle uses Supabase Auth and row-level security; the
+Edge Functions acquire SEC JSON only on an explicit refresh. No SQLite file,
+service-role key, or source credential is used by this cloud path. Local builds
+default to the full sentiment desk. Vercel builds set `VITE_APP_MODE=cloud`
+explicitly and serve the separate SEC research surface. The cloud surface does
+not provide the local source-linked sentiment chart or ChatGPT-plan classifier.
+
+For local development, start the isolated Supabase stack and apply the checked-in
+migrations:
+
+```bash
+DOCKER_CONTEXT=colima-sentiment-desk-verify supabase start
+supabase db reset --local
+supabase status
+supabase functions serve --env-file .env
+```
+
+Set `VITE_APP_MODE=cloud`, the local Supabase URL, and its public anon or
+publishable key in `.env`. Keep the service-role key only in the local Edge
+Function environment. Configure `APP_ALLOWED_ORIGINS` for the local web origin.
+The two `SEC_*_SOURCE_ENABLED` switches stay `false` until the operator has
+verified the exact source use. A descriptive `SEC_USER_AGENT` is required for
+SEC access. Refreshes are user initiated, cached for 24 hours, bounded by
+response/row limits, and shared refresh leases enforce a source-wide cooldown.
+
+To host the web frontend, deploy this repo to Vercel with build command
+`VITE_APP_MODE=cloud npm run build:web` and output directory `dist/web` (also set
+in `vercel.json`). Set `VITE_APP_MODE=cloud` in the Vercel build environment if
+you override the repository build command. The local sentiment desk requires
+its local Hono service and SQLite store; a static cloud deployment cannot use
+that local classifier or chart API.
+Create a Supabase project on the same supported Postgres major version, apply
+`supabase/migrations` with `supabase db push`, and deploy the two functions:
+
+```bash
+supabase functions deploy refresh-sec-issuer-directory
+supabase functions deploy refresh-sec-company-evidence
+```
+
+Set only `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` as Vercel
+browser build variables. Configure Supabase Auth's site URL and redirect list
+for the production domain and set up a real transactional email provider for
+magic links. In Supabase Edge Function secrets, configure
+`APP_ALLOWED_ORIGINS`, `SEC_USER_AGENT`, `SEC_DIRECTORY_SOURCE_ENABLED=false`,
+and `SEC_COMPANY_DATA_ENABLED=false`. Supabase supplies its server-side
+function credentials. Do not put service-role or SEC operator values in Vercel
+or the browser.
+
+Remote Supabase/Vercel accounts and credentials are not part of this checkout,
+so this describes a reproducible deployment path rather than claiming a live
+deployment. The core no-ticker screen is the SEC issuer directory; it is not a
+small-cap screen. Market-cap ranking remains unavailable until a permitted
+price, shares, and corporate-action data chain is chosen and verified.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CLASSIFICATION_PROVIDER` | `openai_luna` | new-record classifier; `typesafe` is rejected, historical Jev remains read-only |
-| `OPENAI_API_KEY` | empty | direct OpenAI API credential; never derived from Codex/ChatGPT authentication |
-| `OPENAI_ACCOUNT_USE_APPROVED` | `false` | authorized account-use attestation; not independent account/terms verification |
-| `OPENAI_ALLOWED_COLLECTORS` | empty | classifier admission intersected with enabled and rights-approved sources |
-| `OPENAI_MAX_REQUESTS_PER_DAY` | `0` | durable UTC-day request reservation cap |
-| `OPENAI_MAX_REQUEST_BYTES_PER_DAY` | `0` | durable serialized request-byte cap |
-| `OPENAI_MAX_DAILY_COST_USD` | `0` | finite daily estimated cost cap; unknown/unpriced outcomes retain reservation |
-| `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to allow configured source and selected-classifier requests; the default serves saved local data only. |
-| `EXTERNAL_SOURCE_COLLECTORS` | empty | Comma-separated real collectors permitted to make network requests; examples include `sec_edgar`, `google_news_rss`, `yahoo_quote`, and `yahoo_chart`. Empty means no source polling or remote chart requests. |
-| `SOURCE_RIGHTS_APPROVED_COLLECTORS` | empty | Separate operator-attestation allowlist; a requested collector without this entry cannot make requests. It does not independently prove rights. |
+| `OPENAI_ALLOWED_COLLECTORS` | `google_news_rss,yahoo_finance_rss` | public RSS sources eligible for automatic ChatGPT-plan Luna, intersected with enabled and rights-approved sources |
+| `CHATGPT_PLAN_MAX_REQUESTS_PER_DAY` | `100` | local UTC-day reservation cap for public classification and explicitly confirmed private-note analysis; provider allowance remains controlled by ChatGPT |
+| `CHATGPT_PLAN_MAX_REQUEST_BYTES_PER_DAY` | `1638400` | local serialized-request-byte cap per UTC day (100 × 16 KiB); Luna dispatch is serialized to one request at a time |
+| `EXTERNAL_REQUESTS_ENABLED` | `false` | Set `true` to opt in to source and provider requests. |
+| `EXTERNAL_SOURCE_COLLECTORS` | `sec_edgar,sec_company_facts` | Comma-separated collectors permitted to make network requests; the local default uses official SEC records only. |
+| `SOURCE_RIGHTS_APPROVED_COLLECTORS` | `sec_edgar,sec_company_facts` | Separate source-use allowlist; a requested collector without this entry cannot make requests. It does not independently prove rights. |
 | `X_BEARER_TOKEN` | — | enables the X source; optional |
-| `SEC_USER_AGENT` | empty (SEC disabled) | required descriptive SEC User-Agent with operator contact information |
+| `SEC_USER_AGENT` | unset (SEC requests disabled) | real operator/product identifier plus contact email |
 | `DESK_HUB_INSTALLATION_FILE` | `~/.codex/references/sentiment-desk-public-data-hub-installation.json` | private descriptor selecting the same-user loopback Public Data Hub; no shared-locator fallback |
 | `POLL_SEC_SECONDS` | `90` | EDGAR submissions poll cadence |
 | `POLL_GDELT_SECONDS` | `300` | GDELT breadth poll cadence |

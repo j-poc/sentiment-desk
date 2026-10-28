@@ -1,11 +1,11 @@
 ---
 name: verify-sentiment-desk
-description: Verify SEC fundamentals recovery, explicit private-evidence consent, listed-issuer filtering, and source-bound SEC filing research cases.
+description: Verify investor company updates, local BYOK provider keys and source-bound assessments, SEC fundamentals recovery, explicit private-evidence consent, listed-issuer filtering, source-bound SEC filing research cases, and hosted cloud company research and request-only assessments.
 ---
 
 # Verify Sentiment Desk
 
-Use this skill for targeted checks of selected-company SEC fundamentals recovery, public-issuer private-evidence consent, and the SEC Recent Filings listing gate. The fundamentals and private-evidence recipe binds each run to current source and verifier fingerprints, then drives an isolated loopback instance backed by temporary SQLite databases. Its SEC adapter and private-analysis adapter are clearly labeled verifier fixtures and make no provider calls. Recent Filings directory acquisition is a separate real-public-source path; its cache tests and live-data ETL gate must not be represented by those fixtures.
+Use this skill for targeted checks of local investor research and provider-key journeys, selected-company SEC fundamentals recovery, public-issuer private-evidence consent, the SEC Recent Filings listing gate, source-bound filing research cases, and the authenticated cloud core. The legacy fundamentals and private-evidence recipe drives an isolated loopback instance backed by temporary SQLite databases. Cloud core uses a local Supabase Auth/Postgres/Edge Functions stack and a static web client; it does not fall back to SQLite. Fixture responses are verification evidence only. They make no claim about current source availability or live classification quality.
 
 ## Launch
 
@@ -60,8 +60,28 @@ The standard test suite is supplemental. Run its focused UI/API regression bound
 npm test -- --reporter=dot --maxWorkers=1 --testTimeout=20000 tests/app-private-evidence.test.ts tests/private-evidence-panel.test.tsx
 ```
 
+## Cloud core
+
+Read [the cloud core feature recipe](./features/cloud-core.md) before driving. It covers the authenticated issuer directory, CIK-scoped company research decisions, followed-company evidence baselines, source-use gates, privacy, identity guards, and readback after a PostgreSQL container restart. The API verifier seeds only local, synthetic SEC-shaped records and deletes them in its cleanup path. It rejects a non-loopback Supabase URL and must never be run against a hosted project.
+
+The browser recipe uses a local Supabase magic link captured by the local Mailpit inbox. It does not send email externally. Keep both SEC source gates false while verifying. Do not interpret synthetic verifier records as live filings or financial facts.
+
+## Local provider keys and assessments
+
+Use the changed credential and one-source flow checks before relying on local BYOK behavior:
+
+```sh
+npx vitest run tests/typesafe-jev-byok.test.ts tests/typesafe-jev-byok-api.test.ts tests/model-provider-credential-vault.test.ts tests/model-provider-settings-ui.test.tsx tests/model-provider-classifier.test.ts tests/external-request-gate.test.ts
+```
+
+These checks cover encrypted provider-scoped local credentials, the visible OpenAI/Gemini/TypeSafe cards, global request-pause enforcement, one source-bound Jev assessment, daily usage persistence, and the no-replay path when delivery is uncertain. Paused verification does not consume its allowance, and a classification blocked at the final network boundary is retained as not sent. Jev results remain in their separate append-only tables and feed; they do not alter the legacy scoring queue or categorical provider results. The adapter uses a fake response in tests, so passing them is not evidence of a live provider account or model quality.
+
+The live local desk can be checked through ordinary read-only HTTP routes at the user's loopback origin: `/api/companies/apple/mentions?hours=24&limit=5`, `/api/companies/apple/price?ticker=AAPL&hours=72`, `/api/sec-issuer-directory?q=AAPL`, and `/api/model-providers/status`. Check real source URLs, retrieval times, Yahoo delivery attribution, current SEC directory freshness, and that each provider status reveals only whether a key is configured. A chart with saved prices and a live public source is real-source evidence; it is not model-classification evidence.
+
+Never ask users to put provider secrets in chat. A live model request requires the user to enter their key in Model API Keys, review the exact source fields and provider terms in the source drawer, and affirmatively send that one item. Save and verify must not classify a source. Keep TypeSafe Jev visible as its own model and series, separate from OpenAI and Gemini. Do not use a credential from the OS vault for automated tests or expose credentials in evidence. A live provider result remains unverified until the user completes that UI flow.
+
 ## Feature map
 
-Read [the feature index](./features/README.md) before driving. The map covers selected-company SEC fundamentals recovery, local private-evidence consent, the Recent Filings active-listing cache, and the source-bound SEC filing research case. The case needs an isolated real-source run; the fixture helper does not drive it. This skill does not certify live Luna classification quality, investor outcomes, or rendered cross-device journeys.
+Read [the feature index](./features/README.md) before driving. The map covers investor company updates, local BYOK credentials and source assessments, selected-company SEC fundamentals recovery, local private-evidence consent, the Recent Filings active-listing cache, the source-bound SEC filing research case, and the hosted cloud core. The research case needs an isolated real-source run; the fixture helper does not drive it. This skill does not certify live Luna classification quality, investor outcomes, or rendered cross-device journeys.
 
 For verifier upkeep, use `$maintain-verification-skill` to reconcile this recipe and map with the source before relying on a later run.

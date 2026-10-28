@@ -43,6 +43,23 @@ function makeApp(title = "iPhone quarterly operating update") {
 }
 
 describe("analyst source-review API", () => {
+  it("routes consumer offers out of company updates without removing their saved record", async () => {
+    const { app, observationId } = makeApp("You Can Save $160 on Apple's Latest MacBook Pro During October Prime Day");
+    const updates = await app.request(`/api/companies/${encodeURIComponent(company.id)}/mentions-page?filter=all&hours=24`);
+    expect(updates.status).toBe(200);
+    expect(await updates.json()).toMatchObject({ items: [], investorRelevanceReviewCount: 1 });
+
+    const held = await app.request(`/api/companies/${encodeURIComponent(company.id)}/mentions-page?filter=relevance_review&limit=10`);
+    expect(await held.json()).toMatchObject({
+      items: [{ id: observationId, companyBusinessRelevant: false, issuerIdentityStrong: true }],
+    });
+
+    const history = await app.request(`/api/companies/${encodeURIComponent(company.id)}/mentions-page?filter=history`);
+    expect(await history.json()).toMatchObject({
+      items: [{ id: observationId, companyBusinessRelevant: false }],
+    });
+  });
+
   it("reports weak company-name matches and returns the exact row in saved history", async () => {
     const { app, observationId } = makeApp("Apple Pie Tree statue draws crowds");
     const working = await app.request(`/api/companies/${encodeURIComponent(company.id)}/mentions-page?filter=all&hours=24`);

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Desk } from "../server/db.js";
-import { SecFilingsInbox, type ListingSnapshotStore } from "../server/sec-filings-inbox.js";
+import { DEFAULT_STORAGE_LIMITS } from "../server/storage-capacity.js";
+import { parseSecAtomFeed, SecFilingsInbox, type ListingSnapshotStore, type SecInboxSnapshotStore } from "../server/sec-filings-inbox.js";
 import { isCurrentSecFilingsReceiptEvidence } from "../scripts/verify-sec-filings-hub.js";
 
 const temporaryDirectories: string[] = [];
@@ -215,7 +216,8 @@ describe("real SEC filings inbox Hub boundary", () => {
     const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-sec-listing-cache-"));
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "desk.sqlite");
-    const firstDb = new Desk(databasePath);
+    const testStorageLimits = { ...DEFAULT_STORAGE_LIMITS, minimumFreeBytes: 1 };
+    const firstDb = new Desk(databasePath, testStorageLimits);
     const firstStore: ListingSnapshotStore = {
       read: () => firstDb.readSecListingSnapshot(),
       write: (snapshot) => firstDb.saveSecListingSnapshot(snapshot),
@@ -232,7 +234,7 @@ describe("real SEC filings inbox Hub boundary", () => {
     });
     firstDb.close();
 
-    const secondDb = new Desk(databasePath);
+    const secondDb = new Desk(databasePath, testStorageLimits);
     try {
       const secondStore: ListingSnapshotStore = {
         read: () => secondDb.readSecListingSnapshot(),
@@ -457,5 +459,189 @@ describe("real SEC filings inbox Hub boundary", () => {
     const inbox = makeInbox(fetcher, undefined, false);
     expect((await inbox.activate()).canActivate).toBe(false);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("direct SEC filing feed recovery", () => {
+  const atom = `<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <id>https://www.sec.gov/cgi-bin/browse-edgar</id>
+      <updated>2026-10-05T12:04:00Z</updated>
+      <entry>
+        <title>8-K - Example Issuer Inc. (0000000320) (Filer)</title>
+        <link rel="alternate" type="text/html" href="${filingUrl}" />
+        <category scheme="https://www.sec.gov/" term="8-K" />
+        <id>urn:tag:sec.gov,2008:accession-number=000000032025000001</id>
+        <updated>2026-10-05T12:04:00Z</updated>
+        <published>2026-10-05T12:03:00Z</published>
+        <summary type="html">Filed: 20261005</summary>
+      </entry>
+    </feed>`;
+
+  const realSecAtom = `<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <id>https://www.sec.gov/cgi-bin/browse-edgar</id>
+      <updated>2026-10-14T10:08:11Z</updated>
+      <entry>
+        <title>8-K - Verastem, Inc. (0001526119) (Filer)</title>
+        <link rel="alternate" type="text/html" href="https://www.sec.gov/Archives/edgar/data/1526119/000110465926115687/0001104659-26-115687-index.htm" />
+        <category scheme="https://www.sec.gov/" term="8-K" />
+        <id>urn:tag:sec.gov,2008:accession-number=0001104659-26-115687</id>
+        <updated>2026-10-14T06:08:11-04:00</updated>
+        <summary type="html">&amp;lt;b&amp;gt;Filed:&amp;lt;/b&amp;gt; 2026-10-14</summary>
+      </entry>
+    </feed>`;
+
+  const realAmendment = `
+      <entry>
+        <title>8-K/A - LATTICE SEMICONDUCTOR CORP (0000855658) (Filer)</title>
+        <link rel="alternate" type="text/html" href="https://www.sec.gov/Archives/edgar/data/855658/000119312526420671/0001193125-26-420671-index.htm" />
+        <category scheme="https://www.sec.gov/" term="8-K/A" />
+        <id>urn:tag:sec.gov,2008:accession-number=0001193125-26-420671</id>
+        <updated>2026-10-13T17:24:14-04:00</updated>
+        <summary type="html">&amp;lt;b&amp;gt;Filed:&amp;lt;/b&amp;gt; 2026-10-13</summary>
+      </entry>`;
+
+  it("parses SEC Atom timestamps as feed clocks, not filing acceptance times", () => {
+    expect(parseSecAtomFeed(atom, "2026-10-05T12:05:00Z")).toMatchObject({
+      feedUpdatedAt: "2026-10-05T12:04:00.000Z",
+      rows: [{ accession: "0000000320-25-000001", cik: "0000000320", filedOn: "2026-10-05",
+        acceptedAt: null, feedPublishedAt: "2026-10-05T12:03:00.000Z", feedUpdatedAt: "2026-10-05T12:04:00.000Z", filingUrl }],
+    });
+    expect(parseSecAtomFeed(atom.replace("<updated>2026-10-05T12:04:00Z</updated>", "<updated>invalid</updated>"), "2026-10-05T12:05:00Z")).toBeNull();
+    expect(parseSecAtomFeed(`<!DOCTYPE feed [<!ENTITY x SYSTEM 'file:///etc/passwd'>]>\n${atom}`, "2026-10-05T12:05:00Z")).toBeNull();
+  });
+
+  it("keeps an actual SEC feed usable when exact 8-K/A amendments appear beside 8-K items", () => {
+    const parsed = parseSecAtomFeed(realSecAtom.replace("</feed>", `${realAmendment}</feed>`), "2026-10-14T12:00:00Z");
+    expect(parsed?.rows).toHaveLength(1);
+    expect(parsed?.rows[0]).toMatchObject({
+      accession: "0001104659-26-115687", cik: "0001526119", form: "8-K",
+      filingUrl: "https://www.sec.gov/Archives/edgar/data/1526119/000110465926115687/0001104659-26-115687-index.htm",
+    });
+  });
+
+  it("fetches only after explicit activation, saves a bounded receipt, and recovers it without network access", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-sec-direct-cache-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "desk.sqlite");
+    const testStorageLimits = { ...DEFAULT_STORAGE_LIMITS, minimumFreeBytes: 1 };
+    const firstDb = new Desk(databasePath, testStorageLimits);
+    const listingCache: { value: unknown | null } = { value: null };
+    const listingStore: ListingSnapshotStore = {
+      read: () => listingCache.value,
+      write: (snapshot) => { listingCache.value = snapshot; },
+    };
+    const directStore: SecInboxSnapshotStore = {
+      readLatest: () => firstDb.readLatestSecFilingsInboxSnapshot(),
+      write: (snapshot) => firstDb.saveSecFilingsInboxSnapshot(snapshot),
+    };
+    const secFeedUrl = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom";
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt") return new Response(listingFile("nasdaq"), { status: 200 });
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt") return new Response(listingFile("other"), { status: 200 });
+      if (url === secFeedUrl) return new Response(atom, { status: 200, headers: { "content-type": "application/atom+xml" } });
+      throw new Error(`unexpected source: ${url}`);
+    });
+    const inbox = new SecFilingsInbox({
+      acquisitionEnabled: true,
+      secUserAgent: "Sentiment Desk/0.2.0 analyst@example.com",
+      fetcher,
+      now: () => Date.parse("2026-10-05T12:05:00Z"),
+      listingSnapshotStore: listingStore,
+      directSnapshotStore: directStore,
+      connectionProvider: () => { throw new Error("Hub is not installed"); },
+    });
+
+    const beforeActivation = await inbox.read();
+    expect(beforeActivation).toMatchObject({ state: "unavailable", rows: [], canActivate: true });
+    expect(fetcher).not.toHaveBeenCalled();
+    const result = await inbox.activate();
+    expect(result).toMatchObject({ state: "ready", freshness: "current", rows: [{ listing: { symbol: "EXMP" } }],
+      receiptId: expect.stringMatching(/^sec_[a-f0-9]{64}$/), retrievedAt: "2026-10-05T12:05:00.000Z" });
+    const secCall = fetcher.mock.calls.find(([input]) => String(input) === secFeedUrl);
+    expect(secCall?.[1]?.headers).toMatchObject({ "user-agent": "Sentiment Desk/0.2.0 analyst@example.com" });
+    expect(firstDb.readLatestSecFilingsInboxSnapshot()).toMatchObject({ receiptId: result.receiptId, responseSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    firstDb.close();
+
+    const secondDb = new Desk(databasePath, testStorageLimits);
+    try {
+      const noNetwork = vi.fn<typeof fetch>(() => Promise.reject(new Error("network access is not allowed while reading a saved snapshot")));
+      const recovered = new SecFilingsInbox({
+        acquisitionEnabled: false,
+        secUserAgent: "Sentiment Desk/0.2.0 analyst@example.com",
+        fetcher: noNetwork,
+        now: () => Date.parse("2026-10-05T12:06:00Z"),
+        listingSnapshotStore: listingStore,
+        directSnapshotStore: { readLatest: () => secondDb.readLatestSecFilingsInboxSnapshot(), write: () => { throw new Error("read-only recovery"); } },
+        connectionProvider: () => { throw new Error("Hub is not installed"); },
+      });
+      expect(await recovered.read()).toMatchObject({ state: "ready", freshness: "current", receiptId: result.receiptId,
+        rows: [{ cik: "0000000320", accession: "0000000320-25-000001", listing: { symbol: "EXMP" } }] });
+      expect(noNetwork).not.toHaveBeenCalled();
+    } finally { secondDb.close(); }
+  });
+
+  it("keeps the accepted snapshot when a later explicit fetch fails and enforces the refresh interval", async () => {
+    const cache: { value: unknown | null } = { value: null };
+    const listingStore: ListingSnapshotStore = { read: () => cache.value, write: (snapshot) => { cache.value = snapshot; } };
+    const directCache: { value: unknown | null } = { value: null };
+    const directStore: SecInboxSnapshotStore = { readLatest: () => directCache.value, write: (snapshot) => { directCache.value = snapshot; } };
+    const secFeedUrl = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom";
+    const firstFetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt") return new Response(listingFile("nasdaq"), { status: 200 });
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt") return new Response(listingFile("other"), { status: 200 });
+      if (url === secFeedUrl) return new Response(atom, { status: 200 });
+      throw new Error(`unexpected source: ${url}`);
+    });
+    const options = {
+      acquisitionEnabled: true,
+      secUserAgent: "Sentiment Desk/0.2.0 analyst@example.com",
+      now: () => Date.parse("2026-10-05T12:05:00Z"),
+      listingSnapshotStore: listingStore,
+      directSnapshotStore: directStore,
+      connectionProvider: () => { throw new Error("Hub is not installed"); },
+    };
+    const first = new SecFilingsInbox({ ...options, fetcher: firstFetcher });
+    const accepted = await first.activate();
+    expect(accepted.state).toBe("ready");
+    const tooSoonFetcher = vi.fn<typeof fetch>(() => Promise.reject(new Error("must respect SEC refresh cadence")));
+    const tooSoon = new SecFilingsInbox({ ...options, fetcher: tooSoonFetcher });
+    expect(await tooSoon.activate()).toMatchObject({ state: "rate_limited", receiptId: accepted.receiptId, rows: [{ listing: { symbol: "EXMP" } }] });
+    expect(tooSoonFetcher).not.toHaveBeenCalled();
+  });
+
+  it("coalesces concurrent activation clicks into one bounded source request", async () => {
+    const cache: { value: unknown | null } = { value: null };
+    const listingStore: ListingSnapshotStore = { read: () => cache.value, write: (snapshot) => { cache.value = snapshot; } };
+    const directCache: { value: unknown | null } = { value: null };
+    const directStore: SecInboxSnapshotStore = { readLatest: () => directCache.value, write: (snapshot) => { directCache.value = snapshot; } };
+    const secFeedUrl = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom";
+    let releaseFetch!: () => void;
+    const pausedFetch = new Promise<void>((resolve) => { releaseFetch = resolve; });
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt") return new Response(listingFile("nasdaq"), { status: 200 });
+      if (url === "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt") return new Response(listingFile("other"), { status: 200 });
+      if (url === secFeedUrl) { await pausedFetch; return new Response(atom, { status: 200 }); }
+      throw new Error(`unexpected source: ${url}`);
+    });
+    const inbox = new SecFilingsInbox({
+      acquisitionEnabled: true,
+      secUserAgent: "Sentiment Desk/0.2.0 analyst@example.com",
+      fetcher,
+      now: () => Date.parse("2026-10-05T12:05:00Z"),
+      listingSnapshotStore: listingStore,
+      directSnapshotStore: directStore,
+      connectionProvider: () => { throw new Error("Hub is not installed"); },
+    });
+    const first = inbox.activate();
+    const second = inbox.activate();
+    releaseFetch();
+    const [one, two] = await Promise.all([first, second]);
+    expect(one.receiptId).toBe(two.receiptId);
+    expect(fetcher.mock.calls.filter(([input]) => String(input) === secFeedUrl)).toHaveLength(1);
   });
 });

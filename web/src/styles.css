@@ -18,6 +18,16 @@ html,
 body,
 #root {
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
 }
 
 body {
@@ -32,6 +42,10 @@ body {
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
   font-size: 13px;
+}
+
+.research-scroll {
+  overscroll-behavior-y: contain;
 }
 
 /* Keep the saved-data warning visible on narrow screens while reducing the
@@ -745,6 +759,32 @@ body {
   padding: 0 9px 9px;
 }
 
+.chatgpt-plan-connection {
+  margin-bottom: 8px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 8px;
+  background: rgba(255,255,255,.018);
+  padding: 10px 12px;
+}
+.chatgpt-plan-connection-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.chatgpt-plan-connection h3 { margin-top: 3px; color: rgba(255,255,255,.88); font-size: 12px; font-weight: 600; }
+.chatgpt-plan-connection-copy,.chatgpt-plan-connection-usage,.chatgpt-plan-connection-disclosure,.chatgpt-plan-connection-blocked,.chatgpt-plan-connection-error { margin-top: 4px; max-width: 760px; color: rgba(255,255,255,.5); font-size: 10px; line-height: 1.5; }
+.chatgpt-plan-connection-usage { color: rgba(110,231,183,.76); font-variant-numeric: tabular-nums; }
+.chatgpt-plan-connection-disclosure { color: rgba(255,255,255,.38); }
+.chatgpt-plan-connection a { display: inline-block; margin-top: 5px; color: #6ee7b7; font-size: 10px; text-decoration: underline; text-underline-offset: 2px; }
+.chatgpt-plan-connection-actions { display: flex; flex: none; flex-direction: column; align-items: stretch; gap: 5px; }
+.chatgpt-plan-connection-actions button { min-height: 30px; border: 1px solid rgba(110,231,183,.22); border-radius: 6px; padding: 5px 9px; color: rgba(167,243,208,.9); font-size: 10px; }
+.chatgpt-plan-connection-actions button:hover:not(:disabled) { background: rgba(110,231,183,.07); }
+.chatgpt-plan-connection-actions button:disabled { cursor: not-allowed; opacity: .45; }
+.chatgpt-plan-connection-actions .chatgpt-plan-refresh { border-color: rgba(255,255,255,.08); color: rgba(255,255,255,.48); }
+.chatgpt-plan-connection-blocked { color: rgba(252,211,77,.72); }
+.chatgpt-plan-connection-error { color: rgba(252,165,165,.85); }
+@media (max-width: 520px) {
+  .chatgpt-plan-connection-main { flex-direction: column; }
+  .chatgpt-plan-connection-actions { width: 100%; flex-direction: row; }
+  .chatgpt-plan-connection-actions button { flex: 1; }
+}
+
 @media (max-width: 720px) {
   .desk-operations-summary-desktop { display: none; }
   .desk-operations-summary-mobile { display: block; }
@@ -766,7 +806,12 @@ body {
 .selected-company {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
+}
+
+.selected-company-overview {
+  flex-basis: 100%;
 }
 
 .selected-company-shortcuts {
@@ -844,9 +889,6 @@ body {
     align-items: start;
   }
 
-  .selected-company-research-content.selected-company-research-evidence-first {
-    grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.45fr);
-  }
 }
 
 .evidence-breadth-heading {
@@ -1459,9 +1501,10 @@ body {
 .chart-view-tabs button[aria-selected="true"] { border-color:rgba(255,255,255,.1); background:rgba(255,255,255,.08); color:rgba(248,250,252,.9); }
 .chart-view-tabs button:focus-visible { outline:2px solid #6ee7b7; outline-offset:2px; }
 .luna-price-context-grid { display:grid; grid-template-columns:minmax(0,1fr); align-items:stretch; gap:10px; margin-top:8px; }
-.luna-price-context-grid>.categorical-trend-panel,.luna-price-context-grid>.market-price-context { min-width:0; margin-top:0; }
-@container (min-width:640px) {
-  .luna-price-context-grid { grid-template-columns:minmax(0,1.04fr) minmax(0,.96fr); }
+.luna-sentiment-chart,.luna-market-price-context { min-width:0; }
+.luna-sentiment-chart .categorical-trend-panel,.luna-market-price-context .market-price-context { margin-top:0; }
+@media (min-width:1320px) {
+  .luna-price-context-grid { grid-template-columns:minmax(0,1.35fr) minmax(300px,.85fr); }
 }
 .market-price-context { min-width:0; padding:13px 14px 12px; display:flex; flex-direction:column; }
 .market-price-context-head { display:flex; align-items:flex-start; justify-content:space-between; gap:9px; }
@@ -1541,6 +1584,9 @@ kbd {
 .followed-evidence-count { flex:none; border:1px solid rgba(52,211,153,.24); border-radius:999px; background:rgba(16,185,129,.08); padding:4px 9px; color:#6ee7b7; font-family:var(--font-mono); font-size:10px; }
 .followed-evidence-meta { display:flex; min-width:0; flex-wrap:wrap; gap:4px 14px; color:rgba(203,213,225,.58); font-size:10px; line-height:1.5; }
 .followed-evidence-explainer { max-width:105ch; margin:0; color:rgba(203,213,225,.52); font-size:10.5px; line-height:1.55; }
+.followed-evidence-triage { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:4px 12px; border:1px solid rgba(125,211,252,.14); border-radius:7px; background:rgba(56,189,248,.025); padding:8px 9px; color:rgba(203,213,225,.72); font-size:10px; line-height:1.5; }
+.followed-evidence-triage strong { color:rgba(186,230,253,.9); font-size:11px; }
+.followed-evidence-triage p { flex-basis:100%; margin:0; color:rgba(148,163,184,.68); }
 .followed-evidence-message { margin:0; color:rgba(226,232,240,.62); font-size:11px; line-height:1.55; }
 .followed-evidence-message button,.followed-evidence-warning button { margin-left:5px; color:#a7f3d0; text-decoration:underline; text-underline-offset:3px; }
 .followed-evidence-warning { color:#fde68a; font-size:10.5px; line-height:1.5; }

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { MarketPriceContextChart, SelectedCompanyMarketPriceContext } from "../web/src/components/MarketPriceContextChart.js";
 import type { PricePoint, PriceSeriesDTO } from "../web/src/lib/api.js";
-import { MARKET_PRICE_GAP_BREAK_MS, marketPriceRefreshState, prepareMarketPriceSeries, shouldLeadWithMarketPriceContext, shouldShowMarketPriceContext } from "../web/src/lib/market-price-context.js";
+import { MARKET_PRICE_GAP_BREAK_MS, marketPriceRefreshState, prepareMarketPriceSeries, shouldShowMarketPriceContext } from "../web/src/lib/market-price-context.js";
 
 const now = Date.parse("2026-10-06T16:00:00.000Z");
 const firstAt = Date.parse("2026-10-06T14:00:00.000Z");
@@ -60,8 +60,8 @@ describe("market price context visibility", () => {
   it("keeps verified prices visible but disables refresh when source or storage controls pause external work", () => {
     const html = marketChart([pricePoint(firstAt), pricePoint(firstAt + 60 * 60_000, 124, "receipt-b")], { refreshState: "paused" });
     expect(html).toContain("disabled=\"\"");
-    expect(html).toContain("Price refresh paused for EXM");
-    expect(html).toContain("Price refresh is paused by source or storage controls");
+    expect(html).toContain("Price updates unavailable for EXM");
+    expect(html).toContain("Price updates are temporarily unavailable");
     expect(html).toContain("Market context only. This is not sentiment.");
   });
 
@@ -70,15 +70,6 @@ describe("market price context visibility", () => {
     // Classifier readiness, result count, and window matching do not gate price history.
     expect(shouldShowMarketPriceContext("jev", "amd")).toBe(false);
     expect(shouldShowMarketPriceContext("luna", null)).toBe(false);
-  });
-
-  it("leads with receipt-verified prices only when current Luna categories are absent", () => {
-    const points = [pricePoint(firstAt), pricePoint(firstAt + 60 * 60_000, 124.12, "receipt-b")];
-    expect(shouldLeadWithMarketPriceContext(null, points)).toBe(true);
-    expect(shouldLeadWithMarketPriceContext({ companyId: "amd", windowHours: 168, status: "ready", eligibleObservationCount: 0, observedAt: now }, points)).toBe(true);
-    expect(shouldLeadWithMarketPriceContext({ companyId: "amd", windowHours: 168, status: "loading", eligibleObservationCount: 4, observedAt: now }, points)).toBe(false);
-    expect(shouldLeadWithMarketPriceContext({ companyId: "amd", windowHours: 168, status: "ready", eligibleObservationCount: 4, observedAt: now }, points)).toBe(false);
-    expect(shouldLeadWithMarketPriceContext({ companyId: "amd", windowHours: 168, status: "ready", eligibleObservationCount: 0, observedAt: now }, [])).toBe(false);
   });
 
   it("renders the selected-company market panel while Luna has no settled chart", () => {

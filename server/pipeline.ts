@@ -6,6 +6,7 @@ import type { HealthTracker } from "./health.js";
 import type { Hub } from "./hub.js";
 import { JevError, prepareJevRequest, type PreparedJevRequest } from "./jev.js";
 import { OpenAIClassifierError, OPENAI_PROMPT_VERSION, OPENAI_SCHEMA_VERSION, prepareOpenAIRequest, type OpenAIClassifierResult, type PreparedOpenAIRequest } from "./openai-classifier.js";
+import { prepareChatGPTPlanRequest } from "./chatgpt-plan-responses.js";
 import { RUBRIC, RUBRIC_SHA } from "./rubric.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
 import { StorageCapacityError } from "./storage-capacity.js";
@@ -17,6 +18,7 @@ import {
   bucketMsFor,
   forwardReturn,
   hasStrongIdentity,
+  isFinanceRelevant,
   parseJudgment,
   shouldAlert,
   weightedBucketSeries,
@@ -61,6 +63,7 @@ export interface PipelineDeps {
   db: Desk;
   judge: JudgeFn | null;
   classifier?: ((prepared: PreparedOpenAIRequest) => Promise<OpenAIClassifierResult>) | null;
+  accountingRoute?: "api_key" | "chatgpt_plan";
   provider?: ModelProvider;
   hub: Hub;
   health: HealthTracker;
@@ -128,8 +131,27 @@ export class Pipeline {
   get alertDeliveryConfigured(): boolean { return Boolean(this.deps.alert?.webhookUrl); }
   get alertDeliveryEnabled(): boolean { return this.alertDeliveryConfigured && this.deps.externalRequestsEnabled !== false; }
 
+  /** Switches the explicitly selected Luna route without restarting source collectors. */
+  setClassifier(
+    classifier: PipelineDeps["classifier"],
+    accountingRoute: PipelineDeps["accountingRoute"] = "chatgpt_plan",
+  ): number {
+    this.deps.classifier = classifier;
+    this.deps.accountingRoute = accountingRoute;
+    return classifier ? this.drainPending(5_000) : 0;
+  }
+
   /** Insert a normalized source observation; exact replays do not reach classification. */
   ingest(m: RawMentionInput): boolean {
+    return this.persistObservation(m, true);
+  }
+
+  /** Store user-requested refresh results without automatically sending them to a model. */
+  ingestUnscored(m: RawMentionInput): boolean {
+    return this.persistObservation(m, false);
+  }
+
+  private persistObservation(m: RawMentionInput, allowAutomaticClassification: boolean): boolean {
     if (!m.deliveryId) throw new Error("A persisted source delivery receipt is required before an observation can be ingested");
     const stored = this.deps.db.insertObservation(m);
     if (stored.inserted) {
@@ -140,7 +162,7 @@ export class Pipeline {
       }
     }
     const collector = m.collector ?? "legacy_unknown";
-    if (stored.inserted && this.deps.externalRequestsEnabled !== false && this.activeProviderReady && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
+    if (allowAutomaticClassification && stored.inserted && this.deps.externalRequestsEnabled !== false && this.activeProviderReady && this.deps.allowedCollectors.has(collector) && this.hasDailyBudgetCapacity()) {
       this.enqueue(stored.observationId);
     }
     return stored.inserted;
@@ -152,7 +174,10 @@ export class Pipeline {
       || !this.deps.db.canStartExternalWork()) return 0;
     const remaining = this.remainingDailyRequests();
     if (remaining <= 0) return 0;
-    const ids = this.deps.db.pendingIds(Math.min(limit, remaining), [...this.deps.allowedCollectors]);
+    const ids = this.deps.db.pendingIds(
+      Math.min(limit, remaining), [...this.deps.allowedCollectors], this.activeProvider === "openai_luna",
+      this.activeProvider === "openai_luna",
+    );
     for (const id of ids) this.enqueue(id);
     return ids.length;
   }
@@ -198,7 +223,8 @@ export class Pipeline {
       maxRequests: this.deps.dailyBudget.maxRequests,
       maxRequestBytes: this.deps.dailyBudget.maxRequestBytes,
       provider: this.activeProvider,
-      maxDailyCostMicros: this.deps.dailyBudget.maxDailyCostMicros,
+      accountingRoute: this.deps.accountingRoute,
+      maxDailyCostMicros: this.deps.accountingRoute === "chatgpt_plan" ? undefined : this.deps.dailyBudget.maxDailyCostMicros,
     });
   }
 
@@ -505,24 +531,35 @@ export class Pipeline {
     if (!this.deps.allowedCollectors.has(collector)) return;
     if (!db.prepareExternalWork()) return;
     const meta = this.companyMeta(row.company_id);
+    if (!isFinanceRelevant({
+      title: row.title, snippet: row.snippet, tier: row.source_tier, kind: row.source_kind, ticker: meta.ticker, companyName: meta.name,
+    })) return;
     const strongIdentity = hasStrongIdentity({
       company: { name: meta.name, ticker: meta.ticker, aliases: meta.aliases, ambiguous: meta.ambiguous },
       title: row.title, snippet: row.snippet, scoped: row.scoped === 1,
     });
+    if (!strongIdentity) return;
     const prepared = prepareOpenAIRequest({
       company: { name: meta.name, ticker: meta.ticker, sector: meta.sector },
       source: { collector, publisher: row.publisher_name, title: row.title, excerpt: row.snippet },
     });
+    const accountingRoute = this.deps.accountingRoute ?? "api_key";
+    const planRequest = accountingRoute === "chatgpt_plan" ? prepareChatGPTPlanRequest(prepared) : null;
+    const requestBytes = planRequest ? Buffer.byteLength(planRequest.body, "utf8") : prepared.requestBytes;
+    const requestSha256 = planRequest?.payloadSha256 ?? prepared.payloadSha256;
+    const profileSha256 = planRequest?.profileSha256 ?? prepared.profileSha256;
     const maxOutputCostMicros = prepared.maxOutputTokens * 0.5;
-    const reservedCostMicros = Math.ceil(prepared.requestBytes * 0.125 + maxOutputCostMicros);
+    const reservedCostMicros = accountingRoute === "chatgpt_plan" ? 0 : Math.ceil(prepared.requestBytes * 0.125 + maxOutputCostMicros);
     const claim = db.claimForScoringWithBudget({
       id, now: Date.now(), allowedCollectors: [...this.deps.allowedCollectors],
-      utcDay: this.deps.dailyBudget.utcDay(), requestBytes: prepared.requestBytes,
-      requestSha256: prepared.payloadSha256, requestedModel: prepared.requestedModel,
-      rubricSha256: prepared.profileSha256, maxRequests: this.deps.dailyBudget.maxRequests,
-      maxRequestBytes: this.deps.dailyBudget.maxRequestBytes, provider: "openai_luna",
-      maxDailyCostMicros: this.deps.dailyBudget.maxDailyCostMicros ?? 0, reservedCostMicros,
-      requestedServiceTier: prepared.requestedServiceTier, maxOutputTokens: prepared.maxOutputTokens,
+      utcDay: this.deps.dailyBudget.utcDay(), requestBytes,
+      requestSha256, requestedModel: prepared.requestedModel,
+      rubricSha256: profileSha256, maxRequests: this.deps.dailyBudget.maxRequests,
+      maxRequestBytes: this.deps.dailyBudget.maxRequestBytes, provider: "openai_luna", accountingRoute,
+      ...(accountingRoute === "chatgpt_plan" ? {} : {
+        maxDailyCostMicros: this.deps.dailyBudget.maxDailyCostMicros ?? 0, reservedCostMicros,
+        requestedServiceTier: prepared.requestedServiceTier, maxOutputTokens: prepared.maxOutputTokens,
+      }),
       schemaSha256: prepared.schemaSha256, promptSha256: prepared.promptSha256,
     });
     if (claim.kind !== "claimed") return;
@@ -538,10 +575,10 @@ export class Pipeline {
       const { classification: raw, usage } = result;
       const disposition: CategoricalClassification["disposition"] = deriveCategoricalDisposition(raw, strongIdentity);
       const classification: CategoricalClassification = {
-        provider: "openai_luna", modelRequested: prepared.requestedModel, modelReturned: result.modelReturned,
-        serviceTierRequested: prepared.requestedServiceTier, serviceTier: result.serviceTier,
+        provider: "openai_luna", accountingRoute, modelRequested: prepared.requestedModel, modelReturned: result.modelReturned,
+        serviceTierRequested: accountingRoute === "chatgpt_plan" ? null : prepared.requestedServiceTier, serviceTier: result.serviceTier,
         promptVersion: OPENAI_PROMPT_VERSION, promptSha256: prepared.promptSha256,
-        profileSha256: prepared.profileSha256,
+        profileSha256: result.profileSha256 ?? profileSha256,
         schemaVersion: OPENAI_SCHEMA_VERSION, schemaSha256: prepared.schemaSha256,
         ...raw, disposition, responseId: result.responseId, responseSha256: result.responseSha256,
         inputTokens: usage.inputTokens, cachedInputTokens: usage.cachedInputTokens,
@@ -570,14 +607,15 @@ export class Pipeline {
       const e = error instanceof OpenAIClassifierError ? error : null;
       const responseSeen = result != null || (e?.status != null && e.status >= 200 && e.status < 300);
       if (!receiptRecorded) {
-        const outcome: JevAttemptReceipt["outcome"] = storagePaused ? "not_sent" : e?.outcomeUnknown ? "unknown" : responseSeen ? "response" : e?.status != null ? "rejected" : intentRecorded ? "unknown" : "not_sent";
+        const preflightNotSent = accountingRoute === "chatgpt_plan" && e?.requestDispatched === false;
+        const outcome: JevAttemptReceipt["outcome"] = storagePaused || preflightNotSent ? "not_sent" : e?.outcomeUnknown ? "unknown" : responseSeen ? "response" : e?.status != null ? "rejected" : intentRecorded ? "unknown" : "not_sent";
         try {
           db.recordJevAttemptReceipt({
             attemptId: claim.attemptId, outcome, occurredAt: Date.now(), httpStatus: e?.status ?? result?.httpStatus ?? null,
             inputTokens: e?.usage?.inputTokens ?? result?.usage.inputTokens ?? null,
             outputTokens: e?.usage?.outputTokens ?? result?.usage.outputTokens ?? null,
             resolvedModel: result?.modelReturned ?? e?.returnedModel ?? null, latencyMs: e?.latencyMs ?? result?.latencyMs ?? null,
-            errorCategory: storagePaused ? "storage_paused" : e ? e.outcomeUnknown ? "provider_outcome_unknown" : e.status === 429 ? "rate_limited_or_quota_exhausted" : "provider_rejected_or_response_invalid" : "internal_or_transport_outcome_unknown",
+            errorCategory: storagePaused ? "storage_paused" : preflightNotSent ? "classifier_preflight" : e ? e.outcomeUnknown ? "provider_outcome_unknown" : e.status === 429 ? "rate_limited_or_quota_exhausted" : "provider_rejected_or_response_invalid" : "internal_or_transport_outcome_unknown",
             cachedInputTokens: e?.usage?.cachedInputTokens ?? result?.usage.cachedInputTokens ?? null, reasoningTokens: e?.usage?.reasoningTokens ?? result?.usage.reasoningTokens ?? null,
             cacheWriteInputTokens: e?.usage?.cacheWriteInputTokens ?? result?.usage.cacheWriteInputTokens ?? null,
             totalTokens: e?.usage?.totalTokens ?? result?.usage.totalTokens ?? null, responseId: e?.responseId ?? result?.responseId ?? null,
@@ -595,6 +633,25 @@ export class Pipeline {
         return;
       }
       const message = e?.message ?? "OpenAI classification failed due to internal processing error";
+      if (accountingRoute === "chatgpt_plan" && e?.requestDispatched === false) {
+        // Catalog/model preflight can fail before the Responses POST. The
+        // durable not_sent receipt already released the reservation, so keep
+        // the observation retryable instead of consuming its terminal state.
+        const retryBackoffMs = Math.min(
+          60 * 60_000,
+          RETRY_BASE_MS * 2 ** Math.min(7, Math.max(0, claimed.score_attempts - 1)),
+        );
+        const retryAt = Date.now() + Math.max(
+          retryBackoffMs,
+          e.retryAfterMs ?? 0,
+        );
+        db.markRetrying(id, `${message}; no request was sent and retry is scheduled`, retryAt);
+        this.deps.health.recordClassifier(false, message);
+        db.logEvent("info", "classifier", `ChatGPT-plan preflight deferred classification for ${id}; no provider request was sent`);
+        const updated = db.mentionRow(id);
+        if (updated) this.deps.hub.broadcast("mention", rowToDTO(updated));
+        return;
+      }
       if (e?.retryable && claimed.score_attempts < MAX_JEV_ATTEMPTS) {
         const retryAt = Date.now() + Math.max(RETRY_BASE_MS * 2 ** (claimed.score_attempts - 1), e.retryAfterMs ?? 0);
         db.markRetrying(id, `${message}; retry ${claimed.score_attempts + 1} of ${MAX_JEV_ATTEMPTS} is scheduled`, retryAt);
@@ -942,8 +999,8 @@ export class Pipeline {
       });
     }
     const sum = points.reduce<CategoricalTrendCounts>((counts, point) => addCategoricalTrendCounts(counts, point.counts), emptyCategoricalTrendCounts());
-    if (!sameCategoricalTrendCounts(sum, snapshot.counts) || sum.total !== snapshot.eligibleObservationCount) {
-      throw new Error("Luna category trend totals did not reconcile to the saved classification count");
+    if (!sameCategoricalTrendCounts(sum, snapshot.counts) || sum.total !== snapshot.plottedObservationCount) {
+      throw new Error("Luna category trend totals did not reconcile to the plotted source-time count");
     }
     return {
       companyId: snapshot.companyId,
@@ -951,13 +1008,15 @@ export class Pipeline {
       fromMs: snapshot.fromMs,
       throughMs: snapshot.throughMs,
       bucketMs: snapshot.bucketMs,
-      timeBasis: "classification_available_at",
+      timeBasis: "validated_source_time",
       countBasis: "immutable_source_observation",
       snapshotGeneration: snapshot.snapshotGeneration,
       snapshotKey: snapshot.snapshotKey,
       points,
       counts: snapshot.counts,
       eligibleObservationCount: snapshot.eligibleObservationCount,
+      plottedObservationCount: snapshot.plottedObservationCount,
+      untimedObservationCount: snapshot.untimedObservationCount,
       candidateClassificationCount: snapshot.candidateClassificationCount,
       withheldInvalidCount: snapshot.withheldInvalidCount,
       latestClassifiedAt: snapshot.latestClassifiedAt,

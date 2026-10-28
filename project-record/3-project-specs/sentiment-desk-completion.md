@@ -3,11 +3,16 @@
 ## Current execution objective
 
 Complete Sentiment Desk as a real-data-only, locally operational investor
-product under this plan and the current v2 `engineering-contract.json`. For
-new classifications, use the accepted OpenAI GPT-6 Luna categorical contract
-and complete its frozen real-source evaluation within finite
-account-owner-approved request, byte, and USD budgets and the source, account,
-usage, and retention gates; preserve historical Jev records separately. Verify
+product under this plan and the current v2 `engineering-contract.json`. The
+public-source sentiment chart defaults to Google Gemini 3.8 Flash and may use
+its free input/output quota only when the model, project, account, region, and
+current Google terms permit it. The app cannot inspect provider quota or cap
+provider charges. GPT-6 Luna remains a separate explicitly authorized route;
+ChatGPT-plan sign-in stays disconnected under the user's current choice.
+Gemini requests require per-item authorization and are limited to public,
+non-sensitive source text. Private notes remain local unless the user
+explicitly sends one item to Luna through its separate consent path. Preserve
+historical Jev records separately. Verify
 the full investor journey, including tickerless discovery, fundamental
 research, and followed-company change, with authorized evidence, interruption
 recovery, and rendered UI proof of persisted saved-state readback. Keep the
@@ -17,10 +22,10 @@ human ground truth or user-outcome evidence. Opportunity Radar stays disabled
 until operational acceptance passes. Use only the explicitly authorized
 `j-poc/sentiment-desk` repository on `codex/real-data-rebuild`; verify the
 remote SHA after each reviewed checkpoint and preserve current repository
-visibility. The native Goal objective remains unchanged because its exposed
-control is status-only; the accepted Luna
-direction supersedes its stale Jev-core wording for new classifications. This
-documentation authorizes no model calls, source collection, or authority change.
+visibility. The native Goal objective remains the high-level rebuild brief;
+this plan records the current provider choice and its explicit consent
+boundaries. This documentation authorizes no model calls, source collection,
+or authority change.
 
 ## Highest-level product-success evaluation: Master Eval — BLOCKED
 
@@ -270,14 +275,16 @@ compatibility is not established. New records use a distinct categorical
 profile; genuine historical Jev probabilities, numeric indices and archive
 remain unchanged. No invented confidence or one-hot probability is permitted.
 
-The current shell has no OpenAI API credential. Codex/ChatGPT model access does
-not establish direct API access or billing; Jev account balance cannot be
-carried over to OpenAI. Any paid dispatch requires a finite OpenAI request,
-byte and USD cap with durable pre-dispatch reservation. There is no automatic
-TypeSafe fallback. The frozen SEC cohort and blinded agent references qualify
-only the exact Luna profile; fixture passes do not establish real
-classification quality. The native goal remains active with stale Jev-core
-objective wording because its status-only controls cannot edit that objective.
+The initial direct API-key route had no credential and was rejected for the
+active product path. On 2026-10-09, the user selected local Sign in with
+ChatGPT subscription use instead. This route does not read an API key or
+switch to API billing. It enforces finite local request and byte limits, while
+provider allowance, billing, and account data controls remain unknown to the
+app. There is no automatic TypeSafe fallback. The frozen SEC cohort and
+blinded agent references qualify only the exact Luna profile; fixture passes
+do not establish real classification quality. The native goal remains active
+with stale Jev-core objective wording because its status-only controls cannot
+edit that objective.
 
 Two independent, blinded agents labeled all 48 items in the frozen SEC
 reference frame, with a separate third agent reviewing the three disputed
@@ -1963,3 +1970,194 @@ These criteria establish deterministic persistence and navigation only. They do
 not establish source independence, investment materiality, Luna research quality,
 or product-level investor usefulness. Offline boundary fixtures are confined to
 tests; the rendered product remains free of demo or synthetic data.
+
+## Current classifier and connection correction — 2026-10-09
+
+The user selected the local **Sign in with ChatGPT** subscription route for new
+GPT-6 Luna classifications and confirmed the public-source rights attestation.
+The application must not require or read `OPENAI_API_KEY`, switch to API billing,
+or claim it knows the provider's remaining allowance or account data controls.
+Local daily request and serialized-byte limits are operational safeguards, not
+provider balance. New Luna classifications remain categorical and source-linked;
+historical Jev records remain available only under their saved semantics.
+
+A public-company private note remains local unless the user selects one item,
+confirms that exact item and issuer for GPT-6 Luna analysis, and reviews the
+account-data-controls disclosure. Private companies remain out of scope. The
+reviewers observed that the running app on port 8797 was an older API-key build,
+while the checkout contained a ChatGPT-plan implementation; real public sources
+and price history were still being saved. This environment mismatch, missing
+plan-connected classification, and hidden connection controls are open until the
+same database-backed app is restarted and the actual source-to-chart workflow is
+verified. The empty Luna chart must remain explicitly empty rather than imply
+neutral sentiment; the historical Jev chart stays separately selectable.
+
+### Rendered chart and connection recovery — 2026-10-09
+
+The current workspace build was independently rechecked in the local browser at
+`127.0.0.1:8797`. It loads 13,613 eligible saved real-source observations
+across 24 configured public companies; the UI reports 1,788 records retrieved
+in the prior 24 hours. For AAPL, the 7-day Luna series has zero saved
+classifications, while the separate historical Jev action reports 245 saved
+scores in the archived UTC week `[2026-09-28, 2026-10-05)`, latest
+`2026-09-28T17:47:00Z`. These are different classifier histories; the empty
+Luna chart is correctly labeled as no sentiment reading and is not populated
+from Jev data. The chart recovery actions open saved source records, the actual
+historical Jev chart, or source/Luna connection controls.
+
+The running verification process was explicitly started with
+`EXTERNAL_REQUESTS_ENABLED=false`; its blocked status does not mean the saved
+sources or product integrations were removed. The local `.env` separately
+contains the owner's enabled source and source-rights allowlists for Google
+News RSS, Yahoo Finance RSS/quotes/charts, SEC 8-Ks/CompanyFacts, and Nasdaq
+listing directories. The independent browser review opened the connection
+controls and observed `Continue with ChatGPT`, zero local requests, the plan
+usage/allowance disclosure, and the external-request gate. No account was
+authorized, no provider request was made, and no Luna classification was
+created. The test process will be restarted using only the already configured
+public-source allowlists; ChatGPT-plan classification remains paused until the
+owner completes the visible sign-in and plan-use consent. The connected Hub
+currently does not provide the SEC 8-K feed, so Recent Filings remains a
+separate open integration gap even after the RSS/price collectors resume.
+
+## 2026-10-10 Bring-your-own-model-key product requirement
+
+The user clarified that an ordinary investor using the app must be able to
+enter their own model-provider API key in the product and use it without
+operator-side credential setup. They have a free-tier Google Gemini key. The
+first usable path is the existing local loopback Investor Desk, whose news,
+source review, saved price chart, and categorical summary flow already share
+one local account. This does not authorize collecting or displaying the key in
+chat. Cloud-mode key storage and classification must use an authenticated,
+per-user secret boundary before that route can claim parity; the local OS
+keychain is not a valid shared-cloud credential store.
+
+### Acceptance and binary rubric
+
+Each of the ten items is yes/no. Completion requires all ten yes answers on
+the intended user route; the score is their sum, not an average across local
+and cloud workflows.
+
+1. The visible Investor Desk offers provider-key setup and selection without
+   exposing backend URL/key, operator source controls, or environment details.
+2. The local user can save, replace, verify, and remove OpenAI, Google Gemini,
+   and TypeSafe Jev credentials in the OS credential store; no plaintext key
+   enters SQLite, logs, status DTOs, or browser responses after submission.
+3. OpenAI and Gemini can classify an explicitly selected saved public source
+   into the same bounded categorical schema, with exact provider/model/prompt
+   provenance and the output bound to that source record.
+4. TypeSafe Jev keeps its distinct rubric, model lineage, and historical
+   series. Jev and categorical outputs are never mislabeled or silently mixed.
+5. A summary, bullish/bearish label, or chart point appears only after a
+   schema-valid provider response and source-identity validation; empty,
+   rejected, and ambiguous outcomes remain distinct.
+6. The user sees what source fields will be sent, which provider/model will
+   process them, and that provider quotas/billing/data controls belong to that
+   provider before a request is authorized.
+7. Local finite request/byte/cost limits apply per provider; ambiguous calls
+   remain reserved and are not automatically replayed.
+8. The summary links back to its source and displays source and retrieval
+   times; it does not claim a recommendation, forecast, or verified materiality.
+9. Existing relevant updates, noise review, source provenance, price chart,
+   and empty Luna/legacy Jev distinction continue to work in the rendered Desk.
+10. A fresh user can enter a real key through the UI, verify the connection,
+    select a real public source item, and read the saved provider-attributed
+    result without manual backend or file configuration.
+
+### Reuse decisions before implementation
+
+- **`local-public-data-hub-workflow` — reject for credential management.** Its
+  owner is the Public Data Hub loopback job/receipt protocol. It does not own
+  per-user model credentials or the local app's classification attempt state.
+- **`@napi-rs/keyring` plus `server/chatgpt-plan-credential-vault.ts` — adapt.**
+  The dependency already exists and protects a local random AES-GCM key with
+  the OS credential store. Extract the reusable local credential-vault pattern
+  for provider API keys, but keep provider names, models, permissions, and
+  billing policy in Sentiment Desk.
+- **`server/openai-classifier.ts` and `server/pipeline.ts` — adapt.** Keep the
+  existing fixed schema, identity checks, durable attempt receipts, finite
+  budgets, and unknown-outcome no-replay behavior. Do not replace these with
+  provider defaults that can retry invisibly or change the rubric.
+- **`server/jev.ts` — reuse its TypeSafe adapter, qualify its UI wiring.** The
+  TypeSafe wire contract already handles Jev. Its historical judgments are a
+  separate workflow and must not be converted into current Luna/Gemini/OpenAI
+  categories.
+- **`lightweight-charts` — reuse.** It already renders the contextual price
+  chart. Provider identity must remain attached to sentiment series and cannot
+  be inferred from the chart library.
+- **AI SDK provider abstraction — no match selected.** Existing adapters own
+  strict provider receipts, usage accounting, timeouts, and retry semantics.
+  The first Gemini path uses a bounded direct REST call because an SDK retry
+  policy has not been proven compatible with the app's unknown-outcome ledger.
+- **Cloud mode — qualify separately.** The local OS keychain cannot serve
+  shared authenticated accounts. Cloud acceptance remains open until keys are
+  encrypted server-side or held only for an explicit request in an
+  authenticated function, and the cloud route has the same real updates,
+  chart, and model-visible evidence workflow.
+
+Implementation and review use the 10-item rubric above. The required
+independent engineering, finance, and user-workflow reviews must inspect the
+rendered UI plus retained provider attempt/result state. A live provider
+verification is performed only after the user enters their key inside the
+app; the key is never requested in chat.
+
+### Local BYOK implementation sketch and throughput checkpoint
+
+Candidate designs converged on an additive provider-specific attempt/result
+store, shared pure categorical-output validation, an OS-backed local credential
+vault, named fixed-endpoint adapters, and a provider/model-filtered chart.
+The existing `categorical_classifications` and `jev_request_attempts` remain
+Luna/TypeSafe-owned because their SQL guards, accounting, and status transitions
+encode those workflows. The local HTTP/UI flow accepts a saved public source
+id and provider selection, then dispatches exactly one request only after the
+user sees and accepts the provider/model/data-use disclosure. Saving or
+verifying a key never classifies a source or drains pending work. Gemini free
+tier disclosure states that submitted content may be used to improve Google
+products and that account quota/billing rules are controlled by Google.
+
+Throughput checkpoint:
+
+1. **Blocking first steps:** retain the current acceptance rubric; finish the
+   local/cloud route grounding; define provider, attempt, and result shapes;
+   reuse the OS keyring pattern and categorical validator.
+2. **Independent workstreams:** vault and adapter modules can be isolated from
+   UI and additive SQLite persistence; integrate sequentially at the route.
+3. **Shared mutable state:** legacy Jev/Luna tables and pending pipeline queue
+   remain untouched; BYOK uses its own append-only attempt/result tables and
+   explicit single-source call path.
+4. **Smallest safe decomposition:** one cross-cutting owner integrates HTTP,
+   DB, chart, and UI; a bounded vault slice and required read-only reviews are
+   disjoint.
+
+The cloud route remains a separate product gap: it currently has SEC discovery,
+financials, filings, and follow baselines, but no news feed, price chart,
+categorical output, or authenticated secret vault. Local success must not be
+reported as cloud parity.
+
+### Local provider-key and live-source progress (2026-10-10)
+
+Implemented the TypeSafe Jev credential and one-source path alongside the
+existing OpenAI/Gemini categorical path. Jev's key is provider-scoped in the
+OS-backed vault. Catalog verification and Jev requests use exact TypeSafe
+endpoints; requests require source-level confirmation, durable daily budgets,
+and a no-replay rule after an uncertain outcome. Assessments use separate
+append-only `typesafe_jev_byok_attempts` and `typesafe_jev_byok_results` tables,
+feed their own provider-filtered company series, and leave the observation,
+legacy Jev history, and categorical classifications untouched.
+
+On 2026-10-10 the local desk API was exercised against live public sources:
+Apple's 24-hour feed returned source-linked Reuters and Yahoo items; the AAPL
+Yahoo price route returned four points with `delivery=network`; and the SEC
+ticker/exchange directory was refreshed and returned Apple Inc. (CIK
+0000320193, Nasdaq) for `AAPL`. The provider status route returned OpenAI,
+Gemini, and TypeSafe Jev with model names and unconfigured booleans only. The
+Gemini key has not been entered in the app, so no live model classification or
+Jev request was made. The API evidence proves real source and price availability,
+not a completed browser rendering or provider result.
+
+Focused verification added/updated: TypeSafe Jev service/API, encrypted vault,
+provider URL gate, provider-key UI, and the affected company/chart/issuer
+component tests. Exact command results are retained in the current task's test
+output; the rendered cross-device UI and fresh-key live provider flow remain
+open until performed in the user's browser after the user saves and approves
+their provider key there.

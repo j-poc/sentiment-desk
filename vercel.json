@@ -1,0 +1,8 @@
+{
+  "buildCommand": "VITE_APP_MODE=cloud npm run build:web",
+  "outputDirectory": "dist/web",
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

@@ -42,6 +42,33 @@ const answerSchema = z.discriminatedUnion("type", [choiceAnswerSchema, noulAnswe
 const tokenCountSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const aliasModels = new Set(["jev-latest", "jev-preview"]);
 const resolvedJevModelPattern = /^jev-(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
+const MAX_JEV_RESPONSE_BYTES = 64 * 1024;
+
+async function readJevJsonBounded(response: Response): Promise<unknown> {
+  const declared = response.headers.get("content-length");
+  if (declared && /^\d+$/.test(declared) && Number(declared) > MAX_JEV_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("oversized_response");
+  }
+  if (!response.body) throw new Error("empty_response");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const part = await reader.read();
+    if (part.done) break;
+    size += part.value.byteLength;
+    if (size > MAX_JEV_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("oversized_response");
+    }
+    chunks.push(part.value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+}
 
 function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
   const header = value?.trim();
@@ -211,7 +238,7 @@ export class JevClient {
 
     let raw: unknown;
     try {
-      raw = await res.json();
+      raw = await readJevJsonBounded(res);
     } catch {
       throw new JevError("TypeSafe response was not valid JSON; request outcome is unknown", res.status, false, true);
     }

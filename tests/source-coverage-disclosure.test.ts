@@ -6,7 +6,7 @@ import { SourceCoverageDisclosure } from "../web/src/components/SourceCoverageDi
 
 describe("Desk source coverage disclosure", () => {
   it("makes the partial configured-feed scope explicit in rendered markup", () => {
-    const html = renderToStaticMarkup(createElement(App));
+    const html = renderToStaticMarkup(createElement(SourceCoverageDisclosure, { externalRequestsEnabled: true }));
 
     expect(html).toContain('role="note"');
     expect(html).toContain("Configured feeds only.");
@@ -21,11 +21,15 @@ describe("Desk source coverage disclosure", () => {
     expect(html).toContain("Reddit and X are the only direct social collectors");
     expect(html).toContain("Feed access does not by itself establish rights");
     expect(html).toContain("SOURCE_RIGHTS_APPROVED_COLLECTORS");
-    expect(html).toContain("OPENAI_ACCOUNT_USE_APPROVED=true");
-    expect(html).toContain("finite daily request, byte and dollar limits");
+    expect(html).toContain("local ChatGPT-plan sign-in");
+    expect(html).toContain("finite local daily request and byte limits");
+    expect(html).toContain("does not use an API key or report API-dollar estimates");
     expect(html).toContain("operator attestations");
-    expect(html).toContain("Checking source, classifier, and webhook status");
     expect(html).not.toContain("External requests are paused.");
+    const desk = renderToStaticMarkup(createElement(App));
+    expect(desk).toContain("Desk");
+    expect(desk).not.toContain("Data connections &amp; operations");
+    expect(desk).not.toContain("SOURCE_RIGHTS_APPROVED_COLLECTORS");
   });
 
   it("keeps paused external requests and saved-data mode visible", () => {

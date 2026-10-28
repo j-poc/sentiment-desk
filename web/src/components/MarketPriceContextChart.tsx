@@ -186,7 +186,7 @@ export function MarketPriceContextChart({
           type="button"
           className="market-price-refresh"
           onClick={onRefresh}
-          aria-label={loading ? `Checking ${ticker} prices` : refreshEnabled ? refreshFailed ? `Retry ${ticker} price history` : `Check for newer ${ticker} prices` : refreshState === "checking" ? "Checking price-source status" : refreshState === "paused" ? `Price refresh paused for ${ticker}` : `Price refresh status unavailable for ${ticker}`}
+          aria-label={loading ? `Checking ${ticker} prices` : refreshEnabled ? refreshFailed ? `Retry ${ticker} price history` : `Check for newer ${ticker} prices` : refreshState === "checking" ? "Checking price-source status" : refreshState === "paused" ? `Price updates unavailable for ${ticker}` : `Price refresh status unavailable for ${ticker}`}
           disabled={loading || !refreshEnabled}
         >
           {loading ? "Checking…" : refreshEnabled ? refreshFailed ? "Retry price history" : "Check prices" : refreshState === "checking" ? "Checking status…" : refreshState === "paused" ? "Refresh paused" : "Status unavailable"}
@@ -204,7 +204,7 @@ export function MarketPriceContextChart({
 
       {loading && !hasSavedPoints && <p className="market-price-context-state" role="status">{refreshEnabled ? "Loading Yahoo price history…" : "Loading saved Yahoo price history…"}</p>}
       {loading && hasSavedPoints && <p className="market-price-context-state" role="status">{refreshEnabled ? "Checking for newer Yahoo observations. Saved verified prices remain visible." : "Reading saved Yahoo prices. No external refresh is running."}</p>}
-      {!loading && refreshState === "paused" && <p className="market-price-context-state" role="status">Price refresh is paused by source or storage controls. Saved verified prices remain available.</p>}
+      {!loading && refreshState === "paused" && <p className="market-price-context-state" role="status">Price updates are temporarily unavailable. Saved verified prices remain available.</p>}
       {!loading && refreshState === "unknown" && <p className="market-price-context-state" role="status">Price-source status is unavailable. Refresh is paused until the desk can verify it.</p>}
       {!loading && refreshState === "checking" && <p className="market-price-context-state" role="status">Checking whether a price refresh is available.</p>}
       {refreshFailed && hasSavedPoints && <p className="market-price-context-warning" role="status">Price refresh failed. Showing saved verified observations.</p>}

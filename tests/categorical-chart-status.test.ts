@@ -6,29 +6,36 @@ describe("categorical chart status labels", () => {
     expect(categoricalChartStatusLabel({
       companyId: "aapl",
       windowHours: 168,
+      provider: "openai_luna",
       status: "loading",
       eligibleObservationCount: 0,
       observedAt: 67_000,
-    }, "7D", 100_000)).toBe("Loading saved Luna history · last confirmed 0 in 7D · last successful read 33s ago");
+    }, "7D", 100_000)).toBe("Loading saved GPT-6 Luna history · last confirmed 0 in 7D · last successful read 33s ago");
   });
 
   it("reports the last confirmed count and read after a failed request", () => {
     expect(categoricalChartStatusLabel({
       companyId: "aapl",
       windowHours: 168,
+      provider: "openai_luna",
       status: "failed",
       eligibleObservationCount: 12,
       observedAt: 67_000,
-    }, "7D", 100_000)).toBe("Saved Luna history unavailable · last confirmed 12 in 7D · last successful read 33s ago");
+    }, "7D", 100_000)).toBe("Saved GPT-6 Luna history unavailable · last confirmed 12 in 7D · last successful read 33s ago");
   });
 
   it("does not imply an old successful read or classifications when none are known", () => {
     expect(categoricalChartStatusLabel({
       companyId: "aapl",
       windowHours: 168,
+      provider: "google_gemini",
       status: "loading",
       eligibleObservationCount: null,
       observedAt: null,
-    }, "7D", 100_000)).toBe("Loading saved Luna history");
+    }, "7D", 100_000)).toBe("Loading saved Gemini 3.8 Flash history");
+  });
+
+  it("defaults an unconfirmed chart to the configured Gemini provider", () => {
+    expect(categoricalChartStatusLabel(null, "7D", 100_000)).toBe("Gemini 3.8 Flash 7D snapshot not confirmed");
   });
 });

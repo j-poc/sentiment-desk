@@ -11,7 +11,7 @@ CONTRACT = Path("engineering-contract.json")
 UI = Path("web/src/components/PrivateEvidencePanel.tsx")
 API = Path("server/app.ts")
 STORE = Path("server/private-evidence-store.ts")
-ANALYZER = Path("server/private-evidence-analysis.ts")
+ANALYZER = Path("server/chatgpt-plan-private-evidence.ts")
 ANALYSIS_SERVICE = Path("server/private-evidence-analysis-service.ts")
 CONFIG = Path("config/companies.json")
 CONFIG_LOADER = Path("server/config.ts")
@@ -88,9 +88,9 @@ def main() -> int:
     if "localStorage" in ui or "https://" in ui or "OPENAI_API_KEY" in ui:
         return fail("UI must use only same-origin local requests for private evidence")
     for phrase in (
-        "the selected note's text, title, source label, optional user-asserted date, note ID, content hash and byte count, plus its issuer identity, are sent to OpenAI GPT-6 Luna only after a separate item-specific confirmation",
+        "the selected note's text, title, source label, optional user-asserted date, note ID, content hash and byte count, plus its issuer identity, are sent to OpenAI GPT-6 Luna after a separate item-specific confirmation",
         "Its filename and local import time are not sent.",
-        "OpenAI API data controls",
+        "Review OpenAI data controls",
         "does not encrypt them",
         "Device backups may retain deleted copies",
     ):
@@ -99,17 +99,21 @@ def main() -> int:
     for phrase in ("confirmExternalProcessing", "privateEvidenceAnalysisRecordSchema", "privateEvidenceCompanyIds?.has(companyId) === true"):
         if phrase not in api:
             return fail(f"API is missing the explicit selected-item boundary: {phrase}")
-    for phrase in ('store: false', 'prompt_cache_options: { mode: "explicit" }', "tools: []", "cachedInputTokens !== 0", "ungrounded_output"):
+    for phrase in ("store: false", "tools: []", "ungrounded_output", "remainingPlanAllowance: null"):
         if phrase not in analyzer:
             return fail(f"GPT-6 Luna request profile or output validator is missing: {phrase}")
-    for phrase in ("privateEvidenceAnalysisEnabled", "createPrivateEvidenceAnalysisService"):
+    if "prompt_cache_options" in analyzer:
+        return fail("ChatGPT-plan requests must not send API-only prompt-cache options")
+    for phrase in ("privateEvidenceEnabled", "createPrivateEvidenceAnalysisService"):
         if phrase not in runtime:
             return fail(f"runtime is missing the shared provider budget gate: {phrase}")
-    for phrase in ("storageCapacity()", "externalRequestAllowed()", "reserveOpenAIEvaluationBudget", "cancelBeforeDispatch", "maxDailyCostMicros"):
+    for phrase in ("storageCapacity()", "externalRequestAllowed()", "reserveChatGPTPlanAuxiliaryRequest", "markChatGPTPlanAuxiliaryRequestDispatched", "cancelBeforeDispatch", "maxRequestBytesPerDay"):
         if phrase not in analysis_service:
             return fail(f"selected-note analysis is missing a current storage, network, or shared-budget gate: {phrase}")
-    if "OPENAI_PRIVATE_EVIDENCE_ANALYSIS_ENABLED=false" not in env:
-        return fail("private-note model analysis must be independently disabled by default")
+    if "OPENAI_API_KEY" in env:
+        return fail("the runtime template must not request a direct OpenAI API key")
+    if "ChatGPT plan connection is available only in the local loopback installation." not in runtime:
+        return fail("private-note plan analysis must remain loopback-only")
     for phrase in ("chmodSync(directory, 0o700)", "chmodSync(path, 0o600)", "isSymbolicLink()"):
         if phrase not in store:
             return fail(f"private store is missing filesystem boundary: {phrase}")

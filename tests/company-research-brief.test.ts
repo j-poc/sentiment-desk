@@ -36,6 +36,7 @@ describe("compileCompanyResearchBrief", () => {
   it("marks empty and partial coverage explicitly and gives no question without evidence", () => {
     const brief = compileCompanyResearchBrief(input({ facts: [], comparisons: [], observations: [], coverage: { sec: "empty", publicObservations: "empty", reasons: ["feed paused"] } }));
     expect(brief.coverage).toEqual({ sec: "empty", publicObservations: "empty", reasons: ["feed paused"] });
+    expect(brief.researchFollowUp).toMatchObject({ state: "undetermined", leads: [] });
     expect(brief.nextResearchQuestion).toBeNull();
     expect(brief.missingEvidenceReason).toContain("No valid comparable SEC metric");
 
@@ -67,9 +68,15 @@ describe("compileCompanyResearchBrief", () => {
 
   it("makes the next check specific to the reported arithmetic change without claiming its cause", () => {
     const brief = compileCompanyResearchBrief(input());
+    expect(brief.researchFollowUp).toMatchObject({
+      state: "indicated",
+      leads: [{ metric: "revenue", direction: "reported_increase", delta: "200", percentChange: "20", currentFactId: "f2", priorFactId: "f1" }],
+    });
+    expect(brief.researchFollowUp.explanation).toContain("comparable SEC-reported measure has different reported values");
+    expect(brief.researchFollowUp.explanation).toContain("decide whether any difference merits more work");
     expect(brief.nextResearchQuestion?.question).toContain("difference of 200 USD (20%)");
     expect(brief.nextResearchQuestion?.question).toContain("2024-12-31 to 2025-12-31");
-    expect(brief.nextResearchQuestion?.question).toContain("supports or challenges");
+    expect(brief.nextResearchQuestion?.question).toContain("what filing evidence challenges that explanation");
   });
 
   it("keeps an absolute SEC question when source precision is missing, without inventing a percentage", () => {
@@ -104,6 +111,7 @@ describe("compileCompanyResearchBrief", () => {
     expect(brief.nextResearchQuestion?.question).toContain("difference of 16920000000 USD");
     expect(brief.nextResearchQuestion?.question).not.toMatch(/\(\d+(?:\.\d+)?%\)/u);
     expect(brief.missingEvidenceReason).toBeNull();
+    expect(brief.researchFollowUp).toMatchObject({ state: "indicated", leads: [{ metric: "net_income", delta: "16920000000", percentChange: null }] });
   });
 
   it("continues to a valid newer comparison when an earlier candidate is malformed", () => {
@@ -123,6 +131,7 @@ describe("compileCompanyResearchBrief", () => {
       comparisons: [{ ...comparison, changeInterpretation, delta, percentChange }],
     }));
     expect(brief.nextResearchQuestion).toBeNull();
+    expect(brief.researchFollowUp).toMatchObject({ state: "undetermined", leads: [] });
     expect(brief.missingEvidenceReason).toContain("No valid comparable SEC metric");
   });
 

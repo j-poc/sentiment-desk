@@ -36,10 +36,7 @@ function makeContract(): LunaClassifierContract {
       const bytes = Buffer.from(body, "utf8");
       return { body, payloadSha256: sha256Bytes(bytes), requestBytes: bytes.byteLength, requestedModel, promptSha256: promptSha, schemaSha256: schemaSha, profileSha256: profileSha };
     },
-    estimateCost(inputTokens, cachedInputTokens, cacheWriteInputTokens, outputTokens, modelReturned, serviceTier) {
-      if (cachedInputTokens === null || cacheWriteInputTokens === null || modelReturned !== model || serviceTier !== "default" || cachedInputTokens + cacheWriteInputTokens > inputTokens) return null;
-      return ((inputTokens - cachedInputTokens - cacheWriteInputTokens) * pricing.inputPerMillionUsd + cachedInputTokens * pricing.cachedInputPerMillionUsd + cacheWriteInputTokens * pricing.cacheWritePerMillionUsd + outputTokens * pricing.outputPerMillionUsd) / 1_000_000;
-    },
+    estimateCost: () => null,
   };
 }
 
@@ -100,7 +97,7 @@ function labelsFixture(stage: "pilot" | "final" = "pilot", tweak?: (labels: any)
     analysisCodeRevision: "a".repeat(40), analysisCodeDirty: false, requestedModel: model, requestedServiceTier: "default", promptVersion, schemaVersionName: schemaVersion,
     promptSha256: promptSha, schemaSha256: schemaSha, profileSha256: profileSha, productCompanyUniverseSha256: PRODUCT_COMPANY_UNIVERSE_SHA256,
     populationFrameSha256: sampleManifestSha256(frame), sampleManifestSha256: sampleManifestSha256(allRows),
-    ...(stage === "final" ? { evaluationBudget: { maxRequests: 40, maxEstimatedCostUsd: 0.01, inputPerMillionUsd: pricing.inputPerMillionUsd, cachedInputPerMillionUsd: pricing.cachedInputPerMillionUsd, cacheWritePerMillionUsd: pricing.cacheWritePerMillionUsd, outputPerMillionUsd: pricing.outputPerMillionUsd, openAIAccountReadback: { kind: "openai_account_spend_limit_readback", observedAt: "2026-10-01T20:25:00Z", availableBudgetUsd: 0.02, artifactSha256: digest("account readback") }, accountOwnerApproval: { attested: true, approvedAt: "2026-10-01T20:25:00Z", approvalRecordSha256: digest("approval") } } } : {}),
+    ...(stage === "final" ? { evaluationBudget: { maxRequests: 40, maxRequestBytes: 1_000_000, accountOwnerApproval: { attested: true, approvedAt: "2026-10-01T20:25:00Z", approvalRecordSha256: digest("approval") } } } : {}),
     populationFrame: frame, samplePlan: planFor(frame, allRows),
     reviewers: primary.map((id) => ({ id, kind: "independent_subagent", agentThreadId: `thread-${id}`, configuredModel: "gpt-6-luna", resolvedModel: null, modelSettingsSha256: digest(`${id} settings`), modelResolutionEvidenceSha256: null, independenceAttested: true, blindedToLunaOutputsAttested: true })),
     agentLabelProtocol: { version: "independent-subagents-blinded-v1", frozenAt, lunaOutputsOpenedAt: null, chronologyArtifactSha256: digest("reviewers froze before Luna output") },
@@ -127,7 +124,7 @@ function bindProviderResponse(attempt: any): void {
       output_tokens_details: { reasoning_tokens: usage.reasoningTokens },
     },
   };
-  attempt.responsePayload = JSON.stringify(response);
+  attempt.responsePayload = JSON.stringify({ type: "response.completed", response });
   attempt.responseSha256 = digest(attempt.responsePayload);
 }
 
@@ -136,7 +133,6 @@ function runFixture(labels: LunaLabelSetV2, labelsSha256: string, mutate?: (run:
     const refs = item.reviews[0]!.labels;
     const prepared = makeContract().prepareRequest(item.input, model);
     const usage = { inputTokens: 100, cachedInputTokens: 10, cacheWriteInputTokens: 5, outputTokens: 50, reasoningTokens: 10, totalTokens: 150 };
-    const estimatedCostUsd = makeContract().estimateCost(usage.inputTokens, usage.cachedInputTokens, usage.cacheWriteInputTokens, usage.outputTokens, model, "default")!;
     const classificationFields = {
       sentiment: refs.sentiment, eventType: refs.eventType, takeaway: refs.takeaway, about: refs.about, material: refs.material, investorRelevant: refs.investorRelevant,
       evidenceSufficient: refs.evidenceSufficient === true, summary: "The SEC excerpt reports the stated company result.", supportingExcerpt: item.excerpt.slice(0, 50),
@@ -144,17 +140,16 @@ function runFixture(labels: LunaLabelSetV2, labelsSha256: string, mutate?: (run:
     const classification = { ...classificationFields, disposition: deriveCategoricalDisposition(classificationFields, true) };
     return {
       observationId: item.observationId, requestPayloadSha256: prepared.payloadSha256, terminalStatus: "completed",
-      attempts: [{ attemptNumber: 1, requestPayloadSha256: prepared.payloadSha256, outcome: "completed", submitted: true, httpStatus: 200, responseId: `resp-${item.observationId}`, responseSha256: digest(`response ${item.observationId}`), responsePayload: null, modelReturned: model, serviceTier: "default", latencyMs: 10 + labels.items.indexOf(item), classification, usage: { ...usage, estimatedCostUsd } }],
+      attempts: [{ attemptNumber: 1, requestPayloadSha256: prepared.payloadSha256, outcome: "completed", submitted: true, httpStatus: 200, responseId: `resp-${item.observationId}`, responseSha256: digest(`response ${item.observationId}`), responsePayload: null, modelReturned: model, serviceTier: "default", latencyMs: 10 + labels.items.indexOf(item), classification, usage: { ...usage, estimatedCostUsd: null } }],
     };
   });
   const openTime = "2026-10-01T21:00:00Z";
   const finalLabels = { ...labels, agentLabelProtocol: { ...labels.agentLabelProtocol, lunaOutputsOpenedAt: openTime } } as any;
   Object.assign(labels as any, finalLabels);
   const run: any = {
-    schemaVersion: 2, studyId: labels.studyId, runId: "luna-run-001", labelsSha256, sampleManifestSha256: labels.sampleManifestSha256,
+    schemaVersion: 2, provider: "chatgpt_plan", studyId: labels.studyId, runId: "luna-run-001", labelsSha256, sampleManifestSha256: labels.sampleManifestSha256,
     evaluationProfile: labels.evaluationProfile, profileSha256: labels.profileSha256, analysisCodeRevision: labels.analysisCodeRevision, sourceTreeDirty: false,
-    startedAt: openTime, requestCount: items.length, requestedModel: labels.requestedModel, maxRequests: labels.evaluationBudget!.maxRequests, maxEstimatedCostUsd: labels.evaluationBudget!.maxEstimatedCostUsd,
-    inputPerMillionUsd: labels.evaluationBudget!.inputPerMillionUsd, cachedInputPerMillionUsd: labels.evaluationBudget!.cachedInputPerMillionUsd, cacheWritePerMillionUsd: labels.evaluationBudget!.cacheWritePerMillionUsd, outputPerMillionUsd: labels.evaluationBudget!.outputPerMillionUsd,
+    startedAt: openTime, requestCount: items.length, requestedModel: labels.requestedModel, maxRequests: labels.evaluationBudget!.maxRequests, maxRequestBytes: labels.evaluationBudget!.maxRequestBytes, estimatedCostUsd: null, providerAllowance: null,
     items,
   };
   mutate?.(run);
@@ -246,7 +241,8 @@ describe("offline categorical Luna evaluation", () => {
     expect(report.quality.evidenceSufficiencyReference.status).toBe("PASS");
     expect(report.rawAgentAgreement.sentiment.rawAgreementIncludingAbstentions).toBe(1);
     expect(report.usage).toMatchObject({ cachedInputTokensKnownSubtotal: 300, cacheWriteInputTokensKnownSubtotal: 150, reasoningTokensAreIncludedInOutput: true });
-    expect(report.usage.estimatedCostUsd).toBeGreaterThan(0);
+    expect(report.usage.estimatedCostUsd).toBeNull();
+    expect(report.usage.providerAllowance).toBeNull();
   });
 
   it("fails when dispositions contradict the inclusion fields that control categorical visibility", () => {
@@ -572,12 +568,12 @@ describe("offline categorical Luna evaluation", () => {
     expect(() => parseLunaModelRun(unknownRetry, labels, makeContract())).toThrow("retries after a terminal or unknown outcome");
   });
 
-  it("rejects fabricated source quotations and tampered cost breakdowns", () => {
+  it("rejects fabricated source quotations and fabricated provider-dollar usage", () => {
     const raw = labelsFixture("final"); const labels = parseLunaLabelSet(raw, makeContract()); const labelsSha256 = digest("quote fixture");
     const badQuote = runFixture(labels, labelsSha256, (value) => { value.items[0].attempts[0].classification.supportingExcerpt = "not in the SEC text"; });
     expect(() => parseLunaModelRun(badQuote, labels, makeContract())).toThrow("quotation absent from the frozen SEC source text");
-    const badCost = runFixture(labels, labelsSha256, (value) => { value.items[0].attempts[0].usage.estimatedCostUsd += 0.1; });
-    expect(() => parseLunaModelRun(badCost, labels, makeContract())).toThrow("cost does not match the production classifier");
+    const badCost = runFixture(labels, labelsSha256, (value) => { value.items[0].attempts[0].usage.estimatedCostUsd = 0.1; });
+    expect(() => parseLunaModelRun(badCost, labels, makeContract())).toThrow("claims a USD amount for subscription usage");
   });
 
   it("keeps missing cache-write, model, tier, or cost facts unverified instead of applying Luna rates", () => {
@@ -589,22 +585,20 @@ describe("offline categorical Luna evaluation", () => {
     const run = parseLunaModelRun(unpriced, labels, makeContract());
     const report = analyzeLunaFinal({ labels, labelsSha256, run }) as any;
     expect(report.status).toBe("UNVERIFIED");
-    expect(report.execution.unpricedAttempts).toBe(1);
+    expect(report.execution.unpricedAttempts).toBe(30);
+    expect(report.execution.status).toBe("PASS");
     expect(report.execution.totalEstimatedCostUsd).toBeNull();
     const wrongTier = structuredClone(unpriced) as any;
     wrongTier.items[0].attempts[0].usage.cacheWriteInputTokens = 5;
     wrongTier.items[0].attempts[0].usage.estimatedCostUsd = 0.0001;
     wrongTier.items[0].attempts[0].serviceTier = "priority";
     bindProviderResponse(wrongTier.items[0].attempts[0]);
-    expect(() => parseLunaModelRun(wrongTier, labels, makeContract())).toThrow("cost does not match the production classifier");
+    expect(() => parseLunaModelRun(wrongTier, labels, makeContract())).toThrow("claims a USD amount for subscription usage");
   });
 
-  it("fails a frozen USD ceiling overrun and tracks refusal and unknown outcomes", () => {
-    const raw = labelsFixture("final", (value) => { value.evaluationBudget.maxEstimatedCostUsd = 0.0001; });
-    const labels = parseLunaLabelSet(raw, makeContract()); const labelsSha256 = digest("budget fixture");
-    const overBudget = runFixture(labels, labelsSha256);
-    const overBudgetReport = analyzeLunaFinal({ labels, labelsSha256, run: parseLunaModelRun(overBudget, labels, makeContract()) }) as any;
-    expect(overBudgetReport.provenanceExecutionStatus).toBe("FAIL");
+  it("fails a frozen local byte ceiling and tracks refusal and unknown outcomes", () => {
+    const raw = labelsFixture("final", (value) => { value.evaluationBudget.maxRequestBytes = 1; });
+    expect(() => parseLunaLabelSet(raw, makeContract())).toThrow("local request/byte ceilings");
     const unknownLabels = parseLunaLabelSet(labelsFixture("final"), makeContract());
     const unknownLabelsSha256 = digest("unknown fixture");
     const unknown = runFixture(unknownLabels, unknownLabelsSha256, (value) => {

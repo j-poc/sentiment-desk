@@ -3,23 +3,24 @@ import { intersectClassifierSourceAllowlist, intersectCollectorAllowlists, inter
 
 // Config resolution must not inspect the real shared-machine credential file
 // while these tests exercise explicit or empty environment values.
-vi.stubEnv("OPENAI_MAX_DAILY_COST_USD", "");
-vi.stubEnv("OPENAI_PRIVATE_EVIDENCE_ANALYSIS_ENABLED", "false");
 const {
-  boundedUsdMicros,
   boundedNonNegativeInt,
   config,
   parseClassificationProvider,
+  parseChatGPTPlanBudget,
+  parseChatGPTPlanLocalOrigin,
   parseExternalSourceCollectors,
+  parseOpenAILunaAllowedCollectors,
   parseExplicitBoolean,
   parseSourceRightsApprovedCollectors,
   parseExternalRequestsEnabled,
   secContactUserAgent,
+  parseSecUserAgent,
 } = await import("../server/config.js");
 afterAll(() => vi.unstubAllEnvs());
 
 describe("external request mode", () => {
-  it("defaults to paused and rejects malformed values", () => {
+  it("keeps external requests off until explicitly enabled and rejects malformed values", () => {
     expect(parseExternalRequestsEnabled(undefined)).toBe(false);
     expect(parseExternalRequestsEnabled("true")).toBe(true);
     expect(parseExternalRequestsEnabled("false")).toBe(false);
@@ -27,8 +28,8 @@ describe("external request mode", () => {
     expect(() => parseExternalRequestsEnabled("off")).toThrow();
   });
 
-  it("requires an explicit collector allowlist and rejects synthetic or unknown collectors", () => {
-    expect(parseExternalSourceCollectors(undefined)).toEqual(new Set());
+  it("defaults source collection to official SEC APIs and rejects synthetic or unknown collectors", () => {
+    expect(parseExternalSourceCollectors(undefined)).toEqual(new Set(["sec_edgar", "sec_company_facts"]));
     expect(parseExternalSourceCollectors(" sec_edgar, yahoo_chart,sec_edgar ")).toEqual(
       new Set(["sec_edgar", "yahoo_chart"]),
     );
@@ -39,7 +40,7 @@ describe("external request mode", () => {
   });
 
   it("keeps source-use approvals separate from request allowlists", () => {
-    expect(parseSourceRightsApprovedCollectors(undefined)).toEqual(new Set());
+    expect(parseSourceRightsApprovedCollectors(undefined)).toEqual(new Set(["sec_edgar", "sec_company_facts"]));
     expect(parseSourceRightsApprovedCollectors("sec_edgar,yahoo_chart")).toEqual(
       new Set(["sec_edgar", "yahoo_chart"]),
     );
@@ -77,8 +78,9 @@ describe("external request mode", () => {
     expect(() => parseExplicitBoolean("yes")).toThrow();
   });
 
-  it("keeps private-note model dispatch independently disabled by default", () => {
-    expect(config.openai.privateEvidenceAnalysisEnabled).toBe(false);
+  it("keeps API-key billing configuration out of the ChatGPT-plan inference route", () => {
+    expect(config.openai).not.toHaveProperty("apiKey");
+    expect(config.openai).not.toHaveProperty("maxDailyCostMicros");
   });
 
   it("intersects Jev forwarding permission with the active source allowlist", () => {
@@ -105,11 +107,29 @@ describe("external request mode", () => {
   });
 });
 
+describe("ChatGPT local browser origin", () => {
+  it("defaults to the API origin and accepts only exact loopback HTTP origins", () => {
+    expect(parseChatGPTPlanLocalOrigin(undefined, "http://127.0.0.1:8787")).toBe("http://127.0.0.1:8787");
+    expect(parseChatGPTPlanLocalOrigin("http://127.0.0.1:5175", "http://127.0.0.1:8787")).toBe("http://127.0.0.1:5175");
+    expect(parseChatGPTPlanLocalOrigin("http://localhost:5173", "http://127.0.0.1:8787")).toBe("http://localhost:5173");
+    expect(() => parseChatGPTPlanLocalOrigin("https://example.com", "http://127.0.0.1:8787")).toThrow(/loopback HTTP origin/);
+    expect(() => parseChatGPTPlanLocalOrigin("http://127.0.0.1:5175/settings", "http://127.0.0.1:8787")).toThrow(/loopback HTTP origin/);
+    expect(() => parseChatGPTPlanLocalOrigin("http://127.0.0.1:5175/?next=evil", "http://127.0.0.1:8787")).toThrow(/loopback HTTP origin/);
+  });
+});
+
 describe("new classifier selection", () => {
   it("uses OpenAI Luna and rejects selecting the retired TypeSafe dispatcher", () => {
     expect(parseClassificationProvider(undefined)).toBe("openai_luna");
     expect(parseClassificationProvider(" openai_luna ")).toBe("openai_luna");
     expect(() => parseClassificationProvider("typesafe")).toThrow(/historical Jev records remain readable/);
+  });
+
+  it("defaults Luna forwarding to public RSS while preserving explicit source gates", () => {
+    const feeds = new Set(["google_news_rss", "yahoo_finance_rss"]);
+    expect(parseOpenAILunaAllowedCollectors(undefined)).toEqual(feeds);
+    expect(parseOpenAILunaAllowedCollectors("")).toEqual(feeds);
+    expect(parseOpenAILunaAllowedCollectors("sec_edgar")).toEqual(new Set(["sec_edgar"]));
   });
 });
 
@@ -123,9 +143,17 @@ describe("SEC User-Agent configuration", () => {
     expect(secContactUserAgent("Research\nDesk analyst@example.com")).toBe("");
     expect(secContactUserAgent("Research\rDesk analyst@example.com")).toBe("");
   });
+
+  it("keeps SEC disabled when no real contact-bearing User-Agent is configured", () => {
+    expect(parseSecUserAgent(undefined)).toBe("");
+    expect(parseSecUserAgent("")).toBe("");
+    expect(parseSecUserAgent("Sentiment Desk/0.2.0 contact@example.com")).toBe("");
+    expect(parseSecUserAgent("Sentiment Desk/0.2.0 operator@service.example")).toBe("");
+    expect(parseSecUserAgent("Sentiment Desk/0.2.0 operator@company.com")).toBe("Sentiment Desk/0.2.0 operator@company.com");
+  });
 });
 
-describe("Jev daily budget caps", () => {
+describe("ChatGPT-plan daily budget caps", () => {
   it("defaults missing limits to zero and accepts only bounded non-negative integers", () => {
     expect(boundedNonNegativeInt(undefined, 100)).toBe(0);
     expect(boundedNonNegativeInt(undefined, 400_000)).toBe(0);
@@ -134,13 +162,14 @@ describe("Jev daily budget caps", () => {
     expect(boundedNonNegativeInt("1.5", 100)).toBe(0);
     expect(boundedNonNegativeInt("101", 100)).toBe(0);
   });
-});
 
-describe("OpenAI spending cap", () => {
-  it("defaults an absent daily cost cap to zero and never treats the validation ceiling as a configured budget", () => {
-    expect(boundedUsdMicros(undefined, 100)).toBe(0);
-    expect(config.openai.maxDailyCostMicros).toBe(0);
-    expect(boundedUsdMicros("0.25", 100)).toBe(250_000);
-    expect(boundedUsdMicros("100.01", 100)).toBe(0);
+  it("uses bounded one-day classification capacity independent of legacy API-billing variables", () => {
+    expect(parseChatGPTPlanBudget({})).toEqual({ maxRequestsPerDay: 100, maxRequestBytesPerDay: 1_638_400 });
+    expect(parseChatGPTPlanBudget({ OPENAI_MAX_REQUESTS_PER_DAY: "1", OPENAI_MAX_REQUEST_BYTES_PER_DAY: "260000" }))
+      .toEqual({ maxRequestsPerDay: 100, maxRequestBytesPerDay: 1_638_400 });
+    expect(parseChatGPTPlanBudget({ CHATGPT_PLAN_MAX_REQUESTS_PER_DAY: "10", CHATGPT_PLAN_MAX_REQUEST_BYTES_PER_DAY: "200000" }))
+      .toEqual({ maxRequestsPerDay: 10, maxRequestBytesPerDay: 200_000 });
+    expect(parseChatGPTPlanBudget({ CHATGPT_PLAN_MAX_REQUESTS_PER_DAY: "0", CHATGPT_PLAN_MAX_REQUEST_BYTES_PER_DAY: "invalid" }))
+      .toEqual({ maxRequestsPerDay: 0, maxRequestBytesPerDay: 0 });
   });
 });

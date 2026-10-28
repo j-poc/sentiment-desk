@@ -111,7 +111,7 @@ describe("MentionDrawer retry availability", () => {
       filedAt: context.filedAt,
       secDocumentContext: context,
     } satisfies Mention;
-    const html = renderDrawer(retryAvailabilityFor(null), mention, () => undefined);
+    const html = renderDrawer(retryAvailabilityFor(null), mention);
     const lineageIndex = html.indexOf("Open selected Exhibit 99.1");
     const excerptDisclosureIndex = html.indexOf("Read the selected SEC excerpt");
     const excerptIndex = html.indexOf(excerpt);
@@ -119,8 +119,8 @@ describe("MentionDrawer retry availability", () => {
     expect(html).toContain("Judgment pending");
     expect(html).toContain("Judgment status");
     expect(html).toContain("source input ready");
-    expect(html).toContain("See why judgment is pending");
-    expect(html).toContain('aria-controls="desk-operations"');
+    expect(html).not.toContain("See why judgment is pending");
+    expect(html).not.toContain('aria-controls="desk-operations"');
     expect(html).toContain('dateTime="1970-01-01T00:00:00.002Z"');
     expect(html).toContain('dateTime="1970-01-01T00:00:00.004Z"');
     expect(html).toContain("Parent 8-K filing");

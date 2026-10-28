@@ -351,6 +351,187 @@ describe("isFinanceRelevant (ingest guard)", () => {
       }),
     ).toBe(true);
   });
+
+  it("drops consumer shopping guides even when they name a public company and price", () => {
+    expect(isFinanceRelevant({
+      title: "This weekend's best Apple deals: AirPods, Mac mini, MacBook Air and Mac Studio $200 off, Series 12, more",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "Apple MacBook Air 13-Inch M5 Gets $200 Off for Prime Day",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "Save an incredible $500 on the powerful 2026 Apple MacBook Pro on Amazon",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "Here are all of Apple's official iPhone 18 Pro cases sitting at Amazon all-time lows from $39",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "iPhone 18 Pro Max review: Apple's biggest, heaviest and longest-lasting superphone",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "Apple shares fall after a new iPhone demand warning and production order cuts",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(true);
+  });
+
+  it("holds option-contract quote pages and broad market roundups out of company updates", () => {
+    expect(isFinanceRelevant({
+      title: "AAPL Oct 2026 345.000 call (AAPL261009C00345000) Stock Price, News, Quote & History",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "Stock Market Today: Dow Rises As Apple Sells Off; SpaceX Jumps On Starlink Move",
+      snippet: "Live coverage of the trading session.",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "The 3 tech stocks accounting for over 20% of the S&P 500",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    for (const title of [
+      "Stocktwits Tech Watch: ASML, TSMC Earnings This Week And Apple’s Next Home Play",
+      "Here are Monday's biggest analyst calls: SpaceX, Nvidia, Apple, Salesforce, Robinhood, First Solar & more",
+      "Apple smart home announcement, Big Bank earnings, September CPI: What to Watch",
+    ]) {
+      expect(isFinanceRelevant({ title, snippet: "", tier: "trade", kind: "rss", ticker: "AAPL", companyName: "Apple" })).toBe(false);
+    }
+    expect(isFinanceRelevant({
+      title: "Apple cuts iPhone orders after a weaker demand outlook",
+      snippet: "The company lowered supplier orders.",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(true);
+  });
+
+  it("keeps company launches, demand signals, and legal settlements despite consumer-product wording", () => {
+    expect(isFinanceRelevant({
+      title: "Apple (AAPL) Reaches $250 Million Siri Settlement Over Recent iPhone Claims",
+      snippet: "The deal covers recent iPhone buyers, subject to court approval.",
+      tier: "trade",
+      kind: "finnhub",
+      ticker: "AAPL",
+    })).toBe(true);
+    expect(isFinanceRelevant({
+      title: "Apple (AAPL) Eyes India Payments With Apple Pay Debut Next Month",
+      snippet: "The company plans to launch Apple Pay with an initial bank partner.",
+      tier: "trade",
+      kind: "finnhub",
+      ticker: "AAPL",
+    })).toBe(true);
+    expect(isFinanceRelevant({
+      title: "Apple Just Got a New Signal From iPhone 18 Demand",
+      snippet: "Delivery times are slightly higher than last year.",
+      tier: "trade",
+      kind: "finnhub",
+      ticker: "AAPL",
+    })).toBe(true);
+  });
+
+  it("keeps strategic chip supply deals despite a consumer pricing mention in the excerpt", () => {
+    expect(isFinanceRelevant({
+      title: "Apple’s New CEO Is Already Being Pressured to Drop the Chinese Chip Deal Tim Cook Fought to Keep",
+      snippet: "Washington is pressuring Apple to drop the chip deal, with possible consequences for iPhone pricing.",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(true);
+    expect(isFinanceRelevant({
+      title: "Apple iPhone deals: save $200 on the latest model",
+      snippet: "Lower iPhone prices for shoppers.",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+  });
+
+  it("holds routine outside-manager share trades out while keeping issuer buybacks", () => {
+    expect(isFinanceRelevant({
+      title: "6,643 Apple Inc. $AAPL Shares Sold by DMC Group LLC",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(false);
+    expect(isFinanceRelevant({
+      title: "Apple buys 10,000 shares of its own stock under the announced buyback",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+      companyName: "Apple",
+    })).toBe(true);
+    expect(isFinanceRelevant({
+      title: "Apple Inc. buys 1,000,000 shares of a supplier in a strategic investment",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+      companyName: "Apple",
+    })).toBe(true);
+    expect(isFinanceRelevant({
+      title: "Apple Inc. (AAPL) buys 1,000,000 shares of a supplier in a strategic investment",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+      companyName: "Apple",
+    })).toBe(true);
+    for (const title of [
+      "Apple Inc. $AAPL Stock Sold by Agate Pass Investment Management LLC",
+      "Apple Inc. $AAPL Stock Purchased by Wedmont Private Capital",
+      "Apple Inc. $AAPL Stock Bought by Endeavor Private Wealth Inc.",
+    ]) {
+      expect(isFinanceRelevant({ title, snippet: "", tier: "trade", kind: "rss", ticker: "AAPL" })).toBe(false);
+    }
+    expect(isFinanceRelevant({
+      title: "Apple Inc. $AAPL Stock Sold by an insider after earnings",
+      snippet: "",
+      tier: "trade",
+      kind: "rss",
+      ticker: "AAPL",
+    })).toBe(true);
+    for (const title of [
+      "Apple Inc. $AAPL Stock: Pinnacle Wealth Management Advisory Group LLC Boosts Holdings",
+      "Apple Inc. $AAPL Stock: Integrated Wealth Concepts LLC Raises Position",
+      "Apple Inc. $AAPL Stock Position Lowered by The Manufacturers Life Insurance Company",
+    ]) {
+      expect(isFinanceRelevant({
+        title, snippet: "", tier: "trade", kind: "rss", ticker: "AAPL", companyName: "Apple",
+      })).toBe(false);
+    }
+  });
 });
 
 describe("applyPostRules investor relevance", () => {

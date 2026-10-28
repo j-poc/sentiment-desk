@@ -21,15 +21,15 @@ afterEach(() => {
   while (openDesks.length) openDesks.pop()!.close();
 });
 
-function insertGoogleMatch(db: Desk, input: { id: string; title: string; publishedAt: number }) {
+function insertGoogleMatch(db: Desk, input: { id: string; title: string; publishedAt: number; snippet?: string; tier?: "wire" | "major" | "trade" | "blog" }) {
   return db.insertObservation({
     companyId: apple.id,
     kind: "rss",
     sourceName: "Google News RSS",
     sourceUrl: `https://news.google.com/rss/articles/${input.id}`,
-    tier: "major",
+    tier: input.tier ?? "major",
     title: input.title,
-    snippet: "Saved publisher result.",
+    snippet: input.snippet ?? "Saved publisher result.",
     publishedAt: input.publishedAt,
     retrievedAt: input.publishedAt + 10,
     collector: "google_news_rss",
@@ -87,6 +87,175 @@ describe("ambiguous issuer matches in the selected-company scan", () => {
     expect(db.mentionsByIds(apple.id, [weakId])[0]?.issuerIdentityStrong).toBe(false);
     expect(db.recentVisible(10).some((item) => item.id === weakId)).toBe(true);
     expect(db.realObservationCount()).toBe(savedCount);
+  });
+
+  it("holds a competitor-led story that mentions Apple only through a product alias", () => {
+    const db = new Desk(":memory:");
+    openDesks.push(db);
+    db.seedCompanies([apple]);
+    const id = insertGoogleMatch(db, {
+      id: "att-iphone-launch",
+      title: "Is AT&T (T) Ready for a Starlink World After Its Latest Fiber and iPhone Duo Moves?",
+      snippet: "AT&T introduced Apple's new iPhone Duo while expanding its wireless and fiber coverage.",
+      publishedAt: Date.now(),
+    });
+    const jointIssuerId = insertGoogleMatch(db, {
+      id: "att-apple-distribution-partnership",
+      title: "AT&T (T) and Apple (AAPL) announce a distribution partnership",
+      snippet: "The companies plan to expand their business relationship.",
+      publishedAt: Date.now() - 1_000,
+    });
+
+    const workingScan = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "all",
+    });
+    expect(workingScan.items.map((item) => item.id)).not.toContain(id);
+    expect(workingScan.items.map((item) => item.id)).toContain(jointIssuerId);
+    expect(workingScan.issuerIdentityReviewCount).toBe(1);
+
+    const held = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "identity_review",
+    });
+    expect(held.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id, issuerIdentityStrong: false }),
+    ]));
+  });
+
+  it("holds fruit-grower financial news in Apple identity review", () => {
+    const db = new Desk(":memory:");
+    openDesks.push(db);
+    db.seedCompanies([apple]);
+    const id = insertGoogleMatch(db, {
+      id: "apple-growers-frost",
+      title: "Apple growers report revenue losses after frost",
+      snippet: "Fruit harvest volumes declined.",
+      publishedAt: Date.now(),
+    });
+
+    const workingScan = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "all",
+    });
+    expect(workingScan.items.map((item) => item.id)).not.toContain(id);
+    expect(workingScan.issuerIdentityReviewCount).toBe(1);
+  });
+
+  it("holds apple-juice business headlines in Apple identity review", () => {
+    const db = new Desk(":memory:");
+    openDesks.push(db);
+    db.seedCompanies([apple]);
+    const id = insertGoogleMatch(db, {
+      id: "apple-juice-revenue",
+      title: "Apple juice manufacturers report revenue growth",
+      snippet: "A regional beverage trade association published the results.",
+      publishedAt: Date.now(),
+    });
+
+    const workingScan = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "all",
+    });
+    expect(workingScan.items.map((item) => item.id)).not.toContain(id);
+    expect(workingScan.issuerIdentityReviewCount).toBe(1);
+    const held = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "identity_review",
+    });
+    expect(held.items.map((item) => item.id)).toContain(id);
+  });
+
+  it("keeps issuer-matched shopping and quote records out of updates while leaving them reviewable", () => {
+    const db = new Desk(":memory:");
+    openDesks.push(db);
+    db.seedCompanies([apple]);
+    const now = Date.now();
+    const dealId = insertGoogleMatch(db, {
+      id: "apple-shopping-deal",
+      title: "You Can Save $160 on Apple's Latest MacBook Pro During October Prime Day",
+      publishedAt: now,
+      tier: "trade",
+    });
+    const optionId = insertGoogleMatch(db, {
+      id: "aapl-option-contract",
+      title: "AAPL Oct 2026 345.000 call (AAPL261009C00345000) Stock Price, News, Quote & History",
+      publishedAt: now - 1_000,
+      tier: "trade",
+    });
+    const productDealId = insertGoogleMatch(db, {
+      id: "apple-product-discount",
+      title: "Apple MacBook Air 13-Inch M5 Gets $200 Off for Prime Day",
+      publishedAt: now - 1_500,
+      tier: "trade",
+    });
+    const promoLeadId = insertGoogleMatch(db, {
+      id: "apple-product-promo-lead",
+      title: "Save an incredible $500 on the powerful 2026 Apple MacBook Pro on Amazon",
+      publishedAt: now - 1_600,
+      tier: "trade",
+    });
+    const managerTradeId = insertGoogleMatch(db, {
+      id: "apple-manager-share-trade",
+      title: "Apple Inc. $AAPL Stock Sold by Agate Pass Investment Management LLC",
+      publishedAt: now - 1_750,
+      tier: "trade",
+    });
+    const managerTradeIds = [
+      managerTradeId,
+      insertGoogleMatch(db, {
+        id: "apple-manager-stock-purchase",
+        title: "Apple Inc. $AAPL Stock Purchased by Wedmont Private Capital",
+        publishedAt: now - 1_800,
+        tier: "trade",
+      }),
+      insertGoogleMatch(db, {
+        id: "apple-manager-stock-buy",
+        title: "Apple Inc. $AAPL Stock Bought by Endeavor Private Wealth Inc.",
+        publishedAt: now - 1_850,
+        tier: "trade",
+      }),
+      insertGoogleMatch(db, {
+        id: "apple-manager-position-lowered",
+        title: "Apple Inc. $AAPL Stock Position Lowered by The Manufacturers Life Insurance Company",
+        publishedAt: now - 1_875,
+        tier: "trade",
+      }),
+    ];
+    const roundupId = insertGoogleMatch(db, {
+      id: "apple-broad-market-roundup",
+      title: "The 3 tech stocks accounting for over 20% of the S&P 500: Apple, Nvidia and Microsoft",
+      publishedAt: now - 1_900,
+      tier: "trade",
+    });
+    const businessId = insertGoogleMatch(db, {
+      id: "apple-demand-update",
+      title: "Apple cuts iPhone orders after a weaker demand outlook",
+      publishedAt: now - 2_000,
+      tier: "trade",
+    });
+
+    const updates = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "all",
+    });
+    expect(updates.items.map((item) => item.id)).toEqual([businessId]);
+    expect(updates.investorRelevanceReviewCount).toBe(8);
+    expect(updates.items[0]?.companyBusinessRelevant).toBe(true);
+
+    const held = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "relevance_review",
+    });
+    expect(held.items.map((item) => item.id)).toEqual(expect.arrayContaining([dealId, optionId, productDealId, promoLeadId, ...managerTradeIds]));
+    expect(held.items).toHaveLength(8);
+    expect(held.items.every((item) => item.companyBusinessRelevant === false)).toBe(true);
+
+    const identityHeld = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "identity_review",
+    });
+    expect(identityHeld.items.map((item) => item.id)).toContain(roundupId);
+    expect(identityHeld.items.find((item) => item.id === roundupId)?.issuerIdentityStrong).toBe(false);
+
+    const history = db.mentionsForCompanyPage({
+      companyId: apple.id, sinceMs: 0, limit: 10, cursor: null, filter: "history",
+    });
+    expect(history.items.map((item) => item.id)).toEqual(expect.arrayContaining([dealId, optionId, productDealId, promoLeadId, ...managerTradeIds, roundupId, businessId]));
+    expect(db.mentionsByIds(apple.id, [optionId])[0]?.companyBusinessRelevant).toBe(false);
+    expect(db.realObservationCount()).toBe(10);
   });
 
   it("keeps weak matches visible in recovery and explicit off-target review filters", () => {

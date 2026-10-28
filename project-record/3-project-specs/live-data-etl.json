@@ -127,10 +127,10 @@
     "enforcement": "Pipeline rejects missing receipt IDs; the database checks the referenced receipt and its source identity."
   },
   "source_request_policy": {
-    "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults false and gates collectors, price reads, selected-provider classification and retry.",
+    "global_opt_in": "EXTERNAL_REQUESTS_ENABLED defaults false and gates collectors, price reads, selected-provider classification and retry. Operators enable requests explicitly after configuring the required source allowlists and SEC User-Agent.",
     "source_allowlist": "EXTERNAL_SOURCE_COLLECTORS defaults to empty. A source request runs only when EXTERNAL_REQUESTS_ENABLED is true and its collector appears in both EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. The latter is an operator attestation, not independent verification of rights.",
     "jev_forwarding": "TYPESAFE_ALLOWED_COLLECTORS is intersected with EXTERNAL_SOURCE_COLLECTORS and SOURCE_RIGHTS_APPROVED_COLLECTORS. Jev additionally requires TYPESAFE_ACCOUNT_USE_APPROVED=true, a non-empty key, and positive finite daily request and request-body-byte limits. This account-use flag is also an operator attestation, not evidence of account authority or terms.",
-    "verification": "Guarded offline-startup verifies default-off zero fetches, each isolated collector, source approvals, historical TypeSafe selection and new Luna key/account/allowlist/cost gates. Outbound fetches are intercepted before network access. The independent authorized keyless Compose check uses only five source endpoints and explicitly disables both classifiers, credentials, account flags and Luna budgets.",
+    "verification": "Guarded offline-startup explicitly sets EXTERNAL_REQUESTS_ENABLED=false and verifies zero fetches, then checks each isolated collector, source approvals, historical TypeSafe selection, and that a legacy direct API key cannot create a ChatGPT-plan grant or dispatch Luna without OAuth. Outbound fetches are intercepted before network access. The independent authorized Compose check uses only five source endpoints and has no user's ChatGPT-plan OAuth grant, so classifier dispatch remains disabled.",
     "live_smoke": {
       "reviewed_at": "2026-09-30",
       "status": "PASS",
@@ -140,7 +140,7 @@
       "evidence": "The latest authorized_keyless_live_smoke status, timestamp, code fingerprint, and output digests are recorded in project-record/4-log/live-data-etl-evidence.json after the final frozen-source verify/check. The 2026-09-30T19:15:49Z PASS against fingerprint 955e0d1da431315907dc117a3cfdc21e3222e476b4847e962f783f33684c44cf is historical; the earlier 2026-09-29 Compose result remains historical_result.",
       "limitation": "This bounded result proves only the configured keyless source delivery and container recreation path. It does not establish endpoint-specific rights, complete source coverage, Jev quality, provider billing, or production readiness."
     },
-    "openai_forwarding": "CLASSIFICATION_PROVIDER defaults openai_luna. Dispatch requires a non-empty OPENAI_API_KEY, OPENAI_ACCOUNT_USE_APPROVED=true, an intersected OPENAI_ALLOWED_COLLECTORS/source-request/source-rights allowlist, and positive finite daily request, byte and USD caps. All caps default zero. No automatic TypeSafe fallback. Unknown/unpriced outcomes retain the reservation; retries need explicit operator review."
+    "openai_forwarding": "CLASSIFICATION_PROVIDER defaults openai_luna. Product dispatch uses the user-authorized local Sign in with ChatGPT plan connection and the documented plan Responses route; no direct API key or API billing fallback is read by the runtime. Dispatch requires verified ChatGPT authorization and exact GPT-6 Luna availability, enabled external requests, an intersected OPENAI_ALLOWED_COLLECTORS/source-request/source-rights allowlist, writable storage, and finite local daily request/byte caps. The app cannot observe remaining plan allowance, provider billing, or account data-control settings; it reports them as unknown and links to OpenAI account controls. No automatic TypeSafe fallback. Known-unsent attempts release their reservation and can be retried; dispatched unknown outcomes retain their reservation and require operator review."
   },
   "rights_review": {
     "as_of": "2026-09-29",
@@ -308,7 +308,7 @@
       "identity": "Separate immutable observation/request/profile/response bindings, returned model and service tier. No numeric Jev compatibility.",
       "time": "Classification completion is distinct from source publication/observation time; new delivery does not refresh old evidence.",
       "retention": "store:false on bounded Responses requests; local categories, usage and receipt digests. Provider account-specific retention controls are not independently verified.",
-      "rights": "User requested the OpenAI replacement. Direct API credential, OpenAI account approval/collector allowlists and a finite own-account budget must be configured before dispatch; no Codex or TypeSafe credential reuse."
+      "rights": "User explicitly selected the OpenAI GPT-6 Luna ChatGPT-plan subscription route. Dispatch requires the user's loopback OAuth grant, explicit source-use approval, external-request enablement, and finite local request/byte caps. This app cannot observe provider-side plan allowance, credits, or billing and never falls back to API-key billing or TypeSafe."
     }
   ],
   "historical_evidence_ledger": {
@@ -1463,7 +1463,7 @@
   "gate_execution_scope": {
     "reviewed_before_execution": "2026-10-01",
     "safe_checks": "All declared commands inspected. Tests use isolated technical fixtures/temp SQLite. Offline startup builds dist/temp state with all outbound provider calls intercepted. Keyless Compose reads only the five explicitly rights-attested collectors in a disposable project and retained-volume recovery, then removes its own volume/network. OpenAI and TypeSafe calls cannot run from that smoke; no developer .env is read.",
-    "not_run": "OpenAI live smoke/quality qualification is blocked by missing direct API credential and finite own-account spending evidence. New Jev calls are blocked by its actual zero-credit balance. Credentialed optional collectors remain disabled; no provider invoice or historical-usage reconciliation is inferred."
+    "not_run": "A live ChatGPT-plan model-access check and one real-source classification are still pending the user's local OAuth grant. The app cannot observe provider allowance, billing, or account data controls; no direct API key or API-dollar estimate is required or inferred. Credentialed optional collectors remain disabled; no provider invoice or historical-usage reconciliation is inferred."
   },
   "known_gaps": [
     "Raw upstream bodies are not retained. Delivery digests cover normalized parsed items and cannot prove parser correctness or replay raw bytes; Jev replay uses normalized observation fields.",

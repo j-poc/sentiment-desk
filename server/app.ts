@@ -20,6 +20,7 @@ import type { Hub } from "./hub.js";
 import type { MarketData } from "./market.js";
 import type { Pipeline } from "./pipeline.js";
 import type { CompanyFundamentals } from "./company-fundamentals.js";
+import { CompanyEvidenceAssessmentError, type CompanyEvidenceAssessmentService } from "./company-evidence-assessment.js";
 import type { SecFilingsInbox } from "./sec-filings-inbox.js";
 import type { SecFilingDetailService } from "./sec-filing-detail.js";
 import { MAX_ANALYST_RESEARCH_QUESTION_CHARS } from "../shared/analyst-research.js";
@@ -31,12 +32,12 @@ import {
   type PrivateEvidenceAnalysisRecord,
   type PrivateEvidenceItem,
 } from "../shared/private-evidence.js";
-import { PRIVATE_EVIDENCE_ANALYSIS_DATA_CONTROLS } from "./private-evidence-analysis.js";
+import { CHATGPT_PLAN_PRIVATE_EVIDENCE_DATA_CONTROLS } from "./chatgpt-plan-private-evidence.js";
 import { savedSourceSearchCursorSchema, type SavedSourceSearchCursor } from "../shared/saved-source-search.js";
 import { secFilingArchiveCikPath, type SecFilingInboxRow } from "../shared/sec-filings-inbox.js";
 import { forwardReturn, impactDistribution, rankIC, SERIES_BUCKET_MS, summarizeReactions, validateSignal, weightedIndex } from "./scoring.js";
 import { buildRadar, isRadarEventType, radarEvidencePage } from "./radar.js";
-import type { CategoricalBucketCursor } from "./types.js";
+import type { CategoricalBucketCursor, CategoricalTrendResult } from "./types.js";
 import type { Company } from "./types.js";
 import { PrivateEvidenceLimitError, type PrivateEvidenceStore } from "./private-evidence-store.js";
 import { ExternalRequestPausedError } from "./external-request-gate.js";
@@ -46,6 +47,11 @@ import { compileCompanyResearchBrief } from "./company-research-brief.js";
 import type { CompanyResearchBriefResponse, CompanyResearchDecision } from "../shared/company-research-brief.js";
 import type { SecFilingResearchBriefResponse, SecFilingResearchCase, SecFilingResearchCaseDetail,
   SecFilingResearchFundamentalFact, SavedSecFilingResearchDecision } from "../shared/sec-filing-research-cases.js";
+import { SEC_ISSUER_DIRECTORY_FRESH_FOR_MS, SEC_ISSUER_DIRECTORY_URL, type SecIssuerResearchSubject } from "../shared/sec-issuer-directory.js";
+import { ModelProviderServiceError, type ModelProviderClassificationService } from "./model-provider-classification-service.js";
+import { TypeSafeJevByokError, type TypeSafeJevByokService } from "./typesafe-jev-byok.js";
+import type { CompanyUpdatesService } from "./company-updates.js";
+import { CodexLunaServiceError, type CodexLunaService } from "./codex-luna-service.js";
 
 /**
  * HTTP surface: read APIs, an explicitly confirmed single-item Jev retry, and
@@ -63,6 +69,7 @@ export interface AppDeps {
   version: string;
   opportunityRadarEnabled?: boolean;
   companyFundamentals?: CompanyFundamentals;
+  companyEvidenceAssessment?: CompanyEvidenceAssessmentService;
   secFilingsInbox?: SecFilingsInbox;
   secFilingDetail?: SecFilingDetailService;
   privateEvidence?: PrivateEvidenceStore;
@@ -81,6 +88,31 @@ export interface AppDeps {
       },
     ) => Promise<PrivateEvidenceAnalysisRecord>;
   };
+  chatgptPlan?: {
+    loopbackBound: boolean;
+    localOrigin: string;
+    redirectUri: string;
+    auth: {
+      isConnected(): Promise<boolean>;
+      beginAuthorization(redirectUri: string): Promise<{ flowId: string; authorizationUrl: string }>;
+      completeCallback(query: URLSearchParams, redirectUri: string): Promise<{ ok: boolean; message: string }>;
+      disconnect(): Promise<{ revoked: boolean }>;
+    };
+    responses: { checkModelAccess(): Promise<{ modelAvailable: boolean }> };
+    enabled(): boolean;
+    modelAvailable(): boolean | null;
+    blockedReason(): string | null;
+    sources: readonly string[];
+    dailyRequestLimit: number;
+    dailyByteLimit: number;
+    activate(): Promise<boolean>;
+    deactivate(reason: string): void;
+    authorizePrivateAnalysis?(): Promise<boolean>;
+  };
+  modelProviders?: ModelProviderClassificationService;
+  codexLuna?: CodexLunaService;
+  typesafeJevByok?: TypeSafeJevByokService;
+  companyUpdates?: CompanyUpdatesService;
   webRoot?: string;
   deliverySources: DeliverySourceSchedule[];
 }
@@ -91,6 +123,18 @@ const retryConfirmationSchema = z.object({
   confirmNewCharge: z.literal(true),
   reviewedProviderUsage: z.boolean(),
 });
+const modelProviderCredentialSchema = z.object({ apiKey: z.string().min(1).max(8 * 1024) }).strict();
+const modelProviderClassificationSchema = z.object({
+  provider: z.enum(["openai", "google_gemini"]),
+  confirmDataSend: z.literal(true),
+  confirmGeminiPaidService: z.boolean().default(false),
+  confirmProviderUsageReview: z.boolean().default(false),
+}).strict();
+const jevByokAssessmentSchema = z.object({
+  confirmDataSend: z.literal(true),
+  confirmProviderUsageReview: z.boolean().default(false),
+}).strict();
+const companyUpdatesRefreshSchema = z.object({ confirmPublicSourceRequest: z.literal(true) }).strict();
 const unscoredCursorSchema = z.object({
   orderAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   ingestedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -106,7 +150,7 @@ const scoreBucketCursorSchema = z.object({
   snapshotKey: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 const categoricalBucketCursorSchema = z.object({
-  classifiedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  sourceTimeAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   id: z.string().min(1).max(200),
 }).strict();
 const followedEvidenceCursorSchema = z.object({
@@ -126,7 +170,7 @@ const alertDeliveryCursorSchema = z.object({
   createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   alertId: z.string().uuid(),
 }).strict();
-const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed", "history", "identity_review"]);
+const mentionFeedFilterSchema = z.enum(["all", "bull", "bear", "material", "offtarget", "failed", "history", "identity_review", "relevance_review"]);
 const mentionLookupSchema = z.object({
   ids: z.array(z.string().min(1).max(200)).min(1).max(900)
     .refine((ids) => new Set(ids).size === ids.length),
@@ -137,6 +181,9 @@ const secFilingResearchTaskSchema = z.object({ cik: z.string().regex(/^\d{10}$/)
   nextQuestion: z.string().max(500).optional() }).strict();
 const secFilingDetailSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/), confirmUse: z.literal(true) }).strict();
 const secFilingResearchCaseEnrollSchema = z.object({ cik: z.string().regex(/^\d{10}$/), accession: z.string().regex(/^\d{10}-\d{2}-\d{6}$/) }).strict();
+const secIssuerDirectoryRefreshSchema = z.object({ confirmUse: z.literal(true) }).strict();
+const secIssuerResearchSubjectSchema = z.object({ cik: z.string().regex(/^\d{10}$/), ticker: z.string().regex(/^[A-Z0-9.\-]{1,14}$/),
+  name: z.string().min(1).max(512), exchange: z.string().max(80).nullable() }).strict();
 const secFilingCaseFundamentalsRefreshSchema = z.object({ requestKey: z.string().uuid() }).strict();
 const secFilingCaseDecisionSchema = z.object({
   requestKey: z.string().uuid(), asOfMs: z.number().int().nonnegative(), snapshotKey: z.string().regex(/^[a-f0-9]{64}$/),
@@ -235,6 +282,10 @@ function companyResearchDecisionStorageState(deps: AppDeps): {
     available: storage.writesAllowed,
     unavailableReason: storage.writesAllowed ? null : storage.reason ?? "Local database writes are paused.",
   };
+}
+
+function isResearchablePublicCompany(deps: AppDeps, companyId: string): boolean {
+  return deps.configuredPublicCompanyIds?.has(companyId) === true || deps.db.secIssuerResearchSubject(companyId) != null;
 }
 
 function companyResearchBriefResponse(deps: AppDeps, companyId: string, asOfMs = Date.now()): CompanyResearchBriefResponse | null {
@@ -350,6 +401,224 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ error: "internal" }, 500);
   });
 
+  const sameLocalOrigin = (c: Context): boolean => {
+    if (!deps.chatgptPlan) return false;
+    const origin = c.req.header("origin");
+    return origin === deps.chatgptPlan.localOrigin;
+  };
+
+  app.get("/api/model-providers/status", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, false) || (!deps.modelProviders && !deps.typesafeJevByok && !deps.codexLuna)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    try {
+      const categorical = deps.modelProviders ? await deps.modelProviders.status() : { loopback: true as const, providers: [] };
+      const jev = deps.typesafeJevByok ? await deps.typesafeJevByok.status() : null;
+      const codex = deps.codexLuna ? await deps.codexLuna.status() : null;
+      return c.json({ loopback: true, providers: [...categorical.providers, ...(jev ? [jev] : []), ...(codex ? [codex] : [])] }, { headers: { "cache-control": "no-store" } });
+    }
+    catch (error) {
+      if (error instanceof ModelProviderServiceError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      if (error instanceof TypeSafeJevByokError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      throw error;
+    }
+  });
+
+  app.put("/api/model-providers/:provider/credential", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true) || (!deps.modelProviders && !deps.typesafeJevByok)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    const body = await readBoundedJson(c.req.raw, 12 * 1024);
+    if (body.kind !== "ok") return c.json({ error: body.kind === "too_large" ? "credential_too_large" : "invalid_credential_request" }, body.kind === "too_large" ? 413 : 400, { "cache-control": "no-store" });
+    const input = modelProviderCredentialSchema.safeParse(body.value);
+    if (!input.success) return c.json({ error: "invalid_credential_request" }, 400, { "cache-control": "no-store" });
+    try {
+      if (c.req.param("provider") === "typesafe_jev") {
+        if (!deps.typesafeJevByok) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+        await deps.typesafeJevByok.save(input.data.apiKey);
+      } else {
+        if (!deps.modelProviders) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+        await deps.modelProviders.save(c.req.param("provider"), input.data.apiKey);
+      }
+      return c.json({ configured: true }, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof ModelProviderServiceError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      if (error instanceof TypeSafeJevByokError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      return c.json({ error: "credential_save_failed" }, 503, { "cache-control": "no-store" });
+    }
+  });
+
+  app.delete("/api/model-providers/:provider/credential", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true) || (!deps.modelProviders && !deps.typesafeJevByok)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    try {
+      if (c.req.param("provider") === "typesafe_jev") {
+        if (!deps.typesafeJevByok) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+        await deps.typesafeJevByok.remove();
+      } else {
+        if (!deps.modelProviders) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+        await deps.modelProviders.remove(c.req.param("provider"));
+      }
+      return c.json({ configured: false }, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof ModelProviderServiceError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      if (error instanceof TypeSafeJevByokError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      return c.json({ error: "credential_remove_failed" }, 503, { "cache-control": "no-store" });
+    }
+  });
+
+  app.post("/api/model-providers/:provider/verify", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true) || (!deps.modelProviders && !deps.typesafeJevByok)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    try {
+      const result = c.req.param("provider") === "typesafe_jev"
+        ? deps.typesafeJevByok ? await deps.typesafeJevByok.verify() : null
+        : deps.modelProviders ? await deps.modelProviders.verify(c.req.param("provider")) : null;
+      if (!result) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+      return c.json(result, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof ModelProviderServiceError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      if (error instanceof TypeSafeJevByokError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      return c.json({ error: "provider_verification_failed" }, 502, { "cache-control": "no-store" });
+    }
+  });
+
+  app.get("/api/mentions/:id/model-classification", (c) => {
+    if (!isLoopbackRequest(c.req.raw, false) || (!deps.modelProviders && !deps.typesafeJevByok && !deps.codexLuna)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    if (!deps.db.mentionRow(c.req.param("id"))) return c.json({ error: "unknown_real_source_observation" }, 404, { "cache-control": "no-store" });
+    try {
+      const provider = c.req.query("provider") ?? "";
+      if (provider === "codex_luna" && deps.codexLuna) return c.json(deps.codexLuna.result(c.req.param("id")), { headers: { "cache-control": "no-store" } });
+      if (provider === "typesafe_jev") {
+        if (!deps.typesafeJevByok) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+        const state = deps.typesafeJevByok.result(c.req.param("id"));
+        const raw = state.result;
+        return c.json({ result: raw ? { ...raw, provider: "typesafe_jev", eventType: raw.eventType, takeaway: raw.takeaway,
+          evidenceSufficient: false, summary: null, supportingExcerpt: null, disposition: raw.excluded ? "excluded" : "classified" } : null,
+          attempts: state.attempts }, { headers: { "cache-control": "no-store" } });
+      }
+      if (!deps.modelProviders) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+      return c.json(deps.modelProviders.result(c.req.param("id"), provider), { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof ModelProviderServiceError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      if (error instanceof TypeSafeJevByokError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      throw error;
+    }
+  });
+
+  app.get("/api/codex-luna/status", async (c) => {
+    if (!isLoopbackRequest(c.req.raw,false) || !deps.codexLuna) return c.json({ error: "loopback_only" },403);
+    return c.json(await deps.codexLuna.status(),{ headers: { "cache-control": "no-store" } });
+  });
+  app.get("/api/companies/:id/codex-luna-series", (c) => {
+    if (!isLoopbackRequest(c.req.raw,false) || !deps.codexLuna) return c.json({ error: "loopback_only" },403);
+    try { return c.json(deps.codexLuna.series(c.req.param("id"),Number(c.req.query("hours") ?? "24")),{ headers: { "cache-control": "no-store" } }); }
+    catch (error) {
+      if (error instanceof CodexLunaServiceError) return c.json({ error: error.code },error.status as ContentfulStatusCode);
+      throw error;
+    }
+  });
+  app.post("/api/mentions/:id/codex-luna-classification", async (c) => {
+    if (!isLoopbackRequest(c.req.raw,true) || !deps.codexLuna) return c.json({ error: "loopback_only" },403);
+    const body = await readBoundedJson(c.req.raw,2048);
+    if (body.kind!=="ok") return c.json({ error: "invalid_classification_request" },400);
+    const input = z.object({ confirmDataSend: z.literal(true), confirmProviderUsageReview: z.boolean().default(false) }).strict().safeParse(body.value);
+    if (!input.success) return c.json({ error: "classification_confirmation_required" },400);
+    try { return c.json({ result: await deps.codexLuna.classify(c.req.param("id"),input.data) },{ headers: { "cache-control": "no-store" } }); }
+    catch (error) {
+      if (error instanceof CodexLunaServiceError) return c.json({ error: error.code },error.status as ContentfulStatusCode);
+      return c.json({ error: "codex_request_failed" },502);
+    }
+  });
+
+  app.post("/api/mentions/:id/model-classification", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true) || !deps.modelProviders) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    const body = await readBoundedJson(c.req.raw, 2 * 1024);
+    if (body.kind !== "ok") return c.json({ error: body.kind === "too_large" ? "classification_request_too_large" : "invalid_classification_request" }, body.kind === "too_large" ? 413 : 400, { "cache-control": "no-store" });
+    const input = modelProviderClassificationSchema.safeParse(body.value);
+    if (!input.success) return c.json({ error: "classification_confirmation_required" }, 400, { "cache-control": "no-store" });
+    try {
+      const result = await deps.modelProviders.classify({ observationId: c.req.param("id"), ...input.data });
+      return c.json({ result }, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof ModelProviderServiceError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      return c.json({ error: "provider_classification_failed" }, 502, { "cache-control": "no-store" });
+    }
+  });
+
+  app.post("/api/mentions/:id/jev-assessment", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true) || !deps.typesafeJevByok) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    const body = await readBoundedJson(c.req.raw, 2 * 1024);
+    if (body.kind !== "ok") return c.json({ error: body.kind === "too_large" ? "assessment_request_too_large" : "invalid_assessment_request" }, body.kind === "too_large" ? 413 : 400, { "cache-control": "no-store" });
+    const input = jevByokAssessmentSchema.safeParse(body.value);
+    if (!input.success) return c.json({ error: "assessment_confirmation_required" }, 400, { "cache-control": "no-store" });
+    try {
+      const result = await deps.typesafeJevByok.assess({ observationId: c.req.param("id"), ...input.data });
+      return c.json({ result }, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof TypeSafeJevByokError) return c.json({ error: error.code }, error.status as ContentfulStatusCode, { "cache-control": "no-store" });
+      return c.json({ error: "provider_assessment_failed" }, 502, { "cache-control": "no-store" });
+    }
+  });
+
+  app.get("/api/chatgpt-plan/status", async (c) => {
+    const plan = deps.chatgptPlan;
+    const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+    const usage = deps.db.planUsageSince(today.getTime());
+    let connected = false;
+    if (plan?.loopbackBound) {
+      try { connected = await plan.auth.isConnected(); } catch { connected = false; }
+    }
+    return c.json({
+      configured: Boolean(plan?.loopbackBound), connected,
+      modelAvailable: plan?.modelAvailable() ?? (connected ? null : false),
+      ready: plan?.enabled() === true,
+      blockedReason: plan?.blockedReason() ?? (plan ? null : "The ChatGPT plan connection is available only in the local loopback installation."),
+      sources: plan ? [...plan.sources] : [],
+      dailyRequestLimit: plan?.dailyRequestLimit ?? 0,
+      dailyByteLimit: plan?.dailyByteLimit ?? 0,
+      usage,
+    }, { headers: { "cache-control": "no-store" } });
+  });
+
+  app.post("/api/chatgpt-plan/connect", async (c) => {
+    const plan = deps.chatgptPlan;
+    if (!plan?.loopbackBound) return c.json({ error: "loopback_only" }, 403);
+    if (!sameLocalOrigin(c)) return c.json({ error: "origin_not_allowed" }, 403);
+    if (!deps.health.snapshot().externalRequestsEnabled) return c.json({ error: "external_requests_disabled" }, 503);
+    try {
+      const flow = await plan.auth.beginAuthorization(plan.redirectUri);
+      return c.json({ authorizationUrl: flow.authorizationUrl }, { headers: { "cache-control": "no-store" } });
+    } catch {
+      return c.json({ error: "chatgpt_sign_in_unavailable" }, 503);
+    }
+  });
+
+  app.post("/api/chatgpt-plan/activate", async (c) => {
+    const plan = deps.chatgptPlan;
+    if (!plan?.loopbackBound) return c.json({ error: "loopback_only" }, 403);
+    if (!sameLocalOrigin(c)) return c.json({ error: "origin_not_allowed" }, 403);
+    if (!deps.health.snapshot().externalRequestsEnabled) return c.json({ error: "external_requests_disabled" }, 503);
+    const ready = await plan.activate();
+    return c.json({ ready, blockedReason: plan.blockedReason() }, { headers: { "cache-control": "no-store" } });
+  });
+
+  app.get("/auth/callback", async (c) => {
+    const plan = deps.chatgptPlan;
+    if (!plan?.loopbackBound || c.req.header("host") !== new URL(plan.redirectUri).host) return c.text("Local ChatGPT callback is unavailable.", 404);
+    const completed = await plan.auth.completeCallback(new URLSearchParams(c.req.url.split("?")[1] ?? ""), plan.redirectUri);
+    const message = completed.ok
+      ? "ChatGPT plan connected. Public classification remains paused until you explicitly choose Activate. Private-note analysis is available only after confirming an individual note."
+      : completed.message;
+    const safeMessage = message.replace(/[&<>\"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]!);
+    return c.html(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Sentiment Desk ChatGPT connection</title><body style="font:16px system-ui;max-width:42rem;margin:12vh auto;padding:24px;background:#0a0c11;color:#e8ebf2"><h1>Sentiment Desk</h1><p>${safeMessage}</p><p>You can close this tab and return to the Desk. It will refresh the connection status.</p></body></html>`, { headers: { "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" } });
+  });
+
+  app.post("/api/chatgpt-plan/disconnect", async (c) => {
+    const plan = deps.chatgptPlan;
+    if (!plan?.loopbackBound) return c.json({ error: "loopback_only" }, 403);
+    if (!sameLocalOrigin(c)) return c.json({ error: "origin_not_allowed" }, 403);
+    plan.deactivate("ChatGPT plan connection was disconnected.");
+    try {
+      const result = await plan.auth.disconnect();
+      return c.json(result, { headers: { "cache-control": "no-store" } });
+    } catch { return c.json({ error: "chatgpt_disconnect_failed" }, 503); }
+  });
+
   app.get("/api/health", (c) => {
     const startOfDayUtc = new Date();
     startOfDayUtc.setUTCHours(0, 0, 0, 0);
@@ -383,6 +652,11 @@ export function createApp(deps: AppDeps): Hono {
       },
       usage: deps.db.usageSince(startOfDayUtc.getTime()),
       classifierUsage: deps.db.classifierUsageSince(startOfDayUtc.getTime()),
+      chatgptPlanUsage: deps.db.planUsageSince(startOfDayUtc.getTime()),
+      chatgptPlanLimits: deps.chatgptPlan ? {
+        dailyRequestLimit: deps.chatgptPlan.dailyRequestLimit,
+        dailyByteLimit: deps.chatgptPlan.dailyByteLimit,
+      } : null,
       events: deps.db.recentEvents(20),
     });
   });
@@ -427,6 +701,73 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/quotes", (c) => c.json(deps.market.current()));
 
+  app.get("/api/sec-issuer-directory", (c) => {
+    if (!deps.companyFundamentals) return c.json({ error: "sec_issuer_directory_unavailable" }, 503);
+    const query = c.req.query("q") ?? "";
+    if (query.length > 100) return c.json({ error: "sec_issuer_directory_query_too_long" }, 400);
+    try {
+      c.header("Cache-Control", "no-store");
+      return c.json(deps.companyFundamentals.readIssuerDirectory(query));
+    } catch { return c.json({ error: "sec_issuer_directory_read_failed" }, 503); }
+  });
+
+  app.post("/api/sec-issuer-directory/refresh", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true)) return c.json({ error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
+    if (!deps.companyFundamentals) return c.json({ error: "sec_issuer_directory_unavailable" }, 503);
+    const body = await readBoundedJson(c.req.raw, 4_096);
+    if (body.kind === "too_large") return c.json({ error: "request_too_large" }, 413);
+    if (body.kind !== "ok") return c.json({ error: "sec_issuer_directory_confirmation_required" }, 400);
+    const input = secIssuerDirectoryRefreshSchema.safeParse(body.value);
+    if (!input.success) return c.json({ error: "sec_issuer_directory_confirmation_required" }, 400);
+    c.header("Cache-Control", "no-store");
+    return c.json(await deps.companyFundamentals.refreshIssuerDirectory());
+  });
+
+  app.get("/api/sec-issuer-research-subjects", (c) => {
+    try {
+      c.header("Cache-Control", "no-store");
+      return c.json({ items: deps.db.secIssuerResearchSubjects() });
+    } catch { return c.json({ error: "sec_issuer_research_subject_read_failed" }, 503); }
+  });
+
+  app.post("/api/sec-issuer-research-subjects", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true)) return c.json({ error: "unsafe_external_request_origin" }, 403);
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
+    const body = await readBoundedJson(c.req.raw, 4_096);
+    if (body.kind === "too_large") return c.json({ error: "request_too_large" }, 413);
+    if (body.kind !== "ok") return c.json({ error: "invalid_sec_issuer_research_subject" }, 400);
+    const input = secIssuerResearchSubjectSchema.safeParse(body.value);
+    if (!input.success) return c.json({ error: "invalid_sec_issuer_research_subject" }, 400);
+    if (!deps.db.storageCapacity().writesAllowed) return c.json({ error: "sec_issuer_research_subject_storage_paused" }, 503);
+    const snapshot = deps.db.readSecIssuerDirectorySnapshot();
+    const matches = snapshot?.entries.filter((item) => item.cik === input.data.cik && item.ticker === input.data.ticker
+      && item.name === input.data.name && item.exchange === input.data.exchange) ?? [];
+    if (matches.length > 1) return c.json({ error: "sec_issuer_directory_mapping_ambiguous" }, 409);
+    const entry = matches.length === 1 ? matches[0] : null;
+    const retrievedAt = snapshot ? Date.parse(snapshot.retrievedAt) : NaN;
+    const now = Date.now();
+    if (!snapshot || snapshot.source !== SEC_ISSUER_DIRECTORY_URL || !entry || !Number.isFinite(retrievedAt)
+      || retrievedAt > now || now - retrievedAt > SEC_ISSUER_DIRECTORY_FRESH_FOR_MS) {
+      return c.json({ error: "sec_issuer_directory_receipt_not_current" }, 409);
+    }
+    let result: ReturnType<Desk["createSecIssuerResearchSubject"]>;
+    try {
+      result = deps.db.createSecIssuerResearchSubject({ cik: entry.cik, ticker: entry.ticker, name: entry.name,
+        exchange: entry.exchange, receiptSha256: snapshot.sha256, now });
+    } catch (error) {
+      if (error instanceof Error && ["sec_issuer_directory_receipt_not_current", "sec_issuer_research_subject_limit_exceeded",
+        "sec_issuer_research_receipt_limit_exceeded"].includes(error.message)) return c.json({ error: error.message }, 409);
+      if (error instanceof Error && error.message === "sec_issuer_research_subject_storage_unavailable") return c.json({ error: error.message }, 503);
+      return c.json({ error: "sec_issuer_research_subject_save_failed" }, 503);
+    }
+    // The subject receipt is durable before realtime notification. A transient
+    // snapshot/broadcast failure must not tell the caller that the save failed.
+    try { deps.hub.broadcast("company", deps.pipeline.snapshot(result.item.companyId)); } catch { /* clients can reload the returned persisted subject */ }
+    c.header("Cache-Control", "no-store");
+    return c.json(result, result.created ? 201 : 200);
+  });
+
   app.get("/api/mentions/:id/jev-attempts", (c) => {
     const id = c.req.param("id");
     if (!deps.db.mentionRow(id)) return c.json({ error: "unknown mention" }, 404);
@@ -449,7 +790,7 @@ export function createApp(deps: AppDeps): Hono {
           enabled: deps.privateEvidenceAnalysis?.enabled === true,
           blockedReason: deps.privateEvidenceAnalysis?.enabled === true ? null : deps.privateEvidenceAnalysis?.blockedReason ?? "private_note_model_analysis_disabled",
           model: PRIVATE_EVIDENCE_ANALYSIS_MODEL,
-          dataControls: PRIVATE_EVIDENCE_ANALYSIS_DATA_CONTROLS,
+          dataControls: CHATGPT_PLAN_PRIVATE_EVIDENCE_DATA_CONTROLS,
         },
       });
     } catch {
@@ -500,6 +841,12 @@ export function createApp(deps: AppDeps): Hono {
         return prior.status === "complete"
           ? privateEvidenceJson(c, { ...prior, reusedSavedAnalysis: true })
           : privateEvidenceJson(c, { error: "private_evidence_analysis_attempt_already_recorded", attempt: prior }, 409);
+      }
+      if (deps.chatgptPlan?.authorizePrivateAnalysis) {
+        const authorized = await deps.chatgptPlan.authorizePrivateAnalysis();
+        if (!authorized) {
+          return privateEvidenceUnavailable(c, deps.privateEvidenceAnalysis?.blockedReason ?? deps.chatgptPlan.blockedReason() ?? "chatgpt_plan_not_connected");
+        }
       }
       if (!deps.privateEvidenceAnalysis?.enabled) {
         return privateEvidenceUnavailable(c, deps.privateEvidenceAnalysis?.blockedReason ?? "private_note_model_analysis_disabled");
@@ -606,6 +953,21 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(ms);
   });
 
+  app.post("/api/companies/:id/updates/refresh", async (c) => {
+    if (!isLoopbackRequest(c.req.raw, true) || !deps.companyUpdates) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "json_content_type_required" }, 415);
+    const body = await readBoundedJson(c.req.raw, 4_096);
+    if (body.kind !== "ok") return c.json({ error: "company_update_confirmation_required" }, body.kind === "too_large" ? 413 : 400);
+    if (!companyUpdatesRefreshSchema.safeParse(body.value).success) return c.json({ error: "company_update_confirmation_required" }, 400);
+    try {
+      c.header("Cache-Control", "no-store");
+      return c.json(await deps.companyUpdates.refresh(c.req.param("id")));
+    } catch (error) {
+      if (error instanceof Error && error.message === "unknown_company") return c.json({ error: "unknown_company" }, 404);
+      return c.json({ error: "company_updates_unavailable" }, 503);
+    }
+  });
+
   app.get("/api/companies/:id/mentions-page", (c) => {
     const id = c.req.param("id");
     const hours = clampNumber(c.req.query("hours"), 1, 168, 168);
@@ -631,9 +993,9 @@ export function createApp(deps: AppDeps): Hono {
       if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400);
       cursor = parsed.data;
     }
-    // Recovery work and explicit History browsing remain reachable after the
-    // normal seven-day investor window; ordinary views stay time-bounded.
-    const sinceMs = filter === "failed" || filter === "history" || filter === "identity_review"
+    // Recovery and held-record views remain reachable after the normal
+    // seven-day investor window; ordinary views stay time-bounded.
+    const sinceMs = filter === "failed" || filter === "history" || filter === "identity_review" || filter === "relevance_review"
       ? 0 : Date.now() - hours * 60 * 60 * 1000;
     return c.json(deps.db.mentionsForCompanyPage({ companyId: id, sinceMs, limit, cursor, filter, includeDismissed }));
   });
@@ -672,9 +1034,46 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(deps.companyFundamentals.read(companyId));
   });
 
+  app.post("/api/companies/:id/evidence-assessment", async (c) => {
+    const requestUrl=new URL(c.req.url),host=requestUrl.hostname.toLowerCase(),hostHeader=c.req.header("host")?.toLowerCase();
+    const originHeader=c.req.header("origin");let sameOrigin=true;
+    if(originHeader){try{sameOrigin=new URL(originHeader).origin===requestUrl.origin;}catch{sameOrigin=false;}}
+    if(!["localhost","127.0.0.1","::1","[::1]"].includes(host)||(hostHeader!=null&&hostHeader!==requestUrl.host.toLowerCase())
+      ||!sameOrigin||c.req.header("sec-fetch-site")?.toLowerCase()==="cross-site")return c.json({error:"unsafe_external_request_origin"},403);
+    if(!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type")??""))return c.json({error:"json_content_type_required"},415);
+    const declared=c.req.header("content-length");if(declared&&(!/^\d+$/.test(declared)||Number(declared)>8192))return c.json({error:"request_too_large"},413);
+    let body:unknown;try{const bytes=new Uint8Array(await c.req.raw.arrayBuffer());if(bytes.byteLength>8192)return c.json({error:"request_too_large"},413);body=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes)) as unknown;}catch{return c.json({error:"invalid_json"},400);}
+    if(!body||typeof body!=="object"||Array.isArray(body))return c.json({error:"invalid_request"},400);
+    const value=body as Record<string,unknown>,keys=Object.keys(value).sort().join(",");
+    if(keys!=="cik,confirmSend,factIds,paidServiceAttested,provider,usageReviewAcknowledged"||
+      (value.provider!=="openai"&&value.provider!=="google_gemini")||typeof value.cik!=="string"||
+      !Array.isArray(value.factIds)||!value.factIds.every(id=>typeof id==="string")||typeof value.confirmSend!=="boolean"||typeof value.paidServiceAttested!=="boolean"||typeof value.usageReviewAcknowledged!=="boolean")return c.json({error:"invalid_request"},400);
+    if(!deps.companyEvidenceAssessment)return c.json({error:"company_evidence_assessment_unavailable"},503);
+    try{
+      const result=await deps.companyEvidenceAssessment.assess({companyId:c.req.param("id"),cik:value.cik,factIds:value.factIds as string[],
+        provider:value.provider,confirmSend:value.confirmSend,paidServiceAttested:value.paidServiceAttested,usageReviewAcknowledged:value.usageReviewAcknowledged,signal:c.req.raw.signal});
+      c.header("cache-control","no-store");return c.json(result);
+    }catch(error){if(error instanceof CompanyEvidenceAssessmentError){c.header("cache-control","no-store");return c.json({error:error.code},error.status as ContentfulStatusCode);}
+      return c.json({error:"company_evidence_assessment_unavailable"},503);}
+  });
+
+  app.get("/api/companies/:id/evidence-assessment", (c) => {
+    const requestUrl=new URL(c.req.url),host=requestUrl.hostname.toLowerCase(),hostHeader=c.req.header("host")?.toLowerCase();
+    const originHeader=c.req.header("origin");let sameOrigin=true;
+    if(originHeader){try{sameOrigin=new URL(originHeader).origin===requestUrl.origin;}catch{sameOrigin=false;}}
+    if(!["localhost","127.0.0.1","::1","[::1]"].includes(host)||(hostHeader!=null&&hostHeader!==requestUrl.host.toLowerCase())
+      ||!sameOrigin||c.req.header("sec-fetch-site")?.toLowerCase()==="cross-site")return c.json({error:"unsafe_external_request_origin"},403);
+    const companyId=c.req.param("id"),providerValues=new URL(c.req.url).searchParams.getAll("provider");
+    if(!deps.db.companies().some(company=>company.id===companyId))return c.json({error:"unknown_company"},404);
+    if(providerValues.length!==1||(providerValues[0]!=="openai"&&providerValues[0]!=="google_gemini"))return c.json({error:"invalid_provider"},400);
+    if(!deps.companyEvidenceAssessment)return c.json({error:"company_evidence_assessment_unavailable"},503);
+    const result=deps.companyEvidenceAssessment.readback(companyId,providerValues[0]);
+    c.header("cache-control","no-store");return c.json(result);
+  });
+
   app.get("/api/companies/:id/research-brief", (c) => {
     const companyId = c.req.param("id");
-    if (!deps.configuredPublicCompanyIds?.has(companyId)) return privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
+    if (!isResearchablePublicCompany(deps, companyId)) return privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
     const cutoffs = new URL(c.req.url).searchParams.getAll("asOfMs");
     let asOfMs: number | undefined;
     if (cutoffs.length > 1 || (cutoffs.length === 1 && !/^(0|[1-9]\d*)$/.test(cutoffs[0]!))) {
@@ -699,7 +1098,7 @@ export function createApp(deps: AppDeps): Hono {
       return privateEvidenceJson(c, { error: "company_research_decision_store_unavailable" }, 503);
     }
     try {
-      const companyIds = [...(deps.configuredPublicCompanyIds ?? [])];
+      const companyIds = [...new Set([...(deps.configuredPublicCompanyIds ?? []), ...deps.db.secIssuerResearchCompanyIds()])];
       return privateEvidenceJson(c, { items: deps.db.latestCompanyResearchDecisionQueue(companyIds) });
     } catch {
       return privateEvidenceJson(c, { error: "company_research_decision_queue_unavailable" }, 503);
@@ -708,7 +1107,7 @@ export function createApp(deps: AppDeps): Hono {
 
   app.post("/api/companies/:id/research-brief/decisions", async (c) => {
     const companyId = c.req.param("id");
-    if (!deps.configuredPublicCompanyIds?.has(companyId)) return privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
+    if (!isResearchablePublicCompany(deps, companyId)) return privateEvidenceJson(c, { error: "unknown_public_company" }, 404);
     if (!isLoopbackRequest(c.req.raw, true)) return privateEvidenceJson(c, { error: "unsafe_external_request_origin" }, 403);
     if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) {
       return privateEvidenceJson(c, { error: "json_content_type_required" }, 415);
@@ -1320,6 +1719,64 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  app.get("/api/companies/:id/google-gemini-categorical-series", (c) => {
+    if (!isLoopbackRequest(c.req.raw, false)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown_company" }, 404, { "cache-control": "no-store" });
+    const rawHours = c.req.query("hours") ?? "24";
+    if (!/^\d{1,3}$/.test(rawHours)) return c.json({ error: "invalid_categorical_window" }, 400, { "cache-control": "no-store" });
+    const hours = Number(rawHours);
+    if (!Number.isSafeInteger(hours) || hours < 1 || hours > 168) return c.json({ error: "invalid_categorical_window" }, 400, { "cache-control": "no-store" });
+    try {
+      const snapshot = deps.db.googleGeminiCategoricalTrendSnapshot(id, hours);
+      const points: CategoricalTrendResult["points"] = [];
+      for (let bucketStartMs = Math.floor(snapshot.fromMs / snapshot.bucketMs) * snapshot.bucketMs;
+        bucketStartMs < snapshot.throughMs; bucketStartMs += snapshot.bucketMs) {
+        const fromMs = Math.max(snapshot.fromMs, bucketStartMs);
+        const throughMs = Math.min(snapshot.throughMs, bucketStartMs + snapshot.bucketMs);
+        if (fromMs < throughMs) points.push({ bucketStartMs, fromMs, throughMs,
+          counts: snapshot.aggregates.find((row) => row.bucketStartMs === bucketStartMs)?.counts
+            ?? { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 } });
+      }
+      if (points.reduce((total, point) => total + point.counts.total, 0) !== snapshot.plottedObservationCount) {
+        throw new Error("Google Gemini chart buckets do not reconcile to source records");
+      }
+      const result: CategoricalTrendResult = {
+        companyId: snapshot.companyId, windowHours: snapshot.windowHours, fromMs: snapshot.fromMs, throughMs: snapshot.throughMs,
+        bucketMs: snapshot.bucketMs, timeBasis: "validated_source_time", countBasis: "immutable_source_observation",
+        snapshotGeneration: snapshot.snapshotGeneration, snapshotKey: snapshot.snapshotKey, points, counts: snapshot.counts,
+        eligibleObservationCount: snapshot.eligibleObservationCount, plottedObservationCount: snapshot.plottedObservationCount,
+        untimedObservationCount: snapshot.untimedObservationCount, candidateClassificationCount: snapshot.candidateClassificationCount,
+        withheldInvalidCount: snapshot.withheldInvalidCount, latestClassifiedAt: snapshot.latestClassifiedAt,
+        lineages: snapshot.lineages, classifierProvider: "google_gemini", classifierModel: "gemini-3.8-flash",
+      };
+      return c.json(result, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof Error && error.message === "invalid_categorical_window") return c.json({ error: "invalid_categorical_window" }, 400, { "cache-control": "no-store" });
+      throw error;
+    }
+  });
+
+  app.get("/api/companies/:id/model-classifications", (c) => {
+    if (!isLoopbackRequest(c.req.raw, false) || (!deps.modelProviders && !deps.typesafeJevByok)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    const id = c.req.param("id");
+    if (!deps.db.companies().some(company => company.id === id)) return c.json({ error: "unknown company" }, 404, { "cache-control": "no-store" });
+    const provider = z.enum(["openai", "google_gemini", "typesafe_jev"]).safeParse(c.req.query("provider"));
+    if (!provider.success) return c.json({ error: "invalid_model_provider" }, 400, { "cache-control": "no-store" });
+    const rawHours = c.req.query("hours") ?? "168";
+    if (!/^\d{1,3}$/.test(rawHours)) return c.json({ error: "invalid_model_provider_window" }, 400, { "cache-control": "no-store" });
+    const hours = Number(rawHours);
+    if (!Number.isSafeInteger(hours) || hours < 1 || hours > 168) return c.json({ error: "invalid_model_provider_window" }, 400, { "cache-control": "no-store" });
+    const throughMs = Date.now();
+    const fromMs = throughMs - hours * 60 * 60_000;
+    const items = provider.data === "typesafe_jev"
+      ? deps.typesafeJevByok ? deps.db.typeSafeJevByokFeed(id, fromMs, throughMs).map(item => ({ ...item, provider: "typesafe_jev",
+        evidenceSufficient: false, summary: null, supportingExcerpt: null, disposition: item.excluded ? "excluded" : "classified" })) : null
+      : deps.modelProviders ? deps.db.modelProviderClassificationFeed(id, provider.data, fromMs, throughMs) : null;
+    if (!items) return c.json({ error: "unsupported_provider" }, 404, { "cache-control": "no-store" });
+    return c.json({ companyId: id, provider: provider.data, hours, fromMs, throughMs, items }, { headers: { "cache-control": "no-store" } });
+  });
+
   app.get("/api/companies/:id/categorical-bucket", (c) => {
     const id = c.req.param("id");
     if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown_company" }, 404);
@@ -1351,6 +1808,39 @@ export function createApp(deps: AppDeps): Hono {
     } catch (error) {
       if (error instanceof CategoricalSnapshotUnavailableError) return c.json({ error: "categorical_snapshot_unavailable" }, 409);
       if (error instanceof InvalidCategoricalBucketError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
+  });
+
+  app.get("/api/companies/:id/google-gemini-categorical-bucket", (c) => {
+    if (!isLoopbackRequest(c.req.raw, false)) return c.json({ error: "loopback_only" }, 403, { "cache-control": "no-store" });
+    const id = c.req.param("id");
+    if (!deps.db.companies().some((company) => company.id === id)) return c.json({ error: "unknown_company" }, 404, { "cache-control": "no-store" });
+    const snapshotKey = c.req.query("snapshot") ?? "";
+    const rawBucket = c.req.query("at") ?? "";
+    const rawSpan = c.req.query("span") ?? "900000";
+    const rawLimit = c.req.query("limit") ?? "50";
+    if (!snapshotKey || snapshotKey.length > 2048 || !/^\d{1,16}$/.test(rawBucket) || !/^\d{1,8}$/.test(rawSpan) || !/^\d{1,3}$/.test(rawLimit)) {
+      return c.json({ error: "invalid_categorical_bucket" }, 400, { "cache-control": "no-store" });
+    }
+    const bucketStartMs = Number(rawBucket); const bucketDurationMs = Number(rawSpan); const limit = Number(rawLimit);
+    if (!Number.isSafeInteger(bucketStartMs) || ![900_000, 1_800_000, 3_600_000, 10_800_000, 21_600_000].includes(bucketDurationMs)
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "invalid_categorical_bucket" }, 400, { "cache-control": "no-store" });
+    const rawCursor = c.req.query("cursor");
+    let cursor: CategoricalBucketCursor | null = null;
+    if (rawCursor != null) {
+      let decoded: unknown;
+      try { decoded = JSON.parse(rawCursor); } catch { return c.json({ error: "invalid_cursor" }, 400, { "cache-control": "no-store" }); }
+      const parsed = categoricalBucketCursorSchema.safeParse(decoded);
+      if (!parsed.success) return c.json({ error: "invalid_cursor" }, 400, { "cache-control": "no-store" });
+      cursor = parsed.data;
+    }
+    try {
+      return c.json(deps.db.googleGeminiCategoricalBucketEvidence({ companyId: id, snapshotKey, bucketStartMs,
+        bucketDurationMs, limit, cursor }), { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      if (error instanceof CategoricalSnapshotUnavailableError) return c.json({ error: "categorical_snapshot_unavailable" }, 409, { "cache-control": "no-store" });
+      if (error instanceof InvalidCategoricalBucketError) return c.json({ error: error.message }, 400, { "cache-control": "no-store" });
       throw error;
     }
   });
@@ -1657,6 +2147,7 @@ export function createApp(deps: AppDeps): Hono {
               data = JSON.stringify({
                 ...mention,
                 issuerIdentityStrong: saved?.issuerIdentityStrong ?? false,
+                companyBusinessRelevant: saved?.companyBusinessRelevant ?? false,
                 analystResearchDisposition: review?.disposition ?? null,
                 analystResearchDispositionUpdatedAt: review?.updatedAt ?? null,
               });

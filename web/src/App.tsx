@@ -21,6 +21,7 @@ import {
   type SeriesResult,
   type JevHistoryWeekResult,
   getJevHistoryWeek,
+  refreshCompanyUpdates,
   type FirstRunEvidenceDTO,
   type AnalystResearchQueueItem,
   type CompanyResearchDecisionQueueItem,
@@ -37,11 +38,13 @@ import { MobileCompanyPicker } from "./components/MobileCompanyPicker.js";
 import { Watchlist } from "./components/Watchlist.js";
 import { SeriesChart } from "./components/SeriesChart.js";
 import { HistoricalJevCaveat } from "./components/HistoricalJevCaveat.js";
+import { LocalLunaSettings } from "./components/LocalLunaSettings.js";
+import { ModelProviderSettings } from "./components/ModelProviderSettings.js";
+import { ModelProviderCompanySummary } from "./components/ModelProviderCompanySummary.js";
 import { MentionFeed } from "./components/MentionFeed.js";
 import { EvidenceBreadth } from "./components/EvidenceBreadth.js";
 import { EvidenceQuickAccess } from "./components/EvidenceQuickAccess.js";
 import { SelectedCompanyResearchSections } from "./components/SelectedCompanyResearchSections.js";
-import { shouldLeadWithCurrentSourceEvidence } from "./lib/chart-view-preference.js";
 import { ScoreBucketEvidence } from "./components/ScoreBucketEvidence.js";
 import { OutcomeCheck } from "./components/OutcomeCheck.js";
 import { CompanyInventoryState } from "./components/CompanyInventoryState.js";
@@ -61,8 +64,12 @@ import { CompanyFundamentals } from "./components/CompanyFundamentals.js";
 import { PrivateEvidencePanel } from "./components/PrivateEvidencePanel.js";
 import { CompanyResearchBriefPanel } from "./components/CompanyResearchBriefPanel.js";
 import { CategoricalTrendChart } from "./components/CategoricalTrendChart.js";
+import { CodexSentimentChart } from "./components/CodexSentimentChart.js";
+import { SelectedCompanyLunaChartStack } from "./components/SelectedCompanyLunaChartStack.js";
 import { SelectedCompanyMarketPriceContext } from "./components/MarketPriceContextChart.js";
+import { SecVerifiedTradingViewChart } from "./components/SecVerifiedTradingViewChart.js";
 import { AnalystResearchQueue } from "./components/AnalystResearchQueue.js";
+import { SecIssuerDirectory } from "./components/SecIssuerDirectory.js";
 import { reconcileScoreBucketAgainstRollingSeries, scoreBucketEvidenceBaseline, scoreBucketSnapshotMatches, shouldRefreshScoreBucketFromRollingSeries } from "./lib/series-chart-state.js";
 import { scoreBucketRetryMode } from "./lib/score-bucket-retry.js";
 import { isScoreBucketCoverage, sameScoreBucketCoverage } from "../../shared/score-bucket-coverage.js";
@@ -71,7 +78,7 @@ import { fmtDelta, quoteSourceAgeLabel, timeAgo } from "./lib/format.js";
 import { filterMentionFeed, matchesMentionFeedFilter } from "./lib/mention-filters.js";
 import { focusCompanyResearchBrief, revealCompanyPrivateEvidence } from "./lib/research-navigation.js";
 import { applyDispositionChange, includesWeakIssuerMatches, visibleInWorkingScan } from "./lib/analyst-feed.js";
-import { operationsAttentionCount } from "./lib/operations-attention.js";
+import { operationsAttentionCount, operationsStatusSummary } from "./lib/operations-attention.js";
 import { retryAvailabilityFor } from "./lib/retryAvailability.js";
 import { historicalJevRevealTarget, revealScrollTarget } from "./lib/reveal-scroll-target.js";
 import { resetResearchScrollForSelection } from "./lib/research-scroll.js";
@@ -79,7 +86,7 @@ import { INITIAL_SAVED_SOURCES_BROWSE_STATE, mergeSavedHistoryStreamEvent, readS
 import { automaticHistoricalArchiveLookupAction, chartViewPreferenceAfterCompanySelection, deriveChartView, matchingCategoricalSnapshot, shouldLoadHistoricalJevForVisibleTab, shouldLookupHistoricalJev, shouldRefreshInactiveLunaSnapshot, type CategoricalChartSnapshot, type ChartViewPreference } from "./lib/chart-view-preference.js";
 import { categoricalChartStatusLabel } from "./lib/categorical-chart-status.js";
 import { mentionDrawerReturnTarget, researchViewAfterMentionClose, selectCompanyForResearch, type MentionDrawerReturnTarget, type ResearchView } from "./lib/research-navigation.js";
-import { marketPriceRefreshState, shouldLeadWithMarketPriceContext, shouldShowMarketPriceContext } from "./lib/market-price-context.js";
+import { marketPriceRefreshState, shouldShowMarketPriceContext } from "./lib/market-price-context.js";
 import { readSessionPreference, writeSessionPreference } from "./lib/session-preferences.js";
 import { secFilingResumeTargetFromTask, type SecFilingResumeTarget } from "./lib/sec-filing-resume.js";
 import { FirstEvidenceRecovery } from "./lib/firstRunEvidence.js";
@@ -155,6 +162,7 @@ const FILTERS = [
   { key: "failed", label: "Unscored" },
   { key: "history", label: "History" },
   { key: "identity_review", label: "Held matches" },
+  { key: "relevance_review", label: "Held from updates" },
 ] as const;
 const RECONNECT_LOOKUP_BATCH_SIZE = 900;
 type FilterKey = (typeof FILTERS)[number]["key"];
@@ -165,6 +173,7 @@ type MentionFeedState = {
   includeDismissed: boolean;
   setAsideCount: number;
   issuerIdentityReviewCount: number;
+  investorRelevanceReviewCount: number;
   loadedAt: number | null;
   items: Mention[];
   nextCursor: MentionPage["nextCursor"];
@@ -221,6 +230,9 @@ function mergeScoreBucketMentions(...pages: Mention[][]): Mention[] {
 
 
 export default function App() {
+  const showOperatorControls = import.meta.env.DEV && import.meta.env.VITE_SHOW_OPERATOR_CONTROLS === "true";
+  const [lunaConnectionOpen, setLunaConnectionOpen] = useState(false);
+  const [modelSettingsFocus, setModelSettingsFocus] = useState<"luna" | "gemini" | "providers">("luna");
   const [companies, setCompanies] = useState<CompanySnapshot[]>([]);
   const [companiesLoadState, setCompaniesLoadState] = useState<"loading" | "ready" | "failed">("loading");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -234,7 +246,7 @@ export default function App() {
   const fundamentalsRequestKeyRef = useRef<{ companyId: string; requestKey: string } | null>(null);
   const [researchView, setResearchView] = useState<ResearchView>(() => {
     const saved = readSessionPreference("sentiment-desk-research-view");
-    return saved === "sources" || saved === "filings" || saved === "queue" || saved === "desk" || saved === "radar" ? saved : "desk";
+    return saved === "sources" || saved === "filings" || saved === "issuers" || saved === "queue" || saved === "desk" || saved === "radar" ? saved : "desk";
   });
   const researchViewTouchedRef = useRef(readSessionPreference("sentiment-desk-research-view") !== null);
   const [researchQueueRevision, setResearchQueueRevision] = useState(0);
@@ -246,6 +258,9 @@ export default function App() {
   const [secResearchCaseResumeId, setSecResearchCaseResumeId] = useState<string | null>(null);
   const secResumeRequestId = useRef(0);
   const [sourceReviewRevision, setSourceReviewRevision] = useState(0);
+  const [modelClassificationRevision, setModelClassificationRevision] = useState(0);
+  const [companyUpdateRefreshing, setCompanyUpdateRefreshing] = useState(false);
+  const [companyUpdateStatus, setCompanyUpdateStatus] = useState<string | null>(null);
   const [tape, setTape] = useState<Mention[]>([]);
   const [savedSourcesState, setSavedSourcesState] = useState<SavedSourcesState>("loading");
   const [savedSourceCoverage, setSavedSourceCoverage] = useState<SavedSourceCoverageSnapshot<Mention> | null>(null);
@@ -290,6 +305,13 @@ export default function App() {
       // The in-memory browse state continues to work when session storage is unavailable.
     }
   }, []);
+  useEffect(() => {
+    if (!lunaConnectionOpen) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById("model-provider-settings-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [lunaConnectionOpen, modelSettingsFocus]);
   useEffect(() => {
     if (researchView !== "sources") return;
     void loadSavedSourceCoverage();
@@ -755,10 +777,10 @@ export default function App() {
     return () => { alive = false; controller.abort(); };
   }, [selectedId]);
 
-  const refreshSelectedFundamentals = useCallback(async () => {
+  const refreshSelectedFundamentals = useCallback(async (): Promise<CompanyFundamentalsView | null> => {
     const company = selected;
     const current = selectedFundamentals;
-    if (!company || !current?.view?.refreshAllowed || current.refreshing) return;
+    if (!company || !current?.view?.refreshAllowed || current.refreshing) return null;
     const companyId = company.id;
     const request = fundamentalsRequestKeyRef.current?.companyId === companyId
       ? fundamentalsRequestKeyRef.current
@@ -769,16 +791,18 @@ export default function App() {
       : state);
     try {
       const result = await refreshCompanyFundamentals(companyId, request.requestKey);
-      if (!isCurrentCompanySelection(companyId, selectedIdRef.current) || result.companyId !== companyId) return;
+      if (!isCurrentCompanySelection(companyId, selectedIdRef.current) || result.companyId !== companyId) return null;
       setCompanyFundamentals({ companyId, view: result, loading: false, refreshing: false, transportError: null });
       fundamentalsRequestKeyRef.current = null;
+      return result;
     } catch {
-      if (!isCurrentCompanySelection(companyId, selectedIdRef.current)) return;
+      if (!isCurrentCompanySelection(companyId, selectedIdRef.current)) return null;
       setCompanyFundamentals((state) => state?.companyId === companyId
         ? { ...state, refreshing: false, transportError: "SEC refresh failed. Saved facts, if any, remain available." }
         : state);
       // Preserve the key after an unknown transport outcome so a deliberate
       // retry cannot create a second provider attempt.
+      return null;
     }
   }, [selected, selectedFundamentals]);
   const selectedCompanyFundamentalsPanel = selected ? (
@@ -791,6 +815,8 @@ export default function App() {
       />
       <PrivateEvidencePanel companyId={selected.id} companyName={selected.name} ticker={selected.ticker} />
       <CompanyFundamentals
+        companyId={selected.id}
+        snapshotId={selectedFundamentals?.view?.snapshotId ?? null}
         companyName={selected.name}
         ticker={selected.ticker}
         state={selectedFundamentals?.refreshing ? "refreshing"
@@ -913,8 +939,6 @@ export default function App() {
   const selectedPricePending = priceRefreshRelevant && selectedSeriesKey != null
     && (priceRefreshingKey === selectedSeriesKey || (!selectedPriceReady && !selectedPriceError));
   const selectedPriceChartState = derivePriceChartState(selectedPriceSource, selectedPricePending, selectedPriceError);
-  const marketPriceContextFirst = priceContextVisible
-    && shouldLeadWithMarketPriceContext(matchingCategoricalChartSnapshot, selectedPrice);
   const selectedPriceRefreshLabels = derivePriceRefreshLabels(selectedPriceSource, selectedPriceReady, selectedPriceError, selectedPrice.length);
   const chartHasPrice = chartMode === "comparison" && selectedPrice.length >= 2;
   const chartLoading = selectedSeriesKey != null && (
@@ -1197,6 +1221,24 @@ export default function App() {
     if (chartViewRef.current === "jev" && chartModeRef.current === "comparison") void refreshPrice();
   }, [refreshPrice, refreshSeries]);
 
+  const refreshSelectedCompanyUpdates = useCallback(async () => {
+    if (!selectedId || companyUpdateRefreshing) return;
+    setCompanyUpdateRefreshing(true);
+    setCompanyUpdateStatus(null);
+    try {
+      const result = await refreshCompanyUpdates(selectedId);
+      const saved = result.sources.reduce((sum, source) => sum + source.saved, 0);
+      const available = result.sources.filter((source) => source.state === "updated" || source.state === "empty").length;
+      setCompanyUpdateStatus(available === 0
+        ? "Fresh public news sources are unavailable. Saved company evidence is unchanged."
+        : saved > 0 ? `${saved} new public source records loaded.` : "Sources checked. No new matching company updates were found.");
+      await refreshBackendSnapshot();
+      setSnapshotRevision((revision) => revision + 1);
+    } catch {
+      setCompanyUpdateStatus("Company updates could not be refreshed. Previously saved evidence is unchanged.");
+    } finally { setCompanyUpdateRefreshing(false); }
+  }, [companyUpdateRefreshing, refreshBackendSnapshot, selectedId]);
+
   useEffect(() => {
     if (firstRunEvidence.state !== "ready") return;
     const recovery = firstEvidenceRecoveryRef.current;
@@ -1281,6 +1323,7 @@ export default function App() {
                   nextCursor: current.nextCursor ?? page.nextCursor,
                   setAsideCount: page.setAsideCount,
                   issuerIdentityReviewCount: page.issuerIdentityReviewCount,
+                  investorRelevanceReviewCount: page.investorRelevanceReviewCount ?? 0,
                   loadedAt: Date.now(),
                   error: false,
                   refreshError: false,
@@ -1382,10 +1425,18 @@ export default function App() {
             && current.loadedAt != null
             && liveMention.ingestedAt > current.loadedAt
             && mentionIsInWindow(liveMention, current.hours);
+          const newInvestorRelevanceReview = (current.filter === "all" || current.filter === "relevance_review")
+            && liveMention.issuerIdentityStrong === true
+            && liveMention.companyBusinessRelevant === false
+            && !wasStreamed
+            && current.loadedAt != null
+            && liveMention.ingestedAt > current.loadedAt
+            && mentionIsInWindow(liveMention, current.hours);
           return {
             ...current,
             items,
             issuerIdentityReviewCount: current.issuerIdentityReviewCount + Number(newWeakIssuerMatch),
+            investorRelevanceReviewCount: current.investorRelevanceReviewCount + Number(newInvestorRelevanceReview),
           };
         });
         setEvidenceBreadthPage((current) => {
@@ -1411,7 +1462,9 @@ export default function App() {
         }
       },
       onResearchDisposition: applyResearchDispositionChange,
-      onCompany: (s) => setCompanies((prev) => prev.map((c) => (c.id === s.id ? s : c))),
+      onCompany: (s) => setCompanies((prev) => prev.some((company) => company.id === s.id)
+        ? prev.map((company) => (company.id === s.id ? s : company))
+        : [...prev, s]),
       onQuotes: (s) => setMarket(s),
     });
     return () => {
@@ -1449,7 +1502,7 @@ export default function App() {
     const includeDismissed = includeSetAside;
     const streamSequenceAtStart = mentionStreamSequence.current;
     setMentionFeedPage({
-      companyId, filter, hours, includeDismissed, setAsideCount: 0, issuerIdentityReviewCount: 0, loadedAt: null, items: [], nextCursor: null, loaded: false,
+      companyId, filter, hours, includeDismissed, setAsideCount: 0, issuerIdentityReviewCount: 0, investorRelevanceReviewCount: 0, loadedAt: null, items: [], nextCursor: null, loaded: false,
       loadingMore: false, error: false, refreshError: false, loadMoreError: false,
     });
     const params = mentionPageParams(filter, hours, null, 100, includeDismissed);
@@ -1475,6 +1528,7 @@ export default function App() {
             nextCursor: page.nextCursor,
             setAsideCount: page.setAsideCount,
             issuerIdentityReviewCount: page.issuerIdentityReviewCount,
+            investorRelevanceReviewCount: page.investorRelevanceReviewCount ?? 0,
             loadedAt: Date.now(),
             loaded: true,
             loadingMore: false,
@@ -1641,6 +1695,10 @@ export default function App() {
     (id: string) => companies.find((c) => c.id === id)?.name ?? id,
     [companies],
   );
+  const companySectorOf = useCallback(
+    (id: string) => companies.find((c) => c.id === id)?.sector ?? "",
+    [companies],
+  );
   const knownTickers = useMemo(() => companies.map((company) => company.ticker), [companies]);
   const activeMentionFeed = selectedId
     && mentionFeedPage?.companyId === selectedId
@@ -1722,6 +1780,7 @@ export default function App() {
           nextCursor: page.nextCursor,
           setAsideCount: page.setAsideCount,
           issuerIdentityReviewCount: page.issuerIdentityReviewCount,
+          investorRelevanceReviewCount: page.investorRelevanceReviewCount ?? 0,
           loadingMore: false,
           loadMoreError: false,
         };
@@ -2031,11 +2090,11 @@ export default function App() {
   return (
     <>
     <div className="flex h-full flex-col overflow-hidden" inert={drawerMention !== null}>
-      <Header connected={connected} health={health} totalMentions={totalMentions} clock={clock} />
-      {researchView !== "filings" && researchView !== "sources" && <MobileCompanyPicker companies={companies} selectedId={selectedId} onSelect={navigateToCompanyResearch} />}
+      <Header totalMentions={totalMentions} clock={clock} />
+      {researchView !== "filings" && researchView !== "sources" && researchView !== "issuers" && <MobileCompanyPicker companies={companies} selectedId={selectedId} onSelect={navigateToCompanyResearch} />}
 
-      <div className={`grid min-h-0 flex-1 grid-cols-1 overflow-hidden ${researchView === "filings" || researchView === "sources" ? "lg:grid-cols-1" : "lg:grid-cols-[232px_minmax(0,1fr)]"}`}>
-        {researchView !== "filings" && researchView !== "sources" && <aside className="hidden min-h-0 overflow-y-auto border-r border-desk-line lg:block">
+      <div className={`grid min-h-0 flex-1 grid-cols-1 overflow-hidden ${researchView === "filings" || researchView === "sources" || researchView === "issuers" ? "lg:grid-cols-1" : "lg:grid-cols-[232px_minmax(0,1fr)]"}`}>
+        {researchView !== "filings" && researchView !== "sources" && researchView !== "issuers" && <aside className="hidden min-h-0 overflow-y-auto border-r border-desk-line lg:block">
           <div className="panel-head sticky top-0 z-10 bg-[#0a0c11]/95 backdrop-blur">
             <div className="flex items-center gap-2">
               <span className="micro">Watchlist</span>
@@ -2070,6 +2129,7 @@ export default function App() {
             {([
               ["desk", "Desk"],
               ["sources", "Saved Sources"],
+              ["issuers", "Find Issuers"],
               ["filings", "Recent Filings"],
               ["queue", "My Research"],
               ...(health?.opportunityRadarEnabled === true ? [["radar", "Opportunity Radar"] as const] : []),
@@ -2093,22 +2153,21 @@ export default function App() {
             <FirstRunEvidenceBrief
               {...firstRunEvidence}
               localObservationArrived={localObservationArrived}
-              onOpenOperations={openOperationsFromDrawer}
+              onOpenOperations={showOperatorControls ? openOperationsFromDrawer : undefined}
               onOpenDisclosures={openRecentFilingsFromFirstRun}
             />
           )}
-          {researchView === "desk" && (
+          {researchView === "desk" && showOperatorControls && (
             <details id="desk-operations" ref={operationsDisclosureRef} className="desk-operations">
               <summary>
-                <span>Sources &amp; operations</span>
+                <span>Data connections &amp; operations</span>
                 <span className="desk-operations-summary desk-operations-summary-desktop">
                   <span className={healthLoadState === "failed" || healthAttentionCount > 0 || webhookNotConfigured ? "text-amber-200/85" : "text-white/60"}>
                     {health == null
                       ? healthLoadState === "failed" ? "status unavailable" : "checking status"
                       : healthLoadState === "failed"
-                        ? `refresh failed · last received status${health.externalRequestsEnabled ? " · external requests enabled" : " · saved data only"}`
-                        : health.storage.state !== "ready" ? "storage paused · saved data only"
-                          : health.externalRequestsEnabled ? "external requests enabled" : "saved data only"}
+                        ? `refresh failed · last status: ${operationsStatusSummary(health)}`
+                        : operationsStatusSummary(health)}
                   </span>
                   {healthAttentionCount > 0 && healthLoadState !== "failed" && <span className="text-amber-200/80">{healthAttentionCount} health or alert signals</span>}
                   {webhookNotConfigured && <span className="text-amber-200/85">webhook not configured</span>}
@@ -2117,9 +2176,8 @@ export default function App() {
                 <span className="desk-operations-summary-mobile">
                   {health == null
                     ? healthLoadState === "failed" ? "Status unavailable" : "Checking status"
-                    : healthLoadState === "failed" ? "Status unavailable · showing last known state"
-                      : health.storage.state !== "ready" ? "Storage paused · saved data only"
-                        : health.externalRequestsEnabled ? "External requests enabled" : "Saved data only"}
+                    : healthLoadState === "failed" ? `Status unavailable · ${operationsStatusSummary(health)}`
+                      : operationsStatusSummary(health)}
                   {healthAttentionCount > 0 && healthLoadState !== "failed" ? ` · ${healthAttentionCount} issues` : ""}
                 </span>
                 <span className="desk-operations-detail">details</span>
@@ -2146,7 +2204,7 @@ export default function App() {
               </div>
             </details>
           )}
-          {researchView === "sources" ? <SavedSourcesView
+          {researchView === "issuers" ? <SecIssuerDirectory companies={companies} onOpenCompany={navigateToCompanyResearch} /> : researchView === "sources" ? <SavedSourcesView
             mentions={tape}
             companies={companies}
             coverageSnapshot={savedSourceCoverage}
@@ -2191,7 +2249,7 @@ export default function App() {
             resumeResearchCaseId={secResearchCaseResumeId}
             onResearchCaseResumed={secResearchCaseResumeHandled}
             archiveStatus={firstRunEvidence.state !== "ready" ? "unknown" : firstRunEvidence.eligibleObservationCount > 0 ? "available" : "empty"}
-            onOpenOperations={openOperationsFromFilings}
+            onOpenOperations={showOperatorControls ? openOperationsFromFilings : undefined}
             onBrowseSavedSources={firstRunEvidence.state === "ready" && firstRunEvidence.eligibleObservationCount > 0 ? () => {
               recoverToSavedSources(rememberSavedSourcesBrowseState, changeSavedSourcesMode, () => {
                 researchViewTouchedRef.current = true;
@@ -2220,7 +2278,7 @@ export default function App() {
             ) : (
             <>
               <div className="selected-company panel shrink-0 px-3 py-2.5 sm:px-4">
-                <div className="min-w-0 flex-1">
+                <div className="selected-company-overview min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-[18px] font-semibold">{selected.name}</h1>
                     <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10.5px] font-medium text-white/60">
@@ -2260,13 +2318,6 @@ export default function App() {
                         {selected.sector} · {chartView === "jev"
                         ? "Historical Jev archive · complete UTC week"
                         : `${lunaWindowHeader}${matchingCategoricalChartSnapshot?.status === "ready" ? " · rolling saved window" : ""}`}
-                      {health?.health.classifier?.provider === "openai_luna" && (
-                        <span title={health.health.classifier.enabled
-                          ? "Luna is available for new categorical classifications. Historical Jev probabilities and this chart retain their original profile; no synthetic probability or impact is assigned."
-                          : `New Luna classifications are paused: ${health.health.classifier.blockedReason ?? "classifier is unavailable"}. Historical Jev data keeps its original profile.`}>
-                          {health.health.classifier.enabled ? " · Luna ready" : " · New Luna classifications paused"}
-                        </span>
-                      )}
                     </span>
                     {selected.earningsAt != null && (
                       <span
@@ -2330,24 +2381,25 @@ export default function App() {
                   ))}
                 </div>
                 <div className="selected-company-shortcuts" role="group" aria-label="Selected company research shortcuts">
+                  {selected.id.startsWith("sec-") && <button type="button" disabled={companyUpdateRefreshing} onClick={() => void refreshSelectedCompanyUpdates()}>{companyUpdateRefreshing ? "Checking updates…" : "Refresh updates"}</button>}
                   <button type="button" onClick={() => { focusCompanyResearchBrief(selected.id); }}>Research brief</button>
                   <button type="button" aria-label={`Open private research notes for ${selected.name} (${selected.ticker})`} onClick={() => { revealCompanyPrivateEvidence(selected.id); }}>Private notes</button>
+                  <button type="button" onClick={() => { setModelSettingsFocus("providers"); setLunaConnectionOpen(true); }}>Model providers</button>
                 </div>
+                {companyUpdateStatus && <p role="status" className="mt-1 text-[10px] text-white/50">{companyUpdateStatus}</p>}
               </div>
 
               <SelectedCompanyResearchSections
                 fundamentals={selectedCompanyFundamentalsPanel}
-                evidenceFirst={shouldLeadWithCurrentSourceEvidence({
-                  snapshot: matchingCategoricalChartSnapshot,
-                  companyId: selectedId,
-                  windowHours,
-                  chartView,
-                  historicalJevHasScores: selectedJevArchiveScoredRecordCount > 0,
-                  marketPriceChartAvailable: marketPriceContextFirst,
-                  evidence: { loaded: activeEvidenceBreadthPage?.loaded === true, recordCount: evidenceBreadthMentions.length },
-                })}
                 chart={
                   <>
+              {lunaConnectionOpen && <section id="model-provider-settings-panel" className="panel my-2 p-3" aria-labelledby="luna-access-heading">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h2 id="luna-access-heading" className="micro m-0">{modelSettingsFocus === "gemini" ? "GEMINI MODEL SETTINGS · LOCAL ONLY" : modelSettingsFocus === "providers" ? "MODEL PROVIDERS · LOCAL ONLY" : "GPT-6 LUNA ACCESS · LOCAL ONLY"}</h2>
+                  <button type="button" onClick={() => setLunaConnectionOpen(false)} className="rounded border border-white/15 px-2 py-1 text-[10px] text-white/60 hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Close</button>
+                </div>
+                {modelSettingsFocus === "luna" ? <LocalLunaSettings /> : <ModelProviderSettings preferredProvider={modelSettingsFocus === "gemini" ? "google_gemini" : undefined} />}
+              </section>}
               <div className="chart-view-tabs" role="tablist" aria-label={`${selected.name} sentiment chart`}>
                 <button
                   id="chart-tab-luna"
@@ -2365,7 +2417,7 @@ export default function App() {
                       requestAnimationFrame(() => document.getElementById(`chart-tab-${next}`)?.focus({ preventScroll: true }));
                     }
                   }}
-                >Luna categories</button>
+                >Current sentiment</button>
                 <button
                   id="chart-tab-jev"
                   type="button"
@@ -2385,54 +2437,60 @@ export default function App() {
                 >Historical Jev</button>
               </div>
               <div id="chart-panel-luna" role="tabpanel" aria-labelledby="chart-tab-luna" hidden={chartView !== "luna"} className="mt-2">
-                <div className={priceContextVisible ? "luna-price-context-grid" : "contents"}>
-                {marketPriceContextFirst && <SelectedCompanyMarketPriceContext
-                  chartView={chartView}
-                  companyId={selected.id}
-                  companyName={selected.name}
-                  ticker={selected.ticker}
-                  hours={windowHours}
-                  points={selectedPrice}
-                  source={selectedPriceSource}
-                  loading={selectedPricePending}
-                  transportError={selectedPriceChartState.priceError}
-                  refreshState={priceRefreshState}
-                  onRefresh={() => void refreshPrice()}
-                  now={clock}
-                />}
-                <CategoricalTrendChart
-                  key={`${selected.id}:${windowHours}:${streamRuntimeId ?? "unknown-runtime"}`}
+                <SelectedCompanyLunaChartStack
+                  sentimentChart={<>
+                  <CodexSentimentChart companyId={selected.id} hours={windowHours}
+                    refreshRevision={modelClassificationRevision} onOpenMention={openDrawerMention}
+                    onReviewSourceRecords={() => showMentionFeed()} />
+                  <details className="mt-3 rounded-lg border border-white/10 p-3">
+                  <summary className="cursor-pointer text-xs text-white/60">Other classifiers and saved API history</summary>
+                  <CategoricalTrendChart
+                  key={`${selected.id}:${streamRuntimeId ?? "unknown-runtime"}`}
                   companyId={selected.id}
                   hours={windowHours}
                   active={chartView === "luna"}
                   refreshRevision={categoricalRefreshRequest?.companyId === selected.id ? categoricalRefreshRequest.revision : 0}
+                  providerClassificationRevision={modelClassificationRevision}
                   classifierEnabled={health?.health.classifier?.provider === "openai_luna" && health.health.classifier.enabled}
-                  blockedReason={health?.health.classifier?.provider === "openai_luna" ? health.health.classifier.blockedReason : null}
                   historicalJevSummary={historicalJevHeaderSummary}
                   onOpenMention={openDrawerMention}
-                  onOpenOperations={openOperationsFromDrawer}
+                  onOpenOperations={showOperatorControls ? openOperationsFromDrawer : undefined}
+                  onOpenLunaSettings={(provider) => {
+                    setModelSettingsFocus(provider === "google_gemini" ? "gemini" : "luna");
+                    setLunaConnectionOpen(true);
+                  }}
                   onViewHistoricalJev={() => {
                     chooseChartView("jev");
                     requestAnimationFrame(() => document.getElementById("chart-tab-jev")?.focus({ preventScroll: true }));
                   }}
                   onReviewSourceRecords={() => showMentionFeed()}
                   onSnapshot={reportCategoricalChartSnapshot}
+                /></details></>}
+                  marketPriceContext={<div className="space-y-2">
+                    <SecVerifiedTradingViewChart
+                      key={`${selected.id}:${selectedFundamentals?.view?.facts[0]?.cik ?? "unverified"}`}
+                      companyId={selected.id}
+                      companyName={selected.name}
+                      ticker={selected.ticker}
+                      cik={selectedFundamentals?.view?.facts[0]?.cik ?? null}
+                      onRefreshFacts={() => refreshSelectedFundamentals()}
+                    />
+                    {(selectedPrice.length > 0 || priceRefreshState === "enabled") && <SelectedCompanyMarketPriceContext
+                      chartView={chartView}
+                      companyId={selected.id}
+                      companyName={selected.name}
+                      ticker={selected.ticker}
+                      hours={windowHours}
+                      points={selectedPrice}
+                      source={selectedPriceSource}
+                      loading={selectedPricePending}
+                      transportError={selectedPriceChartState.priceError}
+                      refreshState={priceRefreshState}
+                      onRefresh={() => void refreshPrice()}
+                      now={clock}
+                    />}
+                  </div>}
                 />
-                {!marketPriceContextFirst && <SelectedCompanyMarketPriceContext
-                  chartView={chartView}
-                  companyId={selected.id}
-                  companyName={selected.name}
-                  ticker={selected.ticker}
-                  hours={windowHours}
-                  points={selectedPrice}
-                  source={selectedPriceSource}
-                  loading={selectedPricePending}
-                  transportError={selectedPriceChartState.priceError}
-                  refreshState={priceRefreshState}
-                  onRefresh={() => void refreshPrice()}
-                  now={clock}
-                />}
-                </div>
               </div>
               <div id="chart-panel-jev" role="tabpanel" aria-labelledby="chart-tab-jev" hidden={chartView !== "jev"}>
                 {chartView === "jev" && <>
@@ -2551,16 +2609,31 @@ export default function App() {
               </div>
 
                 </>}
-                afterChart={<EvidenceQuickAccess
-                  mentions={evidenceBreadthMentions}
-                  hours={windowHours}
-                  loaded={activeEvidenceBreadthPage?.loaded === true}
-                  error={activeEvidenceBreadthPage?.error === true}
-                  hasMore={activeEvidenceBreadthPage?.hasMore === true}
-                  now={clock}
-                  onReview={() => showMentionFeed()}
-                  onRetry={() => setSnapshotRevision((revision) => revision + 1)}
-                />}
+                afterChart={<>
+                  <EvidenceQuickAccess
+                    mentions={evidenceBreadthMentions}
+                    hours={windowHours}
+                    loaded={activeEvidenceBreadthPage?.loaded === true}
+                    error={activeEvidenceBreadthPage?.error === true}
+                    hasMore={activeEvidenceBreadthPage?.hasMore === true}
+                    now={clock}
+                    onReview={() => showMentionFeed()}
+                    onRetry={() => setSnapshotRevision((revision) => revision + 1)}
+                  />
+                </>}
+                modelAssessments={
+                  <ModelProviderCompanySummary
+                    key={selected.id}
+                    companyId={selected.id}
+                    companyName={`${selected.name} (${selected.ticker})`}
+                    refreshRevision={modelClassificationRevision}
+                    onManageKeys={() => {
+                      setModelSettingsFocus("providers");
+                      setLunaConnectionOpen(true);
+                      window.setTimeout(() => document.getElementById("model-provider-settings-panel")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+                    }}
+                  />
+                }
                 evidence={
                   <EvidenceBreadth
                     mentions={evidenceBreadthMentions}
@@ -2618,7 +2691,7 @@ export default function App() {
                 <div className="panel flex min-w-0 flex-col" id="mention-feed-panel">
                   <div className="panel-head mentions-panel-head shrink-0">
                     <h2 id="mention-feed-heading" ref={mentionFeedHeadingRef} tabIndex={-1} className="micro m-0 scroll-mt-3 p-0">
-                      Source records · {feedFilter === "history" || feedFilter === "failed" || feedFilter === "identity_review" ? "all saved history · newest first" : windowLabel(windowHours)}
+                      Source records · {feedFilter === "history" || feedFilter === "failed" || feedFilter === "identity_review" || feedFilter === "relevance_review" ? "all saved history · newest first" : windowLabel(windowHours)}
                       {mentionsFailed && <span className="ml-2 normal-case tracking-normal text-amber-300/80">refresh failed</span>}
                     </h2>
                     <div className="mentions-filters">
@@ -2692,6 +2765,24 @@ export default function App() {
                       </button>
                     </div>
                   )}
+                  {feedFilter === "all" && (activeMentionFeed?.investorRelevanceReviewCount ?? 0) > 0 && (
+                    <div className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-amber-300/20 bg-amber-200/[0.04] px-3 py-2 text-[11px] text-amber-100/80" role="status">
+                      <span>
+                        {activeMentionFeed?.investorRelevanceReviewCount} issuer-matched {activeMentionFeed?.investorRelevanceReviewCount === 1 ? "record is" : "records are"} held out of company updates by the business relevance rule. Saved history is unchanged.
+                      </span>
+                      <button
+                        type="button"
+                        className="shrink-0 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                        onClick={() => {
+                          setFeedGroupFilter(null);
+                          setFeedFilter("relevance_review");
+                          focusMentionFeed();
+                        }}
+                      >
+                        Review held records
+                      </button>
+                    </div>
+                  )}
                   <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
                     {filteredMentions.length > 0 && (
                       <div className="feed-method-note">
@@ -2719,24 +2810,26 @@ export default function App() {
                             ? `Loading ${selected.ticker} mentions…`
                             : !includeSetAside && activeMentionFeed?.loaded && activeMentionFeed.setAsideCount > 0
                               ? `${activeMentionFeed.setAsideCount} source ${activeMentionFeed.setAsideCount === 1 ? "record is" : "records are"} set aside from this scan. Show set-aside to review them.`
+                            : feedFilter === "relevance_review" && activeMentionFeed?.loaded && selectedMentions.length === 0
+                              ? "No issuer-matched records are currently held by the business relevance rule."
                             : feedFilter === "identity_review" && activeMentionFeed?.loaded && selectedMentions.length === 0
                               ? "No company-name matches are held by the current identity rule in saved history."
                             : feedFilter === "history" && activeMentionFeed?.loaded && selectedMentions.length === 0
                               ? "No identified real-source records in retained history for this company."
                             : feedFilter === "failed" && activeMentionFeed?.loaded && selectedMentions.length === 0
                               ? "No unscored items in saved history."
-                              : feedFilter === "all" && (activeMentionFeed?.issuerIdentityReviewCount ?? 0) > 0 && selectedMentions.length === 0
-                              ? "No records pass the current issuer text rule in this window. Review held matches; some may still concern this company."
+                              : feedFilter === "all" && ((activeMentionFeed?.issuerIdentityReviewCount ?? 0) > 0 || (activeMentionFeed?.investorRelevanceReviewCount ?? 0) > 0) && selectedMentions.length === 0
+                              ? "No records pass the current company update rules in this window. Review held matches or records held from updates; saved history is unchanged."
                               : feedFilter !== "all" && activeMentionFeed?.loaded && selectedMentions.length === 0
                                 ? `No ${FILTERS.find((filter) => filter.key === feedFilter)?.label.toLowerCase()} items in this ${windowLabel(windowHours)} window.`
                               : selectedMentions.length === 0
                               ? !health
-                                ? "No saved mentions in this window yet."
+                                ? "No company updates are available in this window yet."
                                 : !health.externalRequestsEnabled || !health.deliveryHealth.some((source) => source.enabled)
-                                  ? "No saved mentions in this window yet. Live collection is paused."
+                                  ? "No company updates are available in this window yet. Verified source evidence will appear here when available."
                                   : !(health.health.classifier ?? health.health.jev).enabled
-                                    ? "No saved mentions in this window yet. Classification is paused; collected real-source items remain pending."
-                                    : "No saved mentions in this window yet. Waiting for a real-source delivery and classification."
+                                    ? "No company updates are available in this window yet. Saved source records remain available for review."
+                                    : "No company updates are available in this window yet. Waiting for new source evidence."
                               : feedFilter === "all" && selectedMentions.length > 0 && selectedMentions.every((mention) => mention.status === "off_target" || mention.status === "excluded")
                                 ? activeMentionFeed?.nextCursor != null
                                   ? `The newest ${selectedMentions.length} saved items are off-target. Load older items or choose Off-target to inspect them.`
@@ -2760,6 +2853,7 @@ export default function App() {
                         {activeMentionFeed.loadingMore
                           ? "Loading older items…"
                           : feedFilter === "identity_review" ? "Load older held matches"
+                            : feedFilter === "relevance_review" ? "Load older held records"
                             : feedFilter === "history" ? "Load older saved records"
                             : feedFilter === "failed" ? "Load older unscored items" : "Load older matching items"}
                       </button>
@@ -2793,7 +2887,7 @@ export default function App() {
 
       </div>
 
-      <StatusBar health={health} session={session} connected={connected} tape={tape} />
+      {showOperatorControls && <StatusBar health={health} session={session} connected={connected} tape={tape} />}
     </div>
     <MentionDrawer
       mention={drawerMention}
@@ -2801,12 +2895,18 @@ export default function App() {
       retryAvailability={retryAvailability}
       refreshWarning={drawerRefreshWarning}
       onRetryRefresh={() => void refreshBackendSnapshot()}
-      onOpenOperations={openOperationsFromDrawer}
+      onOpenOperations={showOperatorControls ? openOperationsFromDrawer : undefined}
       onReviewChanged={reportResearchReviewChanged}
       onOpenResearchQueue={openResearchQueue}
       tickerOf={tickerOf}
       knownTickers={knownTickers}
       companyNameOf={companyNameOf}
+      sectorOf={companySectorOf}
+      onOpenProviderSettings={() => {
+        setLunaConnectionOpen(true);
+        closeDrawer();
+      }}
+      onModelClassificationSaved={() => setModelClassificationRevision((revision) => revision + 1)}
     />
     </>
   );

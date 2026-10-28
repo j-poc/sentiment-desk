@@ -1,5 +1,31 @@
 import type { HealthDTO } from "./api.js";
 
+/** A compact status for the collapsed operations summary. Global request permission alone does not prove a feed is running. */
+export function operationsStatusSummary(health: HealthDTO): string {
+  const enabled = health.deliveryHealth.filter((delivery) => delivery.enabled);
+  const currentCount = enabled.filter((delivery) => delivery.state === "current").length;
+  const collection = health.storage.state !== "ready"
+    ? "storage paused · saved data only"
+    : !health.externalRequestsEnabled
+      ? "external requests off · saved data only"
+      : enabled.length === 0
+        ? "no data feeds enabled"
+        : `${currentCount}/${enabled.length} data feeds current`;
+
+  const classifier = health.health.classifier ?? health.health.jev;
+  const classifierName = health.health.classifier?.provider === "openai_luna" ? "Luna" : "Jev";
+  const classifierBlockedReason = health.health.classifier?.blockedReason;
+  const classifierStatus = classifier?.enabled
+    ? `${classifierName} ready`
+    : health.health.classifier?.accountingRoute === "chatgpt_plan" && classifierBlockedReason?.toLowerCase().includes("chatgpt plan")
+      ? `${classifierName} paused · ChatGPT plan not connected`
+      : classifierBlockedReason
+        ? `${classifierName} blocked`
+        : `${classifierName} paused`;
+
+  return `${collection} · ${classifierStatus}`;
+}
+
 export function operationsAttentionCount(health: HealthDTO): number {
   const degradedDeliveries = health.deliveryHealth.filter((delivery) =>
     ["partial", "overdue", "failed", "processing"].includes(delivery.state)

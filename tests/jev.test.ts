@@ -223,6 +223,14 @@ describe("JevClient", () => {
     await expect(clientWith(notJson).judge({}, RUBRIC)).rejects.toBeInstanceOf(JevError);
   });
 
+  it("bounds TypeSafe response bytes and marks an oversized successful response as uncertain", async () => {
+    const oversized = vi.fn(async () => new Response("x".repeat(64 * 1024 + 1), { status: 200 })) as unknown as typeof fetch;
+    await expect(clientWith(oversized).judge({}, RUBRIC)).rejects.toMatchObject({
+      name: "JevError", status: 200, outcomeUnknown: true,
+    });
+    expect(oversized).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     { configured: "jev-latest", returned: "jev-latest" },
     { configured: "jev-latest", returned: "jev-preview" },

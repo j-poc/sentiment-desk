@@ -332,17 +332,28 @@ export function summarizeReactions(
 }
 
 /* ------------------------------------------------------------------ */
-/* Ingest-time relevance guard. Free and deterministic: finance-context  */
-/* lexicon for weak-tier outlets, trusted tiers bypass, cashtag rule for */
-/* social. Kills word-collision and lifestyle noise before it costs a    */
-/* Jev call. False drops are acceptable: wires re-report anything that   */
-/* matters.                                                             */
+/* Deterministic company-update relevance guard shared by the queue and  */
+/* selected-company feed. Trusted tiers bypass the finance-context test, */
+/* except for recognizable consumer offers and non-company market pages. */
 /* ------------------------------------------------------------------ */
 
 const FINANCE_CONTEXT_RE =
-  /\b(stocks?|shares?|share price|market cap|markets?|earnings|revenue|profits?|guidance|outlook|forecast|quarterly|quarter|fiscal|q[1-4]\b|analysts?|upgrade|downgrade|price target|investors?|wall street|dow|s&p|nasdaq|sec\b|filing|filings|8-k|10-k|10-q|ceo|cfo|coo|founder|board of directors|merger|acqui\w+|takeover|buyback|dividend|ipo|lawsuit|sues|sued|probe|antitrust|regulators?|regulatory|fda|doj|ftc|layoffs?|restructuring|bankruptcy|valuation|beats|misses|raises|supply chain|tariffs?|inflation|factory|plant|chip|chips|data center|smartphone|smartphones|handset|handsets|sales fell|sales rose|demand for|deliveries|subscribers|price cut)\b/i;
+  /\b(stocks?|shares?|share price|market cap|markets?|earnings|revenue|profits?|guidance|outlook|forecast|quarterly|quarter|fiscal|q[1-4]\b|analysts?|upgrade|downgrade|price target|investors?|wall street|dow|s&p|nasdaq|sec\b|filing|filings|8-k|10-k|10-q|ceo|cfo|coo|founder|board of directors|merger|acqui\w+|takeover|buyback|dividend|ipo|lawsuit|settlements?|class[- ]action|sues|sued|probe|antitrust|regulators?|regulatory|fda|doj|ftc|layoffs?|restructuring|bankruptcy|valuation|beats|misses|raises|supply chain|tariffs?|inflation|factory|plant|chip|chips|data center|smartphone|smartphones|handset|handsets|sales fell|sales rose|demand|deliveries|subscribers|price cut|launch(?:es|ed|ing)?|announc(?:es|ed)|unveil(?:s|ed)|debut(?:s|ed)?|partnership|partners?|brings?)\b/i;
 
 const MONEY_RE = /[$€£]\s?\d|\b\d+(\.\d+)?\s?(billion|million|bn)\b/i;
+const CONSUMER_PROMOTION_RE = /\b(?:deals?|discounts?|coupons?|save\s+(?:\w+\s+){0,2}\$?\d+|buy\s+now|\d+(?:\.\d+)?%?\s+off|off\s+\$?\d+)\b/i;
+const CONSUMER_PRODUCT_RE = /\b(?:airpods?|iphones?|ipads?|macbooks?|mac\s+mini|mac\s+studio|apple\s+watch|headphones?|laptops?|tablets?|smartwatches?)\b/i;
+const CONSUMER_RETAIL_PRICE_RE = /\b(?:all[- ]time lows?|amazon all[- ]time lows?|prime day|buying guide|gift guide)\b/i;
+const CONSUMER_PRODUCT_REVIEW_RE = /\b(?:product\s+)?reviews?|\bunboxing\b/i;
+const STRONG_BUSINESS_CONTEXT_RE = /\b(?:earnings|revenue|profits?|sales|margins?|shipments?|demand|guidance|outlook|forecast|production|orders?|market share|supply chain|unit sales)\b/i;
+const STRATEGIC_SUPPLY_EVENT_RE = /\b(?:chip\s+(?:supply\s+)?(?:deals?|agreements?)|semiconductor\s+(?:deals?|agreements?)|supply\s+agreements?|export\s+controls?|trade\s+restrictions?)\b/i;
+const LEGAL_SETTLEMENT_RE = /\b(?:settlements?|class[- ]action|court[- ]approved\s+payouts?)\b/i;
+const MARKET_ROUNDUP_RE = /\b(?:stock market today|(?:am|pm)\s+markets?\s+need to know|nasdaq futures|stocks? in focus|(?:keeping|keeps?|holding|holds?|driving|drives)\s+(?:the\s+)?stock market afloat|stocks?\s+accounting for\s+\d+(?:\.\d+)?%?\s+of\s+(?:the\s+)?s&p\s+\d+)\b|^(?:the\s+)?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|top\s+\d+)\s+(?:(?:best|top|tech|ai|dividend|growth|value|semiconductor|software|bank|energy|healthcare|biotech|chip|mega-cap|large-cap)\s+){0,2}stocks?\b/i;
+const MULTI_TOPIC_ROUNDUP_RE = /\b(?:tech watch|biggest analyst calls|analyst calls|what to watch)\b/i;
+const THIRD_PARTY_HOLDING_ACTIVITY_RE = /\b(?:buys?|bought|purchases?|purchased|acquires?|acquired|sells?|sold)\s+[\d,]+\s+shares?\s+of\b|\b[\d,]+\s+shares?\s+(?:bought|purchased|acquired|sold)\s+by\b|\b(?:shares?|stocks?)\s+(?:bought|purchased|acquired|sold)\s+by\b/i;
+const THIRD_PARTY_PORTFOLIO_ACTIVITY_RE = /\b(?:wealth|investment|asset|advisory|advisors?|capital|financial|funds?|portfolio|trust|institutional|insurance)\b.{0,100}\b(?:boosts?|increases?|raises?|adds?|cuts?|reduces?|trims?|slashes?|lowers?)\s+(?:its\s+)?(?:holdings?|position|stake)\b/i;
+const PASSIVE_THIRD_PARTY_PORTFOLIO_ACTIVITY_RE = /\b(?:shares?|stocks?|equities?)\s+(?:holdings?|position|stake)\s+(?:(?:is|are|was|were|has been|have been)\s+)?(?:boosted|increased|raised|added|cut|reduced|trimmed|slashed|lowered)\s+by\b.{0,120}\b(?:wealth|investment|asset|advisory|advisors?|capital|financial|funds?|portfolio|trust|institutional|insurance)\b/i;
+const OPTION_CONTRACT_PREFIX_RE = /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\s+\d+(?:\.\d+)?\s+(?:call|put)\b/i;
 
 export interface RelevanceCheck {
   title: string;
@@ -350,6 +361,24 @@ export interface RelevanceCheck {
   tier: string;
   kind: string;
   ticker: string;
+  companyName?: string;
+}
+
+function selectedIssuerIsShareBuyer(title: string, companyName: string | undefined, ticker: string): boolean {
+  const name = companyName?.trim().toLocaleLowerCase("en-US");
+  if (!name) return false;
+  const normalizedTitle = title.toLocaleLowerCase("en-US");
+  const position = normalizedTitle.indexOf(name);
+  if (position < 0) return false;
+  const before = normalizedTitle[position - 1] ?? " ";
+  const afterName = title.slice(position + name.length);
+  const afterFirst = afterName[0] ?? " ";
+  if (/[a-z0-9]/i.test(before) || /[a-z0-9]/i.test(afterFirst)) return false;
+  const afterLegalName = afterName.replace(/^\s*(?:(?:inc|corp|corporation|plc|ltd)\b\.?\s*)?/i, "");
+  const parentheticalTicker = afterLegalName.match(/^\(\s*([A-Z0-9.-]+)\s*\)\s*/i);
+  if (parentheticalTicker && parentheticalTicker[1]?.toLocaleUpperCase("en-US") !== ticker.trim().toLocaleUpperCase("en-US")) return false;
+  const afterOptionalTicker = parentheticalTicker ? afterLegalName.slice(parentheticalTicker[0].length) : afterLegalName;
+  return /^(?:buys?|bought|purchases?|purchased|acquires?|acquired)\b/i.test(afterOptionalTicker.trimStart());
 }
 
 /**
@@ -358,13 +387,34 @@ export interface RelevanceCheck {
  * finance-context term, a money amount, or (for social) a cashtag.
  */
 export function isFinanceRelevant(check: RelevanceCheck): boolean {
+  const hay = `${check.title} ${check.snippet}`;
+  const escapedTicker = check.ticker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const isRawOptionContractPage = new RegExp(`^\\s*\\$?${escapedTicker}\\s+`, "i").test(check.title)
+    && OPTION_CONTRACT_PREFIX_RE.test(check.title.trim().replace(new RegExp(`^\\$?${escapedTicker}\\s+`, "i"), ""));
+  const isThirdPartyHoldingActivity = (THIRD_PARTY_HOLDING_ACTIVITY_RE.test(check.title)
+    || THIRD_PARTY_PORTFOLIO_ACTIVITY_RE.test(check.title)
+    || PASSIVE_THIRD_PARTY_PORTFOLIO_ACTIVITY_RE.test(check.title))
+    && !selectedIssuerIsShareBuyer(check.title, check.companyName, check.ticker)
+    && !/\b(?:insider|director|officer|buyback|share repurchase|repurchases?)\b/i.test(check.title);
+  const isMultiTopicRoundup = MULTI_TOPIC_ROUNDUP_RE.test(check.title) && /[,;]/.test(check.title);
+  if (isRawOptionContractPage || MARKET_ROUNDUP_RE.test(check.title) || isMultiTopicRoundup || isThirdPartyHoldingActivity) return false;
+  // Shopping, retail and review coverage can name a valuable product without
+  // reporting an operating change. Keep it out of investor updates unless
+  // the title itself states a business event; settlements and supply decisions
+  // remain eligible even when the excerpt also uses consumer-product language.
+  if ((CONSUMER_PROMOTION_RE.test(hay) || CONSUMER_RETAIL_PRICE_RE.test(check.title)
+    || CONSUMER_PRODUCT_REVIEW_RE.test(check.title)) && CONSUMER_PRODUCT_RE.test(hay)
+    && !STRONG_BUSINESS_CONTEXT_RE.test(check.title)
+    && !LEGAL_SETTLEMENT_RE.test(check.title)
+    && !STRATEGIC_SUPPLY_EVENT_RE.test(check.title)) {
+    return false;
+  }
   if (check.tier === "filing") return true;
   if (check.tier === "wire" || check.tier === "major") return true;
   if ((check.kind === "x" || check.kind === "reddit") &&
     new RegExp(`\\$${check.ticker}\\b`, "i").test(check.title)) {
     return true;
   }
-  const hay = `${check.title} ${check.snippet}`;
   return FINANCE_CONTEXT_RE.test(hay) || MONEY_RE.test(hay);
 }
 

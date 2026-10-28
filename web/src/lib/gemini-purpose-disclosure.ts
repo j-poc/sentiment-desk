@@ -1,0 +1,1 @@
+export const GEMINI_PURPOSE_DISCLOSURE = "Google's Gemini API terms limit use to professional or business purposes, not consumer use. Sentiment Desk cannot determine whether your personal or retail-investing use meets that requirement. Review Google's terms; do not send unless you have determined your intended use is permitted.";

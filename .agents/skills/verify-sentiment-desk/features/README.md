@@ -1,6 +1,6 @@
 # Sentiment Desk verification map
 
-This directory maps four workflows: selected-company SEC fundamentals recovery, local private-evidence handling for configured public issuers, the current-listed-issuer gate for Recent Filings, and source-bound SEC filing research cases. The isolated loopback API recipe uses temporary SQLite stores; its SEC and private-analysis adapters are fixtures. It does not establish live SEC availability or GPT-6 Luna quality.
+This directory maps seven workflows: investor company updates and held-record review, local BYOK provider credentials and source-bound assessments, selected-company SEC fundamentals recovery, local private-evidence handling for configured public issuers, the current-listed-issuer gate for Recent Filings, source-bound SEC filing research cases, and the authenticated cloud core. The legacy loopback API recipe uses temporary SQLite stores; its SEC and private-analysis adapters are fixtures. The cloud verifier uses an isolated local Supabase stack and synthetic SEC-shaped rows. Neither proves live SEC availability, source rights, remote deployment, or GPT-6 Luna quality.
 
 ## Baseline preconditions
 
@@ -9,6 +9,7 @@ This directory maps four workflows: selected-company SEC fundamentals recovery, 
 - The verifier doctor must identify the helper's own build and runtime before any refresh request.
 - Fixture responses are explicitly deterministic test evidence. They do not stand in for a live SEC observation.
 - The private-analysis callback is a local deterministic fixture. It does not send private data to OpenAI or establish that a real classification is correct.
+- Cloud core verification requires the isolated `colima-sentiment-desk-verify` Docker context and loopback Supabase endpoints. Do not use the helper against a hosted project.
 
 ## Driving conventions
 
@@ -19,7 +20,10 @@ This directory maps four workflows: selected-company SEC fundamentals recovery, 
 
 ## Features
 
+- [Company updates and held-record review](./company-updates-feed.md) covers shared relevance filtering for saved investor updates and Luna, discoverable held records, and preservation in full history.
+- [Local BYOK provider keys and assessments](./local-byok-provider-assessments.md) covers OS-backed OpenAI/Gemini/TypeSafe credentials, explicit source review, separate Jev history, finite request budgets, and uncertain-call recovery.
 - [SEC fundamentals recovery](./sec-fundamentals-recovery.md) covers partial revenue-only coverage, failed-refresh retention, and observation freshness.
 - [Private-evidence explicit consent](./private-evidence-explicit-consent.md) covers issuer isolation, metadata-only listing, explicit item-bound analysis confirmation, duplicate-call suppression, separation from public sentiment, and durable readback.
-- [SEC filing listed-issuer cache](./sec-filings-inbox-directory-cache.md) covers active Nasdaq/NYSE issuer verification, bounded local cache persistence across restart, offline reads, and fail-closed expiry or corruption.
+- [SEC filing listed-issuer cache](./sec-filings-inbox-directory-cache.md) covers the bounded SEC Atom fallback, active Nasdaq/NYSE issuer verification, local cache persistence across restart, offline reads, and fail-closed expiry or corruption.
 - [SEC filing research case](./sec-filing-research-case.md) covers the real-source route from a verified Recent Filings row to a separately saved, fact-snapshot-bound analyst disposition and resume.
+- [Cloud core](./cloud-core.md) covers issuer discovery, CIK-scoped saved research, followed-company evidence, request-only OpenAI/Gemini assessments, source-use gates, and local Postgres recovery.

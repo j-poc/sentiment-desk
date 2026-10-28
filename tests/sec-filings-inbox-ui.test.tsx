@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { secFilingArchiveCikPath, secIssuerDisplayName } from "../shared/sec-filings-inbox.js";
-import { SavedFilingTasksRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, isSecFilingsActivationCoolingDown, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFilingQuestionValue, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, secListingVerificationSummary, shouldOfferSavedArchiveSearch, shouldOfferSecFilingsActivation, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
+import { SavedFilingTasksRetry, SecFilingDetailPanel, SecFilingsInbox, SecFilingsRecoveryActions, deskFallbackMessage, isSecFilingsActivationCoolingDown, markSecFilingsRequestFailure, reloadSecFilingsInbox, retainLastAcceptedFilings, secFilingQuestionValue, secFreshnessLabel, secInboxEmptyMessage, secInboxStatusLabel, secIssuerRowAction, secListingDirectoryClockLabels, secListingVerificationSummary, shouldOfferSavedArchiveSearch, shouldOfferSecFilingsActivation, shouldShowDeskFallback, shouldStartSecFilingsPoll } from "../web/src/components/SecFilingsInbox.js";
 import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingsFreshnessNextCheckMs, type SecFilingDetail, type SecFilingInboxRow, type SecFilingsInboxView, type SecFilingResearchTask } from "../shared/sec-filings-inbox.js";
 
 const currentListing = { symbol: "ISSR", exchange: "Nasdaq", securityName: "Issuer One Inc.", directoryCreatedAt: "2026-10-08T11:00:00.000Z", directoryRetrievedAt: "2026-10-08T11:01:00.000Z",
@@ -39,7 +39,7 @@ describe("first-run SEC filing browse surface", () => {
     expect(isSecFilingsActivationCoolingDown({ ...view, nextRefreshAt: null }, now)).toBe(false);
   });
 
-  it("ages source freshness from the SEC feed clock while the saved snapshot remains visible", () => {
+  it("ages source freshness from the SEC update clock while the saved list remains visible", () => {
     const observedAt = Date.parse("2026-10-08T11:00:00.000Z");
     const current: SecFilingsInboxView = {
       state: "ready", freshness: "current", rows: [{
@@ -57,11 +57,11 @@ describe("first-run SEC filing browse surface", () => {
     };
 
     expect(secInboxStatusLabel(current, observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS - 1))
-      .toContain("Source freshness current");
+      .toContain("Source updated recently");
     expect(secInboxStatusLabel(current, observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS + 1))
-      .toContain("Source update is stale");
+      .toContain("Source may be out of date");
     expect(secInboxStatusLabel({ ...current, feedUpdatedAt: "not-a-clock" }, observedAt))
-      .toContain("Source freshness unknown");
+      .toContain("Source update time unavailable");
     expect(secFilingsFreshnessNextCheckMs(new Date(observedAt).toISOString(), observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS))
       .toBe(1);
     expect(secFilingsFreshnessNextCheckMs(new Date(observedAt).toISOString(), observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS + 1))
@@ -126,11 +126,11 @@ describe("first-run SEC filing browse surface", () => {
   });
 
   it("states the exact 8-K-only feed scope and does not imply a filter ran without a snapshot", () => {
-    expect(secInboxEmptyMessage("", "empty", 0)).toContain("latest 40-item window");
+    expect(secInboxEmptyMessage("", "empty", 0)).toContain("latest 40 SEC items");
     expect(secInboxEmptyMessage("", "empty", 0)).toContain("Form 8-K/A amendments are not included");
-    expect(secInboxEmptyMessage("apple", "empty", 0)).toBe("Load a saved SEC filing snapshot before filtering it.");
-    expect(secInboxEmptyMessage("apple", "ready", 2)).toBe("No filings in this saved SEC snapshot match your filter.");
-    expect(secInboxEmptyMessage("", "not_configured", 0)).toBe("Enable the SEC 8-K feed to load current filings.");
+    expect(secInboxEmptyMessage("apple", "empty", 0)).toBe("No filing data is available to filter yet.");
+    expect(secInboxEmptyMessage("apple", "ready", 2)).toBe("No filings in the saved list match your filter.");
+    expect(secInboxEmptyMessage("", "not_configured", 0)).toBe("Current filing updates are unavailable. Try again later; saved filings remain available when present.");
   });
 
   it("shows withheld issuer count, exact current-listing gap, and both source-file clocks", () => {
@@ -144,18 +144,24 @@ describe("first-run SEC filing browse surface", () => {
         { source: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", createdAt: "2026-10-08T19:41:00.000Z", retrievedAt: "2026-10-08T20:00:00.000Z" },
       ] };
     const summary = secListingVerificationSummary(view);
-    expect(summary).toContain("2 withheld");
-    expect(summary).toContain("no unique exact match");
-    expect(summary).toContain("nasdaqlisted.txt created");
-    expect(summary).toContain("otherlisted.txt created");
+    expect(summary).toContain("2 SEC filings were held");
+    expect(summary).toContain("Listing information updated");
+    expect(summary).not.toContain("no unique exact match");
+    expect(summary).not.toContain("nasdaqlisted.txt");
+    expect(secListingDirectoryClockLabels(view)).toEqual([
+      "nasdaqlisted.txt created 2026-10-08 19:41:00 UTC · checked 2026-10-08 20:00:00 UTC",
+      "otherlisted.txt created 2026-10-08 19:41:00 UTC · checked 2026-10-08 20:00:00 UTC",
+    ]);
   });
 
   it("explains the bounded, unranked coverage and does not invent any rows", () => {
     const html = renderToStaticMarkup(createElement(SecFilingsInbox));
     expect(html).toContain("Recent 8-K filings");
-    expect(html).toContain("latest 40 Form 8-K filings");
-    expect(html).toContain("Form 8-K/A amendments are not included");
-    expect(html).toContain("not a complete issuer universe, a small-cap screen, or a ranked opportunity list");
+    expect(html).toContain("Up to 40 recent SEC Form 8-K filings");
+    expect(html).toContain("8-K/A amendments are excluded");
+    expect(html).toContain("not a complete issuer universe, a small-cap screen, or a ranked list");
+    expect(html).toContain("No filing text is sent to Luna or saved here");
+    expect(html).not.toContain("Saved filing tasks");
     expect(html).toContain("Reading the saved SEC feed");
     expect(html).not.toContain("Example Issuer");
     expect(html).not.toContain("Open SEC filing page");
@@ -177,10 +183,10 @@ describe("first-run SEC filing browse surface", () => {
     expect(shouldOfferSavedArchiveSearch("empty", true)).toBe(false);
     expect(shouldOfferSavedArchiveSearch("unknown", true)).toBe(false);
     expect(shouldOfferSavedArchiveSearch("available", false)).toBe(false);
-    expect(deskFallbackMessage("unavailable", false, null, "empty")).toContain("no eligible saved evidence to search");
-    expect(secInboxEmptyMessage("", "listing_unverified", 0)).toContain("Read the verification notice for the available next step");
+    expect(deskFallbackMessage("unavailable", false, null, "empty")).toContain("No saved SEC filings are available to search yet");
+    expect(secInboxEmptyMessage("", "listing_unverified", 0)).toContain("current exchange listing can be confirmed");
     expect(deskFallbackMessage("listing_unverified", false, "2 SEC filings were withheld", "empty"))
-      .toContain("2 SEC filings were withheld");
+      .toContain("2 SEC filings are withheld");
     expect(deskFallbackMessage("listing_unverified", false, "Listing check is paused; approve both sources", "empty"))
       .not.toContain("Activate Recent Filings");
   });
@@ -192,51 +198,50 @@ describe("first-run SEC filing browse surface", () => {
       const html = renderToStaticMarkup(createElement(SecFilingsRecoveryActions, {
         archiveStatus, onBrowseSavedSources, onOpenOperations,
       }));
-      expect(html).toContain("Open Sources &amp; operations");
+      expect(html).not.toContain("Open Data connections");
       expect(html).not.toContain("Search saved archive");
     }
     const available = renderToStaticMarkup(createElement(SecFilingsRecoveryActions, {
       archiveStatus: "available", onBrowseSavedSources, onOpenOperations,
     }));
     expect(available).toContain("Search saved archive");
-    expect(available).not.toContain("Open Sources");
+    expect(available).not.toContain("Open Data connections");
     const stale = renderToStaticMarkup(createElement(SecFilingsRecoveryActions, {
       archiveStatus: "available", onBrowseSavedSources, onOpenOperations, showOperations: true,
     }));
     expect(stale).toContain("Search saved archive");
-    expect(stale).toContain("Open Sources &amp; operations");
+    expect(stale).toContain("View update details");
     const retainedNotConfiguredFallback = shouldShowDeskFallback("not_configured", 38, false, true)
       ? renderToStaticMarkup(createElement(SecFilingsRecoveryActions, {
         archiveStatus: "available", onBrowseSavedSources, onOpenOperations, showOperations: true,
       })) : "";
-    expect(retainedNotConfiguredFallback).toContain("Open Sources &amp; operations");
+    expect(retainedNotConfiguredFallback).toContain("View update details");
   });
 
-  it("distinguishes an unsupported filing feed from an unavailable Hub", () => {
+  it("distinguishes an unsupported filing feed from unavailable SEC source status", () => {
     const unsupported = deskFallbackMessage("unsupported", false, "The saved Hub receipt does not permit this display.", "available");
-    expect(unsupported).toContain("The saved Hub receipt does not permit this display.");
-    expect(unsupported).toContain("Configure the SEC 8-K feed in the Hub, then check again.");
-    expect(unsupported).toContain("Search the saved archive for historical leads");
+    expect(unsupported).toContain("Recent SEC filings are unavailable in this view right now.");
+    expect(unsupported).not.toContain("Hub receipt");
+    expect(unsupported).not.toContain("Configure the SEC 8-K feed");
+    expect(unsupported).toContain("Search saved filings for historical leads");
     expect(unsupported).toContain("not current coverage");
     expect(unsupported).not.toContain("cannot reach");
-    expect(deskFallbackMessage("unsupported", false)).toContain("not supported by the current Hub configuration");
+    expect(deskFallbackMessage("unsupported", false)).not.toMatch(/Hub|configuration/i);
 
     const blocked = deskFallbackMessage("unavailable", false, "The Hub needs its SEC contact User-Agent configured before collection can start.", "available");
-    expect(blocked).toContain("SEC contact User-Agent configured");
+    expect(blocked).not.toMatch(/User-Agent|configured|Hub/i);
     expect(blocked).not.toContain("cannot reach its registered local Public Data Hub");
 
     const paused = deskFallbackMessage("stale", false, null, "empty");
-    expect(paused).toContain("saved SEC snapshot is stale");
-    expect(paused).toContain("Refresh is paused for this Desk");
-    expect(paused).toContain("Open Sources & operations");
+    expect(paused).toContain("saved SEC filing list is out of date");
+    expect(paused).not.toMatch(/Refresh is paused|Data connections|source gate/i);
 
     const unavailable = deskFallbackMessage("unavailable", false, null, "available");
-    expect(unavailable).toContain("cannot reach its registered local Public Data Hub");
-    expect(unavailable).toContain("Check that Hub service, then choose Check Hub again");
-    expect(unavailable).toContain("Search the saved archive for historical leads");
+    expect(unavailable).toContain("filing status could not be read");
+    expect(unavailable).toContain("Search saved filings for historical leads");
     expect(unavailable).toContain("not current coverage");
     expect(unavailable).not.toContain("source allowlists");
-    expect(deskFallbackMessage("failed", true, null, "empty")).toContain("could not confirm its registered local Public Data Hub status");
+    expect(deskFallbackMessage("failed", true, null, "empty")).toContain("filing status could not be read");
   });
 
   it("keeps the exact last accepted filing receipt and clocks visible during transient refresh states", () => {
@@ -255,14 +260,14 @@ describe("first-run SEC filing browse surface", () => {
       jobStatus: "queued", canActivate: true, nextRefreshAt: null, message: "Refresh started.",
     };
 
-    expect(retainLastAcceptedFilings(accepted, pending)).toMatchObject({
+    expect(retainLastAcceptedFilings(accepted, pending, Date.parse("2026-10-08T23:45:00.000Z"))).toMatchObject({
       state: "pending", rows: accepted.rows, receiptId: "receipt-1", retrievedAt: accepted.retrievedAt,
       feedUpdatedAt: accepted.feedUpdatedAt, freshness: "stale", message: "Refresh started.",
     });
-    expect(retainLastAcceptedFilings(accepted, { ...pending, state: "rate_limited" }).rows).toEqual(accepted.rows);
-    expect(retainLastAcceptedFilings(accepted, { ...pending, state: "failed" }).rows).toEqual(accepted.rows);
+    expect(retainLastAcceptedFilings(accepted, { ...pending, state: "rate_limited" }, Date.parse("2026-10-08T23:45:00.000Z")).rows).toEqual(accepted.rows);
+    expect(retainLastAcceptedFilings(accepted, { ...pending, state: "failed" }, Date.parse("2026-10-08T23:45:00.000Z")).rows).toEqual(accepted.rows);
     for (const state of ["unsupported", "unavailable", "not_configured"] as const) {
-      expect(retainLastAcceptedFilings(accepted, { ...pending, state, message: "Hub configuration needs attention." })).toMatchObject({
+      expect(retainLastAcceptedFilings(accepted, { ...pending, state, message: "Hub configuration needs attention." }, Date.parse("2026-10-08T23:45:00.000Z"))).toMatchObject({
         state, rows: accepted.rows, receiptId: "receipt-1", retrievedAt: accepted.retrievedAt,
         feedUpdatedAt: accepted.feedUpdatedAt, freshness: "stale", message: "Hub configuration needs attention.",
       });
@@ -293,6 +298,7 @@ describe("first-run SEC filing browse surface", () => {
       (next) => { view = typeof next === "function" ? next(view) : next; },
       (failed) => { loadFailed = typeof failed === "function" ? failed(loadFailed) : failed; },
       (active) => { loading = typeof active === "function" ? active(loading) : active; },
+      undefined, undefined, Date.parse("2026-10-08T23:45:00.000Z"),
     );
 
     expect(view).toMatchObject({
@@ -308,9 +314,10 @@ describe("first-run SEC filing browse surface", () => {
       (next) => { view = typeof next === "function" ? next(view) : next; },
       (failed) => { loadFailed = typeof failed === "function" ? failed(loadFailed) : failed; },
       (active) => { loading = typeof active === "function" ? active(loading) : active; },
+      undefined, undefined, Date.parse("2026-10-08T23:45:00.000Z"),
     );
     expect(view?.freshness).toBe("stale");
-    expect(view && secInboxStatusLabel(view)).toContain("Source update is stale");
+    expect(view && secInboxStatusLabel(view)).toContain("Source may be out of date");
   });
 
   it("downgrades unverified freshness and retains the last accepted receipt after a failed poll", async () => {
@@ -333,13 +340,14 @@ describe("first-run SEC filing browse surface", () => {
       (next) => { view = typeof next === "function" ? next(view) : next; },
       (failed) => { loadFailed = typeof failed === "function" ? failed(loadFailed) : failed; },
       (active) => { loading = typeof active === "function" ? active(loading) : active; },
+      undefined, undefined, Date.parse("2026-10-08T23:45:00.000Z"),
     );
 
     expect(view).toMatchObject({
       state: "failed", rows: accepted.rows, receiptId: "receipt-1", retrievedAt: accepted.retrievedAt,
       feedUpdatedAt: accepted.feedUpdatedAt, freshness: "stale",
     });
-    expect(view && secInboxStatusLabel(view)).toContain("Source update is stale");
+    expect(view && secInboxStatusLabel(view)).toContain("Source may be out of date");
     expect(loadFailed).toBe(true);
     expect(loading).toBe(false);
   });
@@ -386,17 +394,17 @@ describe("first-run SEC filing browse surface", () => {
 
   it("labels source observation freshness separately from saved receipt delivery", () => {
     const observedAt = Date.parse("2026-10-08T11:00:00.000Z");
-    expect(secFreshnessLabel("current")).toBe("Source freshness current");
-    expect(secFreshnessLabel("stale")).toBe("Source update is stale");
-    expect(secFreshnessLabel("unknown")).toBe("Source freshness unknown");
+    expect(secFreshnessLabel("current")).toBe("Source updated recently");
+    expect(secFreshnessLabel("stale")).toBe("Source may be out of date");
+    expect(secFreshnessLabel("unknown")).toBe("Source update time unavailable");
     const delivered: SecFilingsInboxView = {
       state: "ready", freshness: "unknown", rows: [], receiptId: "receipt-1",
       retrievedAt: "2026-10-05T12:00:00.000Z", feedUpdatedAt: new Date(observedAt).toISOString(), jobStatus: "succeeded",
       canActivate: true, nextRefreshAt: null, message: null,
     };
-    expect(secInboxStatusLabel({ ...delivered, feedUpdatedAt: null }, observedAt)).toBe("Saved feed available · Source freshness unknown");
-    expect(secInboxStatusLabel(delivered, observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS + 1)).toBe("Saved feed available · Source update is stale");
-    expect(secInboxStatusLabel(delivered, observedAt + 1)).toBe("Saved feed available · Source freshness current");
+    expect(secInboxStatusLabel({ ...delivered, feedUpdatedAt: null }, observedAt)).toBe("Filing updates available · Source update time unavailable");
+    expect(secInboxStatusLabel(delivered, observedAt + SEC_FILINGS_FRESHNESS_BUDGET_MS + 1)).toBe("Filing updates available · Source may be out of date");
+    expect(secInboxStatusLabel(delivered, observedAt + 1)).toBe("Filing updates available · Source updated recently");
   });
 
   it("renders exact filing clocks, item labels, excerpt provenance, and partial state without an AI summary", () => {

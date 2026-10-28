@@ -3,13 +3,12 @@ import { ExternalRequestPausedError } from "./external-request-gate.js";
 import { z } from "zod";
 import { EVENT_TYPES, RUBRIC, TAKEAWAY_KEYS, type ChoiceQuestion } from "./rubric.js";
 import type { CategoricalClassification } from "./types.js";
+import { boundModelProviderInput } from "../shared/model-provider-input.js";
 
 export const OPENAI_MODEL = "gpt-6-luna";
 export const OPENAI_SERVICE_TIER = "default" as const;
 export const OPENAI_PROMPT_VERSION = "openai-luna-classification/1";
 export const OPENAI_SCHEMA_VERSION = "openai-luna-classification-json/1";
-const MAX_TITLE_CHARS = 500;
-const MAX_EXCERPT_CHARS = 4_000;
 const MAX_OUTPUT_TOKENS = 700;
 const MAX_SUMMARY_CHARS = 500;
 const MAX_SUPPORTING_EXCERPT_CHARS = 240;
@@ -17,7 +16,7 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 export const OPENAI_PRICING = Object.freeze({ inputPerMillionUsd: 0.10, cachedInputPerMillionUsd: 0.01, cacheWritePerMillionUsd: 0.125, outputPerMillionUsd: 0.50 });
 
-const classificationJsonSchema = {
+export const CATEGORICAL_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   required: ["sentiment", "event_type", "takeaway", "about", "material", "investor_relevant", "evidence_sufficient", "summary", "supporting_excerpt"],
@@ -34,7 +33,7 @@ const classificationJsonSchema = {
   },
 } as const;
 
-export const OPENAI_SCHEMA_SHA256 = createHash("sha256").update(JSON.stringify(classificationJsonSchema)).digest("hex");
+export const OPENAI_SCHEMA_SHA256 = createHash("sha256").update(JSON.stringify(CATEGORICAL_JSON_SCHEMA)).digest("hex");
 const criteria = (key: string) => (RUBRIC[key] as ChoiceQuestion).criteria;
 export const OPENAI_PROMPT = [
   "Classify one source item for the named public company using only the supplied company and source fields.",
@@ -96,6 +95,10 @@ export interface OpenAIClassifierResult {
     "provider" | "disposition" | "classifiedAt" | "latencyMs" | "estimatedCostUsd" | "responseId" | "responseSha256" | "inputTokens" | "cachedInputTokens" | "cacheWriteInputTokens" | "outputTokens" | "reasoningTokens" | "totalTokens" | "modelRequested" | "modelReturned" | "serviceTierRequested" | "serviceTier" | "promptVersion" | "promptSha256" | "profileSha256" | "schemaVersion" | "schemaSha256">;
   modelReturned: string;
   serviceTier: string | null;
+  /** The actual account/billing path, independent of model lineage. */
+  accountingRoute?: "api_key" | "chatgpt_plan";
+  /** Present only for an actual ChatGPT-plan Responses completion. */
+  profileSha256?: string;
   responseId: string;
   responseSha256: string;
   usage: OpenAIUsage;
@@ -116,6 +119,11 @@ export class OpenAIClassifierError extends Error {
     readonly retryAfterMs: number | null = null,
     readonly returnedModel: string | null = null,
     readonly serviceTier: string | null = null,
+    readonly requestDispatched = true,
+    readonly providerCode: string | null = null,
+    readonly parameter: string | null = null,
+    readonly requestId: string | null = null,
+    readonly failureKind: "usage_limit" | "account_not_eligible" | "authorization" | "unsupported_capability" | "unsupported_route" | "temporary_unavailable" | "provider_rejected" | "unknown" | null = null,
   ) {
     super(message);
     this.name = "OpenAIClassifierError";
@@ -130,16 +138,12 @@ function parseRetryAfter(raw: string | null): number | null {
   return Number.isFinite(at) ? Math.max(0, Math.min(3_600_000, at - Date.now())) : null;
 }
 
+export function boundClassificationInput(input: OpenAIClassificationInput): OpenAIClassificationInput {
+  return boundModelProviderInput(input);
+}
+
 export function prepareOpenAIRequest(input: OpenAIClassificationInput, model = OPENAI_MODEL): PreparedOpenAIRequest {
-  const bounded: OpenAIClassificationInput = {
-    company: { name: input.company.name.slice(0, 160), ticker: input.company.ticker.slice(0, 24), sector: input.company.sector.slice(0, 120) },
-    source: {
-      collector: input.source.collector.slice(0, 48),
-      publisher: input.source.publisher.slice(0, 120),
-      title: input.source.title.slice(0, MAX_TITLE_CHARS),
-      excerpt: input.source.excerpt.slice(0, MAX_EXCERPT_CHARS),
-    },
-  };
+  const bounded = boundClassificationInput(input);
   const body = JSON.stringify({
     model,
     service_tier: OPENAI_SERVICE_TIER,
@@ -150,7 +154,7 @@ export function prepareOpenAIRequest(input: OpenAIClassificationInput, model = O
       { role: "system", content: OPENAI_PROMPT },
       { role: "user", content: JSON.stringify(bounded) },
     ],
-    text: { format: { type: "json_schema", name: "investor_news_classification_v1", strict: true, schema: classificationJsonSchema } },
+    text: { format: { type: "json_schema", name: "investor_news_classification_v1", strict: true, schema: CATEGORICAL_JSON_SCHEMA } },
   });
   const bytes = Buffer.from(body, "utf8");
   return Object.freeze({
@@ -219,6 +223,37 @@ function extractOutputText(raw: Record<string, unknown>): { text: string | null;
     }
   }
   return { text, refusal };
+}
+
+/** Validate model-produced categories and quotations against the exact source sent. */
+export function validateCategoricalOutput(
+  raw: Record<string, unknown>,
+  request: PreparedOpenAIRequest,
+): OpenAIClassifierResult["classification"] {
+  const extracted = extractOutputText(raw);
+  if (extracted.refusal) throw new Error("OpenAI refused the classification");
+  const parsedJson = extracted.text == null ? null : (() => { try { return JSON.parse(extracted.text) as unknown; } catch { return null; } })();
+  const input = JSON.parse(JSON.parse(request.body).input[1].content) as OpenAIClassificationInput;
+  return validateCategoricalPayload(parsedJson, input);
+}
+
+/** Pure shared validator for provider outputs, including exact source quotation checks. */
+export function validateCategoricalPayload(
+  raw: unknown,
+  input: OpenAIClassificationInput,
+): OpenAIClassifierResult["classification"] {
+  const parsed = outputSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("Provider response failed classification schema validation");
+  const excerpt = parsed.data.supporting_excerpt;
+  if (excerpt != null && (!excerpt.trim() || !(input.source.title.includes(excerpt) || input.source.excerpt.includes(excerpt))))
+    throw new Error("Supporting excerpt does not exactly match supplied source text");
+  if (parsed.data.evidence_sufficient && (!excerpt || !parsed.data.summary || !parsed.data.sentiment || !parsed.data.event_type || !parsed.data.takeaway))
+    throw new Error("Provider marked evidence sufficient without a supported summary and quotation");
+  return {
+    sentiment: parsed.data.sentiment, eventType: parsed.data.event_type, takeaway: parsed.data.takeaway,
+    about: parsed.data.about, material: parsed.data.material, investorRelevant: parsed.data.investor_relevant,
+    evidenceSufficient: parsed.data.evidence_sufficient, summary: parsed.data.summary, supportingExcerpt: excerpt,
+  };
 }
 
 export class OpenAIClassifier {
@@ -298,25 +333,16 @@ export class OpenAIClassifier {
       throw new OpenAIClassifierError("OpenAI response model or service tier did not match the prepared Luna profile", response.status, false, false,
         id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
     }
-    const extracted = extractOutputText(node);
-    if (extracted.refusal) throw new OpenAIClassifierError("OpenAI refused the classification", response.status, false, false, id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
-    const parsedJson = extracted.text == null ? null : (() => { try { return JSON.parse(extracted.text) as unknown; } catch { return null; } })();
-    const parsed = outputSchema.safeParse(parsedJson);
-    if (!parsed.success || !id || !usage || returnedModel == null) throw new OpenAIClassifierError("OpenAI response failed classification, model, or usage validation", response.status, false, false, id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
-    const input = JSON.parse(JSON.parse(request.body).input[1].content) as OpenAIClassificationInput;
-    const excerpt = parsed.data.supporting_excerpt;
-    if (excerpt != null && (!excerpt.trim() || !(input.source.title.includes(excerpt) || input.source.excerpt.includes(excerpt)))) {
-      throw new OpenAIClassifierError("OpenAI supporting excerpt does not exactly match supplied source text", response.status, false, false, id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
+    let classification: OpenAIClassifierResult["classification"];
+    try { classification = validateCategoricalOutput(node, request); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "OpenAI response failed classification validation";
+      throw new OpenAIClassifierError(message, response.status, false, false, id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
     }
-    if (parsed.data.evidence_sufficient && (!excerpt || !parsed.data.summary || !parsed.data.sentiment || !parsed.data.event_type || !parsed.data.takeaway)) {
-      throw new OpenAIClassifierError("OpenAI marked evidence sufficient without a supported summary and quotation", response.status, false, false, id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
-    }
+    if (!id || !usage || returnedModel == null) throw new OpenAIClassifierError("OpenAI response failed classification, model, or usage validation", response.status, false, false, id, digest, usage, Date.now() - started, null, returnedModel, serviceTier);
     return {
-      classification: {
-        sentiment: parsed.data.sentiment, eventType: parsed.data.event_type, takeaway: parsed.data.takeaway,
-        about: parsed.data.about, material: parsed.data.material, investorRelevant: parsed.data.investor_relevant, evidenceSufficient: parsed.data.evidence_sufficient,
-        summary: parsed.data.summary, supportingExcerpt: excerpt,
-      },
+      classification,
+      accountingRoute: "api_key",
       modelReturned: returnedModel,
       serviceTier,
       responseId: id, responseSha256: digest, usage, latencyMs: Date.now() - started, httpStatus: response.status,

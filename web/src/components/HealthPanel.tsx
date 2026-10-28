@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getJSON, type AlertDeliveryHistoryPage, type AlertDeliveryRecord, type HealthDTO } from "../lib/api.js";
-import { operationsAttentionCount } from "../lib/operations-attention.js";
+import { operationsAttentionCount, operationsStatusSummary } from "../lib/operations-attention.js";
 import { fmtCost, shortTime, timeAgo } from "../lib/format.js";
 
 function Row({ label, value, wrap = false }: { label: string; value: string; wrap?: boolean }) {
@@ -45,7 +45,9 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
           : `${sourceApproval.approvedCollectors.length} approved source flag(s) · ${sourceApproval.approvedCollectors.join(", ") || "none"}`}
         wrap
       />
-      <Row label={lunaSelected ? "OpenAI account-use flag" : "Jev account-use flag"} value={(lunaSelected ? sourceApproval.openaiAccountUseApproved : sourceApproval.typesafeAccountUseApproved) ? "set · operator attestation" : "missing · dispatch blocked"} wrap />
+      <Row label={lunaSelected && health.health.classifier?.accountingRoute === "chatgpt_plan" ? "ChatGPT plan connection" : lunaSelected ? "OpenAI account-use flag" : "Jev account-use flag"} value={lunaSelected && health.health.classifier?.accountingRoute === "chatgpt_plan"
+        ? health.health.classifier.configured ? "connected through OpenAI sign-in" : "not connected · classification paused"
+        : (lunaSelected ? sourceApproval.openaiAccountUseApproved : sourceApproval.typesafeAccountUseApproved) ? "set · operator attestation" : "missing · dispatch blocked"} wrap />
       <Row label="engine" value={`${classifier.model} · ${health.externalRequestsEnabled ? classifier.enabled ? "enabled" : "blocked" : "paused"}`} />
       <div className="mt-3 border-t border-white/[0.05] pt-2.5">
         <Row label="database capacity" value={health.storage.state.replaceAll("_", " ")} />
@@ -68,7 +70,15 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
       </div>
       <Row label="historical Jev judgments today" value={String(health.usage.judgedItems)} />
       <Row label="Jev input estimate · identified sources" value={fmtCost(health.usage.estimatedInputCostUsd)} />
-      {health.classifierUsage && (
+      {health.health.classifier?.accountingRoute === "chatgpt_plan" ? (
+        <>
+          <Row label="ChatGPT-plan requests sent today" value={String(health.chatgptPlanUsage?.requests ?? 0)} />
+          <Row label="Local request / byte limit" value={`${health.chatgptPlanLimits?.dailyRequestLimit ?? 0} requests · ${bytes(health.chatgptPlanLimits?.dailyByteLimit ?? null)}`} wrap />
+          <Row label="Sent request data today" value={bytes(health.chatgptPlanUsage?.requestBytes ?? null)} />
+          <Row label="Luna unknown outcomes" value={String(health.chatgptPlanUsage?.unknownOutcomes ?? 0)} />
+          <p className="mt-1 text-[9.5px] text-white/40">These are local request controls. OpenAI account limits, included usage, and remaining allowance are not visible here.</p>
+        </>
+      ) : health.classifierUsage && (
         <>
           <Row label="Luna dispatched / reserved today" value={`${health.classifierUsage.requests} / ${health.classifierUsage.reservedRequests}`} />
           <Row label="Luna cost estimate / reserved" value={`${health.classifierUsage.estimatedCostUsd == null ? "unknown" : fmtCost(health.classifierUsage.estimatedCostUsd)} / ${fmtCost(health.classifierUsage.reservedCostUsd)}`} />
@@ -123,7 +133,7 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
                 : "text-amber-300/80";
           const name = delivery.collector.replaceAll("_", " ");
           const evidenceLabel = delivery.latestObservationAt == null
-            ? delivery.latestObservationBasis === "unknown" || delivery.latestObservationBasis === "legacy_unknown" ? "source time unknown" : "no stored item"
+            ? delivery.latestObservationBasis === "unknown" || delivery.latestObservationBasis === "legacy_unknown" ? "source time unknown" : "source time unavailable"
             : `${delivery.latestObservationBasis === "provider_observed" ? "seen" : "published"} ${timeAgo(delivery.latestObservationAt)}`;
           const recordedOutcome = recordedDeliveryOutcome(delivery.latestResult);
           return (
@@ -138,7 +148,7 @@ export function HealthPanel({ health }: { health: HealthDTO | null }) {
                 <span>recent coverage {delivery.coverageCount}/{delivery.targetCount} companies</span>
                 <span>
                   {delivery.latestItemCount == null ? "no response" : `${delivery.latestItemCount} provider rows`}
-                  {delivery.latestIngestionRequired && ` · ingestion ${delivery.latestIngestionState ?? "not started"} ${delivery.latestIngestionProcessedCount ?? 0}/${delivery.latestIngestionExpectedCount ?? 0}`}
+                  {delivery.latestIngestionRequired && ` · ingestion ${delivery.latestIngestionState ?? "not started"} ${delivery.latestIngestionProcessedCount ?? 0}/${delivery.latestIngestionExpectedCount ?? 0} · ${delivery.latestIngestionInsertedCount ?? "?"} saved`}
                 </span>
               </div>
               {recordedOutcome && (
@@ -188,8 +198,7 @@ export function DeskHealthDisclosure({ health, loadState = "loading" }: { health
     </p>
   );
   const operationalIssues = operationsAttentionCount(health);
-  const mode = health.storage.state !== "ready" ? "storage paused · saved data only"
-    : health.externalRequestsEnabled ? "external requests enabled" : "saved data only";
+  const mode = operationsStatusSummary(health);
   return (
     <>
     {loadState === "failed" && <p role="status" aria-live="polite" className="mb-2 px-1 text-[10.5px] text-amber-200/80">Operations refresh failed. Showing the last received source, classifier, and webhook status.</p>}

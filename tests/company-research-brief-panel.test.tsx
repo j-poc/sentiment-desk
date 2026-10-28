@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanyResearchBriefResponse, SavedCompanyResearchDecision } from "../shared/company-research-brief.js";
 import type { PersistedFundamentalFact } from "../shared/company-fundamentals.js";
+import { ApiRequestError } from "../web/src/lib/api.js";
 import { CompanyResearchBriefPanel } from "../web/src/components/CompanyResearchBriefPanel.js";
 
 const api = vi.hoisted(() => ({
@@ -12,7 +13,7 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("../web/src/lib/api.js", () => ({
-  ApiRequestError: class ApiRequestError extends Error { status: number; constructor(message: string, status: number) { super(message); this.status = status; } },
+  ApiRequestError: class ApiRequestError extends Error { status: number; code: string; constructor(status: number, code: string) { super(code); this.status = status; this.code = code; } },
   getCompanyResearchBrief: api.getBrief,
   saveCompanyResearchDecision: api.saveDecision,
 }));
@@ -36,6 +37,7 @@ function brief(companyId: string, name: string, ticker: string, evidenceTitle: s
         snippet: "Saved source excerpt.", status: "eligible", collector: "google_news_rss", timeBasis: "publisher_declared",
         deliveryCompletedAt: AS_OF, ingestionCompletedAt: AS_OF,
       }],
+      researchFollowUp: { state: "undetermined", leads: [], explanation: "The saved snapshot does not contain a validated comparable metric difference." },
       nextResearchQuestion: null,
       missingEvidenceReason: null,
       interpretationLimits: [],
@@ -51,6 +53,11 @@ function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+function setTextAreaValue(element: HTMLTextAreaElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function secFact(id: string, startDate: string, endDate: string, value: string): PersistedFundamentalFact {
@@ -145,10 +152,45 @@ describe("selected-company research brief panel", () => {
     const fieldset = container.querySelector("fieldset");
     const rationale = container.querySelector<HTMLTextAreaElement>("textarea");
     const save = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Save decision"));
-    expect(container.textContent).toContain("Free at least 1 GiB on the data volume");
+    expect(container.textContent).toContain("Decision saving is temporarily unavailable");
+    expect(container.textContent).not.toContain("Free at least 1 GiB on the data volume");
     expect(fieldset?.disabled).toBe(false);
     expect(rationale?.disabled).toBe(false);
     expect(save?.disabled).toBe(true);
+  });
+
+  it("rechecks saving availability without replacing the unsaved decision draft", async () => {
+    const initial = brief("apple", "Apple", "AAPL", "APPLE_ONLY_SOURCE_EVIDENCE");
+    const recovered = { ...initial, decisionStorageAvailable: true };
+    const availability = deferred<CompanyResearchBriefResponse>();
+    api.getBrief.mockResolvedValueOnce(initial).mockReturnValueOnce(availability.promise);
+    api.saveDecision.mockRejectedValueOnce(new ApiRequestError(503, "company_research_decision_storage_paused"));
+
+    await act(async () => {
+      root.render(<CompanyResearchBriefPanel companyId="apple" companyName="Apple" ticker="AAPL" />);
+      await Promise.resolve();
+    });
+    const rationale = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    setTextAreaValue(rationale, "Review the order trends before making a decision.");
+    const form = container.querySelector<HTMLFormElement>("form.crb-decision")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const check = [...container.querySelectorAll("button")].find((button) => button.textContent === "Check saving availability")!;
+    expect(container.textContent).toContain("Decision saving is temporarily unavailable");
+    expect(rationale.value).toBe("Review the order trends before making a decision.");
+
+    await act(async () => {
+      check.click();
+      availability.resolve(recovered);
+      await availability.promise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Saving is available again. Your draft is unchanged.");
+    expect(rationale.value).toBe("Review the order trends before making a decision.");
+    const save = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Save decision")!;
+    expect(save.disabled).toBe(false);
   });
 
   it("shows both exact question facts even when a newer same-metric row hides the current fact from latest-per-metric", async () => {
@@ -167,6 +209,14 @@ describe("selected-company research brief panel", () => {
       metric: "revenue", currentFactId: current.id, priorFactId: prior.id,
       question: "What explains the reported revenue difference?",
     };
+    data.brief.researchFollowUp = {
+      state: "indicated",
+      explanation: "One comparable SEC-reported measure has different reported values.",
+      leads: [{ metric: "revenue", direction: "reported_increase", delta: "25126000000", percentChange: null,
+        currentFactId: current.id, priorFactId: prior.id, currentPeriodEnd: current.endDate, priorPeriodEnd: prior.endDate,
+        currentAccession: current.accession, priorAccession: prior.accession,
+        question: "What filing explains the reported revenue increase?" }],
+    };
     api.getBrief.mockResolvedValue(data);
 
     await act(async () => {
@@ -179,7 +229,7 @@ describe("selected-company research brief panel", () => {
     expect(pair?.textContent).toContain("391,035,000,000 USD");
     expect(pair?.textContent).toContain("416,161,000,000 USD");
     expect(pair?.textContent).toContain("2023-10-01–2024-09-28");
-    expect(pair?.textContent).toContain("annual duration");
+    expect(pair?.textContent).toContain("Annual duration · 2023-10-01–2024-09-28");
     expect(pair?.textContent).toContain("Accepted");
     expect(pair?.textContent).toContain("Retrieved");
     expect(pair?.textContent).toContain("Reported arithmetic difference: 25126000000 USD · percentage change is withheld because the SEC source precision metadata is unavailable.");
@@ -191,6 +241,13 @@ describe("selected-company research brief panel", () => {
     expect(pair?.textContent).not.toContain("430000000000 USD");
     expect(container.querySelector(".crb-facts")?.textContent).toContain("430,000,000,000 USD");
     expect(container.querySelector(".crb-review-progress")?.textContent).toContain("0 support · 0 challenge · 0 context · 1 not reviewed");
+    const followUp = container.querySelector<HTMLElement>("[aria-label='Fundamental research follow-up']");
+    expect(followUp?.textContent).toContain("1 reported change to review");
+    expect(followUp?.textContent).toContain("25126000000 USD");
+    expect(followUp?.textContent).toContain("reported revenue increase");
+    expect(followUp?.textContent).toContain("Annual duration · 2023-10-01–2024-09-28 → 2024-09-29–2025-09-27");
+    expect(followUp?.querySelectorAll("a[href^='https://www.sec.gov/Archives/edgar/data/']")).toHaveLength(2);
+    expect(followUp?.textContent).toContain("does not mean the change is favorable, material, recurring, or investment-worthy");
   });
 
   it("puts the decision action before collapsed financial and public-source manifests", async () => {

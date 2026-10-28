@@ -167,7 +167,15 @@ export class StorageCapacity {
       return { ...result, state: "checkpoint_blocked", canStartExternalWork: false, reason: "A WAL checkpoint could not complete; close long-running database readers and retry." };
     }
     if (this.readOnlyReason) {
-      return { ...result, state: this.readOnlyState, canStartExternalWork: false, writesAllowed: false, reason: this.readOnlyReason };
+      return {
+        ...result,
+        state: this.readOnlyState,
+        canStartExternalWork: false,
+        writesAllowed: false,
+        reason: this.readOnlyState === "disk_pressure"
+          ? "Desk started in read-only mode after a storage check failed; restart to recheck capacity before resuming collection and saves."
+          : this.readOnlyReason,
+      };
     }
     return result;
   }

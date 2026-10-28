@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { TestDesk as Desk } from "./test-desk.js";
-import { StorageCapacityError, type StorageLimits } from "../server/storage-capacity.js";
+import { StorageCapacity, StorageCapacityError, type StorageLimits } from "../server/storage-capacity.js";
 import { HealthTracker } from "../server/health.js";
 import { startRssPoller } from "../server/schedule.js";
 import { installExternalRequestGate } from "../server/external-request-gate.js";
@@ -51,6 +51,22 @@ afterEach(() => {
 });
 
 describe("SQLite storage capacity boundary", () => {
+  it("requires restart to recheck a startup disk-pressure pause without claiming capacity recovered", () => {
+    const { path } = temporaryDatabase();
+    const database = new DatabaseSync(path);
+    const storage = new StorageCapacity(path, testStorageLimits);
+    storage.configurePageLimit(database);
+    storage.setReadOnlyReason("startup disk pressure", "disk_pressure");
+
+    expect(storage.status(database, true)).toMatchObject({
+      state: "disk_pressure",
+      canStartExternalWork: false,
+      writesAllowed: false,
+      reason: "Desk started in read-only mode after a storage check failed; restart to recheck capacity before resuming collection and saves.",
+    });
+    database.close();
+  });
+
   it("initializes a fresh database without reserving its entire future size ceiling", () => {
     const largeDatabaseLimits: StorageLimits = {
       maxDatabaseBytes: 8 * 1024 ** 3,

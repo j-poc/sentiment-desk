@@ -34,6 +34,20 @@ export interface CompanyResearchBriefInput {
   coverage: { sec: "complete" | "partial" | "empty"; publicObservations: "complete" | "partial" | "empty"; reasons: string[] };
 }
 
+export interface FundamentalChangeLead {
+  metric: FundamentalMetricKey;
+  direction: "reported_increase" | "reported_decrease";
+  delta: string;
+  percentChange: string | null;
+  currentFactId: string;
+  priorFactId: string;
+  currentPeriodEnd: string;
+  priorPeriodEnd: string;
+  currentAccession: string;
+  priorAccession: string;
+  question: string;
+}
+
 export interface CompanyResearchBrief {
   schemaVersion: 1;
   company: ResearchBriefCompany;
@@ -43,6 +57,8 @@ export interface CompanyResearchBrief {
   facts: PersistedFundamentalFact[];
   comparisons: FundamentalComparison[];
   observations: ResearchBriefObservation[];
+  /** Follow-up leads from source-validated SEC metric differences; never a merit or materiality score. */
+  researchFollowUp: { state: "indicated" | "undetermined"; leads: FundamentalChangeLead[]; explanation: string };
   nextResearchQuestion: { question: string; metric: FundamentalMetricKey; currentFactId: string; priorFactId: string } | null;
   missingEvidenceReason: string | null;
   interpretationLimits: string[];

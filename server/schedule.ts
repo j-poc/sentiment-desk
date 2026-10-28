@@ -114,6 +114,7 @@ export function startRssPoller(deps: {
                     tier: item.tier,
                     kind: "rss",
                     ticker: company.ticker,
+                    companyName: company.name,
                   })
                 ) {
                   dropped += 1;
@@ -334,6 +335,7 @@ export function startXPoller(deps: {
                   tier: "social",
                   kind: "x",
                   ticker: company.ticker,
+                  companyName: company.name,
                 })
               ) {
                 itemProcessed();
@@ -716,6 +718,7 @@ export function startGdeltPoller(deps: {
                   tier: tierForHost(a.url),
                   kind: "rss",
                   ticker: company.ticker,
+                  companyName: company.name,
                 })
               ) {
                 dropped += 1;
@@ -863,6 +866,7 @@ export function startFinnhubPoller(deps: {
                 tier: tierForHost(n.url),
                 kind: "finnhub",
                 ticker: company.ticker,
+                companyName: company.name,
               })
             ) {
               itemProcessed();
@@ -1046,6 +1050,7 @@ export function startFinnhubPoller(deps: {
                   tier: tierForHost(n.url),
                   kind: "finnhub",
                   ticker: company.ticker,
+                  companyName: company.name,
                 })
               ) {
                 dropped += 1;
@@ -1222,6 +1227,7 @@ export function startRedditPoller(deps: {
                   tier: "social",
                   kind: "reddit",
                   ticker: company.ticker,
+                  companyName: company.name,
                 })
               ) {
                 dropped += 1;

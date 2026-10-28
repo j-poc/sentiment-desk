@@ -27,9 +27,10 @@ function resultForWindow(hours: number, throughMs: number): CategoricalTrendResu
   }
   return {
     companyId: "acme", windowHours: hours, fromMs, throughMs, bucketMs: sourceBucketMs,
-    timeBasis: "classification_available_at", countBasis: "immutable_source_observation",
+    timeBasis: "validated_source_time", countBasis: "immutable_source_observation",
     snapshotGeneration: "00000000-0000-4000-8000-000000000001", snapshotKey: "snapshot",
-    points, counts, eligibleObservationCount: counts.total, candidateClassificationCount: counts.total,
+    points, counts, eligibleObservationCount: counts.total, plottedObservationCount: counts.total,
+    untimedObservationCount: 0, candidateClassificationCount: counts.total,
     withheldInvalidCount: 0, latestClassifiedAt: null, lineages: [],
   };
 }
@@ -50,7 +51,7 @@ describe("Luna categorical chart projection", () => {
     for (const key of ["positive", "neutral", "negative", "reviewRequired", "excluded"] as const) {
       expect(points.reduce((sum, point) => sum + point.counts[key], 0)).toBe(result.counts[key]);
     }
-    expect(points.reduce((sum, point) => sum + point.counts.total, 0)).toBe(result.eligibleObservationCount);
+    expect(points.reduce((sum, point) => sum + point.counts.total, 0)).toBe(result.plottedObservationCount);
     expect(points.some((point) => point.counts.total === 0)).toBe(true);
   });
 
@@ -61,7 +62,7 @@ describe("Luna categorical chart projection", () => {
     expect(points[0]?.fromMs).toBe(result.fromMs);
     expect(points.at(-1)?.throughMs).toBe(result.throughMs);
     expect(points[0]?.throughMs).toBe(points[1]?.fromMs);
-    expect(points.reduce((sum, point) => sum + point.counts.total, 0)).toBe(result.eligibleObservationCount);
+    expect(points.reduce((sum, point) => sum + point.counts.total, 0)).toBe(result.plottedObservationCount);
     expect(formatUtcRange(result.fromMs, result.throughMs)).toContain("end exclusive");
     expect(formatUtcRange(result.fromMs, result.throughMs)).toContain("UTC");
     expect(formatUtcRange(result.fromMs, result.throughMs).match(/31[.,]456/g)).toHaveLength(2);

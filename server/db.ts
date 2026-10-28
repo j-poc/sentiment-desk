@@ -17,6 +17,7 @@ import type {
   MentionDTO,
   MentionScore,
   MentionStatus,
+  ProviderCategoricalEvidence,
   RawMention,
   RadarItemEvidence,
   SourceKind,
@@ -26,12 +27,17 @@ import type {
 } from "./types.js";
 import { deliveryHealthState, type DeliveryHealthState } from "./delivery.js";
 import { researchPublisherDomain } from "./publisher-domain.js";
+import { isFinanceRelevant } from "./scoring.js";
 import { summarizeScoreBucketCoverage } from "../shared/score-bucket-coverage.js";
 import type { CompanyFundamentalsView, PersistedFundamentalFact } from "../shared/company-fundamentals.js";
+import { validateCompanyEvidenceAssessment, type CompanyEvidenceAssessment, type CompanyAssessmentCompany, type CompanyAssessmentResult, type CompanyAssessmentReadback,
+  type CompanyAssessmentAttemptStatus } from "../shared/company-evidence-assessment.js";
 import type { SavedSourceCoverageSnapshot } from "../shared/saved-source-coverage.js";
 import { savedSourceTextMatches, type SavedSourceSearchCursor, type SavedSourceSearchPage } from "../shared/saved-source-search.js";
 import type { CompanyResearchDecision, CompanyResearchDecisionQueueItem, CompanyResearchEvidenceRole, CompanyResearchEvidenceRoleChoice, SavedCompanyResearchDecision } from "../shared/company-research-brief.js";
 import type { ListingSnapshot } from "../shared/sec-listing-snapshot.js";
+import { MAX_SEC_ISSUER_RESEARCH_SUBJECTS, SEC_ISSUER_DIRECTORY_URL, type SecIssuerDirectorySnapshot, type SecIssuerResearchSubject } from "../shared/sec-issuer-directory.js";
+import type { SecInboxSnapshot } from "./sec-filings-inbox.js";
 import type { SavedSecFilingResearchDecision, SecFilingResearchCase, SecFilingResearchFundamentalFact, SecFilingResearchFundamentalsView,
   SecFilingCaseDecisionQueueItem, SecFilingResearchSubject } from "../shared/sec-filing-research-cases.js";
 import {
@@ -44,6 +50,8 @@ import {
 import { DEFAULT_STORAGE_LIMITS, StorageCapacity, StorageCapacityError, type StorageLimits, type StorageStatus } from "./storage-capacity.js";
 import { canonicalDatabasePath, DeskWriterLock, WriterAlreadyOwnedError } from "./writer-lock.js";
 import { hasStrongIdentity } from "../shared/company-identity.js";
+import { sourceIdentityDigest, type ProviderClassificationResult } from "./model-provider-classifier.js";
+import type { CodexLunaAttempt, CodexLunaSaved } from "../shared/codex-luna.js";
 
 // Historical simulation and unverified legacy rows stay in place for audit,
 // but only observations with an identified collector can enter live research
@@ -54,6 +62,13 @@ const REAL_MENTION_FILTER = "collector NOT IN ('demo_simulation', 'legacy_unknow
 const DISPLAYED_SOURCE_CLOCK_SQL = `COALESCE(m.published_at,
   CASE WHEN m.collector IN ('google_news_rss', 'yahoo_finance_rss') THEN m.aggregator_published_at END,
   m.provider_observed_at)`;
+// Chart chronology accepts only publisher/feed/provider clocks whose
+// persisted basis confirms their provenance. Retrieval is never substituted.
+const VALIDATED_SOURCE_CLOCK_SQL = `CASE m.time_basis
+  WHEN 'publisher_declared' THEN m.publisher_published_at
+  WHEN 'aggregator_declared' THEN m.aggregator_published_at
+  WHEN 'provider_observed' THEN m.provider_observed_at
+  ELSE NULL END`;
 const DISPLAYED_SOURCE_CLOCK_UNKNOWN_SQL = `(CASE WHEN ${DISPLAYED_SOURCE_CLOCK_SQL} IS NULL THEN 1 ELSE 0 END)`;
 const DISPLAYED_SOURCE_CLOCK_ORDER_SQL = `COALESCE(${DISPLAYED_SOURCE_CLOCK_SQL}, 0)`;
 const REVIEW_REVISION_KEY = "analyst_source_review_revision";
@@ -63,6 +78,7 @@ const MAX_STORED_COMPANY_RESEARCH_DECISIONS = 10_000;
 const FOLLOWED_BASELINE_ELIGIBLE_FILTER = `m.company_id = ?
   AND m.collector NOT IN ('demo_simulation', 'legacy_unknown')
   AND COALESCE(m.engine, '') <> 'demo-sim'
+  AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) = 1
   AND m.delivery_id IS NOT NULL
   AND d.processing_required = 1
   AND d.collector = o.collector
@@ -74,7 +90,8 @@ const FOLLOWED_BASELINE_ELIGIBLE_FILTER = `m.company_id = ?
 const FOLLOWED_BASELINE_RECEIPT_JOINS = `
   JOIN source_observations o ON o.id = m.id
   JOIN source_deliveries d ON d.id = m.delivery_id
-  JOIN source_ingestions i ON i.delivery_id = d.id`;
+  JOIN source_ingestions i ON i.delivery_id = d.id
+  JOIN companies c ON c.id = m.company_id`;
 const SQLITE_FULL = 13;
 const CATEGORICAL_BUCKET_MS = 15 * 60_000;
 const CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER = `
@@ -83,8 +100,10 @@ const CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER = `
   WHEN NEW.provider IS NOT 'openai_luna'
     OR NEW.model_requested IS NOT 'gpt-6-luna'
     OR NEW.model_returned IS NOT NEW.model_requested
-    OR NEW.requested_service_tier IS NOT 'default'
-    OR NEW.service_tier IS NOT NEW.requested_service_tier
+    OR NEW.accounting_route NOT IN ('api_key', 'chatgpt_plan')
+    OR (NEW.accounting_route = 'api_key' AND NEW.requested_service_tier IS NOT 'default')
+    OR (NEW.accounting_route = 'chatgpt_plan' AND (NEW.requested_service_tier IS NOT NULL OR NEW.estimated_cost_usd IS NOT NULL))
+    OR (NEW.accounting_route = 'api_key' AND NEW.service_tier IS NOT NEW.requested_service_tier)
     OR NOT EXISTS (
       SELECT 1
       FROM jev_request_attempts a
@@ -92,15 +111,16 @@ const CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER = `
       WHERE a.id = NEW.attempt_id
         AND a.observation_id = NEW.observation_id
         AND a.provider = 'openai_luna'
+        AND (a.accounting_route = NEW.accounting_route OR a.accounting_route = 'legacy' AND NEW.accounting_route = 'api_key')
         AND a.requested_model = NEW.model_requested
         AND a.rubric_sha = NEW.profile_sha256
         AND a.prompt_sha256 = NEW.prompt_sha256
         AND a.schema_sha256 = NEW.schema_sha256
-        AND a.requested_service_tier = NEW.requested_service_tier
+        AND a.requested_service_tier IS NEW.requested_service_tier
         AND e.event_type = 'response'
         AND e.http_status BETWEEN 200 AND 299
         AND e.resolved_model = NEW.model_returned
-        AND e.response_service_tier = NEW.service_tier
+        AND e.response_service_tier IS NEW.service_tier
         AND e.response_id = NEW.response_id
         AND e.response_sha256 = NEW.response_sha256
         AND e.input_tokens IS NEW.input_tokens
@@ -118,8 +138,12 @@ const CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER = `
 `;
 const REAL_CATEGORICAL_FILTER = `m.collector NOT IN ('demo_simulation', 'legacy_unknown')
   AND COALESCE(m.engine, '') <> 'demo-sim'
+  AND desk_issuer_identity_strong(co.name, co.ticker, co.aliases, co.ambiguous, m.title, m.snippet, m.scoped) = 1
+  AND desk_finance_relevant(m.title, m.snippet, m.source_tier, m.source_kind, co.ticker, co.name) = 1
   AND c.provider = 'openai_luna' AND c.model_requested = 'gpt-6-luna' AND c.model_returned = 'gpt-6-luna'
-  AND c.requested_service_tier = 'default' AND c.service_tier = 'default'
+  AND c.accounting_route IN ('api_key', 'chatgpt_plan')
+  AND (c.accounting_route <> 'api_key' OR c.requested_service_tier = 'default' AND c.service_tier = 'default')
+  AND (c.accounting_route <> 'chatgpt_plan' OR c.requested_service_tier IS NULL AND c.estimated_cost_usd IS NULL)
   AND c.prompt_version <> '' AND length(c.prompt_sha256) = 64 AND c.prompt_sha256 NOT GLOB '*[^0-9a-f]*'
   AND c.schema_version <> '' AND length(c.schema_sha256) = 64 AND c.schema_sha256 NOT GLOB '*[^0-9a-f]*'
   AND c.response_id <> '' AND length(c.response_sha256) = 64 AND c.response_sha256 NOT GLOB '*[^0-9a-f]*'
@@ -134,21 +158,22 @@ const REAL_CATEGORICAL_FILTER = `m.collector NOT IN ('demo_simulation', 'legacy_
   AND m.retrieved_at <= c.classified_at AND o.adapter_version = d.adapter_version
   AND d.id = m.delivery_id AND d.collector = m.collector AND d.company_id = m.company_id
   AND d.result IN ('success', 'partial')
-  AND EXISTS (
+  AND ((c.receipt_origin = 'explicit_byok' AND c.source_receipt_valid = 1) OR (c.receipt_origin = 'scoring' AND EXISTS (
     SELECT 1 FROM jev_request_attempts a
     JOIN jev_attempt_events e ON e.attempt_id = a.id
     WHERE a.id = c.attempt_id AND a.observation_id = c.observation_id AND a.provider = c.provider
+      AND (a.accounting_route = c.accounting_route OR a.accounting_route = 'legacy' AND c.accounting_route = 'api_key')
       AND a.requested_model = c.model_requested AND a.rubric_sha = c.profile_sha256
       AND a.prompt_sha256 = c.prompt_sha256 AND a.schema_sha256 = c.schema_sha256
-      AND a.requested_service_tier = c.requested_service_tier
+      AND a.requested_service_tier IS c.requested_service_tier
       AND e.event_type = 'response' AND e.http_status BETWEEN 200 AND 299
-      AND e.resolved_model = c.model_returned AND e.response_service_tier = c.service_tier
+      AND e.resolved_model = c.model_returned AND e.response_service_tier IS c.service_tier
       AND e.response_id = c.response_id AND e.response_sha256 = c.response_sha256
       AND e.input_tokens IS c.input_tokens AND e.output_tokens IS c.output_tokens
       AND e.cached_input_tokens IS c.cached_input_tokens AND e.cache_write_tokens IS c.cache_write_tokens
       AND e.reasoning_tokens IS c.reasoning_tokens AND e.total_tokens IS c.total_tokens
       AND e.estimated_cost_usd IS c.estimated_cost_usd AND e.latency_ms IS c.latency_ms
-  )`;
+  )))`;
 const CATEGORICAL_COUNTS_SQL = `
   COUNT(*) AS total,
   SUM(CASE WHEN c.disposition='classified' AND c.sentiment='positive' THEN 1 ELSE 0 END) AS positive,
@@ -158,6 +183,17 @@ const CATEGORICAL_COUNTS_SQL = `
   SUM(CASE WHEN c.disposition='excluded' THEN 1 ELSE 0 END) AS excluded`;
 
 interface CategoricalSnapshotToken {
+  companyId: string;
+  fromMs: number;
+  throughMs: number;
+  windowHours: number;
+  bucketMs: number;
+  maxRowId: number;
+  maxModelProviderRowId: number;
+}
+
+interface GoogleGeminiCategoricalSnapshotToken {
+  provider: "google_gemini";
   companyId: string;
   fromMs: number;
   throughMs: number;
@@ -252,19 +288,20 @@ function processIsAlive(pid: number): boolean {
 function hasCurrentReadableSchema(db: DatabaseSync): boolean {
   try {
     const version = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-    if (version?.user_version !== 16 && version?.user_version !== 17) return false;
+    if (version?.user_version !== 16 && version?.user_version !== 17 && version?.user_version !== 18 && version?.user_version !== 19 && version?.user_version !== 20) return false;
     const objects = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name));
     if (!["companies", "mentions", "source_observations", "jev_judgments", "categorical_classifications",
       "source_deliveries", "source_ingestions", "followed_company_baselines", "followed_company_baseline_items",
       "price_points", "alert_outbox", "desk_runtime_sessions", "jev_request_attempts",
       "sec_fundamental_attempts", "sec_fundamental_payload_blobs", "sec_fundamental_payloads",
-      "sec_fundamental_snapshots", "sec_fundamental_facts", "analyst_source_reviews"]
+      "sec_fundamental_snapshots", "sec_fundamental_facts", "analyst_source_reviews",
+      "company_evidence_assessment_attempts", "company_evidence_assessment_reservations", "company_evidence_assessment_receipts"]
       .every((name) => objects.has(name))) return false;
     const attempts = new Set((db.prepare("PRAGMA table_info(jev_request_attempts)").all() as Array<{ name: string }>).map((row) => row.name));
     const classifications = new Set((db.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((row) => row.name));
     const baselineColumns = new Set((db.prepare("PRAGMA table_info(followed_company_baselines)").all() as Array<{ name: string }>).map((row) => row.name));
     const fundamentalColumns = new Set((db.prepare("PRAGMA table_info(sec_fundamental_facts)").all() as Array<{ name: string }>).map((row) => row.name));
-    return attempts.has("prompt_sha256") && classifications.has("profile_sha256") && classifications.has("attempt_id")
+    return attempts.has("prompt_sha256") && attempts.has("accounting_route") && classifications.has("profile_sha256") && classifications.has("attempt_id") && classifications.has("accounting_route")
       && baselineColumns.has("expected_baseline_id") && fundamentalColumns.has("reported_decimals")
       && fundamentalColumns.has("reported_precision_status");
   } catch {
@@ -514,6 +551,42 @@ CREATE TRIGGER IF NOT EXISTS sec_fundamental_facts_no_update BEFORE UPDATE ON se
 BEGIN SELECT RAISE(ABORT, 'SEC fundamental facts are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS sec_fundamental_facts_no_delete BEFORE DELETE ON sec_fundamental_facts
 BEGIN SELECT RAISE(ABORT, 'SEC fundamental facts are immutable'); END;
+CREATE TABLE IF NOT EXISTS company_evidence_assessment_attempts (
+  id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id), cik TEXT NOT NULL CHECK(length(cik)=10),
+  snapshot_id TEXT NOT NULL REFERENCES sec_fundamental_snapshots(id), provider TEXT NOT NULL CHECK(provider IN ('openai','google_gemini')),
+  model TEXT NOT NULL, prompt_version TEXT NOT NULL, selected_fact_ids_json TEXT NOT NULL,
+  request_sha256 TEXT NOT NULL CHECK(length(request_sha256)=64), status TEXT NOT NULL CHECK(status IN ('completed','invalid_output','rejected','unknown_delivery','not_sent')),
+  started_at INTEGER NOT NULL CHECK(started_at>=0), completed_at INTEGER CHECK(completed_at IS NULL OR completed_at>=started_at),
+  result_json TEXT, result_sha256 TEXT CHECK(result_sha256 IS NULL OR length(result_sha256)=64)
+);
+CREATE TRIGGER IF NOT EXISTS company_evidence_assessment_attempts_no_update BEFORE UPDATE ON company_evidence_assessment_attempts
+BEGIN SELECT RAISE(ABORT, 'company evidence assessments are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS company_evidence_assessment_attempts_no_delete BEFORE DELETE ON company_evidence_assessment_attempts
+BEGIN SELECT RAISE(ABORT, 'company evidence assessments are append-only'); END;
+CREATE TABLE IF NOT EXISTS company_evidence_assessment_reservations (
+  id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id), cik TEXT NOT NULL CHECK(length(cik)=10),
+  snapshot_id TEXT NOT NULL REFERENCES sec_fundamental_snapshots(id), provider TEXT NOT NULL CHECK(provider IN ('openai','google_gemini')),
+  model TEXT NOT NULL, prompt_version TEXT NOT NULL, selected_fact_ids_json TEXT NOT NULL,
+  request_sha256 TEXT NOT NULL CHECK(length(request_sha256)=64), budget_day TEXT NOT NULL CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  usage_review_acknowledged INTEGER NOT NULL CHECK(usage_review_acknowledged IN (0,1)),
+  unresolved_count_at_reservation INTEGER NOT NULL CHECK(unresolved_count_at_reservation>=0),
+  reserved_at INTEGER NOT NULL CHECK(reserved_at>=0)
+);
+CREATE TRIGGER IF NOT EXISTS company_evidence_assessment_reservations_no_update BEFORE UPDATE ON company_evidence_assessment_reservations
+BEGIN SELECT RAISE(ABORT, 'company evidence assessment reservations are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS company_evidence_assessment_reservations_no_delete BEFORE DELETE ON company_evidence_assessment_reservations
+BEGIN SELECT RAISE(ABORT, 'company evidence assessment reservations are immutable'); END;
+CREATE TABLE IF NOT EXISTS company_evidence_assessment_receipts (
+  reservation_id TEXT PRIMARY KEY REFERENCES company_evidence_assessment_reservations(id),
+  status TEXT NOT NULL CHECK(status IN ('completed','invalid_output','rejected','unknown_delivery','not_sent')),
+  completed_at INTEGER NOT NULL CHECK(completed_at>=0), result_json TEXT, result_sha256 TEXT CHECK(result_sha256 IS NULL OR length(result_sha256)=64),
+  CHECK((status='completed' AND result_json IS NOT NULL AND result_sha256 IS NOT NULL)
+     OR (status<>'completed' AND result_json IS NULL AND result_sha256 IS NULL))
+);
+CREATE TRIGGER IF NOT EXISTS company_evidence_assessment_receipts_no_update BEFORE UPDATE ON company_evidence_assessment_receipts
+BEGIN SELECT RAISE(ABORT, 'company evidence assessment receipts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS company_evidence_assessment_receipts_no_delete BEFORE DELETE ON company_evidence_assessment_receipts
+BEGIN SELECT RAISE(ABORT, 'company evidence assessment receipts are immutable'); END;
 CREATE TABLE IF NOT EXISTS source_ingestions (
   delivery_id TEXT PRIMARY KEY REFERENCES source_deliveries(id),
   started_at INTEGER NOT NULL,
@@ -601,6 +674,7 @@ CREATE TABLE IF NOT EXISTS jev_request_attempts (
  requested_model TEXT NOT NULL, rubric_sha TEXT NOT NULL CHECK (length(rubric_sha) = 64), reserved_at INTEGER NOT NULL,
  provider TEXT NOT NULL DEFAULT 'typesafe', reserved_cost_micros INTEGER NOT NULL DEFAULT 0,
  requested_service_tier TEXT, max_daily_cost_micros INTEGER NOT NULL DEFAULT 0, max_output_tokens INTEGER NOT NULL DEFAULT 0, budget_day TEXT, schema_sha256 TEXT, prompt_sha256 TEXT,
+ accounting_route TEXT NOT NULL DEFAULT 'legacy' CHECK(accounting_route IN ('legacy','typesafe','api_key','chatgpt_plan')),
  UNIQUE(observation_id, attempt_number)
 );
 CREATE INDEX IF NOT EXISTS jev_attempts_observation ON jev_request_attempts(observation_id, attempt_number DESC);
@@ -627,7 +701,8 @@ CREATE TRIGGER IF NOT EXISTS jev_attempt_events_no_delete BEFORE DELETE ON jev_a
 CREATE TABLE IF NOT EXISTS categorical_classifications (
  observation_id TEXT PRIMARY KEY REFERENCES source_observations(id), attempt_id TEXT NOT NULL REFERENCES jev_request_attempts(id),
  provider TEXT NOT NULL CHECK(provider='openai_luna'),
- model_requested TEXT NOT NULL, model_returned TEXT NOT NULL, requested_service_tier TEXT NOT NULL, service_tier TEXT,
+ model_requested TEXT NOT NULL, model_returned TEXT NOT NULL, requested_service_tier TEXT, service_tier TEXT,
+ accounting_route TEXT NOT NULL DEFAULT 'api_key' CHECK(accounting_route IN ('api_key','chatgpt_plan')),
  prompt_version TEXT NOT NULL, prompt_sha256 TEXT NOT NULL CHECK(length(prompt_sha256)=64),
  schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL CHECK(length(schema_sha256)=64), profile_sha256 TEXT NOT NULL CHECK(length(profile_sha256)=64), sentiment TEXT,
  event_type TEXT, takeaway TEXT, about INTEGER, material INTEGER, investor_relevant INTEGER,
@@ -692,6 +767,196 @@ BEFORE UPDATE OF observation_id, company_id ON analyst_source_reviews
 BEGIN SELECT RAISE(ABORT, 'analyst review source identity is immutable'); END;
 `;
 
+const MODEL_PROVIDER_SCHEMA = `
+CREATE TABLE IF NOT EXISTS model_provider_attempts (
+  id TEXT PRIMARY KEY,
+  observation_id TEXT NOT NULL REFERENCES source_observations(id),
+  provider TEXT NOT NULL CHECK(provider IN ('openai','google_gemini')),
+  model_requested TEXT NOT NULL,
+  source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+  request_sha256 TEXT NOT NULL CHECK(length(request_sha256)=64),
+  request_bytes INTEGER NOT NULL CHECK(request_bytes BETWEEN 1 AND 98304),
+  prompt_version TEXT NOT NULL,
+  prompt_sha256 TEXT NOT NULL CHECK(length(prompt_sha256)=64),
+  schema_version TEXT NOT NULL,
+  schema_sha256 TEXT NOT NULL CHECK(length(schema_sha256)=64),
+  budget_day TEXT NOT NULL CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  reserved_at INTEGER NOT NULL CHECK(reserved_at>=0),
+  dispatch_intent_at INTEGER,
+  completed_at INTEGER,
+  status TEXT NOT NULL CHECK(status IN ('reserved','dispatched','completed','rejected','not_sent','unknown')),
+  cost_reservation_micros INTEGER NOT NULL CHECK(cost_reservation_micros>=0),
+  http_status INTEGER CHECK(http_status IS NULL OR http_status BETWEEN 100 AND 599),
+  model_returned TEXT,
+  response_id TEXT,
+  response_sha256 TEXT CHECK(response_sha256 IS NULL OR length(response_sha256)=64),
+  input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens>=0),
+  output_tokens INTEGER CHECK(output_tokens IS NULL OR output_tokens>=0),
+  estimated_cost_usd REAL CHECK(estimated_cost_usd IS NULL OR estimated_cost_usd>=0),
+  latency_ms INTEGER CHECK(latency_ms IS NULL OR latency_ms>=0),
+  error_category TEXT,
+  CHECK((status IN ('reserved','dispatched') AND completed_at IS NULL) OR
+        (status IN ('completed','rejected','not_sent','unknown') AND completed_at IS NOT NULL)),
+  CHECK((status IN ('reserved','not_sent') AND dispatch_intent_at IS NULL) OR
+        (status IN ('dispatched','completed','rejected','unknown') AND dispatch_intent_at IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS model_provider_attempts_source ON model_provider_attempts(observation_id,provider,reserved_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS model_provider_attempts_budget ON model_provider_attempts(provider,budget_day,status);
+DROP TRIGGER IF EXISTS model_provider_attempts_transition;
+CREATE TRIGGER model_provider_attempts_transition
+BEFORE UPDATE ON model_provider_attempts
+WHEN OLD.status NOT IN ('reserved','dispatched') OR
+  (OLD.status='reserved' AND NEW.status NOT IN ('dispatched','not_sent','unknown')) OR
+  (OLD.status='dispatched' AND NEW.status NOT IN ('completed','rejected','not_sent','unknown')) OR
+  NEW.id<>OLD.id OR NEW.observation_id<>OLD.observation_id OR NEW.provider<>OLD.provider OR
+  NEW.model_requested<>OLD.model_requested OR NEW.source_sha256<>OLD.source_sha256 OR
+  NEW.request_sha256<>OLD.request_sha256 OR NEW.request_bytes<>OLD.request_bytes OR
+  NEW.prompt_version<>OLD.prompt_version OR NEW.prompt_sha256<>OLD.prompt_sha256 OR
+  NEW.schema_version<>OLD.schema_version OR NEW.schema_sha256<>OLD.schema_sha256 OR
+  NEW.budget_day<>OLD.budget_day OR NEW.reserved_at<>OLD.reserved_at OR
+  (OLD.dispatch_intent_at IS NOT NULL AND NEW.dispatch_intent_at IS NOT OLD.dispatch_intent_at
+    AND NOT (NEW.status='not_sent' AND NEW.dispatch_intent_at IS NULL)) OR
+  (NEW.status='dispatched' AND NEW.dispatch_intent_at IS NULL) OR
+  (NEW.status IN ('reserved','dispatched') AND NEW.completed_at IS NOT NULL) OR
+  (NEW.status IN ('completed','rejected','not_sent','unknown') AND NEW.completed_at IS NULL)
+BEGIN SELECT RAISE(ABORT, 'invalid model provider attempt transition'); END;
+CREATE TRIGGER IF NOT EXISTS model_provider_attempts_no_delete BEFORE DELETE ON model_provider_attempts
+BEGIN SELECT RAISE(ABORT, 'model provider attempts are immutable'); END;
+
+CREATE TABLE IF NOT EXISTS model_provider_classifications (
+  attempt_id TEXT PRIMARY KEY REFERENCES model_provider_attempts(id),
+  observation_id TEXT NOT NULL REFERENCES source_observations(id),
+  provider TEXT NOT NULL CHECK(provider IN ('openai','google_gemini')),
+  model_requested TEXT NOT NULL,
+  model_returned TEXT NOT NULL,
+  source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+  source_time_at INTEGER,
+  retrieved_at INTEGER NOT NULL CHECK(retrieved_at>=0),
+  sentiment TEXT CHECK(sentiment IS NULL OR sentiment IN ('negative','neutral','positive')),
+  event_type TEXT,
+  takeaway TEXT,
+  about INTEGER CHECK(about IS NULL OR about IN (0,1)),
+  material INTEGER CHECK(material IS NULL OR material IN (0,1)),
+  investor_relevant INTEGER CHECK(investor_relevant IS NULL OR investor_relevant IN (0,1)),
+  evidence_sufficient INTEGER NOT NULL CHECK(evidence_sufficient IN (0,1)),
+  summary TEXT,
+  supporting_excerpt TEXT,
+  disposition TEXT NOT NULL CHECK(disposition IN ('classified','excluded','review_required')),
+  created_at INTEGER NOT NULL CHECK(created_at>=0)
+) STRICT;
+CREATE INDEX IF NOT EXISTS model_provider_classifications_source ON model_provider_classifications(observation_id,provider,created_at DESC,attempt_id DESC);
+CREATE TRIGGER IF NOT EXISTS model_provider_classifications_no_update BEFORE UPDATE ON model_provider_classifications
+BEGIN SELECT RAISE(ABORT, 'model provider classifications are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS model_provider_classifications_no_delete BEFORE DELETE ON model_provider_classifications
+BEGIN SELECT RAISE(ABORT, 'model provider classifications are immutable'); END;
+
+CREATE TABLE IF NOT EXISTS model_provider_verification_attempts (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL CHECK(provider IN ('openai','google_gemini')),
+  budget_day TEXT NOT NULL CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  reserved_at INTEGER NOT NULL CHECK(reserved_at>=0)
+) STRICT;
+CREATE INDEX IF NOT EXISTS model_provider_verification_budget ON model_provider_verification_attempts(provider,budget_day);
+CREATE TRIGGER IF NOT EXISTS model_provider_verification_no_update BEFORE UPDATE ON model_provider_verification_attempts
+BEGIN SELECT RAISE(ABORT, 'model provider verification reservations are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS model_provider_verification_no_delete BEFORE DELETE ON model_provider_verification_attempts
+BEGIN SELECT RAISE(ABORT, 'model provider verification reservations are immutable'); END;
+
+-- Manual TypeSafe Jev assessments have their own append-only lineage. They do
+-- not enter categorical classifications or the automated legacy scoring queue.
+CREATE TABLE IF NOT EXISTS typesafe_jev_byok_attempts (
+  id TEXT PRIMARY KEY,
+  observation_id TEXT NOT NULL REFERENCES source_observations(id),
+  model_requested TEXT NOT NULL,
+  source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+  request_sha256 TEXT NOT NULL CHECK(length(request_sha256)=64),
+  request_bytes INTEGER NOT NULL CHECK(request_bytes BETWEEN 1 AND 98304),
+  rubric_sha256 TEXT NOT NULL CHECK(length(rubric_sha256)=64),
+  budget_day TEXT NOT NULL CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  reserved_at INTEGER NOT NULL CHECK(reserved_at>=0),
+  dispatch_intent_at INTEGER,
+  completed_at INTEGER,
+  status TEXT NOT NULL CHECK(status IN ('reserved','dispatched','completed','rejected','not_sent','unknown')),
+  cost_reservation_micros INTEGER NOT NULL CHECK(cost_reservation_micros>=0),
+  http_status INTEGER CHECK(http_status IS NULL OR http_status BETWEEN 100 AND 599),
+  model_returned TEXT,
+  input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens>=0),
+  output_tokens INTEGER CHECK(output_tokens IS NULL OR output_tokens>=0),
+  estimated_cost_usd REAL CHECK(estimated_cost_usd IS NULL OR estimated_cost_usd>=0),
+  latency_ms INTEGER CHECK(latency_ms IS NULL OR latency_ms>=0),
+  error_category TEXT,
+  CHECK((status IN ('reserved','dispatched') AND completed_at IS NULL) OR
+        (status IN ('completed','rejected','not_sent','unknown') AND completed_at IS NOT NULL)),
+  CHECK((status IN ('reserved','not_sent') AND dispatch_intent_at IS NULL) OR
+        (status IN ('dispatched','completed','rejected','unknown') AND dispatch_intent_at IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS typesafe_jev_byok_source ON typesafe_jev_byok_attempts(observation_id,reserved_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS typesafe_jev_byok_budget ON typesafe_jev_byok_attempts(budget_day,status);
+DROP TRIGGER IF EXISTS typesafe_jev_byok_attempt_transition;
+CREATE TRIGGER typesafe_jev_byok_attempt_transition
+BEFORE UPDATE ON typesafe_jev_byok_attempts
+WHEN OLD.status NOT IN ('reserved','dispatched') OR
+  (OLD.status='reserved' AND NEW.status NOT IN ('dispatched','not_sent','unknown')) OR
+  (OLD.status='dispatched' AND NEW.status NOT IN ('completed','rejected','not_sent','unknown')) OR
+  NEW.id<>OLD.id OR NEW.observation_id<>OLD.observation_id OR NEW.model_requested<>OLD.model_requested OR
+  NEW.source_sha256<>OLD.source_sha256 OR NEW.request_sha256<>OLD.request_sha256 OR NEW.request_bytes<>OLD.request_bytes OR
+  NEW.rubric_sha256<>OLD.rubric_sha256 OR NEW.budget_day<>OLD.budget_day OR NEW.reserved_at<>OLD.reserved_at OR
+  NEW.cost_reservation_micros<>OLD.cost_reservation_micros OR
+  (OLD.dispatch_intent_at IS NOT NULL AND NEW.dispatch_intent_at IS NOT OLD.dispatch_intent_at
+    AND NOT (NEW.status='not_sent' AND NEW.dispatch_intent_at IS NULL)) OR
+  (NEW.status='dispatched' AND NEW.dispatch_intent_at IS NULL) OR
+  (NEW.status IN ('reserved','dispatched') AND NEW.completed_at IS NOT NULL) OR
+  (NEW.status IN ('completed','rejected','not_sent','unknown') AND NEW.completed_at IS NULL)
+BEGIN SELECT RAISE(ABORT, 'invalid TypeSafe Jev BYOK attempt transition'); END;
+CREATE TRIGGER IF NOT EXISTS typesafe_jev_byok_attempt_no_delete BEFORE DELETE ON typesafe_jev_byok_attempts
+BEGIN SELECT RAISE(ABORT, 'TypeSafe Jev BYOK attempts are immutable'); END;
+
+CREATE TABLE IF NOT EXISTS typesafe_jev_byok_results (
+  attempt_id TEXT PRIMARY KEY REFERENCES typesafe_jev_byok_attempts(id),
+  observation_id TEXT NOT NULL REFERENCES source_observations(id),
+  model_requested TEXT NOT NULL,
+  model_returned TEXT NOT NULL,
+  source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+  rubric_sha256 TEXT NOT NULL CHECK(length(rubric_sha256)=64),
+  source_time_at INTEGER,
+  retrieved_at INTEGER NOT NULL CHECK(retrieved_at>=0),
+  sentiment TEXT NOT NULL CHECK(sentiment IN ('negative','neutral','positive')),
+  p_positive REAL NOT NULL CHECK(p_positive BETWEEN 0 AND 1),
+  p_neutral REAL NOT NULL CHECK(p_neutral BETWEEN 0 AND 1),
+  p_negative REAL NOT NULL CHECK(p_negative BETWEEN 0 AND 1),
+  confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+  about REAL NOT NULL CHECK(about BETWEEN 0 AND 1),
+  investor_relevant REAL NOT NULL CHECK(investor_relevant BETWEEN 0 AND 1),
+  material REAL NOT NULL CHECK(material BETWEEN 0 AND 1),
+  novel REAL NOT NULL CHECK(novel BETWEEN 0 AND 1),
+  credible REAL NOT NULL CHECK(credible BETWEEN 0 AND 1),
+  event_type TEXT NOT NULL,
+  magnitude REAL NOT NULL CHECK(magnitude BETWEEN 0 AND 1),
+  surprise REAL NOT NULL CHECK(surprise BETWEEN 0 AND 1),
+  takeaway TEXT NOT NULL,
+  event_score REAL NOT NULL,
+  impact REAL NOT NULL,
+  weight REAL NOT NULL CHECK(weight>=0),
+  excluded INTEGER NOT NULL CHECK(excluded IN (0,1)),
+  created_at INTEGER NOT NULL CHECK(created_at>=0)
+) STRICT;
+CREATE INDEX IF NOT EXISTS typesafe_jev_byok_results_source ON typesafe_jev_byok_results(observation_id,created_at DESC,attempt_id DESC);
+CREATE TRIGGER IF NOT EXISTS typesafe_jev_byok_results_no_update BEFORE UPDATE ON typesafe_jev_byok_results
+BEGIN SELECT RAISE(ABORT, 'TypeSafe Jev BYOK results are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS typesafe_jev_byok_results_no_delete BEFORE DELETE ON typesafe_jev_byok_results
+BEGIN SELECT RAISE(ABORT, 'TypeSafe Jev BYOK results are immutable'); END;
+CREATE TABLE IF NOT EXISTS typesafe_jev_byok_verification_attempts (
+  id TEXT PRIMARY KEY,
+  budget_day TEXT NOT NULL CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  reserved_at INTEGER NOT NULL CHECK(reserved_at>=0)
+) STRICT;
+CREATE INDEX IF NOT EXISTS typesafe_jev_byok_verification_budget ON typesafe_jev_byok_verification_attempts(budget_day);
+CREATE TRIGGER IF NOT EXISTS typesafe_jev_byok_verification_no_update BEFORE UPDATE ON typesafe_jev_byok_verification_attempts
+BEGIN SELECT RAISE(ABORT, 'TypeSafe Jev BYOK verification reservations are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS typesafe_jev_byok_verification_no_delete BEFORE DELETE ON typesafe_jev_byok_verification_attempts
+BEGIN SELECT RAISE(ABORT, 'TypeSafe Jev BYOK verification reservations are immutable'); END;
+`;
+
 const retryRowSchema = z.object({
   status: z.string(),
   score_usage_check_required: z.number(),
@@ -713,6 +978,7 @@ export interface CompanyMentionPage {
   nextCursor: MentionPageCursor | null;
   setAsideCount: number;
   issuerIdentityReviewCount: number;
+  investorRelevanceReviewCount: number;
 }
 
 export interface FollowedCompanyBaseline {
@@ -782,7 +1048,7 @@ export interface ScoreBucketCursor {
   snapshotKey: string;
 }
 
-export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed" | "history" | "identity_review";
+export type MentionFeedFilter = "all" | "bull" | "bear" | "material" | "offtarget" | "failed" | "history" | "identity_review" | "relevance_review";
 
 export interface MentionRow {
   id: string;
@@ -838,6 +1104,8 @@ export interface MentionRow {
   score_retry_at: number | null;
   score_usage_check_required: number;
   classification_provider?: string | null;
+  classification_receipt_origin?: "scoring" | "explicit_byok";
+  classification_accounting_route?: string | null;
   classification_model_requested?: string | null;
   classification_model_returned?: string | null;
   classification_service_tier_requested?: string | null;
@@ -878,6 +1146,81 @@ export type BudgetedScoreClaim =
 
 export type JevAttemptOutcome = "response" | "rejected" | "unknown" | "not_sent";
 export type ModelProvider = "typesafe" | "openai_luna";
+export type BYOKModelProvider = "openai" | "google_gemini";
+export type BYOKCredentialProvider = BYOKModelProvider | "typesafe_jev";
+
+export interface ModelProviderAttemptReservation {
+  id: string;
+  observationId: string;
+  provider: BYOKModelProvider;
+  modelRequested: string;
+  sourceSha256: string;
+  requestSha256: string;
+  requestBytes: number;
+  promptVersion: string;
+  promptSha256: string;
+  schemaVersion: string;
+  schemaSha256: string;
+  utcDay: string;
+  reservedAt: number;
+  costReservationMicros: number;
+  maxDailyRequests: number;
+  maxDailyBytes: number;
+  maxDailyCostMicros: number;
+}
+
+export interface ModelProviderClassificationRecord {
+  attemptId: string;
+  observationId: string;
+  provider: BYOKModelProvider;
+  modelRequested: string;
+  modelReturned: string;
+  sourceSha256: string;
+  sourceTimeAt: number | null;
+  retrievedAt: number;
+  sentiment: "negative" | "neutral" | "positive" | null;
+  eventType: string | null;
+  takeaway: string | null;
+  about: boolean | null;
+  material: boolean | null;
+  investorRelevant: boolean | null;
+  evidenceSufficient: boolean;
+  summary: string | null;
+  supportingExcerpt: string | null;
+  disposition: "classified" | "excluded" | "review_required";
+  createdAt: number;
+}
+
+export interface TypeSafeJevByokResultRecord {
+  attemptId: string;
+  observationId: string;
+  modelRequested: string;
+  modelReturned: string;
+  sourceSha256: string;
+  rubricSha256: string;
+  sourceTimeAt: number | null;
+  retrievedAt: number;
+  sentiment: "negative" | "neutral" | "positive";
+  pPositive: number;
+  pNeutral: number;
+  pNegative: number;
+  confidence: number;
+  about: number;
+  investorRelevant: number;
+  material: number;
+  novel: number;
+  credible: number;
+  eventType: string;
+  magnitude: number;
+  surprise: number;
+  takeaway: string;
+  eventScore: number;
+  impact: number;
+  weight: number;
+  excluded: boolean;
+  createdAt: number;
+}
+
 export interface JevAttemptReceipt {
   attemptId: string;
   outcome: JevAttemptOutcome;
@@ -916,6 +1259,7 @@ export interface JevAttemptSummary {
   latencyMs: number | null;
   errorCategory: string | null;
   provider: ModelProvider;
+  accountingRoute: "typesafe" | "api_key" | "chatgpt_plan";
   cachedInputTokens: number | null;
   cacheWriteInputTokens: number | null;
   reasoningTokens: number | null;
@@ -1048,6 +1392,20 @@ export class ScoreBucketSnapshotConflictError extends Error {
   constructor() { super("score_bucket_snapshot_changed"); }
 }
 
+function validateStoredCompanyAssessment(raw: unknown, allowedCitationIds: ReadonlySet<string>): CompanyEvidenceAssessment | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const value = raw as Partial<CompanyEvidenceAssessment>;
+  const points = (items: unknown) => Array.isArray(items) ? items.map((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
+    const point = item as { claim?: unknown; citationIds?: unknown };
+    return { claim: point.claim, citation_ids: point.citationIds };
+  }) : items;
+  return validateCompanyEvidenceAssessment({
+    stance: value.stance, summary: value.summary, summary_citation_ids: value.summaryCitationIds,
+    bullish_evidence: points(value.bullishEvidence), bearish_evidence: points(value.bearishEvidence), unknowns: value.unknowns,
+  }, allowedCitationIds);
+}
+
 export class Desk {
   private readonly db: DatabaseSync;
   private readonly runtimeId: string;
@@ -1073,7 +1431,7 @@ export class Desk {
       const probe = new DatabaseSync(canonicalPath, { readOnly: true });
       try {
         schemaVersion = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (schemaVersion > 17) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
+        if (schemaVersion > 20) throw new Error(`unsupported_database_schema_version_${schemaVersion}`);
         currentSchema = hasCurrentReadableSchema(probe);
         // v11+ upgrades are additive; older upgrades may rebuild legacy rows,
         // so they retain the full-database startup reserve.
@@ -1108,7 +1466,7 @@ export class Desk {
           const probe = new DatabaseSync(canonicalPath, { readOnly: true });
           try {
             const version = Number((probe.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-            if (version > 17) throw new Error(`unsupported_database_schema_version_${version}`);
+            if (version > 20) throw new Error(`unsupported_database_schema_version_${version}`);
             currentSchema = hasCurrentReadableSchema(probe);
           }
           finally { probe.close(); }
@@ -1125,6 +1483,18 @@ export class Desk {
       this.db.function("desk_saved_source_search_match", { deterministic: true }, (text, query) => {
         if (typeof text !== "string" || typeof query !== "string") return 0;
         return Number(savedSourceTextMatches(text, query));
+      });
+      this.db.function("desk_model_source_digest", { deterministic: true, varargs: true }, (...args) => {
+        const [sourceId, name, ticker, sector, collector, publisher, title, excerpt, sourceUrl, retrievedAt] = args;
+        if (typeof sourceId !== "string" || typeof name !== "string" || typeof ticker !== "string" || typeof sector !== "string"
+          || typeof collector !== "string" || typeof publisher !== "string" || typeof title !== "string" || typeof excerpt !== "string"
+          || typeof sourceUrl !== "string" || typeof retrievedAt !== "number") return null;
+        return sourceIdentityDigest({ sourceId, company: { name, ticker, sector }, source: { collector, publisher, title, excerpt }, sourceUrl, retrievedAt });
+      });
+      this.db.function("desk_finance_relevant", { deterministic: true }, (title, snippet, tier, kind, ticker, companyName) => {
+        if (typeof title !== "string" || typeof snippet !== "string" || typeof tier !== "string"
+          || typeof kind !== "string" || typeof ticker !== "string" || typeof companyName !== "string") return 0;
+        return Number(isFinanceRelevant({ title, snippet, tier, kind, ticker, companyName }));
       });
       this.db.function("desk_issuer_identity_strong", { deterministic: true, varargs: true }, (...args) => {
         const [name, ticker, aliasesJson, ambiguous, title, snippet, scoped] = args;
@@ -1154,7 +1524,7 @@ export class Desk {
       this.exec("PRAGMA journal_mode = WAL");
       if (!currentSchema) {
         const version = Number((this.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)?.user_version ?? 0);
-        if (version > 17) throw new Error(`unsupported_database_schema_version_${version}`);
+        if (version > 20) throw new Error(`unsupported_database_schema_version_${version}`);
         this.exec(SCHEMA);
         this.migrate();
       }
@@ -1186,6 +1556,13 @@ export class Desk {
         this.exec("ALTER TABLE company_research_decisions ADD COLUMN evidence_roles_json TEXT NOT NULL DEFAULT '[]'");
       }
       this.exec(ANALYST_SOURCE_REVIEW_GUARDS);
+      // User-owned provider attempts live beside, but never inside, the legacy
+      // Luna or Jev lineage tables. This remains additive for v20 databases.
+      this.exec(MODEL_PROVIDER_SCHEMA);
+      const providerAttemptColumns = new Set((this.prepare("PRAGMA table_info(model_provider_attempts)").all() as Array<{ name: string }>).map(row => row.name));
+      if (!providerAttemptColumns.has("categorical_receipt_json")) {
+        this.exec("ALTER TABLE model_provider_attempts ADD COLUMN categorical_receipt_json TEXT CHECK(categorical_receipt_json IS NULL OR json_valid(categorical_receipt_json))");
+      }
       // Research-only SEC subjects stay outside companies, monitoring tables,
       // and every private-evidence allowlist. Their identity is the exact
       // issuer CIK plus the SEC filing that prompted the analyst case.
@@ -1322,15 +1699,144 @@ export class Desk {
         snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
         saved_at INTEGER NOT NULL CHECK (saved_at >= 0)
       ) STRICT`);
+      // Full SEC issuer discovery is saved separately from the current Nasdaq
+      // listing proof used by the filing inbox. It is a search aid, not an
+      // active-listing assertion.
+      this.exec(`CREATE TABLE IF NOT EXISTS sec_issuer_directory_cache (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        snapshot_gzip BLOB NOT NULL CHECK(length(snapshot_gzip) BETWEEN 1 AND 8000000),
+        cache_sha256 TEXT NOT NULL CHECK(length(cache_sha256)=64),
+        source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+        retrieved_at TEXT NOT NULL,
+        row_count INTEGER NOT NULL CHECK(row_count BETWEEN 0 AND 100000),
+        saved_at INTEGER NOT NULL CHECK(saved_at>=0)
+      ) STRICT`);
+      this.exec(`CREATE TABLE IF NOT EXISTS sec_issuer_research_identity_receipts (
+        cik TEXT NOT NULL CHECK(length(cik)=10 AND cik NOT GLOB '*[^0-9]*'),
+        sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+        ticker TEXT NOT NULL CHECK(length(ticker) BETWEEN 1 AND 14),
+        name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 512),
+        exchange TEXT CHECK(exchange IS NULL OR length(exchange)<=80),
+        source_url TEXT NOT NULL CHECK(source_url='${SEC_ISSUER_DIRECTORY_URL}'),
+        retrieved_at TEXT NOT NULL,
+        PRIMARY KEY(cik,sha256)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS sec_issuer_research_identity_receipts_no_update BEFORE UPDATE ON sec_issuer_research_identity_receipts
+      BEGIN SELECT RAISE(ABORT, 'SEC issuer identity receipts are immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS sec_issuer_research_identity_receipts_no_delete BEFORE DELETE ON sec_issuer_research_identity_receipts
+      BEGIN SELECT RAISE(ABORT, 'SEC issuer identity receipts are immutable'); END;
+      CREATE TABLE IF NOT EXISTS sec_issuer_research_subjects (
+        cik TEXT PRIMARY KEY CHECK(length(cik)=10 AND cik NOT GLOB '*[^0-9]*'),
+        company_id TEXT NOT NULL UNIQUE REFERENCES companies(id),
+        current_identity_sha256 TEXT NOT NULL,
+        created_at INTEGER NOT NULL CHECK(created_at>=0),
+        last_added_at INTEGER NOT NULL CHECK(last_added_at>=created_at),
+        FOREIGN KEY(cik,current_identity_sha256) REFERENCES sec_issuer_research_identity_receipts(cik,sha256)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS sec_issuer_research_subject_identity_guard BEFORE UPDATE ON sec_issuer_research_subjects
+      WHEN NEW.cik<>OLD.cik OR NEW.company_id<>OLD.company_id OR NEW.created_at<>OLD.created_at
+        OR NOT EXISTS(SELECT 1 FROM sec_issuer_research_identity_receipts r WHERE r.cik=NEW.cik AND r.sha256=NEW.current_identity_sha256)
+      BEGIN SELECT RAISE(ABORT, 'SEC issuer research subject identity is invalid'); END;
+      CREATE TRIGGER IF NOT EXISTS sec_issuer_research_subjects_no_delete BEFORE DELETE ON sec_issuer_research_subjects
+      BEGIN SELECT RAISE(ABORT, 'SEC issuer research subjects are retained'); END;`);
+      // Keep a bounded, compressed history of direct SEC feed observations so
+      // the last accepted result survives restart and filing tasks retain a
+      // resolvable receipt for 30 days without unbounded database growth.
+      this.exec(`CREATE TABLE IF NOT EXISTS sec_filings_inbox_snapshots (
+        receipt_id TEXT PRIMARY KEY,
+        snapshot_gzip BLOB NOT NULL CHECK (length(snapshot_gzip) BETWEEN 1 AND 500000),
+        snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+        retrieved_at TEXT NOT NULL,
+        saved_at INTEGER NOT NULL CHECK (saved_at >= 0)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS sec_filings_inbox_snapshots_latest ON sec_filings_inbox_snapshots(saved_at DESC);
+      CREATE TRIGGER IF NOT EXISTS sec_filings_inbox_snapshots_no_update BEFORE UPDATE ON sec_filings_inbox_snapshots
+      BEGIN SELECT RAISE(ABORT, 'SEC feed observations are immutable'); END;`);
+      // Private-note calls share the plan route's public classifier request and
+      // byte counters without writing private text or issuer identity here.
+      this.exec(`CREATE TABLE IF NOT EXISTS chatgpt_plan_auxiliary_requests (
+        id TEXT PRIMARY KEY,
+        task_type TEXT NOT NULL CHECK(task_type='private_note_analysis'),
+        budget_day TEXT NOT NULL CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+        reserved_at INTEGER NOT NULL CHECK(reserved_at>=0),
+        request_bytes INTEGER NOT NULL CHECK(request_bytes BETWEEN 1 AND 260000),
+        status TEXT NOT NULL CHECK(status IN ('reserved','dispatched','completed','rejected','not_sent','unknown')),
+        completed_at INTEGER CHECK(completed_at IS NULL OR completed_at>=reserved_at),
+        CHECK((status IN ('reserved','dispatched') AND completed_at IS NULL) OR
+          (status IN ('completed','rejected','not_sent','unknown') AND completed_at IS NOT NULL))
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS chatgpt_plan_auxiliary_requests_day
+        ON chatgpt_plan_auxiliary_requests(reserved_at,status);`);
+      const planAuxiliaryColumns = new Set((this.prepare("PRAGMA table_info(chatgpt_plan_auxiliary_requests)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!planAuxiliaryColumns.has("budget_day")) {
+        this.exec("ALTER TABLE chatgpt_plan_auxiliary_requests ADD COLUMN budget_day TEXT NOT NULL DEFAULT '1970-01-01' CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]')");
+        this.exec(`UPDATE chatgpt_plan_auxiliary_requests
+          SET budget_day=strftime('%Y-%m-%d', reserved_at / 1000, 'unixepoch') WHERE budget_day='1970-01-01'`);
+      }
+      this.exec(`DROP TRIGGER IF EXISTS chatgpt_plan_auxiliary_request_transition;
+      CREATE TRIGGER chatgpt_plan_auxiliary_request_transition
+      BEFORE UPDATE ON chatgpt_plan_auxiliary_requests
+      WHEN OLD.status NOT IN ('reserved','dispatched') OR
+        (OLD.status='reserved' AND NEW.status NOT IN ('dispatched','not_sent','unknown')) OR
+        (OLD.status='dispatched' AND NEW.status NOT IN ('completed','rejected','not_sent','unknown')) OR
+        NEW.id<>OLD.id OR NEW.task_type<>OLD.task_type OR NEW.budget_day<>OLD.budget_day OR NEW.reserved_at<>OLD.reserved_at OR NEW.request_bytes<>OLD.request_bytes OR
+        (NEW.status IN ('reserved','dispatched') AND NEW.completed_at IS NOT NULL) OR
+        (NEW.status IN ('completed','rejected','not_sent','unknown') AND NEW.completed_at IS NULL)
+      BEGIN SELECT RAISE(ABORT, 'invalid ChatGPT-plan request transition'); END;
+      CREATE TRIGGER IF NOT EXISTS chatgpt_plan_auxiliary_requests_no_delete BEFORE DELETE ON chatgpt_plan_auxiliary_requests
+      BEGIN SELECT RAISE(ABORT, 'ChatGPT-plan usage records are immutable'); END;`);
+      this.exec(`CREATE TABLE IF NOT EXISTS chatgpt_plan_evaluation_requests (
+        id TEXT PRIMARY KEY,
+        budget_day TEXT NOT NULL CHECK(budget_day GLOB '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+        reserved_at INTEGER NOT NULL CHECK(reserved_at>=0),
+        request_bytes INTEGER NOT NULL CHECK(request_bytes BETWEEN 1 AND 260000),
+        status TEXT NOT NULL CHECK(status IN ('reserved','dispatched','completed','rejected','not_sent','unknown')),
+        completed_at INTEGER CHECK(completed_at IS NULL OR completed_at>=reserved_at),
+        CHECK((status IN ('reserved','dispatched') AND completed_at IS NULL) OR
+          (status IN ('completed','rejected','not_sent','unknown') AND completed_at IS NOT NULL))
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS chatgpt_plan_evaluation_requests_day ON chatgpt_plan_evaluation_requests(reserved_at,status);
+      CREATE TRIGGER IF NOT EXISTS chatgpt_plan_evaluation_request_transition
+      BEFORE UPDATE ON chatgpt_plan_evaluation_requests
+      WHEN OLD.status NOT IN ('reserved','dispatched') OR
+        (OLD.status='reserved' AND NEW.status NOT IN ('dispatched','not_sent','unknown')) OR
+        (OLD.status='dispatched' AND NEW.status NOT IN ('completed','rejected','not_sent','unknown')) OR
+        NEW.id<>OLD.id OR NEW.budget_day<>OLD.budget_day OR NEW.reserved_at<>OLD.reserved_at OR NEW.request_bytes<>OLD.request_bytes OR
+        (NEW.status IN ('reserved','dispatched') AND NEW.completed_at IS NOT NULL) OR
+        (NEW.status IN ('completed','rejected','not_sent','unknown') AND NEW.completed_at IS NULL)
+      BEGIN SELECT RAISE(ABORT, 'invalid ChatGPT-plan evaluation request transition'); END;
+      CREATE TRIGGER IF NOT EXISTS chatgpt_plan_evaluation_requests_no_delete BEFORE DELETE ON chatgpt_plan_evaluation_requests
+      BEGIN SELECT RAISE(ABORT, 'ChatGPT-plan evaluation usage records are immutable'); END;`);
       // Additive and idempotent: existing v9 databases receive the guard on
       // writable startup without a table rebuild or historical row rewrite.
       this.exec(CATEGORICAL_CLASSIFICATION_PROFILE_TRIGGER);
+      this.exec(`CREATE TABLE IF NOT EXISTS codex_luna_attempts (
+        id TEXT PRIMARY KEY, observation_id TEXT NOT NULL REFERENCES source_observations(id),
+        company_id TEXT NOT NULL REFERENCES companies(id), source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+        request_bytes INTEGER NOT NULL CHECK(request_bytes BETWEEN 1 AND 24576),
+        reserved_at INTEGER NOT NULL, completed_at INTEGER,
+        status TEXT NOT NULL CHECK(status IN ('reserved','dispatched','completed','not_sent','unknown')),
+        error TEXT, result_json TEXT CHECK(result_json IS NULL OR length(result_json)<=30000),
+        CHECK((status='completed')=(result_json IS NOT NULL))
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS codex_luna_company ON codex_luna_attempts(company_id,reserved_at);
+      CREATE INDEX IF NOT EXISTS codex_luna_source ON codex_luna_attempts(observation_id,reserved_at);
+      CREATE TRIGGER IF NOT EXISTS codex_luna_terminal_immutable BEFORE UPDATE ON codex_luna_attempts
+        WHEN OLD.status NOT IN ('reserved','dispatched')
+        BEGIN SELECT RAISE(ABORT,'Codex terminal attempts are immutable'); END;`);
+      this.prepare(`UPDATE codex_luna_attempts SET completed_at=?,
+        error='interrupted_before_completion',status=CASE status WHEN 'reserved' THEN 'not_sent' ELSE 'unknown' END
+        WHERE status IN ('reserved','dispatched')`).run(Date.now());
       this.prepare("INSERT INTO desk_runtime_sessions(id, pid, started_at) VALUES (?, ?, ?)")
         .run(this.runtimeId, process.pid, Date.now());
       this.recoverUnfinishedJevAttempts();
       this.recoverUnfinishedFundamentalAttempts();
       this.recoverUnfinishedSecFilingCaseFundamentalAttempts();
-      this.exec("PRAGMA user_version = 17");
+      this.recoverUnfinishedChatGPTPlanAuxiliaryRequests();
+      this.recoverUnfinishedChatGPTPlanEvaluationRequests();
+      this.recoverUnfinishedModelProviderAttempts();
+      this.recoverUnfinishedTypeSafeJevByokAttempts();
+      this.exec("PRAGMA user_version = 20");
       this.storageEnforcementEnabled = true;
     } catch (error) {
       try { openedDb?.close(); } catch { /* preserve startup failure */ }
@@ -1393,6 +1899,140 @@ export class Desk {
     return this.storage.status(this.db, this.storageReadOnly).canStartExternalWork;
   }
 
+  saveSecIssuerDirectorySnapshot(snapshot: SecIssuerDirectorySnapshot): void {
+    if (!this.storage.status(this.db, this.storageReadOnly).writesAllowed) throw new Error("sec_issuer_directory_storage_unavailable");
+    if (snapshot.source !== SEC_ISSUER_DIRECTORY_URL || !Number.isFinite(Date.parse(snapshot.retrievedAt))
+      || !/^[a-f0-9]{64}$/.test(snapshot.sha256) || !Array.isArray(snapshot.entries) || snapshot.entries.length > 100_000
+      || typeof snapshot.sourceBody !== "string" || createHash("sha256").update(snapshot.sourceBody, "utf8").digest("hex") !== snapshot.sha256
+      || snapshot.entries.some((entry) => !/^\d{10}$/.test(entry.cik) || !/^[A-Z0-9.\-]{1,14}$/.test(entry.ticker)
+        || !entry.name.trim() || entry.name.length > 512 || (entry.exchange !== null && entry.exchange.length > 80))) {
+      throw new Error("sec_issuer_directory_snapshot_invalid");
+    }
+    const serialized = JSON.stringify(snapshot);
+    if (Buffer.byteLength(serialized, "utf8") > 40_000_000) throw new Error("sec_issuer_directory_snapshot_too_large");
+    const cacheSha256 = createHash("sha256").update(serialized, "utf8").digest("hex");
+    const compressed = gzipSync(Buffer.from(serialized, "utf8"));
+    if (compressed.byteLength > 8_000_000) throw new Error("sec_issuer_directory_snapshot_too_large");
+    this.prepare(`INSERT INTO sec_issuer_directory_cache(singleton,snapshot_gzip,cache_sha256,source_sha256,retrieved_at,row_count,saved_at)
+      VALUES (1,?,?,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET
+      snapshot_gzip=excluded.snapshot_gzip,cache_sha256=excluded.cache_sha256,source_sha256=excluded.source_sha256,
+      retrieved_at=excluded.retrieved_at,row_count=excluded.row_count,saved_at=excluded.saved_at`)
+      .run(compressed, cacheSha256, snapshot.sha256, snapshot.retrievedAt, snapshot.entries.length, Date.now());
+  }
+
+  readSecIssuerDirectorySnapshot(): SecIssuerDirectorySnapshot | null {
+    try {
+      const row = this.prepare(`SELECT snapshot_gzip,cache_sha256,source_sha256,retrieved_at,row_count
+        FROM sec_issuer_directory_cache WHERE singleton=1`).get() as {
+          snapshot_gzip?: Uint8Array; cache_sha256?: string; source_sha256?: string; retrieved_at?: string; row_count?: number;
+        } | undefined;
+      if (!(row?.snapshot_gzip instanceof Uint8Array) || typeof row.cache_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(row.cache_sha256)
+        || typeof row.source_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(row.source_sha256)
+        || typeof row.retrieved_at !== "string" || !Number.isInteger(row.row_count) || Number(row.row_count) < 0 || Number(row.row_count) > 100_000) return null;
+      const serialized = gunzipSync(Buffer.from(row.snapshot_gzip), { maxOutputLength: 40_000_000 }).toString("utf8");
+      if (createHash("sha256").update(serialized, "utf8").digest("hex") !== row.cache_sha256) return null;
+      const value = JSON.parse(serialized) as unknown;
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+      const snapshot = value as Partial<SecIssuerDirectorySnapshot>;
+      if (snapshot.source !== SEC_ISSUER_DIRECTORY_URL || snapshot.sha256 !== row.source_sha256 || snapshot.retrievedAt !== row.retrieved_at
+        || typeof snapshot.sourceBody !== "string" || createHash("sha256").update(snapshot.sourceBody, "utf8").digest("hex") !== snapshot.sha256
+        || !Array.isArray(snapshot.entries) || snapshot.entries.length !== Number(row.row_count) || snapshot.entries.length > 100_000
+        || snapshot.entries.some((entry) => typeof entry !== "object" || entry === null
+          || !/^\d{10}$/.test(String(entry.cik)) || !/^[A-Z0-9.\-]{1,14}$/.test(String(entry.ticker))
+          || typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 512
+          || (entry.exchange !== null && typeof entry.exchange !== "string")
+          || (typeof entry.exchange === "string" && entry.exchange.length > 80))) return null;
+      return snapshot as SecIssuerDirectorySnapshot;
+    } catch {
+      return null;
+    }
+  }
+
+  createSecIssuerResearchSubject(input: {
+    cik: string; ticker: string; name: string; exchange: string | null; receiptSha256: string; now?: number;
+  }): { item: SecIssuerResearchSubject; created: boolean } {
+    const now = input.now ?? Date.now();
+    if (!/^\d{10}$/.test(input.cik) || !/^[A-Z0-9.\-]{1,14}$/.test(input.ticker) || !input.name.trim() || input.name.length > 512
+      || (input.exchange !== null && input.exchange.length > 80) || !/^[a-f0-9]{64}$/.test(input.receiptSha256)
+      || !Number.isSafeInteger(now) || now < 0) throw new Error("invalid_sec_issuer_research_subject");
+    if (!this.storage.status(this.db, this.storageReadOnly).writesAllowed) throw new Error("sec_issuer_research_subject_storage_unavailable");
+    const snapshot = this.readSecIssuerDirectorySnapshot();
+    if (!snapshot) throw new Error("sec_issuer_directory_receipt_not_current");
+    const retrievedAt = Date.parse(snapshot.retrievedAt);
+    const match = snapshot.sha256 === input.receiptSha256
+      ? snapshot.entries.find((entry) => entry.cik === input.cik && entry.ticker === input.ticker && entry.name === input.name && entry.exchange === input.exchange)
+      : null;
+    if (!match || !Number.isFinite(retrievedAt) || now < retrievedAt || now - retrievedAt > 24 * 60 * 60 * 1000) {
+      throw new Error("sec_issuer_directory_receipt_not_current");
+    }
+    const companyId = `sec-${input.cik}`;
+    const existing = this.prepare("SELECT cik,created_at FROM sec_issuer_research_subjects WHERE cik=?").get(input.cik) as { cik: string; created_at: number } | undefined;
+    const receiptCount = Number((this.prepare("SELECT COUNT(*) AS count FROM sec_issuer_research_identity_receipts").get() as { count: number }).count);
+    if (receiptCount >= 10_000 && !this.prepare("SELECT 1 FROM sec_issuer_research_identity_receipts WHERE cik=? AND sha256=?").get(input.cik, snapshot.sha256)) {
+      throw new Error("sec_issuer_research_receipt_limit_exceeded");
+    }
+    if (!existing) {
+      const subjectCount = Number((this.prepare("SELECT COUNT(*) AS count FROM sec_issuer_research_subjects").get() as { count: number }).count);
+      if (subjectCount >= MAX_SEC_ISSUER_RESEARCH_SUBJECTS) throw new Error("sec_issuer_research_subject_limit_exceeded");
+    }
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      this.prepare(`INSERT OR IGNORE INTO sec_issuer_research_identity_receipts(cik,sha256,ticker,name,exchange,source_url,retrieved_at)
+        VALUES (?,?,?,?,?,?,?)`).run(input.cik, snapshot.sha256, input.ticker, input.name, input.exchange, snapshot.source, snapshot.retrievedAt);
+      const priorSubject = this.prepare("SELECT cik FROM sec_issuer_research_subjects WHERE cik=?").get(input.cik);
+      this.prepare(`INSERT INTO companies(id,name,ticker,sector,aliases,color,ambiguous)
+        VALUES(?,?,?,'SEC research only',?, '#64748b',1)
+        ON CONFLICT(id) DO UPDATE SET name=excluded.name,ticker=excluded.ticker,sector=excluded.sector,
+          aliases=excluded.aliases,color=excluded.color,ambiguous=excluded.ambiguous`)
+        .run(companyId, input.name, input.ticker, JSON.stringify([input.name, input.ticker]));
+      this.prepare(`INSERT INTO sec_issuer_research_subjects(cik,company_id,current_identity_sha256,created_at,last_added_at)
+        VALUES(?,?,?,?,?) ON CONFLICT(cik) DO UPDATE SET current_identity_sha256=excluded.current_identity_sha256,last_added_at=excluded.last_added_at`)
+        .run(input.cik, companyId, snapshot.sha256, existing ? Number(existing.created_at) : now, now);
+      this.exec("COMMIT");
+      const item = this.secIssuerResearchSubjectByCik(input.cik);
+      if (!item) throw new Error("sec_issuer_research_subject_read_failed");
+      return { item, created: !priorSubject };
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
+  }
+
+  secIssuerResearchSubject(companyId: string): SecIssuerResearchSubject | null {
+    const row = this.prepare(`SELECT s.cik,s.company_id,s.created_at,r.ticker,r.name,r.exchange,r.source_url,r.retrieved_at,r.sha256
+      FROM sec_issuer_research_subjects s JOIN sec_issuer_research_identity_receipts r
+        ON r.cik=s.cik AND r.sha256=s.current_identity_sha256 WHERE s.company_id=?`).get(companyId) as Record<string, unknown> | undefined;
+    return row ? this.toSecIssuerResearchSubject(row) : null;
+  }
+
+  secIssuerResearchSubjects(): SecIssuerResearchSubject[] {
+    const rows = this.prepare(`SELECT s.cik,s.company_id,s.created_at,r.ticker,r.name,r.exchange,r.source_url,r.retrieved_at,r.sha256
+      FROM sec_issuer_research_subjects s JOIN sec_issuer_research_identity_receipts r
+        ON r.cik=s.cik AND r.sha256=s.current_identity_sha256 ORDER BY s.last_added_at DESC,s.cik`).all() as Array<Record<string, unknown>>;
+    return rows.map((row) => this.toSecIssuerResearchSubject(row));
+  }
+
+  secIssuerResearchCompanyIds(): string[] { return this.secIssuerResearchSubjects().map((item) => item.companyId); }
+
+  private secIssuerResearchSubjectByCik(cik: string): SecIssuerResearchSubject | null {
+    const row = this.prepare(`SELECT s.cik,s.company_id,s.created_at,r.ticker,r.name,r.exchange,r.source_url,r.retrieved_at,r.sha256
+      FROM sec_issuer_research_subjects s JOIN sec_issuer_research_identity_receipts r
+        ON r.cik=s.cik AND r.sha256=s.current_identity_sha256 WHERE s.cik=?`).get(cik) as Record<string, unknown> | undefined;
+    return row ? this.toSecIssuerResearchSubject(row) : null;
+  }
+
+  private toSecIssuerResearchSubject(row: Record<string, unknown>): SecIssuerResearchSubject {
+    if (row.source_url !== SEC_ISSUER_DIRECTORY_URL || typeof row.cik !== "string" || typeof row.company_id !== "string"
+      || typeof row.ticker !== "string" || typeof row.name !== "string" || !/^\d{10}$/.test(row.cik)
+      || !/^[A-Z0-9.\-]{1,14}$/.test(row.ticker) || !/^[a-f0-9]{64}$/.test(String(row.sha256))) {
+      throw new Error("sec_issuer_research_subject_corrupt");
+    }
+    return { kind: "sec_issuer_research", companyId: row.company_id, cik: row.cik, ticker: row.ticker, name: row.name,
+      exchange: row.exchange == null ? null : String(row.exchange),
+      identityReceipt: { source: SEC_ISSUER_DIRECTORY_URL, retrievedAt: String(row.retrieved_at), sha256: String(row.sha256) },
+      createdAt: Number(row.created_at) };
+  }
+
   saveSecListingSnapshot(snapshot: ListingSnapshot): void {
     const serialized = JSON.stringify(snapshot);
     if (Buffer.byteLength(serialized, "utf8") > 8_000_000) throw new Error("sec_listing_snapshot_too_large");
@@ -1416,6 +2056,42 @@ export class Desk {
     } catch {
       // Missing table on a read-only legacy database and corrupt cache rows
       // both degrade to a fresh explicit directory check.
+      return null;
+    }
+  }
+
+  saveSecFilingsInboxSnapshot(snapshot: SecInboxSnapshot): void {
+    if (!this.storage.status(this.db, this.storageReadOnly).writesAllowed) throw new Error("sec_filings_inbox_storage_unavailable");
+    const serialized = JSON.stringify(snapshot);
+    if (Buffer.byteLength(serialized, "utf8") > 1_000_000) throw new Error("sec_filings_inbox_snapshot_too_large");
+    const digest = createHash("sha256").update(serialized).digest("hex");
+    const compressed = gzipSync(Buffer.from(serialized, "utf8"));
+    if (compressed.byteLength > 500_000) throw new Error("sec_filings_inbox_snapshot_too_large");
+    const now = Date.now();
+    this.prepare(`INSERT OR IGNORE INTO sec_filings_inbox_snapshots(receipt_id, snapshot_gzip, snapshot_sha256, retrieved_at, saved_at)
+      VALUES (?, ?, ?, ?, ?)`)
+      .run(snapshot.receiptId, compressed, digest, snapshot.retrievedAt, now);
+    this.prepare(`DELETE FROM sec_filings_inbox_snapshots
+      WHERE saved_at < ? OR receipt_id NOT IN (
+        SELECT receipt_id FROM sec_filings_inbox_snapshots ORDER BY saved_at DESC, receipt_id DESC LIMIT 200
+      )`).run(now - 30 * 24 * 60 * 60 * 1000);
+  }
+
+  readLatestSecFilingsInboxSnapshot(): unknown | null {
+    try {
+      const row = this.prepare(`SELECT receipt_id, snapshot_gzip, snapshot_sha256 FROM sec_filings_inbox_snapshots
+        ORDER BY saved_at DESC, receipt_id DESC LIMIT 1`).get() as
+        { receipt_id?: string; snapshot_gzip?: Uint8Array; snapshot_sha256?: string } | undefined;
+      if (typeof row?.receipt_id !== "string" || !(row.snapshot_gzip instanceof Uint8Array) || typeof row.snapshot_sha256 !== "string"
+        || !/^[a-f0-9]{64}$/.test(row.snapshot_sha256)) return null;
+      const serialized = gunzipSync(Buffer.from(row.snapshot_gzip), { maxOutputLength: 1_000_000 }).toString("utf8");
+      if (createHash("sha256").update(serialized).digest("hex") !== row.snapshot_sha256) return null;
+      const snapshot: unknown = JSON.parse(serialized);
+      if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)
+        || (snapshot as { receiptId?: unknown }).receiptId !== row.receipt_id) return null;
+      return snapshot;
+    } catch {
+      // An older read-only database without this cache remains a truthful empty state.
       return null;
     }
   }
@@ -1471,7 +2147,7 @@ export class Desk {
       ["reserved_cost_micros", "INTEGER NOT NULL DEFAULT 0"],
       ["requested_service_tier", "TEXT"], ["max_daily_cost_micros", "INTEGER NOT NULL DEFAULT 0"],
       ["max_output_tokens", "INTEGER NOT NULL DEFAULT 0"], ["budget_day", "TEXT"], ["schema_sha256", "TEXT"],
-      ["prompt_sha256", "TEXT"],
+      ["prompt_sha256", "TEXT"], ["accounting_route", "TEXT NOT NULL DEFAULT 'legacy'"],
     ];
     for (const [name, ddl] of attemptAdditions) {
       if (!jevAttemptCols.has(name)) this.exec(`ALTER TABLE jev_request_attempts ADD COLUMN ${name} ${ddl}`);
@@ -1485,9 +2161,11 @@ export class Desk {
       if (!eventCols.has(name)) this.exec(`ALTER TABLE jev_attempt_events ADD COLUMN ${name} ${ddl}`);
     }
     const categoricalCols = new Set((this.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string }>).map((r) => r.name));
-    for (const [name, ddl] of [["requested_service_tier", "TEXT NOT NULL DEFAULT 'default'"], ["service_tier", "TEXT"], ["profile_sha256", "TEXT"], ["attempt_id", "TEXT REFERENCES jev_request_attempts(id)"]] as Array<[string, string]>) {
+    for (const [name, ddl] of [["requested_service_tier", "TEXT NOT NULL DEFAULT 'default'"], ["service_tier", "TEXT"], ["profile_sha256", "TEXT"], ["attempt_id", "TEXT REFERENCES jev_request_attempts(id)"], ["accounting_route", "TEXT NOT NULL DEFAULT 'api_key'"]] as Array<[string, string]>) {
       if (!categoricalCols.has(name)) this.exec(`ALTER TABLE categorical_classifications ADD COLUMN ${name} ${ddl}`);
     }
+    const tierColumn = (this.prepare("PRAGMA table_info(categorical_classifications)").all() as Array<{ name: string; notnull: number }>).find((column) => column.name === "requested_service_tier");
+    if (tierColumn?.notnull) this.rebuildCategoricalClassifications();
 
     const priceCols = new Set(
       (this.prepare("PRAGMA table_info(price_points)").all() as Array<{ name: string }>).map((r) => r.name),
@@ -1604,13 +2282,59 @@ export class Desk {
       if (!judgmentCols.has("score_usage_check_required")) {
         this.exec("ALTER TABLE jev_judgments ADD COLUMN score_usage_check_required INTEGER NOT NULL DEFAULT 0");
       }
-      if (object?.type === "view") this.exec("DROP VIEW mentions");
+      if (object?.type === "view") this.exec("DROP VIEW IF EXISTS mentions");
       this.createMentionsView();
       this.exec("PRAGMA user_version = 11");
       this.exec("COMMIT");
     } catch (err) {
       this.rollbackIfActive();
       throw err;
+    }
+  }
+
+  private rebuildCategoricalClassifications(): void {
+    // Older schemas made requested_service_tier NOT NULL. Rebuild only this
+    // append-only result table so plan rows can faithfully store no tier while
+    // preserving every historical classification and its source/receipt links.
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      this.exec("DROP TRIGGER IF EXISTS categorical_classifications_profile_guard");
+      this.exec("DROP TRIGGER IF EXISTS categorical_classifications_no_update");
+      this.exec("DROP TRIGGER IF EXISTS categorical_classifications_no_delete");
+      this.exec("DROP VIEW IF EXISTS mentions");
+      this.exec("ALTER TABLE categorical_classifications RENAME TO categorical_classifications_v17");
+      this.exec(`CREATE TABLE categorical_classifications (
+        observation_id TEXT PRIMARY KEY REFERENCES source_observations(id), attempt_id TEXT REFERENCES jev_request_attempts(id),
+        provider TEXT NOT NULL CHECK(provider='openai_luna'), model_requested TEXT NOT NULL, model_returned TEXT NOT NULL,
+        requested_service_tier TEXT, service_tier TEXT, accounting_route TEXT NOT NULL DEFAULT 'api_key' CHECK(accounting_route IN ('api_key','chatgpt_plan')),
+        prompt_version TEXT NOT NULL, prompt_sha256 TEXT NOT NULL CHECK(length(prompt_sha256)=64),
+        schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL CHECK(length(schema_sha256)=64),
+        profile_sha256 TEXT CHECK(profile_sha256 IS NULL OR length(profile_sha256)=64), sentiment TEXT, event_type TEXT, takeaway TEXT,
+        about INTEGER, material INTEGER, investor_relevant INTEGER, evidence_sufficient INTEGER NOT NULL CHECK(evidence_sufficient IN (0,1)),
+        summary TEXT, supporting_excerpt TEXT, disposition TEXT NOT NULL CHECK(disposition IN ('classified','excluded','review_required')),
+        response_id TEXT NOT NULL, response_sha256 TEXT NOT NULL CHECK(length(response_sha256)=64),
+        input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER, cache_write_tokens INTEGER, output_tokens INTEGER NOT NULL,
+        reasoning_tokens INTEGER, total_tokens INTEGER NOT NULL, estimated_cost_usd REAL, latency_ms INTEGER NOT NULL, classified_at INTEGER NOT NULL
+      )`);
+      this.exec(`INSERT INTO categorical_classifications
+        (observation_id,attempt_id,provider,model_requested,model_returned,requested_service_tier,service_tier,accounting_route,
+         prompt_version,prompt_sha256,schema_version,schema_sha256,profile_sha256,sentiment,event_type,takeaway,about,material,
+         investor_relevant,evidence_sufficient,summary,supporting_excerpt,disposition,response_id,response_sha256,input_tokens,
+         cached_input_tokens,cache_write_tokens,output_tokens,reasoning_tokens,total_tokens,estimated_cost_usd,latency_ms,classified_at)
+        SELECT observation_id,attempt_id,provider,model_requested,model_returned,requested_service_tier,service_tier,
+          COALESCE(accounting_route,'api_key'),prompt_version,prompt_sha256,schema_version,schema_sha256,profile_sha256,sentiment,
+          event_type,takeaway,about,material,investor_relevant,evidence_sufficient,summary,supporting_excerpt,disposition,response_id,
+          response_sha256,input_tokens,cached_input_tokens,cache_write_tokens,output_tokens,reasoning_tokens,total_tokens,
+          estimated_cost_usd,latency_ms,classified_at FROM categorical_classifications_v17`);
+      this.exec("DROP TABLE categorical_classifications_v17");
+      this.exec(`CREATE TRIGGER categorical_classifications_no_update BEFORE UPDATE ON categorical_classifications
+        BEGIN SELECT RAISE(ABORT, 'Categorical classifications are immutable'); END;
+        CREATE TRIGGER categorical_classifications_no_delete BEFORE DELETE ON categorical_classifications
+        BEGIN SELECT RAISE(ABORT, 'Categorical classifications are immutable'); END`);
+      this.exec("COMMIT");
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
     }
   }
 
@@ -1635,6 +2359,7 @@ export class Desk {
         j.score_attempts, j.score_retry_at, j.score_usage_check_required,
         c.provider AS classification_provider, c.model_requested AS classification_model_requested,
         c.model_returned AS classification_model_returned, c.requested_service_tier AS classification_service_tier_requested,
+        c.accounting_route AS classification_accounting_route,
         c.service_tier AS classification_service_tier, c.prompt_version AS classification_prompt_version,
         c.prompt_sha256 AS classification_prompt_sha256, c.profile_sha256 AS classification_profile_sha256,
         c.attempt_id AS classification_attempt_id,
@@ -1657,12 +2382,12 @@ export class Desk {
   }
 
   private recoverUnfinishedJevAttempts(): void {
-    const unfinished = this.prepare(`SELECT a.id, a.observation_id, a.attempt_number, a.provider, a.budget_day, s.pid, s.closed_at,
+    const unfinished = this.prepare(`SELECT a.id, a.observation_id, a.attempt_number, a.provider, a.accounting_route, a.budget_day, s.pid, s.closed_at,
         a.reserved_cost_micros, a.max_daily_cost_micros, a.request_bytes,
         EXISTS(SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type = 'dispatch_intent') AS dispatch_started
       FROM jev_request_attempts a LEFT JOIN desk_runtime_sessions s ON s.id = a.runtime_id
       WHERE NOT EXISTS (SELECT 1 FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response', 'rejected', 'unknown', 'not_sent'))
-      ORDER BY a.reserved_at`).all() as Array<{ id: string; observation_id: string; attempt_number: number; provider: ModelProvider;
+      ORDER BY a.reserved_at`).all() as Array<{ id: string; observation_id: string; attempt_number: number; provider: ModelProvider; accounting_route: string;
         budget_day: string | null; reserved_cost_micros: number; max_daily_cost_micros: number; request_bytes: number; pid: number | null; closed_at: number | null; dispatch_started: number }>;
     const abandoned = unfinished.filter((attempt) => attempt.closed_at != null || !processIsAlive(attempt.pid ?? 0));
     const scoring = this.prepare(`SELECT j.observation_id, j.score_attempts, a.id AS attempt_id, a.runtime_id, s.pid, s.closed_at,
@@ -1689,7 +2414,7 @@ export class Desk {
         if (!wasDispatched) this.releaseScoringReservation(attempt);
         if (wasDispatched && attempt.provider === "openai_luna" && attempt.budget_day) {
           this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
-            .run(`openai:budget:${attempt.budget_day}:closed`);
+            .run(`${attempt.accounting_route === "chatgpt_plan" ? "chatgpt-plan" : "openai"}:budget:${attempt.budget_day}:closed`);
         }
       }
       const fail = this.prepare(`UPDATE jev_judgments SET status='failed', score_retry_at=NULL,
@@ -1699,7 +2424,7 @@ export class Desk {
         const outcome = row.terminal_outcome ?? (attempt ? attempt.dispatch_started === 1 ? "unknown" : "not_sent" : "unknown");
         if (outcome === "unknown" && attempt?.provider === "openai_luna" && attempt.budget_day) {
           this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
-            .run(`openai:budget:${attempt.budget_day}:closed`);
+            .run(`${attempt.accounting_route === "chatgpt_plan" ? "chatgpt-plan" : "openai"}:budget:${attempt.budget_day}:closed`);
         }
         const needsUsageReview = outcome === "response" || outcome === "unknown" ? 1 : 0;
         const errorMessage = outcome === "not_sent"
@@ -1747,18 +2472,75 @@ export class Desk {
     } catch (error) { this.rollbackIfActive(); throw error; }
   }
 
+  private recoverUnfinishedChatGPTPlanAuxiliaryRequests(): void {
+    const now = Date.now();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const reserved = this.prepare("SELECT budget_day,request_bytes FROM chatgpt_plan_auxiliary_requests WHERE status='reserved'").all() as Array<{ budget_day: string; request_bytes: number }>;
+      for (const row of reserved) this.releaseChatGPTPlanBudgetReservation(row.budget_day, row.request_bytes);
+      const dispatched = this.prepare("SELECT DISTINCT budget_day FROM chatgpt_plan_auxiliary_requests WHERE status='dispatched'").all() as Array<{ budget_day: string }>;
+      for (const row of dispatched) this.closeChatGPTPlanBudgetDay(row.budget_day);
+      this.prepare(`UPDATE chatgpt_plan_auxiliary_requests SET status='not_sent', completed_at=? WHERE status='reserved'`).run(now);
+      this.prepare(`UPDATE chatgpt_plan_auxiliary_requests SET status='unknown', completed_at=? WHERE status='dispatched'`).run(now);
+      this.exec("COMMIT");
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  private recoverUnfinishedChatGPTPlanEvaluationRequests(): void {
+    const now = Date.now();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const reserved = this.prepare("SELECT budget_day,request_bytes FROM chatgpt_plan_evaluation_requests WHERE status='reserved'").all() as Array<{ budget_day: string; request_bytes: number }>;
+      for (const row of reserved) this.releaseChatGPTPlanBudgetReservation(row.budget_day, row.request_bytes);
+      const dispatched = this.prepare("SELECT DISTINCT budget_day FROM chatgpt_plan_evaluation_requests WHERE status='dispatched'").all() as Array<{ budget_day: string }>;
+      for (const row of dispatched) this.closeChatGPTPlanBudgetDay(row.budget_day);
+      this.prepare("UPDATE chatgpt_plan_evaluation_requests SET status='not_sent',completed_at=? WHERE status='reserved'").run(now);
+      this.prepare("UPDATE chatgpt_plan_evaluation_requests SET status='unknown',completed_at=? WHERE status='dispatched'").run(now);
+      this.exec("COMMIT");
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  private closeChatGPTPlanBudgetDay(day: string): void {
+    this.prepare("INSERT INTO kv(key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'")
+      .run(`chatgpt-plan:budget:${day}:closed`);
+  }
+
+  /** Release only a pre-dispatch reservation. Corrupt counters fail closed for that day. */
+  private releaseChatGPTPlanBudgetReservation(day: string, requestBytes: number): boolean {
+    const prefix = `chatgpt-plan:budget:${day}`;
+    const reservations: Array<[string, number]> = [[`${prefix}:requests`, 1], [`${prefix}:request-bytes`, requestBytes]];
+    const current = reservations.map(([key]) => {
+      const row = this.prepare("SELECT value FROM kv WHERE key=?").get(key) as { value: string } | undefined;
+      return row ? Number(row.value) : 0;
+    });
+    const valid = reservations.every(([, amount], index) => Number.isSafeInteger(amount) && amount >= 0 &&
+      Number.isSafeInteger(current[index]!) && current[index]! >= amount);
+    if (!valid) {
+      this.closeChatGPTPlanBudgetDay(day);
+      return false;
+    }
+    for (let index = 0; index < reservations.length; index += 1) {
+      const [key] = reservations[index]!;
+      this.prepare("INSERT INTO kv(key,value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(key, String(current[index]! - reservations[index]![1]));
+    }
+    return true;
+  }
+
   private releaseScoringReservation(attempt: {
     provider: ModelProvider;
+    accounting_route?: string;
     budget_day: string | null;
     request_bytes: number;
     reserved_cost_micros: number;
   }): void {
     if (!attempt.budget_day) return;
-    const prefix = `${attempt.provider === "openai_luna" ? "openai" : "jev"}:budget:${attempt.budget_day}`;
+    const service = attempt.provider !== "openai_luna" ? "jev" : attempt.accounting_route === "chatgpt_plan" ? "chatgpt-plan" : "openai";
+    const prefix = `${service}:budget:${attempt.budget_day}`;
     const reservations: Array<[string, number]> = [
       [`${prefix}:requests`, 1],
       [`${prefix}:request-bytes`, Number(attempt.request_bytes)],
-      ...(attempt.provider === "openai_luna"
+      ...(attempt.provider === "openai_luna" && service === "openai"
         ? [[`${prefix}:cost-micros`, Number(attempt.reserved_cost_micros)] as [string, number]]
         : []),
     ];
@@ -2072,6 +2854,153 @@ export class Desk {
     };
   }
 
+  companyAssessmentEvidence(cik: string, factIds: readonly string[]): {
+    company: CompanyAssessmentCompany; snapshotId: string; facts: PersistedFundamentalFact[];
+  } | null {
+    if (!/^\d{10}$/.test(cik) || factIds.length < 1 || factIds.length > 12
+      || new Set(factIds).size !== factIds.length) return null;
+    const first = this.prepare(`SELECT snapshot_id FROM sec_fundamental_facts WHERE id=? AND cik=?`).get(factIds[0]!,cik) as {snapshot_id:string}|undefined;
+    if(!first)return null;
+    const snapshot = this.prepare(`SELECT s.id,s.cik,s.company_id,c.ticker,c.name FROM sec_fundamental_snapshots s
+      JOIN companies c ON c.id=s.company_id WHERE s.id=? AND s.cik=? AND s.id=(SELECT id FROM sec_fundamental_snapshots WHERE company_id=s.company_id ORDER BY created_at DESC,rowid DESC LIMIT 1)`).get(first.snapshot_id,cik) as
+      { id:string; cik:string; company_id:string; ticker:string; name:string } | undefined;
+    if (!snapshot) return null;
+    const rows = this.prepare(`SELECT id,company_id,cik,metric,taxonomy,concept,unit,value,reported_decimals,reported_precision_status,
+      start_date,end_date,fiscal_year,fiscal_period,duration_class,form,accession,filed_at,accepted_at,retrieved_at,source_url,
+      response_sha256,directory_delivery_id,submissions_delivery_id,companyfacts_delivery_id,amended
+      FROM sec_fundamental_facts WHERE snapshot_id=? AND cik=? AND id IN (${factIds.map(() => "?").join(",")})`)
+      .all(snapshot.id,cik,...factIds) as Array<Record<string,unknown>>;
+    if (rows.length !== factIds.length) return null;
+    const byId = new Map(rows.map((row) => [String(row.id), row]));
+    const facts = factIds.map((id) => byId.get(id)).filter((row): row is Record<string,unknown> => Boolean(row)).map((row) => ({
+      id:String(row.id), companyId:String(row.company_id), cik:String(row.cik), metric:String(row.metric) as PersistedFundamentalFact["metric"],
+      taxonomy:String(row.taxonomy), concept:String(row.concept), unit:String(row.unit), value:String(row.value),
+      reportedDecimals:row.reported_decimals == null ? null : String(row.reported_decimals),
+      reportedPrecisionStatus:String(row.reported_precision_status) as PersistedFundamentalFact["reportedPrecisionStatus"],
+      startDate:row.start_date == null ? null : String(row.start_date), endDate:String(row.end_date),
+      filingFocusYear:row.fiscal_year == null ? null : Number(row.fiscal_year), filingFocusPeriod:row.fiscal_period == null ? null : String(row.fiscal_period),
+      durationClass:String(row.duration_class) as PersistedFundamentalFact["durationClass"], form:String(row.form), accession:String(row.accession),
+      filedAt:Number(row.filed_at), acceptedAt:Number(row.accepted_at), retrievedAt:Number(row.retrieved_at), sourceUrl:String(row.source_url),
+      responseSha256:String(row.response_sha256), companyFactsDeliveryId:String(row.companyfacts_delivery_id),
+      submissionsDeliveryId:String(row.submissions_delivery_id), amended:Number(row.amended)===1,
+    }));
+    return { company:{ cik:snapshot.cik,ticker:snapshot.ticker,name:snapshot.name },snapshotId:snapshot.id,facts };
+  }
+
+  reserveCompanyEvidenceAssessment(input:{id:string;companyId:string;cik:string;snapshotId:string;provider:"openai"|"google_gemini";
+    model:string;promptVersion:string;factIds:readonly string[];requestSha256:string;budgetDay:string;reservedAt:number;
+    usageReviewAcknowledged:boolean;dailyLimit:number}):
+    {kind:"reserved";unresolvedCount:number}|{kind:"usage_review_required";unresolvedCount:number}|{kind:"daily_limit"}|{kind:"source_changed"}{
+    if(!/^[0-9a-f-]{36}$/i.test(input.id)||!/^[0-9a-f]{64}$/.test(input.requestSha256)||!/^\d{10}$/.test(input.cik)
+      ||!/^20\d\d-\d\d-\d\d$/.test(input.budgetDay)||!Number.isSafeInteger(input.reservedAt)||input.reservedAt<0
+      ||!Number.isSafeInteger(input.dailyLimit)||input.dailyLimit<1||input.factIds.length<1||input.factIds.length>12
+      ||new Set(input.factIds).size!==input.factIds.length)throw new Error("invalid_company_assessment_reservation");
+    this.exec("BEGIN IMMEDIATE");
+    try{
+      const selected=this.companyAssessmentEvidence(input.cik,input.factIds);
+      if(!selected||selected.company.cik!==input.cik||selected.snapshotId!==input.snapshotId
+        ||selected.facts.some(fact=>fact.companyId!==input.companyId)){this.rollbackIfActive();return {kind:"source_changed"};}
+      const prior=this.prepare(`SELECT COUNT(*) AS count FROM (
+        SELECT r.id FROM company_evidence_assessment_reservations r LEFT JOIN company_evidence_assessment_receipts e ON e.reservation_id=r.id
+          WHERE r.provider=? AND (e.reservation_id IS NULL OR e.status='unknown_delivery')
+        UNION ALL SELECT id FROM company_evidence_assessment_attempts WHERE provider=? AND status='unknown_delivery'
+      )`).get(input.provider,input.provider) as {count:number};
+      const unresolvedCount=Number(prior.count);
+      if(unresolvedCount>0&&!input.usageReviewAcknowledged){this.rollbackIfActive();return {kind:"usage_review_required",unresolvedCount};}
+      const usage=this.companyAssessmentDailyUsage(input.budgetDay);
+      if(usage>=input.dailyLimit){this.rollbackIfActive();return {kind:"daily_limit"};}
+      this.prepare(`INSERT INTO company_evidence_assessment_reservations
+        (id,company_id,cik,snapshot_id,provider,model,prompt_version,selected_fact_ids_json,request_sha256,budget_day,
+         usage_review_acknowledged,unresolved_count_at_reservation,reserved_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(input.id,input.companyId,input.cik,input.snapshotId,input.provider,input.model,input.promptVersion,
+        JSON.stringify(input.factIds),input.requestSha256,input.budgetDay,input.usageReviewAcknowledged?1:0,unresolvedCount,input.reservedAt);
+      this.exec("COMMIT");return {kind:"reserved",unresolvedCount};
+    }catch(error){this.rollbackIfActive();throw error;}
+  }
+
+  completeCompanyEvidenceAssessmentReservation(input:{reservationId:string;status:CompanyAssessmentAttemptStatus;completedAt:number;result:CompanyAssessmentResult|null}):void{
+    if(!/^[0-9a-f-]{36}$/i.test(input.reservationId)||!Number.isSafeInteger(input.completedAt)||input.completedAt<0)throw new Error("invalid_company_assessment_receipt");
+    const reservation=this.prepare(`SELECT provider,model,prompt_version,selected_fact_ids_json,reserved_at FROM company_evidence_assessment_reservations WHERE id=?`)
+      .get(input.reservationId) as {provider:string;model:string;prompt_version:string;selected_fact_ids_json:string;reserved_at:number}|undefined;
+    if(!reservation||input.completedAt<Number(reservation.reserved_at))throw new Error("company_assessment_reservation_not_found");
+    const result=input.result;
+    let resultJson:string|null=null,resultSha256:string|null=null;
+    if(input.status==="completed"){
+      if(!result||result.provider!==reservation.provider||(result.modelRequested??result.model)!==reservation.model
+        ||(result.modelReturned!==undefined&&result.modelReturned!==result.model)||result.promptVersion!==reservation.prompt_version
+        ||!Array.isArray(result.citations))throw new Error("company_assessment_result_reservation_mismatch");
+      let factIds:unknown;try{factIds=JSON.parse(reservation.selected_fact_ids_json) as unknown;}catch{throw new Error("company_assessment_reservation_corrupt");}
+      if(!Array.isArray(factIds)||!result.citations.every(citation=>citation.factId!=null&&factIds.includes(citation.factId)))throw new Error("company_assessment_result_reservation_mismatch");
+      const citationIds=new Set(result.citations.map(citation=>citation.id));
+      const assessment=validateStoredCompanyAssessment(result.assessment,citationIds);
+      if(!assessment)throw new Error("company_assessment_result_invalid");
+      resultJson=JSON.stringify(result);resultSha256=createHash("sha256").update(resultJson).digest("hex");
+    }else if(result!==null)throw new Error("noncompleted_company_assessment_has_result");
+    this.prepare(`INSERT INTO company_evidence_assessment_receipts (reservation_id,status,completed_at,result_json,result_sha256)
+      VALUES (?,?,?,?,?)`).run(input.reservationId,input.status,input.completedAt,resultJson,resultSha256);
+  }
+
+  companyAssessmentUsageReviewState(provider:"openai"|"google_gemini"):{required:boolean;unresolvedCount:number}{
+    const row=this.prepare(`SELECT COUNT(*) AS count FROM (
+      SELECT r.id FROM company_evidence_assessment_reservations r LEFT JOIN company_evidence_assessment_receipts e ON e.reservation_id=r.id
+        WHERE r.provider=? AND (e.reservation_id IS NULL OR e.status='unknown_delivery')
+      UNION ALL SELECT id FROM company_evidence_assessment_attempts WHERE provider=? AND status='unknown_delivery'
+    )`).get(provider,provider) as {count:number};
+    const unresolvedCount=Number(row.count);return {required:unresolvedCount>0,unresolvedCount};
+  }
+
+  latestCompanyEvidenceAssessment(companyId:string,provider:"openai"|"google_gemini"):
+    {snapshotId:string|null;assessment:CompanyAssessmentReadback["assessment"]}|null{
+    const snapshot=this.prepare(`SELECT id FROM sec_fundamental_snapshots WHERE company_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1`).get(companyId) as {id:string}|undefined;
+    if(!snapshot)return {snapshotId:null,assessment:null};
+    const row=this.prepare(`SELECT r.id,r.provider,r.model,r.prompt_version,r.selected_fact_ids_json,r.reserved_at,e.status,e.completed_at,e.result_json,e.result_sha256
+      FROM company_evidence_assessment_reservations r LEFT JOIN company_evidence_assessment_receipts e ON e.reservation_id=r.id
+      WHERE r.company_id=? AND r.provider=? AND r.snapshot_id=? ORDER BY r.reserved_at DESC,r.rowid DESC LIMIT 1`)
+      .get(companyId,provider,snapshot.id) as {id:string;provider:string;model:string;prompt_version:string;selected_fact_ids_json:string;reserved_at:number;
+        status:CompanyAssessmentAttemptStatus|null;completed_at:number|null;result_json:string|null;result_sha256:string|null}|undefined;
+    if(!row)return {snapshotId:snapshot.id,assessment:null};
+    let selectedFactIds:string[]=[];try{const parsed:unknown=JSON.parse(row.selected_fact_ids_json);if(Array.isArray(parsed)&&parsed.every(id=>typeof id==="string"))selectedFactIds=parsed;}catch{/* retain empty selection on corrupt lineage */}
+    let status:CompanyAssessmentAttemptStatus=row.status??"unknown_delivery",result:CompanyAssessmentResult|null=null;
+    if(row.result_json){
+      try{
+        if(!row.result_sha256||createHash("sha256").update(row.result_json).digest("hex")!==row.result_sha256)throw new Error("assessment_digest_mismatch");
+        const parsed:unknown=JSON.parse(row.result_json);
+        if(typeof parsed==="object"&&parsed!==null&&!Array.isArray(parsed)){
+          const candidate=parsed as CompanyAssessmentResult;
+          const allowed=new Set(candidate.citations?.map(citation=>citation.id)??[]);
+          const assessment=validateStoredCompanyAssessment(candidate.assessment,allowed);
+          if(candidate.provider===provider&&(candidate.modelRequested??candidate.model)===row.model
+            &&(candidate.modelReturned===undefined||candidate.modelReturned===candidate.model)&&candidate.promptVersion===row.prompt_version&&assessment
+            &&candidate.citations.every(citation=>citation.factId!=null&&selectedFactIds.includes(citation.factId)))result=candidate;
+        }
+      }catch{/* a corrupt saved response is never served */}
+      if(!result)status="invalid_output";
+    }
+    return {snapshotId:snapshot.id,assessment:{reservationId:row.id,provider,model:row.model,promptVersion:row.prompt_version,selectedFactIds,
+      status,startedAt:Number(row.reserved_at),completedAt:row.completed_at==null?null:Number(row.completed_at),result}};
+  }
+
+  appendCompanyEvidenceAssessmentAttempt(input: {
+    id:string; companyId:string; cik:string; snapshotId:string; provider:"openai"|"google_gemini"; model:string;
+    promptVersion:string; selectedFactIds:readonly string[]; requestSha256:string;
+    status:"completed"|"invalid_output"|"rejected"|"unknown_delivery"|"not_sent";
+    startedAt:number; completedAt:number; result:CompanyAssessmentResult|null;
+  }): void {
+    const resultJson=input.result ? JSON.stringify(input.result) : null;
+    const resultSha256=resultJson ? createHash("sha256").update(resultJson).digest("hex") : null;
+    this.prepare(`INSERT INTO company_evidence_assessment_attempts
+      (id,company_id,cik,snapshot_id,provider,model,prompt_version,selected_fact_ids_json,request_sha256,status,started_at,completed_at,result_json,result_sha256)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(input.id,input.companyId,input.cik,input.snapshotId,input.provider,input.model,input.promptVersion,
+      JSON.stringify(input.selectedFactIds),input.requestSha256,input.status,input.startedAt,input.completedAt,resultJson,resultSha256);
+  }
+
+  companyAssessmentDailyUsage(day: string): number {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error("invalid_company_assessment_usage_day");
+    const row=this.prepare(`SELECT (SELECT COUNT(*) FROM company_evidence_assessment_reservations WHERE budget_day=?)
+      +(SELECT COUNT(*) FROM company_evidence_assessment_attempts WHERE date(started_at / 1000, 'unixepoch')=?) AS count`).get(day,day) as {count:number};
+    return Number(row.count);
+  }
+
   companyResearchBriefInputs(companyId: string, asOfMs: number, limit = 20): {
     company: Company;
     asOfMs: number;
@@ -2100,8 +3029,9 @@ export class Desk {
       const common = `${FOLLOWED_BASELINE_ELIGIBLE_FILTER}
         AND i.completed_at<=? AND o.ingested_at<=? AND o.rowid<=? AND m.retrieved_at<=?
         AND COALESCE(${DISPLAYED_SOURCE_CLOCK_SQL}, m.retrieved_at)<=?
-        AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)=1`;
-      const joins = `FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS} JOIN companies c ON c.id=m.company_id`;
+        AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)=1
+        AND desk_finance_relevant(m.title, m.snippet, m.source_tier, m.source_kind, c.ticker, c.name)=1`;
+      const joins = `FROM mentions m ${FOLLOWED_BASELINE_RECEIPT_JOINS}`;
       const asOfParams = [companyId, asOfMs, asOfMs, asOfMs, maxRowId, asOfMs, asOfMs] as const;
       const eligibleRow = this.prepare(`SELECT COUNT(*) AS count ${joins}
         WHERE ${common} AND m.collector NOT IN ('demo_simulation','legacy_unknown')
@@ -2204,7 +3134,7 @@ export class Desk {
       const decision = company ? this.latestCompanyResearchDecision(companyId) : null;
       if (!company || !decision) continue;
       items.push({
-        company: { companyId: company.id, name: company.name, ticker: company.ticker, cik: null },
+        company: { companyId: company.id, name: company.name, ticker: company.ticker, cik: this.secIssuerResearchSubject(company.id)?.cik ?? null },
         decision,
         factCount: decision.factIds.length,
         observationCount: decision.observationIds.length,
@@ -2408,6 +3338,312 @@ export class Desk {
 
   mentionRow(id: string): MentionRow | undefined {
     return this.prepare(`SELECT * FROM mentions WHERE id = ? AND ${REAL_MENTION_FILTER}`).get(id) as MentionRow | undefined;
+  }
+
+  codexLunaSource(id: string): MentionRow | undefined {
+    return this.prepare(`SELECT m.* FROM mentions m
+      JOIN source_observations o ON o.id=m.id
+      JOIN source_deliveries d ON d.id=m.delivery_id
+      JOIN source_ingestions i ON i.delivery_id=d.id
+      JOIN companies c ON c.id=m.company_id
+      WHERE m.id=? AND m.collector NOT IN ('demo_simulation','legacy_unknown')
+        AND COALESCE(m.engine,'')<>'demo-sim' AND m.source_url GLOB 'https://*'
+        AND d.collector=m.collector AND d.company_id=m.company_id AND d.adapter_version=o.adapter_version
+        AND d.result IN ('success','partial') AND d.processing_required=1 AND i.status IN ('success','partial')
+        AND desk_issuer_identity_strong(c.name,c.ticker,c.aliases,c.ambiguous,m.title,m.snippet,m.scoped)=1
+        AND desk_finance_relevant(m.title,m.snippet,m.source_tier,m.source_kind,c.ticker,c.name)=1`).get(id) as MentionRow | undefined;
+  }
+
+  codexLunaAttempts(companyId?: string): CodexLunaAttempt[] {
+    const rows = this.prepare(`SELECT id,observation_id AS observationId,company_id AS companyId,
+      source_sha256 AS sourceSha256,request_bytes AS requestBytes,reserved_at AS reservedAt,
+      completed_at AS completedAt,status,error,result_json AS result
+      FROM codex_luna_attempts ${companyId ? "WHERE company_id=?" : ""} ORDER BY reserved_at DESC,id DESC`)
+      .all(...(companyId ? [companyId] : [])) as Array<Omit<CodexLunaAttempt,"result"> & { result: string | null }>;
+    return rows.map(row => ({ ...row, result: row.result == null ? null : JSON.parse(row.result) as unknown }));
+  }
+
+  reserveCodexLunaAttempt(input: Pick<CodexLunaAttempt,"id"|"observationId"|"companyId"|"sourceSha256"|"requestBytes"|"reservedAt">): string | null {
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const counts = this.prepare(`SELECT COUNT(*) AS total,
+        SUM(CASE WHEN reserved_at>=? AND status<>'not_sent' THEN 1 ELSE 0 END) AS daily,
+        SUM(CASE WHEN reserved_at>=? AND status<>'not_sent' THEN request_bytes ELSE 0 END) AS bytes,
+        SUM(CASE WHEN status IN ('reserved','dispatched') THEN 1 ELSE 0 END) AS active
+        FROM codex_luna_attempts`).get(Math.floor(input.reservedAt/86400000)*86400000,Math.floor(input.reservedAt/86400000)*86400000) as {
+          total: number; daily: number | null; bytes: number | null; active: number | null };
+      const blocked = counts.total>=20_000 ? "codex_history_capacity" : counts.active ? "codex_request_in_progress"
+        : (counts.daily ?? 0)>=20 ? "daily_request_limit" : (counts.bytes ?? 0)+input.requestBytes>512_000 ? "daily_byte_limit" : null;
+      if (!blocked) this.prepare(`INSERT INTO codex_luna_attempts
+        (id,observation_id,company_id,source_sha256,request_bytes,reserved_at,status)
+        VALUES (?,?,?,?,?,?,'reserved')`).run(input.id,input.observationId,input.companyId,input.sourceSha256,input.requestBytes,input.reservedAt);
+      this.exec("COMMIT");
+      return blocked;
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  dispatchCodexLunaAttempt(id: string): boolean {
+    return Number(this.prepare("UPDATE codex_luna_attempts SET status='dispatched' WHERE id=? AND status='reserved'").run(id).changes)===1;
+  }
+
+  finishCodexLunaAttempt(id: string, status: "completed"|"not_sent"|"unknown", result: CodexLunaSaved|null, error: string|null): void {
+    const changed = this.prepare(`UPDATE codex_luna_attempts SET status=?,completed_at=?,result_json=?,error=?
+      WHERE id=? AND status IN ('reserved','dispatched')`).run(status,Date.now(),result ? JSON.stringify(result) : null,error,id);
+    if (Number(changed.changes)!==1) throw new Error("codex_attempt_already_finished");
+  }
+
+  reserveModelProviderAttempt(input: ModelProviderAttemptReservation): "reserved" | "daily_request_limit" | "daily_byte_limit" | "daily_cost_limit" | "storage_paused" {
+    if (!this.storage.status(this.db, this.storageReadOnly).writesAllowed) return "storage_paused";
+    if (!z.string().uuid().safeParse(input.id).success || !/^[a-f0-9]{64}$/.test(input.sourceSha256)
+      || !/^[a-f0-9]{64}$/.test(input.requestSha256) || !/^[a-f0-9]{64}$/.test(input.promptSha256)
+      || !/^[a-f0-9]{64}$/.test(input.schemaSha256) || !/^20\d\d-\d\d-\d\d$/.test(input.utcDay)
+      || !Number.isSafeInteger(input.requestBytes) || input.requestBytes < 1 || input.requestBytes > 98_304
+      || !Number.isSafeInteger(input.costReservationMicros) || input.costReservationMicros < 0
+      || !Number.isSafeInteger(input.reservedAt) || input.reservedAt < 0
+      || !Number.isSafeInteger(input.maxDailyRequests) || input.maxDailyRequests < 1
+      || !Number.isSafeInteger(input.maxDailyBytes) || input.maxDailyBytes < 1
+      || !Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros < 1) throw new Error("invalid_model_provider_attempt_reservation");
+    const mention = this.mentionRow(input.observationId);
+    if (!mention || mention.company_id.length === 0) throw new Error("unknown_real_source_observation");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const usage = this.prepare(`SELECT COUNT(*) AS requests, COALESCE(SUM(request_bytes),0) AS bytes,
+        COALESCE(SUM(cost_reservation_micros),0) AS cost
+        FROM model_provider_attempts WHERE provider=? AND budget_day=? AND status<>'not_sent'`)
+        .get(input.provider, input.utcDay) as { requests: number; bytes: number; cost: number };
+      if (Number(usage.requests) >= input.maxDailyRequests) { this.exec("ROLLBACK"); return "daily_request_limit"; }
+      if (Number(usage.bytes) + input.requestBytes > input.maxDailyBytes) { this.exec("ROLLBACK"); return "daily_byte_limit"; }
+      if (Number(usage.cost) + input.costReservationMicros > input.maxDailyCostMicros) { this.exec("ROLLBACK"); return "daily_cost_limit"; }
+      this.prepare(`INSERT INTO model_provider_attempts
+        (id,observation_id,provider,model_requested,source_sha256,request_sha256,request_bytes,
+         prompt_version,prompt_sha256,schema_version,schema_sha256,budget_day,reserved_at,status,cost_reservation_micros)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'reserved',?)`)
+        .run(input.id, input.observationId, input.provider, input.modelRequested, input.sourceSha256,
+          input.requestSha256, input.requestBytes, input.promptVersion, input.promptSha256,
+          input.schemaVersion, input.schemaSha256, input.utcDay, input.reservedAt, input.costReservationMicros);
+      this.exec("COMMIT");
+      return "reserved";
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  markModelProviderDispatched(attemptId: string, at = Date.now()): boolean {
+    if (!Number.isSafeInteger(at) || at < 0) throw new Error("invalid_model_provider_dispatch_time");
+    const result = this.prepare(`UPDATE model_provider_attempts SET status='dispatched',dispatch_intent_at=?
+      WHERE id=? AND status='reserved'`).run(at, attemptId);
+    return Number(result.changes) === 1;
+  }
+
+  finishModelProviderAttempt(input: {
+    attemptId: string;
+    outcome: "completed" | "rejected" | "not_sent" | "unknown";
+    completedAt: number;
+    httpStatus: number | null;
+    modelReturned: string | null;
+    responseId: string | null;
+    responseSha256: string | null;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    estimatedCostUsd: number | null;
+    latencyMs: number | null;
+    errorCategory: string | null;
+    categoricalReceipt?: ProviderClassificationResult["categoricalReceipt"];
+    classification?: Omit<ModelProviderClassificationRecord, "attemptId" | "observationId" | "provider" | "modelRequested" | "createdAt">;
+  }): boolean {
+    if (input.categoricalReceipt) {
+      const receiptSchema = z.object({
+        profileSha256: z.string().regex(/^[a-f0-9]{64}$/), serviceTierRequested: z.literal("default"), serviceTier: z.literal("default"),
+        cachedInputTokens: z.number().int().nonnegative().safe().nullable(),
+        cacheWriteInputTokens: z.number().int().nonnegative().safe().nullable(),
+        reasoningTokens: z.number().int().nonnegative().safe().nullable(), totalTokens: z.number().int().nonnegative().safe(),
+      }).strict();
+      if (!receiptSchema.safeParse(input.categoricalReceipt).success || input.outcome !== "completed"
+        || input.inputTokens == null || input.outputTokens == null
+        || input.categoricalReceipt.totalTokens !== input.inputTokens + input.outputTokens
+        || (input.categoricalReceipt.cachedInputTokens ?? 0) + (input.categoricalReceipt.cacheWriteInputTokens ?? 0) > input.inputTokens
+        || (input.categoricalReceipt.reasoningTokens ?? 0) > input.outputTokens) throw new Error("invalid_model_provider_categorical_receipt");
+    }
+    if (!Number.isSafeInteger(input.completedAt) || input.completedAt < 0
+      || (input.responseSha256 != null && !/^[a-f0-9]{64}$/.test(input.responseSha256))
+      || (input.estimatedCostUsd != null && (!Number.isFinite(input.estimatedCostUsd) || input.estimatedCostUsd < 0))) {
+      throw new Error("invalid_model_provider_attempt_receipt");
+    }
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const attempt = this.prepare("SELECT * FROM model_provider_attempts WHERE id=?").get(input.attemptId) as {
+        observation_id: string; provider: BYOKModelProvider; model_requested: string; source_sha256: string;
+        status: string; cost_reservation_micros: number; budget_day: string;
+      } | undefined;
+      if (!attempt) { this.exec("ROLLBACK"); return false; }
+      if (input.classification && input.outcome !== "completed") throw new Error("classification_requires_completed_attempt");
+      if (input.categoricalReceipt && (attempt.provider !== "openai" || attempt.model_requested !== "gpt-6-luna"
+        || input.modelReturned !== "gpt-6-luna" || input.httpStatus == null || input.httpStatus < 200 || input.httpStatus > 299
+        || !input.responseId || !input.responseSha256)) throw new Error("invalid_model_provider_categorical_receipt");
+      const changed = this.prepare(`UPDATE model_provider_attempts SET status=?,dispatch_intent_at=CASE WHEN ?='not_sent' THEN NULL ELSE dispatch_intent_at END,
+        completed_at=?,http_status=?,model_returned=?,
+        response_id=?,response_sha256=?,input_tokens=?,output_tokens=?,estimated_cost_usd=?,latency_ms=?,error_category=?,
+        categorical_receipt_json=?,
+        cost_reservation_micros=CASE WHEN ?='completed' AND ? IS NOT NULL THEN CAST(ROUND(?*1000000) AS INTEGER) ELSE cost_reservation_micros END
+        WHERE id=? AND status IN ('reserved','dispatched')`)
+        .run(input.outcome, input.outcome, input.completedAt, input.httpStatus, input.modelReturned, input.responseId,
+          input.responseSha256, input.inputTokens, input.outputTokens, input.estimatedCostUsd, input.latencyMs,
+          input.errorCategory, input.categoricalReceipt == null ? null : JSON.stringify(input.categoricalReceipt),
+          input.outcome, input.estimatedCostUsd, input.estimatedCostUsd, input.attemptId);
+      if (Number(changed.changes) !== 1) { this.exec("ROLLBACK"); return false; }
+      if (input.classification) {
+        const c = input.classification;
+        if (c.sourceSha256 !== attempt.source_sha256 || c.modelReturned !== input.modelReturned
+          || !/^[a-f0-9]{64}$/.test(c.sourceSha256)) throw new Error("model_provider_result_source_mismatch");
+        this.prepare(`INSERT INTO model_provider_classifications
+          (attempt_id,observation_id,provider,model_requested,model_returned,source_sha256,source_time_at,retrieved_at,
+           sentiment,event_type,takeaway,about,material,investor_relevant,evidence_sufficient,summary,supporting_excerpt,disposition,created_at)
+          SELECT ?,o.id,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+          FROM source_observations o WHERE o.id=?`)
+          .run(input.attemptId, attempt.provider, attempt.model_requested, c.modelReturned,
+            c.sourceSha256, c.sourceTimeAt, c.retrievedAt, c.sentiment, c.eventType, c.takeaway,
+            c.about == null ? null : c.about ? 1 : 0, c.material == null ? null : c.material ? 1 : 0,
+            c.investorRelevant == null ? null : c.investorRelevant ? 1 : 0, c.evidenceSufficient ? 1 : 0,
+            c.summary, c.supportingExcerpt, c.disposition, input.completedAt, attempt.observation_id);
+      }
+      this.exec("COMMIT");
+      return true;
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  latestModelProviderClassification(observationId: string, provider: BYOKModelProvider, attemptId: string | null = null): ModelProviderClassificationRecord | null {
+    const row = this.prepare(`SELECT attempt_id AS attemptId,observation_id AS observationId,provider,
+      model_requested AS modelRequested,model_returned AS modelReturned,source_sha256 AS sourceSha256,
+      source_time_at AS sourceTimeAt,retrieved_at AS retrievedAt,sentiment,event_type AS eventType,takeaway,
+      about,material,investor_relevant AS investorRelevant,evidence_sufficient AS evidenceSufficient,
+      summary,supporting_excerpt AS supportingExcerpt,disposition,created_at AS createdAt
+      FROM model_provider_classifications WHERE observation_id=? AND provider=? AND (? IS NULL OR attempt_id=?)
+      ORDER BY created_at DESC,rowid DESC LIMIT 1`).get(observationId, provider, attemptId, attemptId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      attemptId: String(row.attemptId), observationId: String(row.observationId), provider: row.provider as BYOKModelProvider,
+      modelRequested: String(row.modelRequested), modelReturned: String(row.modelReturned), sourceSha256: String(row.sourceSha256),
+      sourceTimeAt: row.sourceTimeAt == null ? null : Number(row.sourceTimeAt), retrievedAt: Number(row.retrievedAt),
+      sentiment: row.sentiment as ModelProviderClassificationRecord["sentiment"], eventType: row.eventType == null ? null : String(row.eventType),
+      takeaway: row.takeaway == null ? null : String(row.takeaway), about: row.about == null ? null : Number(row.about) === 1,
+      material: row.material == null ? null : Number(row.material) === 1, investorRelevant: row.investorRelevant == null ? null : Number(row.investorRelevant) === 1,
+      evidenceSufficient: Number(row.evidenceSufficient) === 1, summary: row.summary == null ? null : String(row.summary),
+      supportingExcerpt: row.supportingExcerpt == null ? null : String(row.supportingExcerpt),
+      disposition: row.disposition as ModelProviderClassificationRecord["disposition"], createdAt: Number(row.createdAt),
+    };
+  }
+
+  modelProviderClassificationFeed(companyId: string, provider: BYOKModelProvider, fromMs: number, throughMs = Number.MAX_SAFE_INTEGER, limit = 100): Array<ModelProviderClassificationRecord & {
+    title: string; publisherName: string; sourceUrl: string; companyId: string;
+  }> {
+    if (!Number.isSafeInteger(fromMs) || fromMs < 0 || !Number.isSafeInteger(throughMs) || throughMs < fromMs) throw new Error("invalid_model_provider_window");
+    const sourceClock = VALIDATED_SOURCE_CLOCK_SQL.replaceAll("m.", "o.");
+    const rows = this.prepare(`SELECT c.attempt_id AS attemptId,c.observation_id AS observationId,c.provider,
+      c.model_requested AS modelRequested,c.model_returned AS modelReturned,c.source_sha256 AS sourceSha256,
+      ${sourceClock} AS sourceTimeAt,c.retrieved_at AS retrievedAt,c.sentiment,c.event_type AS eventType,
+      c.takeaway,c.about,c.material,c.investor_relevant AS investorRelevant,c.evidence_sufficient AS evidenceSufficient,
+      c.summary,c.supporting_excerpt AS supportingExcerpt,c.disposition,c.created_at AS createdAt,
+      o.title,o.publisher_name AS publisherName,o.source_url AS sourceUrl,o.company_id AS companyId
+      FROM model_provider_classifications c
+      JOIN source_observations o ON o.id=c.observation_id
+      JOIN companies co ON co.id=o.company_id
+      WHERE o.company_id=? AND c.provider=? AND ((${sourceClock}>=? AND ${sourceClock}<=?)
+        OR (${sourceClock} IS NULL AND o.retrieved_at>=? AND o.retrieved_at<=?))
+        AND desk_issuer_identity_strong(co.name,co.ticker,co.aliases,co.ambiguous,o.title,o.snippet,o.scoped)=1
+        AND desk_finance_relevant(o.title,o.snippet,o.source_tier,o.source_kind,co.ticker,co.name)=1
+        AND c.attempt_id=(SELECT newest.attempt_id FROM model_provider_classifications newest
+          WHERE newest.observation_id=c.observation_id AND newest.provider=c.provider
+          ORDER BY newest.created_at DESC,newest.rowid DESC LIMIT 1)
+      ORDER BY CASE WHEN ${sourceClock} IS NULL THEN 1 ELSE 0 END ASC,${sourceClock} DESC,c.created_at DESC,c.attempt_id DESC LIMIT ?`)
+      .all(companyId, provider, fromMs, throughMs, fromMs, throughMs, Math.max(1, Math.min(500, Math.trunc(limit)))) as Array<Record<string, unknown>>;
+    return rows.map(row => ({
+      attemptId: String(row.attemptId), observationId: String(row.observationId), provider: row.provider as BYOKModelProvider,
+      modelRequested: String(row.modelRequested), modelReturned: String(row.modelReturned), sourceSha256: String(row.sourceSha256),
+      sourceTimeAt: row.sourceTimeAt == null ? null : Number(row.sourceTimeAt), retrievedAt: Number(row.retrievedAt),
+      sentiment: row.sentiment as ModelProviderClassificationRecord["sentiment"],
+      eventType: row.eventType == null ? null : String(row.eventType), takeaway: row.takeaway == null ? null : String(row.takeaway),
+      about: row.about == null ? null : Number(row.about) === 1, material: row.material == null ? null : Number(row.material) === 1,
+      investorRelevant: row.investorRelevant == null ? null : Number(row.investorRelevant) === 1,
+      evidenceSufficient: Number(row.evidenceSufficient) === 1, summary: row.summary == null ? null : String(row.summary),
+      supportingExcerpt: row.supportingExcerpt == null ? null : String(row.supportingExcerpt),
+      disposition: row.disposition as ModelProviderClassificationRecord["disposition"], createdAt: Number(row.createdAt),
+      title: String(row.title), publisherName: String(row.publisherName), sourceUrl: String(row.sourceUrl), companyId: String(row.companyId),
+    }));
+  }
+
+  modelProviderAttemptHistory(observationId: string, provider: BYOKModelProvider, limit = 10): Array<{
+    id: string; modelRequested: string; status: string; reservedAt: number; completedAt: number | null;
+    httpStatus: number | null; modelReturned: string | null; inputTokens: number | null; outputTokens: number | null;
+    estimatedCostUsd: number | null; errorCategory: string | null;
+  }> {
+    const rows = this.prepare(`SELECT id,model_requested AS modelRequested,status,reserved_at AS reservedAt,
+      completed_at AS completedAt,http_status AS httpStatus,model_returned AS modelReturned,input_tokens AS inputTokens,
+      output_tokens AS outputTokens,estimated_cost_usd AS estimatedCostUsd,error_category AS errorCategory
+      FROM model_provider_attempts WHERE observation_id=? AND provider=? ORDER BY reserved_at DESC,id DESC LIMIT ?`)
+      .all(observationId, provider, Math.max(1, Math.min(20, Math.trunc(limit)))) as Array<Record<string, unknown>>;
+    return rows.map(row => ({
+      id: String(row.id), modelRequested: String(row.modelRequested), status: String(row.status), reservedAt: Number(row.reservedAt),
+      completedAt: row.completedAt == null ? null : Number(row.completedAt), httpStatus: row.httpStatus == null ? null : Number(row.httpStatus),
+      modelReturned: row.modelReturned == null ? null : String(row.modelReturned), inputTokens: row.inputTokens == null ? null : Number(row.inputTokens),
+      outputTokens: row.outputTokens == null ? null : Number(row.outputTokens), estimatedCostUsd: row.estimatedCostUsd == null ? null : Number(row.estimatedCostUsd),
+      errorCategory: row.errorCategory == null ? null : String(row.errorCategory),
+    }));
+  }
+
+  modelProviderDailyUsage(provider: BYOKModelProvider, utcDay: string): { requests: number; requestBytes: number; estimatedCostUsd: number } {
+    const row = this.prepare(`SELECT COUNT(*) AS requests,COALESCE(SUM(request_bytes),0) AS requestBytes,
+      COALESCE(SUM(cost_reservation_micros),0) AS cost FROM model_provider_attempts
+      WHERE provider=? AND budget_day=? AND status<>'not_sent'`).get(provider, utcDay) as { requests: number; requestBytes: number; cost: number };
+    return { requests: Number(row.requests), requestBytes: Number(row.requestBytes), estimatedCostUsd: Number(row.cost) / 1_000_000 };
+  }
+
+  reserveModelProviderVerification(input: { id: string; provider: BYOKModelProvider; utcDay: string; reservedAt: number; maxDailyRequests: number }): "reserved" | "daily_verification_limit" | "storage_paused" {
+    if (!this.storage.status(this.db, this.storageReadOnly).writesAllowed) return "storage_paused";
+    if (!z.string().uuid().safeParse(input.id).success || !/^20\d\d-\d\d-\d\d$/.test(input.utcDay)
+      || !Number.isSafeInteger(input.reservedAt) || input.reservedAt < 0
+      || !Number.isSafeInteger(input.maxDailyRequests) || input.maxDailyRequests < 1) {
+      throw new Error("invalid_model_provider_verification_reservation");
+    }
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const usage = this.prepare(`SELECT COUNT(*) AS requests FROM model_provider_verification_attempts
+        WHERE provider=? AND budget_day=?`).get(input.provider, input.utcDay) as { requests: number };
+      if (Number(usage.requests) >= input.maxDailyRequests) {
+        this.exec("ROLLBACK");
+        return "daily_verification_limit";
+      }
+      this.prepare(`INSERT INTO model_provider_verification_attempts (id,provider,budget_day,reserved_at)
+        VALUES (?,?,?,?)`).run(input.id, input.provider, input.utcDay, input.reservedAt);
+      this.exec("COMMIT");
+      return "reserved";
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  modelProviderVerificationUsage(provider: BYOKModelProvider, utcDay: string): number {
+    const row = this.prepare(`SELECT COUNT(*) AS requests FROM model_provider_verification_attempts
+      WHERE provider=? AND budget_day=?`).get(provider, utcDay) as { requests: number };
+    return Number(row.requests);
+  }
+
+  private recoverUnfinishedModelProviderAttempts(): void {
+    const now = Date.now();
+    this.prepare(`UPDATE model_provider_attempts SET status='not_sent',completed_at=?,error_category='interrupted_before_dispatch'
+      WHERE status='reserved'`).run(now);
+    this.prepare(`UPDATE model_provider_attempts SET status='unknown',completed_at=?,error_category='interrupted_after_dispatch'
+      WHERE status='dispatched'`).run(now);
+  }
+
+  private recoverUnfinishedTypeSafeJevByokAttempts(): void {
+    const now = Date.now();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      this.prepare(`UPDATE typesafe_jev_byok_attempts SET status='not_sent',completed_at=?,error_category='interrupted_before_dispatch'
+        WHERE status='reserved'`).run(now);
+      this.prepare(`UPDATE typesafe_jev_byok_attempts SET status='unknown',completed_at=?,error_category='interrupted_after_dispatch'
+        WHERE status='dispatched'`).run(now);
+      this.exec("COMMIT");
+    } catch (error) {
+      this.rollbackIfActive();
+      throw error;
+    }
   }
 
   analystSourceReview(observationId: string): AnalystSourceReview | null {
@@ -2796,6 +4032,7 @@ export class Desk {
     maxRequests: number;
     maxRequestBytes: number;
     provider?: ModelProvider;
+    accountingRoute?: "api_key" | "chatgpt_plan";
     maxDailyCostMicros?: number;
     reservedCostMicros?: number;
     requestedServiceTier?: "default";
@@ -2804,6 +4041,7 @@ export class Desk {
     promptSha256?: string;
   }): BudgetedScoreClaim {
     const provider = input.provider ?? "typesafe";
+    const accountingRoute = provider === "openai_luna" ? (input.accountingRoute ?? "api_key") : "typesafe";
     if (input.allowedCollectors.length === 0) return { kind: "not_claimed" };
     if (!/^[a-f0-9]{64}$/.test(input.requestSha256) || !/^[a-f0-9]{64}$/.test(input.rubricSha256) || !input.requestedModel.trim()) {
       throw new Error("valid Jev request digest, rubric digest, and requested model are required for a scoring claim");
@@ -2813,14 +4051,17 @@ export class Desk {
       !Number.isSafeInteger(input.requestBytes) || input.requestBytes <= 0 ||
       !Number.isSafeInteger(input.maxRequests) || input.maxRequests <= 0 ||
       !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0 ||
-      (provider === "openai_luna" && (!Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros! <= 0 ||
-        !Number.isSafeInteger(input.reservedCostMicros) || input.reservedCostMicros! <= 0 ||
-        input.requestedServiceTier !== "default" || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens! <= 0 ||
-        !/^[a-f0-9]{64}$/.test(input.schemaSha256 ?? "") || !/^[a-f0-9]{64}$/.test(input.promptSha256 ?? "")))
+      (provider === "openai_luna" && (!/^[a-f0-9]{64}$/.test(input.schemaSha256 ?? "") || !/^[a-f0-9]{64}$/.test(input.promptSha256 ?? "") ||
+        accountingRoute === "api_key" && (!Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros! <= 0 ||
+          !Number.isSafeInteger(input.reservedCostMicros) || input.reservedCostMicros! <= 0 || input.requestedServiceTier !== "default" ||
+          !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens! <= 0) ||
+        accountingRoute === "chatgpt_plan" && (input.reservedCostMicros != null && input.reservedCostMicros !== 0 ||
+          input.maxDailyCostMicros != null && input.maxDailyCostMicros !== 0 || input.requestedServiceTier != null ||
+          input.maxOutputTokens != null && input.maxOutputTokens !== 0 || input.requestedModel !== "gpt-6-luna")))
     ) return { kind: "budget_exhausted" };
 
     const collectorSlots = input.allowedCollectors.map(() => "?").join(", ");
-    const budgetPrefix = provider === "openai_luna" ? "openai:budget" : "jev:budget";
+    const budgetPrefix = provider === "openai_luna" ? accountingRoute === "chatgpt_plan" ? "chatgpt-plan:budget" : "openai:budget" : "jev:budget";
     const requestKey = `${budgetPrefix}:${input.utcDay}:requests`;
     const bytesKey = `${budgetPrefix}:${input.utcDay}:request-bytes`;
     const costKey = `${budgetPrefix}:${input.utcDay}:cost-micros`;
@@ -2869,7 +4110,7 @@ export class Desk {
         "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       );
       let costMicros = 0;
-      if (provider === "openai_luna") {
+      if (provider === "openai_luna" && accountingRoute === "api_key") {
         const usedCost = readCounter(costKey);
         costMicros = input.reservedCostMicros!;
         if (usedCost == null || usedCost + costMicros > input.maxDailyCostMicros!) {
@@ -2901,10 +4142,10 @@ export class Desk {
       const attemptId = randomUUID();
       this.prepare(`INSERT INTO jev_request_attempts
         (id, observation_id, runtime_id, attempt_number, request_sha256, request_bytes, requested_model, rubric_sha, reserved_at, provider, reserved_cost_micros,
-         requested_service_tier, max_daily_cost_micros, max_output_tokens, budget_day, schema_sha256, prompt_sha256)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+         requested_service_tier, max_daily_cost_micros, max_output_tokens, budget_day, schema_sha256, prompt_sha256, accounting_route)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(attemptId, input.id, this.runtimeId, row.score_attempts, input.requestSha256, input.requestBytes, input.requestedModel.trim(), input.rubricSha256, input.now, provider, costMicros,
-          input.requestedServiceTier ?? null, input.maxDailyCostMicros ?? 0, input.maxOutputTokens ?? 0, input.utcDay, input.schemaSha256 ?? null, input.promptSha256 ?? null);
+          input.requestedServiceTier ?? null, input.maxDailyCostMicros ?? 0, input.maxOutputTokens ?? 0, input.utcDay, input.schemaSha256 ?? null, input.promptSha256 ?? null, accountingRoute);
       this.exec("COMMIT");
       return { kind: "claimed", row, attemptId };
     } catch (err) {
@@ -2952,15 +4193,20 @@ export class Desk {
   }
 
   private appendJevAttemptReceipt(receipt: JevAttemptReceipt): void {
-    const attempt = this.prepare(`SELECT provider, reserved_cost_micros, budget_day, max_daily_cost_micros,
+    const attempt = this.prepare(`SELECT provider, accounting_route, reserved_cost_micros, budget_day, max_daily_cost_micros,
       max_output_tokens, request_bytes, requested_service_tier FROM jev_request_attempts WHERE id=?`).get(receipt.attemptId) as
-      | { provider: ModelProvider; reserved_cost_micros: number; budget_day: string | null; max_daily_cost_micros: number;
+      | { provider: ModelProvider; accounting_route: string; reserved_cost_micros: number; budget_day: string | null; max_daily_cost_micros: number;
           max_output_tokens: number; request_bytes: number; requested_service_tier: string | null }
       | undefined;
     if (!attempt) throw new Error("Jev attempt receipt has no matching request attempt");
+    if (attempt.accounting_route === "chatgpt_plan" && (attempt.provider !== "openai_luna" || attempt.requested_service_tier !== null ||
+      attempt.reserved_cost_micros !== 0 || attempt.max_daily_cost_micros !== 0 || receipt.estimatedCostUsd != null)) {
+      throw new Error("ChatGPT plan accounting must not contain an API tier or USD cost");
+    }
     const dispatched = this.prepare("SELECT 1 FROM jev_attempt_events WHERE attempt_id = ? AND event_type = 'dispatch_intent'").get(receipt.attemptId);
     const storagePausedAfterIntent = receipt.outcome === "not_sent" && receipt.errorCategory === "storage_paused";
-    if (receipt.outcome === "not_sent" ? Boolean(dispatched) && !storagePausedAfterIntent : !dispatched) {
+    const planPreflightNotSent = receipt.outcome === "not_sent" && attempt.accounting_route === "chatgpt_plan" && receipt.errorCategory === "classifier_preflight";
+    if (receipt.outcome === "not_sent" ? Boolean(dispatched) && !storagePausedAfterIntent && !planPreflightNotSent : !dispatched) {
       throw new Error("Jev attempt receipt does not match its dispatch-intent state");
     }
     this.prepare(`INSERT INTO jev_attempt_events
@@ -2972,10 +4218,14 @@ export class Desk {
         receipt.cachedInputTokens ?? null, receipt.cacheWriteInputTokens ?? null, receipt.reasoningTokens ?? null, receipt.totalTokens ?? null,
         receipt.responseId ?? null, receipt.responseSha256 ?? null, receipt.estimatedCostUsd ?? null, receipt.responseServiceTier ?? null);
     if (receipt.outcome === "not_sent") this.releaseScoringReservation({
-      provider: attempt.provider, budget_day: attempt.budget_day,
+      provider: attempt.provider, accounting_route: attempt.accounting_route, budget_day: attempt.budget_day,
       request_bytes: attempt.request_bytes, reserved_cost_micros: attempt.reserved_cost_micros,
     });
-    if (attempt.provider === "openai_luna" && attempt.budget_day && receipt.outcome !== "not_sent") {
+    if (attempt.accounting_route === "chatgpt_plan" && attempt.budget_day && receipt.outcome === "unknown") {
+      const prefix = `chatgpt-plan:budget:${attempt.budget_day}`;
+      this.prepare("INSERT INTO kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(`${prefix}:closed`);
+    }
+    if (attempt.provider === "openai_luna" && attempt.accounting_route !== "chatgpt_plan" && attempt.budget_day && receipt.outcome !== "not_sent") {
       const prefix = `openai:budget:${attempt.budget_day}`;
       const costKey = `${prefix}:cost-micros`;
       const reserved = Number(attempt.reserved_cost_micros);
@@ -3005,31 +4255,35 @@ export class Desk {
   }
 
   recordCategoricalClassification(observationId: string, classification: CategoricalClassification, receipt: JevAttemptReceipt): void {
+    const accountingRoute = classification.accountingRoute ?? "api_key";
     if (classification.provider !== "openai_luna" || classification.modelRequested !== "gpt-6-luna" ||
-      classification.modelReturned !== "gpt-6-luna" || classification.serviceTierRequested !== "default" ||
-      classification.serviceTier !== "default" || receipt.outcome !== "response" ||
+      classification.modelReturned !== "gpt-6-luna" ||
+      accountingRoute === "api_key" && (classification.serviceTierRequested !== "default" || classification.serviceTier !== "default") ||
+      accountingRoute === "chatgpt_plan" && (classification.serviceTierRequested !== null || classification.estimatedCostUsd !== null) ||
+      receipt.outcome !== "response" ||
       receipt.httpStatus == null || receipt.httpStatus < 200 || receipt.httpStatus >= 300 ||
-      receipt.resolvedModel !== classification.modelReturned || receipt.responseServiceTier !== classification.serviceTier ||
+      receipt.resolvedModel !== classification.modelReturned || (receipt.responseServiceTier ?? null) !== classification.serviceTier ||
       receipt.responseId !== classification.responseId || receipt.responseSha256 !== classification.responseSha256 ||
       receipt.inputTokens !== classification.inputTokens || receipt.outputTokens !== classification.outputTokens ||
       (receipt.cachedInputTokens ?? null) !== classification.cachedInputTokens ||
       (receipt.cacheWriteInputTokens ?? null) !== classification.cacheWriteInputTokens ||
       (receipt.reasoningTokens ?? null) !== classification.reasoningTokens ||
       (receipt.totalTokens ?? null) !== classification.totalTokens ||
-      (receipt.estimatedCostUsd ?? null) !== classification.estimatedCostUsd || receipt.latencyMs !== classification.latencyMs) {
+      (receipt.estimatedCostUsd ?? null) !== classification.estimatedCostUsd || receipt.latencyMs !== classification.latencyMs ||
+      accountingRoute === "chatgpt_plan" && receipt.estimatedCostUsd != null) {
       throw new Error("Categorical classification does not match the required GPT-6 Luna profile and complete response receipt");
     }
     this.exec("BEGIN IMMEDIATE");
     try {
       this.appendJevAttemptReceipt(receipt);
       this.prepare(`INSERT INTO categorical_classifications
-        (observation_id, attempt_id, provider, model_requested, model_returned, requested_service_tier, service_tier, prompt_version, prompt_sha256,
+        (observation_id, attempt_id, provider, model_requested, model_returned, requested_service_tier, service_tier, accounting_route, prompt_version, prompt_sha256,
          schema_version, schema_sha256, profile_sha256, sentiment, event_type, takeaway, about, material, investor_relevant,
          evidence_sufficient, summary, supporting_excerpt, disposition, response_id, response_sha256,
          input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, reasoning_tokens, total_tokens, estimated_cost_usd, latency_ms, classified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(observationId, receipt.attemptId, classification.provider, classification.modelRequested, classification.modelReturned,
-          classification.serviceTierRequested, classification.serviceTier, classification.promptVersion, classification.promptSha256, classification.schemaVersion, classification.schemaSha256,
+          classification.serviceTierRequested, classification.serviceTier, accountingRoute, classification.promptVersion, classification.promptSha256, classification.schemaVersion, classification.schemaSha256,
           classification.profileSha256,
           classification.sentiment, classification.eventType, classification.takeaway,
           classification.about == null ? null : classification.about ? 1 : 0,
@@ -3064,7 +4318,7 @@ export class Desk {
         (SELECT resolved_model FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS resolved_model,
         (SELECT latency_ms FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS latency_ms,
         (SELECT error_category FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS error_category,
-        a.provider, a.reserved_cost_micros,
+        a.provider, a.accounting_route, a.reserved_cost_micros,
         a.schema_sha256 AS schema_sha256,
         (SELECT cached_input_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS cached_input_tokens,
         (SELECT cache_write_tokens FROM jev_attempt_events e WHERE e.attempt_id = a.id AND e.event_type IN ('response','rejected','unknown','not_sent')) AS cache_write_tokens,
@@ -3086,6 +4340,10 @@ export class Desk {
       outputTokens: row.output_tokens == null ? null : Number(row.output_tokens), resolvedModel: row.resolved_model == null ? null : String(row.resolved_model),
       latencyMs: row.latency_ms == null ? null : Number(row.latency_ms), errorCategory: row.error_category == null ? null : String(row.error_category),
       provider: row.provider === "openai_luna" ? "openai_luna" : "typesafe",
+      accountingRoute: row.accounting_route === "chatgpt_plan" ? "chatgpt_plan"
+        : row.accounting_route === "api_key" ? "api_key"
+          : row.accounting_route === "typesafe" ? "typesafe"
+            : row.provider === "openai_luna" ? "api_key" : "typesafe",
       reservedCostMicros: Number(row.reserved_cost_micros ?? 0),
       reservedCostUsd: Number(row.reserved_cost_micros ?? 0) / 1_000_000,
       schemaSha256: row.schema_sha256 == null ? null : String(row.schema_sha256),
@@ -3391,6 +4649,7 @@ export class Desk {
     const rows = this.prepare(
       `SELECT m.*, r.disposition AS analyst_research_disposition,
          desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) AS issuer_identity_strong,
+         desk_finance_relevant(m.title, m.snippet, m.source_tier, m.source_kind, c.ticker, c.name) AS company_business_relevant,
          r.updated_at AS analyst_research_disposition_updated_at
        FROM mentions m LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id
        LEFT JOIN companies c ON c.id = m.company_id
@@ -3400,10 +4659,12 @@ export class Desk {
       analyst_research_disposition?: AnalystResearchDisposition | null;
       analyst_research_disposition_updated_at?: number | null;
       issuer_identity_strong: number;
+      company_business_relevant: number;
     }>;
     return rows.map((row) => ({
       ...rowToDTO(row),
       issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
+      companyBusinessRelevant: Number(row.company_business_relevant) === 1,
       analystResearchDisposition: row.analyst_research_disposition ?? null,
       analystResearchDispositionUpdatedAt: row.analyst_research_disposition_updated_at == null
         ? null : Number(row.analyst_research_disposition_updated_at),
@@ -3640,12 +4901,19 @@ export class Desk {
       failed: "status IN ('pending', 'retrying', 'scoring', 'failed', 'corrupt', 'review_required')",
       history: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
       identity_review: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
+      relevance_review: "status IN ('pending', 'scoring', 'retrying', 'scored', 'off_target', 'classified', 'excluded', 'review_required', 'failed', 'corrupt')",
     };
     const identitySql = "desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped)";
+    const companyBusinessRelevantSql = "desk_finance_relevant(m.title, m.snippet, m.source_tier, m.source_kind, c.ticker, c.name)";
     const identityFiltered = filter === "all" || filter === "bull" || filter === "bear" || filter === "material";
     const identityReviewOnly = filter === "identity_review";
+    const relevanceReviewOnly = filter === "relevance_review";
     const identityFilterSql = identityFiltered ? `AND ${identitySql} = 1`
-      : identityReviewOnly ? `AND ${identitySql} = 0` : "";
+      : identityReviewOnly ? `AND ${identitySql} = 0`
+        : relevanceReviewOnly ? `AND ${identitySql} = 1` : "";
+    const relevanceFiltered = filter === "all" || filter === "bull" || filter === "bear" || filter === "material" || filter === "failed";
+    const relevanceFilterSql = relevanceFiltered ? `AND ${companyBusinessRelevantSql} = 1`
+      : relevanceReviewOnly ? `AND ${companyBusinessRelevantSql} = 0` : "";
     const cursorFilter = cursor
       ? `AND (
            COALESCE(published_at, provider_observed_at, retrieved_at) < ?
@@ -3664,6 +4932,7 @@ export class Desk {
          AND (${filterSql[filter]})
          AND COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) >= ?
          ${identityFilterSql}
+         ${relevanceFilterSql}
          AND r.disposition = 'dismissed'`,
     ).get(companyId, sinceMs) as { count: number };
     const issuerIdentityReviewCount = identityFiltered || identityReviewOnly
@@ -3678,9 +4947,23 @@ export class Desk {
            AND (? = 1 OR r.disposition IS NULL OR r.disposition <> 'dismissed')`,
       ).get(companyId, sinceMs, includeDismissed ? 1 : 0) as { count: number }
       : { count: 0 };
+    const investorRelevanceReviewCount = filter === "all" || relevanceReviewOnly
+      ? this.prepare(
+        `SELECT COUNT(*) AS count
+         FROM mentions m LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id
+         LEFT JOIN companies c ON c.id = m.company_id
+         WHERE m.company_id = ? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
+           AND (${filterSql[filter]})
+           AND COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) >= ?
+           AND ${identitySql} = 1
+           AND ${companyBusinessRelevantSql} = 0
+           AND (? = 1 OR r.disposition IS NULL OR r.disposition <> 'dismissed')`,
+      ).get(companyId, sinceMs, includeDismissed ? 1 : 0) as { count: number }
+      : { count: 0 };
     const rows = this.prepare(
       `SELECT m.*, r.disposition AS analyst_research_disposition,
          ${identitySql} AS issuer_identity_strong,
+         ${companyBusinessRelevantSql} AS company_business_relevant,
          r.updated_at AS analyst_research_disposition_updated_at,
          COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) AS order_at
        FROM mentions m LEFT JOIN analyst_source_reviews r ON r.observation_id = m.id
@@ -3690,6 +4973,7 @@ export class Desk {
          AND COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) >= ?
          AND (? = 1 OR r.disposition IS NULL OR r.disposition <> 'dismissed')
          ${identityFilterSql}
+         ${relevanceFilterSql}
          ${cursorFilter}
        ORDER BY COALESCE(m.published_at, m.provider_observed_at, m.retrieved_at) DESC,
          m.ingested_at DESC, m.id DESC LIMIT ?`,
@@ -3697,6 +4981,7 @@ export class Desk {
       analyst_research_disposition: AnalystResearchDisposition | null;
       analyst_research_disposition_updated_at: number | null;
       issuer_identity_strong: number;
+      company_business_relevant: number;
       order_at: number;
     }>;
     const hasMore = rows.length > limit;
@@ -3705,6 +4990,7 @@ export class Desk {
       items: rows.slice(0, limit).map((row) => ({
         ...rowToDTO(row),
         issuerIdentityStrong: Number(row.issuer_identity_strong) === 1,
+        companyBusinessRelevant: Number(row.company_business_relevant) === 1,
         analystResearchDisposition: row.analyst_research_disposition,
         analystResearchDispositionUpdatedAt: row.analyst_research_disposition_updated_at == null
           ? null : Number(row.analyst_research_disposition_updated_at),
@@ -3714,6 +5000,7 @@ export class Desk {
         : null,
       setAsideCount: Number(setAsideCount.count),
       issuerIdentityReviewCount: Number(issuerIdentityReviewCount.count),
+      investorRelevanceReviewCount: Number(investorRelevanceReviewCount.count),
     };
   }
 
@@ -4252,7 +5539,52 @@ export class Desk {
     return { weekStartMs, latestWeekStartMs, olderWeekStartMs: nav[currentIndex + 1]?.weekStartMs ?? null, newerWeekStartMs: nav[currentIndex - 1]?.weekStartMs ?? null, latestEligibleScoreAtMs, items: rows };
   }
 
-  /** Saved GPT-6 Luna observations, bucketed by classification availability. */
+  /** Saved GPT-6 Luna observations, bucketed only by validated source time. */
+  private categoricalProviderMaxRowId(): number {
+    // A legacy read-only database may predate the explicit BYOK ledger.
+    const columns = this.prepare("PRAGMA table_info(model_provider_attempts)").all() as Array<{ name: string }>;
+    if (!columns.some(column => column.name === "categorical_receipt_json")) return 0;
+    const row = this.prepare("SELECT COALESCE(MAX(rowid),0) AS max_row_id FROM model_provider_classifications").get() as { max_row_id: number };
+    return Number(row.max_row_id);
+  }
+
+  private categoricalReadProjection(snapshot: CategoricalSnapshotToken): string {
+    const fields = `observation_id,attempt_id,provider,model_requested,model_returned,requested_service_tier,service_tier,
+      accounting_route,prompt_version,prompt_sha256,schema_version,schema_sha256,profile_sha256,sentiment,event_type,
+      takeaway,about,material,investor_relevant,evidence_sufficient,summary,supporting_excerpt,disposition,response_id,
+      response_sha256,input_tokens,cached_input_tokens,cache_write_tokens,output_tokens,reasoning_tokens,total_tokens,
+      estimated_cost_usd,latency_ms,classified_at`;
+    const legacy = `SELECT ${fields},'scoring' AS receipt_origin,1 AS source_receipt_valid,rowid AS receipt_rowid
+      FROM categorical_classifications WHERE rowid<=${snapshot.maxRowId} AND classified_at<=${snapshot.throughMs}`;
+    const byok = snapshot.maxModelProviderRowId === 0 ? "" : ` UNION ALL
+      SELECT c.observation_id,c.attempt_id,'openai_luna',c.model_requested,c.model_returned,
+        json_extract(a.categorical_receipt_json,'$.serviceTierRequested'),json_extract(a.categorical_receipt_json,'$.serviceTier'),
+        'api_key',a.prompt_version,a.prompt_sha256,a.schema_version,a.schema_sha256,
+        json_extract(a.categorical_receipt_json,'$.profileSha256'),c.sentiment,c.event_type,c.takeaway,c.about,c.material,
+        c.investor_relevant,c.evidence_sufficient,c.summary,c.supporting_excerpt,c.disposition,a.response_id,a.response_sha256,
+        a.input_tokens,json_extract(a.categorical_receipt_json,'$.cachedInputTokens'),json_extract(a.categorical_receipt_json,'$.cacheWriteInputTokens'),
+        a.output_tokens,json_extract(a.categorical_receipt_json,'$.reasoningTokens'),json_extract(a.categorical_receipt_json,'$.totalTokens'),
+        a.estimated_cost_usd,a.latency_ms,c.created_at,'explicit_byok',
+        (a.status='completed' AND a.provider=c.provider AND a.observation_id=c.observation_id
+          AND a.model_requested=c.model_requested AND a.model_returned=c.model_returned
+          AND a.source_sha256=c.source_sha256 AND a.completed_at=c.created_at
+          AND a.dispatch_intent_at>=a.reserved_at AND a.completed_at>=a.dispatch_intent_at
+          AND a.http_status BETWEEN 200 AND 299 AND c.retrieved_at=o.retrieved_at
+          AND c.source_sha256=desk_model_source_digest(o.id,co.name,co.ticker,co.sector,o.collector,o.publisher_name,o.title,o.snippet,o.source_url,o.retrieved_at)
+          AND length(json_extract(a.categorical_receipt_json,'$.profileSha256'))=64
+          AND json_extract(a.categorical_receipt_json,'$.totalTokens')=a.input_tokens+a.output_tokens),c.rowid
+      FROM model_provider_classifications c JOIN model_provider_attempts a ON a.id=c.attempt_id
+      JOIN source_observations o ON o.id=c.observation_id JOIN companies co ON co.id=o.company_id
+      WHERE c.provider='openai' AND c.model_requested='gpt-6-luna'
+        AND c.rowid<=${snapshot.maxModelProviderRowId} AND c.created_at<=${snapshot.throughMs}`;
+    // One immutable observation contributes once. A later explicit review may
+    // supersede its classification, while an earlier snapshot remains frozen.
+    return `WITH categorical_receipts AS (${legacy}${byok}),
+      categorical_ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY observation_id
+        ORDER BY classified_at DESC,CASE receipt_origin WHEN 'explicit_byok' THEN 1 ELSE 0 END DESC,receipt_rowid DESC) AS receipt_rank FROM categorical_receipts),
+      categorical_chart_classifications AS (SELECT * FROM categorical_ranked WHERE receipt_rank=1)`;
+  }
+
   categoricalTrendSnapshot(companyId: string, windowHours: number, now = Date.now()): {
     companyId: string;
     windowHours: number;
@@ -4264,6 +5596,8 @@ export class Desk {
     counts: CategoricalTrendCounts;
     aggregates: Array<{ bucketStartMs: number; counts: CategoricalTrendCounts }>;
     eligibleObservationCount: number;
+    plottedObservationCount: number;
+    untimedObservationCount: number;
     candidateClassificationCount: number;
     withheldInvalidCount: number;
     latestClassifiedAt: number | null;
@@ -4277,27 +5611,34 @@ export class Desk {
     const maxRow = this.prepare("SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM categorical_classifications").get() as { max_row_id: number };
     const maxRowId = Number(maxRow.max_row_id);
     if (!Number.isSafeInteger(maxRowId) || maxRowId < 0) throw new Error("categorical_row_id_out_of_range");
-    const snapshot = { companyId, fromMs, throughMs, windowHours, bucketMs: CATEGORICAL_BUCKET_MS, maxRowId };
+    const maxModelProviderRowId = this.categoricalProviderMaxRowId();
+    const snapshot = { companyId, fromMs, throughMs, windowHours, bucketMs: CATEGORICAL_BUCKET_MS, maxRowId, maxModelProviderRowId };
     const snapshotKey = this.encodeCategoricalSnapshot(snapshot);
+    const projection = this.categoricalReadProjection(snapshot);
     const baseJoin = `FROM mentions m
+      JOIN companies co ON co.id=m.company_id
       JOIN source_observations o ON o.id=m.id
-      JOIN categorical_classifications c ON c.observation_id=m.id
+      JOIN categorical_chart_classifications c ON c.observation_id=m.id
       JOIN source_deliveries d ON d.id=m.delivery_id`;
-    const scope = `m.company_id=? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
-      AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
-    const validScope = `m.company_id=? AND ${REAL_CATEGORICAL_FILTER}
-      AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
-    const candidateRow = this.prepare(`SELECT COUNT(*) AS count FROM mentions m
+    const sourceClock = VALIDATED_SOURCE_CLOCK_SQL;
+    const realCategoricalAtSnapshot = REAL_CATEGORICAL_FILTER.replace("AND c.classified_at >= 0 AND c.classified_at <= ?", "AND c.classified_at >= 0");
+    const classificationSnapshot = `c.classified_at<=?`;
+    const candidateScope = `m.company_id=? AND ${REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine")}
+      AND c.provider='openai_luna' AND c.model_requested='gpt-6-luna'
+      AND ${classificationSnapshot}
+      AND (${sourceClock} IS NULL OR (${sourceClock}>=? AND ${sourceClock}<?))`;
+    const validScope = `m.company_id=? AND ${realCategoricalAtSnapshot}
+      AND ${classificationSnapshot}
+      AND (${sourceClock} IS NULL OR (${sourceClock}>=? AND ${sourceClock}<?))`;
+    const candidateRow = this.prepare(`${projection} SELECT COUNT(*) AS count FROM mentions m
       JOIN source_observations o ON o.id=m.id
-      JOIN categorical_classifications c ON c.observation_id=m.id
-      WHERE ${scope} AND c.provider='openai_luna' AND c.model_requested='gpt-6-luna'`).get(
-      companyId, fromMs, throughMs, maxRowId,
-    ) as { count: number };
-    const aggregateRows = this.prepare(`SELECT (c.classified_at / ${CATEGORICAL_BUCKET_MS}) * ${CATEGORICAL_BUCKET_MS} AS bucket_start_ms,
+      JOIN categorical_chart_classifications c ON c.observation_id=m.id
+      WHERE ${candidateScope}`).get(companyId, throughMs, fromMs, throughMs) as { count: number };
+    const aggregateRows = this.prepare(`${projection} SELECT (${sourceClock} / ${CATEGORICAL_BUCKET_MS}) * ${CATEGORICAL_BUCKET_MS} AS bucket_start_ms,
       ${CATEGORICAL_COUNTS_SQL}
-      ${baseJoin} WHERE ${validScope}
+      ${baseJoin} WHERE ${validScope} AND ${sourceClock} IS NOT NULL
       GROUP BY bucket_start_ms ORDER BY bucket_start_ms`).all(
-      companyId, throughMs, fromMs, throughMs, maxRowId,
+      companyId, throughMs, fromMs, throughMs,
     ) as unknown as CategoricalAggregateRow[];
     const aggregates = aggregateRows.map((row) => ({ bucketStartMs: Number(row.bucket_start_ms), counts: categoricalCounts(row) }));
     const counts = aggregates.reduce<CategoricalTrendCounts>((total, row) => ({
@@ -4308,20 +5649,25 @@ export class Desk {
       excluded: total.excluded + row.counts.excluded,
       total: total.total + row.counts.total,
     }), { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 });
-    const latestRow = this.prepare(`SELECT MAX(c.classified_at) AS latest ${baseJoin} WHERE ${validScope}`)
-      .get(companyId, throughMs, fromMs, throughMs, maxRowId) as { latest: number | null };
-    const lineageRows = this.prepare(`SELECT c.prompt_version, c.prompt_sha256, c.profile_sha256, c.schema_version, c.schema_sha256, COUNT(*) AS count
+    const eligibleRow = this.prepare(`${projection} SELECT COUNT(*) AS count, SUM(CASE WHEN ${sourceClock} IS NULL THEN 1 ELSE 0 END) AS untimed
+      ${baseJoin} WHERE ${validScope}`).get(companyId, throughMs, fromMs, throughMs) as { count: number; untimed: number | null };
+    const latestRow = this.prepare(`${projection} SELECT MAX(c.classified_at) AS latest ${baseJoin} WHERE ${validScope}`)
+      .get(companyId, throughMs, fromMs, throughMs) as { latest: number | null };
+    const lineageRows = this.prepare(`${projection} SELECT c.prompt_version, c.prompt_sha256, c.profile_sha256, c.schema_version, c.schema_sha256, COUNT(*) AS count
       ${baseJoin} WHERE ${validScope}
       GROUP BY c.prompt_version, c.prompt_sha256, c.profile_sha256, c.schema_version, c.schema_sha256
       ORDER BY count DESC, c.prompt_version, c.schema_version`).all(
-      companyId, throughMs, fromMs, throughMs, maxRowId,
+      companyId, throughMs, fromMs, throughMs,
     ) as Array<{ prompt_version: string; prompt_sha256: string; profile_sha256: string; schema_version: string; schema_sha256: string; count: number }>;
     const candidateClassificationCount = Number(candidateRow.count);
-    const eligibleObservationCount = counts.total;
+    const eligibleObservationCount = Number(eligibleRow.count);
+    const plottedObservationCount = counts.total;
+    const untimedObservationCount = Number(eligibleRow.untimed ?? 0);
+    if (eligibleObservationCount !== plottedObservationCount + untimedObservationCount) throw new Error("Categorical timed and untimed rows do not reconcile");
     return {
       companyId, windowHours, fromMs, throughMs, bucketMs: CATEGORICAL_BUCKET_MS,
       snapshotGeneration: this.runtimeId, snapshotKey, counts, aggregates,
-      eligibleObservationCount, candidateClassificationCount,
+      eligibleObservationCount, plottedObservationCount, untimedObservationCount, candidateClassificationCount,
       withheldInvalidCount: Math.max(0, candidateClassificationCount - eligibleObservationCount),
       latestClassifiedAt: latestRow.latest == null ? null : Number(latestRow.latest),
       lineages: lineageRows.map((row) => ({
@@ -4329,6 +5675,237 @@ export class Desk {
         schemaVersion: row.schema_version, schemaSha256: row.schema_sha256, count: Number(row.count),
       })),
     };
+  }
+
+  /** A strictly Google Gemini-only chart snapshot. It never reads Luna or Jev rows. */
+  googleGeminiCategoricalTrendSnapshot(companyId: string, windowHours: number, now = Date.now()): {
+    companyId: string; windowHours: number; fromMs: number; throughMs: number; bucketMs: number;
+    snapshotGeneration: string; snapshotKey: string; counts: CategoricalTrendCounts;
+    aggregates: Array<{ bucketStartMs: number; counts: CategoricalTrendCounts }>;
+    eligibleObservationCount: number; plottedObservationCount: number; untimedObservationCount: number;
+    candidateClassificationCount: number; withheldInvalidCount: number; latestClassifiedAt: number | null;
+    lineages: CategoricalTrendLineage[];
+  } {
+    if (!Number.isSafeInteger(windowHours) || windowHours < 1 || windowHours > 168 || !Number.isSafeInteger(now) || now < 0) {
+      throw new Error("invalid_categorical_window");
+    }
+    const fromMs = now - windowHours * 60 * 60_000;
+    const throughMs = now;
+    const maxRow = this.prepare("SELECT COALESCE(MAX(rowid),0) AS max_row_id FROM model_provider_classifications").get() as { max_row_id: number };
+    const maxRowId = Number(maxRow.max_row_id);
+    if (!Number.isSafeInteger(maxRowId) || maxRowId < 0) throw new Error("provider_categorical_row_id_out_of_range");
+    const snapshot: GoogleGeminiCategoricalSnapshotToken = {
+      provider: "google_gemini", companyId, fromMs, throughMs, windowHours, bucketMs: CATEGORICAL_BUCKET_MS, maxRowId,
+    };
+    const snapshotKey = this.encodeGoogleGeminiCategoricalSnapshot(snapshot);
+    const projection = this.googleGeminiCategoricalReadProjection(snapshot);
+    const inWindow = `(source_clock>=${fromMs} AND source_clock<${throughMs}) OR
+      (source_clock IS NULL AND retrieved_at>=${fromMs} AND retrieved_at<${throughMs})`;
+    const countsRow = this.prepare(`${projection} SELECT COUNT(*) AS candidates,
+      SUM(CASE WHEN source_receipt_valid=1 THEN 1 ELSE 0 END) AS eligible,
+      SUM(CASE WHEN source_receipt_valid=1 AND source_clock IS NOT NULL THEN 1 ELSE 0 END) AS plotted,
+      SUM(CASE WHEN source_receipt_valid=1 AND source_clock IS NULL THEN 1 ELSE 0 END) AS untimed,
+      MAX(CASE WHEN source_receipt_valid=1 THEN created_at ELSE NULL END) AS latest
+      FROM gemini_latest WHERE ${inWindow}`).get() as {
+        candidates: number | null; eligible: number | null; plotted: number | null; untimed: number | null; latest: number | null;
+      };
+    const aggregateRows = this.prepare(`${projection} SELECT (source_clock/${CATEGORICAL_BUCKET_MS})*${CATEGORICAL_BUCKET_MS} AS bucket_start_ms,
+      COUNT(*) AS total,
+      SUM(CASE WHEN disposition='classified' AND sentiment='positive' THEN 1 ELSE 0 END) AS positive,
+      SUM(CASE WHEN disposition='classified' AND sentiment='neutral' THEN 1 ELSE 0 END) AS neutral,
+      SUM(CASE WHEN disposition='classified' AND sentiment='negative' THEN 1 ELSE 0 END) AS negative,
+      SUM(CASE WHEN disposition='review_required' OR (disposition='classified' AND sentiment IS NULL) THEN 1 ELSE 0 END) AS review_required,
+      SUM(CASE WHEN disposition='excluded' THEN 1 ELSE 0 END) AS excluded
+      FROM gemini_latest WHERE (${inWindow}) AND source_receipt_valid=1 AND source_clock IS NOT NULL
+      GROUP BY bucket_start_ms ORDER BY bucket_start_ms`).all() as CategoricalAggregateRow[];
+    const aggregates = aggregateRows.map(row => ({ bucketStartMs: Number(row.bucket_start_ms), counts: categoricalCounts(row) }));
+    const counts = aggregates.reduce((total, row) => ({
+      positive: total.positive + row.counts.positive, neutral: total.neutral + row.counts.neutral,
+      negative: total.negative + row.counts.negative, reviewRequired: total.reviewRequired + row.counts.reviewRequired,
+      excluded: total.excluded + row.counts.excluded, total: total.total + row.counts.total,
+    }), { positive: 0, neutral: 0, negative: 0, reviewRequired: 0, excluded: 0, total: 0 });
+    const candidateClassificationCount = Number(countsRow.candidates ?? 0);
+    const eligibleObservationCount = Number(countsRow.eligible ?? 0);
+    const plottedObservationCount = Number(countsRow.plotted ?? 0);
+    const untimedObservationCount = Number(countsRow.untimed ?? 0);
+    if (eligibleObservationCount !== plottedObservationCount + untimedObservationCount || counts.total !== plottedObservationCount) {
+      throw new Error("Google Gemini category trend totals did not reconcile to validated source-time counts");
+    }
+    const lineageRows = this.prepare(`${projection} SELECT prompt_version,prompt_sha256,schema_version,schema_sha256,COUNT(*) AS count
+      FROM gemini_latest WHERE (${inWindow}) AND source_receipt_valid=1
+      GROUP BY prompt_version,prompt_sha256,schema_version,schema_sha256
+      ORDER BY count DESC,prompt_version,schema_version`).all() as Array<{
+        prompt_version: string; prompt_sha256: string; schema_version: string; schema_sha256: string; count: number;
+      }>;
+    const lineages = lineageRows.map(row => ({
+      promptVersion: String(row.prompt_version), promptSha256: String(row.prompt_sha256), profileSha256: null,
+      schemaVersion: String(row.schema_version), schemaSha256: String(row.schema_sha256), count: Number(row.count),
+    }));
+    if (lineages.reduce((sum, lineage) => sum + lineage.count, 0) !== eligibleObservationCount) {
+      throw new Error("Google Gemini provider lineage does not reconcile to eligible source records");
+    }
+    return {
+      companyId, windowHours, fromMs, throughMs, bucketMs: CATEGORICAL_BUCKET_MS,
+      snapshotGeneration: this.runtimeId, snapshotKey, counts, aggregates,
+      eligibleObservationCount, plottedObservationCount, untimedObservationCount, candidateClassificationCount,
+      withheldInvalidCount: Math.max(0, candidateClassificationCount - eligibleObservationCount),
+      latestClassifiedAt: countsRow.latest == null ? null : Number(countsRow.latest), lineages,
+    };
+  }
+
+  googleGeminiCategoricalBucketEvidence(input: {
+    companyId: string; snapshotKey: string; bucketStartMs: number; bucketDurationMs?: number;
+    limit: number; cursor: CategoricalBucketCursor | null;
+  }): CategoricalBucketEvidencePage {
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100
+      || !Number.isSafeInteger(input.bucketStartMs) || input.bucketStartMs < 0) throw new InvalidCategoricalBucketError();
+    const snapshot = this.decodeGoogleGeminiCategoricalSnapshot(input.snapshotKey, input.companyId);
+    const bucketDurationMs = input.bucketDurationMs ?? snapshot.bucketMs;
+    if (![snapshot.bucketMs, snapshot.bucketMs * 2, snapshot.bucketMs * 4, snapshot.bucketMs * 12, snapshot.bucketMs * 24].includes(bucketDurationMs)
+      || input.bucketStartMs % bucketDurationMs !== 0) throw new InvalidCategoricalBucketError();
+    const fromMs = Math.max(snapshot.fromMs, input.bucketStartMs);
+    const throughMs = Math.min(snapshot.throughMs, input.bucketStartMs + bucketDurationMs);
+    if (fromMs >= throughMs) throw new InvalidCategoricalBucketError();
+    const projection = this.googleGeminiCategoricalReadProjection(snapshot);
+    const scope = `company_id='${snapshot.companyId.replaceAll("'", "''")}' AND source_receipt_valid=1 AND source_clock>=${fromMs} AND source_clock<${throughMs}`;
+    if (input.cursor) {
+      if (!Number.isSafeInteger(input.cursor.sourceTimeAt) || input.cursor.sourceTimeAt < fromMs || input.cursor.sourceTimeAt >= throughMs
+        || typeof input.cursor.id !== "string" || input.cursor.id.length < 1 || input.cursor.id.length > 200) throw new InvalidCategoricalBucketError("invalid_cursor");
+      const exists = this.prepare(`${projection} SELECT 1 AS ok FROM gemini_latest WHERE ${scope} AND observation_id=? AND source_clock=? LIMIT 1`)
+        .get(input.cursor.id, input.cursor.sourceTimeAt);
+      if (!exists) throw new InvalidCategoricalBucketError("invalid_cursor");
+    }
+    const countRow = this.prepare(`${projection} SELECT COUNT(*) AS total,
+      SUM(CASE WHEN disposition='classified' AND sentiment='positive' THEN 1 ELSE 0 END) AS positive,
+      SUM(CASE WHEN disposition='classified' AND sentiment='neutral' THEN 1 ELSE 0 END) AS neutral,
+      SUM(CASE WHEN disposition='classified' AND sentiment='negative' THEN 1 ELSE 0 END) AS negative,
+      SUM(CASE WHEN disposition='review_required' OR (disposition='classified' AND sentiment IS NULL) THEN 1 ELSE 0 END) AS review_required,
+      SUM(CASE WHEN disposition='excluded' THEN 1 ELSE 0 END) AS excluded
+      FROM gemini_latest WHERE ${scope}`).get() as CategoricalAggregateRow;
+    const cursorClause = input.cursor ? "AND (source_clock<? OR (source_clock=? AND observation_id<?))" : "";
+    const rows = this.prepare(`${projection} SELECT * FROM gemini_latest WHERE ${scope} ${cursorClause}
+      ORDER BY source_clock DESC,observation_id DESC LIMIT ?`).all(
+      ...(input.cursor ? [input.cursor.sourceTimeAt, input.cursor.sourceTimeAt, input.cursor.id] : []), input.limit + 1,
+    ) as Array<Record<string, unknown>>;
+    const hasMore = rows.length > input.limit;
+    const pageRows = hasMore ? rows.slice(0, input.limit) : rows;
+    const items = pageRows.map(row => this.googleGeminiCategoricalEvidenceDTO(row));
+    const last = pageRows.at(-1);
+    return {
+      companyId: input.companyId, snapshotKey: input.snapshotKey, bucketStartMs: input.bucketStartMs,
+      bucketDurationMs, fromMs, throughMs, counts: categoricalCounts(countRow), items,
+      nextCursor: hasMore && last ? { sourceTimeAt: Number(last.source_clock), id: String(last.observation_id) } : null,
+    };
+  }
+
+  private googleGeminiCategoricalReadProjection(snapshot: GoogleGeminiCategoricalSnapshotToken): string {
+    const sourceClock = VALIDATED_SOURCE_CLOCK_SQL.replaceAll("m.", "o.");
+    const maxRowId = snapshot.maxRowId;
+    return `WITH gemini_ranked AS (
+      SELECT c.rowid AS classification_rowid,c.attempt_id,c.observation_id,c.provider,c.model_requested,c.model_returned,
+        c.source_sha256,c.source_time_at,c.retrieved_at,c.sentiment,c.event_type,c.takeaway,c.about,c.material,
+        c.investor_relevant,c.evidence_sufficient,c.summary,c.supporting_excerpt,c.disposition,c.created_at,
+        a.provider AS attempt_provider,a.observation_id AS attempt_observation_id,a.model_requested AS attempt_model_requested,
+        a.model_returned AS attempt_model_returned,a.source_sha256 AS attempt_source_sha256,a.status AS attempt_status,
+        a.reserved_at,a.dispatch_intent_at,a.completed_at AS attempt_completed_at,a.http_status,a.prompt_version,
+        a.prompt_sha256,a.schema_version,a.schema_sha256,
+        o.id AS observation_id_alias,o.company_id,o.collector,o.channel,o.publisher_name,o.publisher_domain,o.source_name,
+        o.source_url,o.source_kind,o.source_tier,o.title,o.snippet,o.publisher_published_at,o.aggregator_published_at,
+        o.provider_observed_at,o.retrieved_at AS observation_retrieved_at,o.ingested_at,o.time_basis,o.filed_at,o.adapter_version,
+        o.delivery_id,o.scoped,co.name AS company_name,co.ticker AS company_ticker,co.sector AS company_sector,
+        co.aliases AS company_aliases,co.ambiguous AS company_ambiguous,
+        d.id AS delivery_receipt_id,d.collector AS delivery_collector,d.company_id AS delivery_company_id,
+        d.adapter_version AS delivery_adapter_version,d.result AS delivery_result,d.completed_at AS delivery_completed_at,
+        d.processing_required AS delivery_processing_required,
+        ${sourceClock} AS source_clock,
+        ROW_NUMBER() OVER (PARTITION BY c.observation_id ORDER BY c.created_at DESC,c.rowid DESC) AS latest_rank
+      FROM model_provider_classifications c
+      JOIN model_provider_attempts a ON a.id=c.attempt_id
+      JOIN source_observations o ON o.id=c.observation_id
+      JOIN companies co ON co.id=o.company_id
+      LEFT JOIN source_deliveries d ON d.id=o.delivery_id
+      WHERE c.provider='google_gemini' AND c.model_requested='gemini-3.8-flash'
+        AND c.rowid<=${maxRowId} AND c.created_at<=${snapshot.throughMs}
+    ), gemini_latest AS (
+      SELECT *, CASE WHEN attempt_status='completed' AND attempt_provider='google_gemini'
+        AND attempt_observation_id=observation_id_alias AND attempt_model_requested='gemini-3.8-flash'
+        AND attempt_model_returned='gemini-3.8-flash' AND model_returned='gemini-3.8-flash'
+        AND attempt_source_sha256=source_sha256 AND attempt_completed_at=created_at
+        AND dispatch_intent_at>=reserved_at AND attempt_completed_at>=dispatch_intent_at
+        AND http_status BETWEEN 200 AND 299 AND source_time_at IS source_clock
+        AND retrieved_at=observation_retrieved_at
+        AND source_sha256=desk_model_source_digest(observation_id_alias,company_name,company_ticker,company_sector,
+          collector,publisher_name,title,snippet,source_url,observation_retrieved_at)
+        AND delivery_receipt_id IS NOT NULL AND delivery_collector=collector AND delivery_company_id=company_id
+        AND delivery_adapter_version=adapter_version AND delivery_result IN ('success','partial')
+        AND delivery_processing_required=1 AND delivery_completed_at<=${snapshot.throughMs}
+        AND collector NOT IN ('demo_simulation','legacy_unknown')
+        AND desk_issuer_identity_strong(company_name,company_ticker,company_aliases,company_ambiguous,title,snippet,scoped)=1
+        AND desk_finance_relevant(title,snippet,source_tier,source_kind,company_ticker,company_name)=1
+        THEN 1 ELSE 0 END AS source_receipt_valid
+      FROM gemini_ranked WHERE latest_rank=1
+    )`;
+  }
+
+  private googleGeminiCategoricalEvidenceDTO(row: Record<string, unknown>): MentionDTO {
+    const collector = String(row.collector) as CollectorId;
+    const sourceTimeBasis = row.time_basis as TimeBasis;
+    const publisherDomain = researchPublisherDomain(collector, row.publisher_domain == null ? null : String(row.publisher_domain));
+    const sentiment = row.sentiment == null ? null : String(row.sentiment) as ProviderCategoricalEvidence["sentiment"];
+    return {
+      id: String(row.observation_id_alias), companyId: String(row.company_id), collector,
+      publisherName: String(row.publisher_name), publisherDomain,
+      source: {
+        name: String(row.source_name), url: String(row.source_url), kind: String(row.source_kind) as SourceKind,
+        tier: String(row.source_tier) as SourceTier, collector, publisher: String(row.publisher_name), publisherDomain,
+        deliveryId: row.delivery_receipt_id == null ? null : String(row.delivery_receipt_id),
+      },
+      title: String(row.title), snippet: String(row.snippet), publishedAt: row.publisher_published_at == null ? null : Number(row.publisher_published_at),
+      aggregatorPublishedAt: row.aggregator_published_at == null ? null : Number(row.aggregator_published_at),
+      providerObservedAt: row.provider_observed_at == null ? null : Number(row.provider_observed_at),
+      retrievedAt: Number(row.observation_retrieved_at), ingestedAt: Number(row.ingested_at), timeBasis: sourceTimeBasis,
+      filedAt: row.filed_at == null ? null : Number(row.filed_at), status: String(row.disposition) as MentionStatus,
+      scoreRetryAt: null, usageCheckRequired: false, score: null, classification: null, error: null,
+      providerCategorical: {
+        provider: "google_gemini", modelRequested: "gemini-3.8-flash", modelReturned: "gemini-3.8-flash",
+        attemptId: String(row.attempt_id), sourceSha256: String(row.source_sha256), sentiment,
+        eventType: row.event_type == null ? null : String(row.event_type), takeaway: row.takeaway == null ? null : String(row.takeaway),
+        about: row.about == null ? null : Number(row.about) === 1, material: row.material == null ? null : Number(row.material) === 1,
+        investorRelevant: row.investor_relevant == null ? null : Number(row.investor_relevant) === 1,
+        evidenceSufficient: Number(row.evidence_sufficient) === 1, summary: row.summary == null ? null : String(row.summary),
+        supportingExcerpt: row.supporting_excerpt == null ? null : String(row.supporting_excerpt),
+        disposition: String(row.disposition) as ProviderCategoricalEvidence["disposition"], classifiedAt: Number(row.created_at),
+      },
+    };
+  }
+
+  private encodeGoogleGeminiCategoricalSnapshot(snapshot: GoogleGeminiCategoricalSnapshotToken): string {
+    const payload = Buffer.from(JSON.stringify(snapshot)).toString("base64url");
+    const signature = createHmac("sha256", this.categoricalSnapshotSecret).update(`gemini-v1.${payload}`).digest("base64url");
+    return `gemini-v1.${payload}.${signature}`;
+  }
+
+  private decodeGoogleGeminiCategoricalSnapshot(snapshotKey: string, companyId: string): GoogleGeminiCategoricalSnapshotToken {
+    if (typeof snapshotKey !== "string" || snapshotKey.length > 2048) throw new CategoricalSnapshotUnavailableError();
+    const parts = snapshotKey.split(".");
+    if (parts.length !== 3 || parts[0] !== "gemini-v1") throw new CategoricalSnapshotUnavailableError();
+    const expected = createHmac("sha256", this.categoricalSnapshotSecret).update(`gemini-v1.${parts[1]}`).digest();
+    let actual: Buffer;
+    try { actual = Buffer.from(parts[2]!, "base64url"); } catch { throw new CategoricalSnapshotUnavailableError(); }
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new CategoricalSnapshotUnavailableError();
+    try {
+      const parsed = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as GoogleGeminiCategoricalSnapshotToken;
+      const maxRow = Number((this.prepare("SELECT COALESCE(MAX(rowid),0) AS max_row_id FROM model_provider_classifications").get() as { max_row_id: number }).max_row_id);
+      if (parsed.provider !== "google_gemini" || parsed.companyId !== companyId || !Number.isSafeInteger(parsed.fromMs)
+        || !Number.isSafeInteger(parsed.throughMs) || parsed.fromMs < 0 || parsed.throughMs <= parsed.fromMs
+        || !Number.isSafeInteger(parsed.windowHours) || parsed.windowHours < 1 || parsed.windowHours > 168
+        || parsed.bucketMs !== CATEGORICAL_BUCKET_MS || !Number.isSafeInteger(parsed.maxRowId)
+        || parsed.maxRowId < 0 || parsed.maxRowId > maxRow) throw new CategoricalSnapshotUnavailableError();
+      return parsed;
+    } catch (error) {
+      if (error instanceof CategoricalSnapshotUnavailableError) throw error;
+      throw new CategoricalSnapshotUnavailableError();
+    }
   }
 
   categoricalBucketEvidence(input: {
@@ -4340,10 +5917,9 @@ export class Desk {
     cursor: CategoricalBucketCursor | null;
   }): CategoricalBucketEvidencePage {
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100
-      || !Number.isSafeInteger(input.bucketStartMs) || input.bucketStartMs < 0) {
-      throw new InvalidCategoricalBucketError();
-    }
+      || !Number.isSafeInteger(input.bucketStartMs) || input.bucketStartMs < 0) throw new InvalidCategoricalBucketError();
     const snapshot = this.decodeCategoricalSnapshot(input.snapshotKey, input.companyId);
+    const projection = this.categoricalReadProjection(snapshot);
     const bucketDurationMs = input.bucketDurationMs ?? snapshot.bucketMs;
     if (![snapshot.bucketMs, snapshot.bucketMs * 2, snapshot.bucketMs * 4, snapshot.bucketMs * 12, snapshot.bucketMs * 24].includes(bucketDurationMs)
       || input.bucketStartMs % bucketDurationMs !== 0) throw new InvalidCategoricalBucketError();
@@ -4351,52 +5927,55 @@ export class Desk {
     const throughMs = Math.min(snapshot.throughMs, input.bucketStartMs + bucketDurationMs);
     if (fromMs >= throughMs) throw new InvalidCategoricalBucketError();
     const baseJoin = `FROM mentions m
+      JOIN companies co ON co.id=m.company_id
       JOIN source_observations o ON o.id=m.id
-      JOIN categorical_classifications c ON c.observation_id=m.id
+      JOIN categorical_chart_classifications c ON c.observation_id=m.id
       JOIN source_deliveries d ON d.id=m.delivery_id`;
-    const scope = `m.company_id=? AND ${REAL_CATEGORICAL_FILTER}
-      AND c.classified_at>=? AND c.classified_at<? AND c.rowid<=?`;
+    const sourceClock = VALIDATED_SOURCE_CLOCK_SQL;
+    const realCategoricalAtSnapshot = REAL_CATEGORICAL_FILTER.replace("AND c.classified_at >= 0 AND c.classified_at <= ?", "AND c.classified_at >= 0");
+    const scope = `m.company_id=? AND ${realCategoricalAtSnapshot}
+      AND c.classified_at<=? AND ${sourceClock}>=? AND ${sourceClock}<?`;
     if (input.cursor) {
-      if (!Number.isSafeInteger(input.cursor.classifiedAt) || input.cursor.classifiedAt < fromMs || input.cursor.classifiedAt >= throughMs
-        || typeof input.cursor.id !== "string" || input.cursor.id.length < 1 || input.cursor.id.length > 200) {
-        throw new InvalidCategoricalBucketError("invalid_cursor");
-      }
-      const cursorExists = this.prepare(`SELECT 1 AS ok ${baseJoin}
-        WHERE ${scope} AND m.id=? AND c.classified_at=? LIMIT 1`).get(
-        input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId,
-        input.cursor.id, input.cursor.classifiedAt,
+      if (!Number.isSafeInteger(input.cursor.sourceTimeAt) || input.cursor.sourceTimeAt < fromMs || input.cursor.sourceTimeAt >= throughMs
+        || typeof input.cursor.id !== "string" || input.cursor.id.length < 1 || input.cursor.id.length > 200) throw new InvalidCategoricalBucketError("invalid_cursor");
+      const cursorExists = this.prepare(`${projection} SELECT 1 AS ok ${baseJoin}
+        WHERE ${scope} AND m.id=? AND ${sourceClock}=? LIMIT 1`).get(
+        input.companyId, snapshot.throughMs, fromMs, throughMs,
+        input.cursor.id, input.cursor.sourceTimeAt,
       );
       if (!cursorExists) throw new InvalidCategoricalBucketError("invalid_cursor");
     }
-    const countRow = this.prepare(`SELECT ${CATEGORICAL_COUNTS_SQL} ${baseJoin}
-      WHERE ${scope}`).get(input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId) as CategoricalAggregateRow;
+    const countRow = this.prepare(`${projection} SELECT ${CATEGORICAL_COUNTS_SQL} ${baseJoin}
+      WHERE ${scope}`).get(input.companyId, snapshot.throughMs, fromMs, throughMs) as CategoricalAggregateRow;
     const cursorClause = input.cursor
-      ? "AND (c.classified_at < ? OR (c.classified_at = ? AND m.id < ?))"
+      ? `AND (${sourceClock} < ? OR (${sourceClock} = ? AND m.id < ?))`
       : "";
-    const cursorParams = input.cursor ? [input.cursor.classifiedAt, input.cursor.classifiedAt, input.cursor.id] : [];
-    const rows = this.prepare(`SELECT m.* ${baseJoin}
+    const cursorParams = input.cursor ? [input.cursor.sourceTimeAt, input.cursor.sourceTimeAt, input.cursor.id] : [];
+    const classificationFields = ["provider", "receipt_origin", "accounting_route", "model_requested", "model_returned", "service_tier",
+      "prompt_version", "prompt_sha256", "profile_sha256", "attempt_id", "schema_version", "schema_sha256", "sentiment", "event_type",
+      "takeaway", "about", "material", "investor_relevant", "evidence_sufficient", "summary", "supporting_excerpt", "disposition",
+      "response_id", "response_sha256", "input_tokens", "cached_input_tokens", "cache_write_tokens", "output_tokens", "reasoning_tokens",
+      "total_tokens", "estimated_cost_usd", "latency_ms", "classified_at"].map(field => `c.${field} AS classification_${field}`).join(",");
+    const rows = this.prepare(`${projection} SELECT m.*,c.disposition AS status,
+      c.requested_service_tier AS classification_service_tier_requested,${classificationFields} ${baseJoin}
       WHERE ${scope} ${cursorClause}
-      ORDER BY c.classified_at DESC, m.id DESC LIMIT ?`).all(
-      input.companyId, snapshot.throughMs, fromMs, throughMs, snapshot.maxRowId,
+      ORDER BY ${sourceClock} DESC, m.id DESC LIMIT ?`).all(
+      input.companyId, snapshot.throughMs, fromMs, throughMs,
       ...cursorParams, input.limit + 1,
     ) as unknown as MentionRow[];
     const hasMore = rows.length > input.limit;
     const pageRows = hasMore ? rows.slice(0, input.limit) : rows;
     const items = pageRows.map(rowToDTO);
-    if (items.some((item) => item.classification == null || item.status === "corrupt")) {
-      throw new Error("Stored Luna classification failed DTO validation");
-    }
+    if (items.some((item) => item.classification == null || item.status === "corrupt")) throw new Error("Stored Luna classification failed DTO validation");
     const last = items.at(-1);
+    const lastClock = last ? (last.timeBasis === "publisher_declared" ? last.publishedAt
+      : last.timeBasis === "aggregator_declared" ? last.aggregatorPublishedAt ?? last.publishedAt
+        : last.timeBasis === "provider_observed" ? last.providerObservedAt : null) : null;
+    if (hasMore && lastClock == null) throw new Error("Categorical bucket cursor lost its validated source clock");
     return {
-      companyId: input.companyId,
-      snapshotKey: input.snapshotKey,
-      bucketStartMs: input.bucketStartMs,
-      bucketDurationMs,
-      fromMs,
-      throughMs,
-      counts: categoricalCounts(countRow),
-      items,
-      nextCursor: hasMore && last?.classification ? { classifiedAt: last.classification.classifiedAt, id: last.id } : null,
+      companyId: input.companyId, snapshotKey: input.snapshotKey, bucketStartMs: input.bucketStartMs,
+      bucketDurationMs, fromMs, throughMs, counts: categoricalCounts(countRow), items,
+      nextCursor: hasMore && last && lastClock != null ? { sourceTimeAt: lastClock, id: last.id } : null,
     };
   }
 
@@ -4423,6 +6002,8 @@ export class Desk {
         || !Number.isSafeInteger(parsed.maxRowId) || parsed.maxRowId < 0 || parsed.maxRowId > Number(maxRow.max_row_id)) {
         throw new CategoricalSnapshotUnavailableError();
       }
+      if (!Number.isSafeInteger(parsed.maxModelProviderRowId) || parsed.maxModelProviderRowId < 0
+        || parsed.maxModelProviderRowId > this.categoricalProviderMaxRowId()) throw new CategoricalSnapshotUnavailableError();
       return parsed;
     } catch (error) {
       if (error instanceof CategoricalSnapshotUnavailableError) throw error;
@@ -4503,15 +6084,30 @@ export class Desk {
       }>;
   }
 
-  pendingIds(limit: number, allowedCollectors: readonly CollectorId[]): string[] {
+  pendingIds(limit: number, allowedCollectors: readonly CollectorId[], requireStrongIdentity = false, requireFinanceRelevance = false): string[] {
     if (allowedCollectors.length === 0) return [];
+    if (!Number.isSafeInteger(limit) || limit <= 0) return [];
     const collectorSlots = allowedCollectors.map(() => "?").join(", ");
+    const identityFilter = requireStrongIdentity
+      ? "AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) = 1"
+      : "";
+    const relevanceFilter = requireFinanceRelevance
+      ? "AND desk_finance_relevant(m.title, m.snippet, m.source_tier, m.source_kind, c.ticker, c.name) = 1"
+      : "";
     return (
-      this.prepare(`SELECT id FROM mentions
-        WHERE ${REAL_MENTION_FILTER}
-          AND collector IN (${collectorSlots})
-          AND (status = 'pending' OR (status = 'retrying' AND score_retry_at <= ?))
-        ORDER BY COALESCE(published_at, provider_observed_at, retrieved_at) DESC LIMIT ?`)
+      this.prepare(`WITH ranked AS (
+        SELECT m.id, m.company_id,
+          COALESCE(${VALIDATED_SOURCE_CLOCK_SQL}, m.retrieved_at) AS queue_at,
+          ROW_NUMBER() OVER (PARTITION BY m.company_id ORDER BY COALESCE(${VALIDATED_SOURCE_CLOCK_SQL}, m.retrieved_at) DESC, m.id DESC) AS issuer_rank
+        FROM mentions m JOIN companies c ON c.id = m.company_id
+        WHERE m.collector NOT IN ('demo_simulation', 'legacy_unknown')
+          AND COALESCE(m.engine, '') <> 'demo-sim'
+          AND m.collector IN (${collectorSlots})
+          AND (m.status = 'pending' OR (m.status = 'retrying' AND m.score_retry_at <= ?))
+          ${identityFilter}
+          ${relevanceFilter}
+      )
+      SELECT id FROM ranked ORDER BY issuer_rank ASC, queue_at DESC, company_id, id LIMIT ?`)
         .all(...allowedCollectors, Date.now(), limit) as unknown as Array<{ id: string }>
     ).map((r) => r.id);
   }
@@ -4538,6 +6134,7 @@ export class Desk {
                 COALESCE(m.event_type, 'other') AS eventType, m.title AS title
          FROM mentions m JOIN companies c ON c.id = m.company_id
          WHERE m.collector NOT IN ('demo_simulation', 'legacy_unknown') AND COALESCE(m.engine, '') <> 'demo-sim'
+           AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) = 1
            AND m.status = 'scored' AND m.scored_at IS NOT NULL
            AND m.scored_at >= ? AND m.scored_at <= ? AND m.impact IS NOT NULL
          ORDER BY m.scored_at, m.id`,
@@ -4555,12 +6152,16 @@ export class Desk {
   }
 
   sourceActivity24h(sinceMs: number): Map<string, { sourceRecords24h: number; latestCollectedAt: number | null }> {
+    const realFilter = REAL_MENTION_FILTER.replaceAll("collector", "m.collector").replaceAll("engine", "m.engine");
     const rows = this.db
       .prepare(
-        `SELECT company_id,
-                SUM(CASE WHEN retrieved_at >= ? THEN 1 ELSE 0 END) AS count_24h,
-                MAX(retrieved_at) AS latest_collected_at
-         FROM mentions WHERE ${REAL_MENTION_FILTER} GROUP BY company_id`,
+        `SELECT m.company_id,
+                SUM(CASE WHEN m.retrieved_at >= ? THEN 1 ELSE 0 END) AS count_24h,
+                MAX(m.retrieved_at) AS latest_collected_at
+         FROM mentions m JOIN companies c ON c.id=m.company_id
+         WHERE ${realFilter}
+           AND desk_issuer_identity_strong(c.name, c.ticker, c.aliases, c.ambiguous, m.title, m.snippet, m.scoped) = 1
+         GROUP BY m.company_id`,
       )
       .all(sinceMs) as Array<{ company_id: string; count_24h: number; latest_collected_at: number | null }>;
     return new Map(rows.map((r) => [r.company_id, {
@@ -4671,15 +6272,17 @@ export class Desk {
     }
   }
 
-  remainingJevRequests(input: { utcDay: string; maxRequests: number; maxRequestBytes: number; provider?: ModelProvider; maxDailyCostMicros?: number }): number {
+  remainingJevRequests(input: { utcDay: string; maxRequests: number; maxRequestBytes: number; provider?: ModelProvider;
+    accountingRoute?: "api_key" | "chatgpt_plan"; maxDailyCostMicros?: number }): number {
     const provider = input.provider ?? "typesafe";
+    const accountingRoute = provider === "openai_luna" ? input.accountingRoute ?? "api_key" : "typesafe";
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(input.utcDay) ||
       !Number.isSafeInteger(input.maxRequests) || input.maxRequests <= 0 ||
       !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes <= 0 ||
-      (provider === "openai_luna" && (!Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros! <= 0))
+      (provider === "openai_luna" && accountingRoute === "api_key" && (!Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros! <= 0))
     ) return 0;
-    const prefix = provider === "openai_luna" ? "openai:budget" : "jev:budget";
+    const prefix = provider === "openai_luna" ? accountingRoute === "chatgpt_plan" ? "chatgpt-plan:budget" : "openai:budget" : "jev:budget";
     const closed = this.getKv(`${prefix}:${input.utcDay}:closed`);
     if (closed !== undefined && closed !== "0") return 0;
     const requests = this.getKv(`${prefix}:${input.utcDay}:requests`);
@@ -4690,10 +6293,170 @@ export class Desk {
     if (
       !Number.isSafeInteger(usedRequests) || usedRequests < 0 ||
       !Number.isSafeInteger(usedBytes) || usedBytes < 0 ||
-      (provider === "openai_luna" && (!Number.isSafeInteger(Number(cost ?? "0")) || Number(cost ?? "0") + 1 > input.maxDailyCostMicros!)) ||
+      (provider === "openai_luna" && accountingRoute === "api_key" && (!Number.isSafeInteger(Number(cost ?? "0")) || Number(cost ?? "0") + 1 > input.maxDailyCostMicros!)) ||
       usedBytes >= input.maxRequestBytes
     ) return 0;
     return Math.max(0, input.maxRequests - usedRequests);
+  }
+
+  reserveTypeSafeJevByokAttempt(input: {
+    id: string; observationId: string; modelRequested: string; sourceSha256: string; requestSha256: string;
+    requestBytes: number; rubricSha256: string; utcDay: string; reservedAt: number; costReservationMicros: number;
+    maxDailyRequests: number; maxDailyBytes: number; maxDailyCostMicros: number;
+  }): "reserved" | "daily_request_limit" | "daily_byte_limit" | "daily_cost_limit" | "storage_paused" {
+    if (!this.storage.status(this.db, this.storageReadOnly).writesAllowed) return "storage_paused";
+    if (!z.string().uuid().safeParse(input.id).success || !/^[a-f0-9]{64}$/.test(input.sourceSha256)
+      || !/^[a-f0-9]{64}$/.test(input.requestSha256) || !/^[a-f0-9]{64}$/.test(input.rubricSha256)
+      || !/^20\d\d-\d\d-\d\d$/.test(input.utcDay) || !input.modelRequested
+      || !Number.isSafeInteger(input.requestBytes) || input.requestBytes < 1 || input.requestBytes > 98_304
+      || !Number.isSafeInteger(input.reservedAt) || input.reservedAt < 0
+      || !Number.isSafeInteger(input.costReservationMicros) || input.costReservationMicros < 0
+      || !Number.isSafeInteger(input.maxDailyRequests) || input.maxDailyRequests < 1
+      || !Number.isSafeInteger(input.maxDailyBytes) || input.maxDailyBytes < 1
+      || !Number.isSafeInteger(input.maxDailyCostMicros) || input.maxDailyCostMicros < 1) throw new Error("invalid_typesafe_jev_byok_reservation");
+    if (!this.mentionRow(input.observationId)) throw new Error("unknown_real_source_observation");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const usage = this.prepare(`SELECT COUNT(*) AS requests,COALESCE(SUM(request_bytes),0) AS bytes,
+        COALESCE(SUM(CASE WHEN estimated_cost_usd IS NULL THEN cost_reservation_micros ELSE CAST(ROUND(estimated_cost_usd*1000000) AS INTEGER) END),0) AS cost
+        FROM typesafe_jev_byok_attempts WHERE budget_day=? AND status<>'not_sent'`).get(input.utcDay) as { requests: number; bytes: number; cost: number };
+      if (Number(usage.requests) >= input.maxDailyRequests) { this.exec("ROLLBACK"); return "daily_request_limit"; }
+      if (Number(usage.bytes) + input.requestBytes > input.maxDailyBytes) { this.exec("ROLLBACK"); return "daily_byte_limit"; }
+      if (Number(usage.cost) + input.costReservationMicros > input.maxDailyCostMicros) { this.exec("ROLLBACK"); return "daily_cost_limit"; }
+      this.prepare(`INSERT INTO typesafe_jev_byok_attempts
+        (id,observation_id,model_requested,source_sha256,request_sha256,request_bytes,rubric_sha256,budget_day,reserved_at,status,cost_reservation_micros)
+        VALUES (?,?,?,?,?,?,?,?,?,'reserved',?)`).run(input.id, input.observationId, input.modelRequested, input.sourceSha256,
+        input.requestSha256, input.requestBytes, input.rubricSha256, input.utcDay, input.reservedAt, input.costReservationMicros);
+      this.exec("COMMIT");
+      return "reserved";
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  markTypeSafeJevByokDispatched(attemptId: string, at = Date.now()): boolean {
+    if (!Number.isSafeInteger(at) || at < 0) throw new Error("invalid_typesafe_jev_byok_dispatch_time");
+    return Number(this.prepare(`UPDATE typesafe_jev_byok_attempts SET status='dispatched',dispatch_intent_at=? WHERE id=? AND status='reserved'`)
+      .run(at, attemptId).changes) === 1;
+  }
+
+  finishTypeSafeJevByokAttempt(input: {
+    attemptId: string; outcome: "completed" | "rejected" | "not_sent" | "unknown"; completedAt: number;
+    httpStatus: number | null; modelReturned: string | null; inputTokens: number | null; outputTokens: number | null;
+    estimatedCostUsd: number | null; latencyMs: number | null; errorCategory: string | null;
+    result?: Omit<TypeSafeJevByokResultRecord, "attemptId" | "observationId" | "createdAt">;
+  }): boolean {
+    if (!Number.isSafeInteger(input.completedAt) || input.completedAt < 0
+      || (input.estimatedCostUsd != null && (!Number.isFinite(input.estimatedCostUsd) || input.estimatedCostUsd < 0))) throw new Error("invalid_typesafe_jev_byok_receipt");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const attempt = this.prepare("SELECT * FROM typesafe_jev_byok_attempts WHERE id=?").get(input.attemptId) as {
+        observation_id: string; model_requested: string; source_sha256: string; rubric_sha256: string;
+      } | undefined;
+      if (!attempt) { this.exec("ROLLBACK"); return false; }
+      const r = input.result;
+      if (r && (input.outcome !== "completed" || r.sourceSha256 !== attempt.source_sha256 || r.rubricSha256 !== attempt.rubric_sha256
+        || r.modelRequested !== attempt.model_requested || r.modelReturned !== input.modelReturned)) throw new Error("typesafe_jev_byok_result_mismatch");
+      const changed = this.prepare(`UPDATE typesafe_jev_byok_attempts SET status=?,dispatch_intent_at=CASE WHEN ?='not_sent' THEN NULL ELSE dispatch_intent_at END,
+        completed_at=?,http_status=?,model_returned=?,input_tokens=?,output_tokens=?,estimated_cost_usd=?,latency_ms=?,error_category=?
+        WHERE id=? AND status IN ('reserved','dispatched')`)
+        .run(input.outcome, input.outcome, input.completedAt, input.httpStatus, input.modelReturned, input.inputTokens, input.outputTokens,
+          input.estimatedCostUsd, input.latencyMs, input.errorCategory, input.attemptId);
+      if (Number(changed.changes) !== 1) { this.exec("ROLLBACK"); return false; }
+      if (r) this.prepare(`INSERT INTO typesafe_jev_byok_results
+        (attempt_id,observation_id,model_requested,model_returned,source_sha256,rubric_sha256,source_time_at,retrieved_at,
+         sentiment,p_positive,p_neutral,p_negative,confidence,about,investor_relevant,material,novel,credible,event_type,
+         magnitude,surprise,takeaway,event_score,impact,weight,excluded,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(input.attemptId, attempt.observation_id, r.modelRequested, r.modelReturned, r.sourceSha256, r.rubricSha256, r.sourceTimeAt,
+          r.retrievedAt, r.sentiment, r.pPositive, r.pNeutral, r.pNegative, r.confidence, r.about, r.investorRelevant, r.material,
+          r.novel, r.credible, r.eventType, r.magnitude, r.surprise, r.takeaway, r.eventScore, r.impact, r.weight, r.excluded ? 1 : 0,
+          input.completedAt);
+      this.exec("COMMIT");
+      return true;
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  private mapTypeSafeJevByokResult(row: Record<string, unknown>): TypeSafeJevByokResultRecord {
+    return { attemptId: String(row.attemptId), observationId: String(row.observationId), modelRequested: String(row.modelRequested),
+      modelReturned: String(row.modelReturned), sourceSha256: String(row.sourceSha256), rubricSha256: String(row.rubricSha256),
+      sourceTimeAt: row.sourceTimeAt == null ? null : Number(row.sourceTimeAt), retrievedAt: Number(row.retrievedAt),
+      sentiment: row.sentiment as TypeSafeJevByokResultRecord["sentiment"], pPositive: Number(row.pPositive), pNeutral: Number(row.pNeutral),
+      pNegative: Number(row.pNegative), confidence: Number(row.confidence), about: Number(row.about), investorRelevant: Number(row.investorRelevant),
+      material: Number(row.material), novel: Number(row.novel), credible: Number(row.credible), eventType: String(row.eventType),
+      magnitude: Number(row.magnitude), surprise: Number(row.surprise), takeaway: String(row.takeaway), eventScore: Number(row.eventScore),
+      impact: Number(row.impact), weight: Number(row.weight), excluded: Number(row.excluded) === 1, createdAt: Number(row.createdAt) };
+  }
+
+  typeSafeJevByokResult(observationId: string): TypeSafeJevByokResultRecord | null {
+    const row = this.prepare(`SELECT attempt_id AS attemptId,observation_id AS observationId,model_requested AS modelRequested,model_returned AS modelReturned,
+      source_sha256 AS sourceSha256,rubric_sha256 AS rubricSha256,source_time_at AS sourceTimeAt,retrieved_at AS retrievedAt,sentiment,
+      p_positive AS pPositive,p_neutral AS pNeutral,p_negative AS pNegative,confidence,about,investor_relevant AS investorRelevant,material,
+      novel,credible,event_type AS eventType,magnitude,surprise,takeaway,event_score AS eventScore,impact,weight,excluded,created_at AS createdAt
+      FROM typesafe_jev_byok_results WHERE observation_id=? ORDER BY created_at DESC,attempt_id DESC LIMIT 1`).get(observationId) as Record<string, unknown> | undefined;
+    return row ? this.mapTypeSafeJevByokResult(row) : null;
+  }
+
+  typeSafeJevByokAttemptHistory(observationId: string, limit = 10) {
+    const rows = this.prepare(`SELECT id,model_requested AS modelRequested,status,reserved_at AS reservedAt,completed_at AS completedAt,
+      http_status AS httpStatus,model_returned AS modelReturned,input_tokens AS inputTokens,output_tokens AS outputTokens,
+      estimated_cost_usd AS estimatedCostUsd,error_category AS errorCategory FROM typesafe_jev_byok_attempts
+      WHERE observation_id=? ORDER BY reserved_at DESC,id DESC LIMIT ?`).all(observationId, Math.max(1, Math.min(20, Math.trunc(limit)))) as Array<Record<string, unknown>>;
+    return rows.map(row => ({ id: String(row.id), modelRequested: String(row.modelRequested), status: String(row.status), reservedAt: Number(row.reservedAt),
+      completedAt: row.completedAt == null ? null : Number(row.completedAt), httpStatus: row.httpStatus == null ? null : Number(row.httpStatus),
+      modelReturned: row.modelReturned == null ? null : String(row.modelReturned), inputTokens: row.inputTokens == null ? null : Number(row.inputTokens),
+      outputTokens: row.outputTokens == null ? null : Number(row.outputTokens), estimatedCostUsd: row.estimatedCostUsd == null ? null : Number(row.estimatedCostUsd),
+      errorCategory: row.errorCategory == null ? null : String(row.errorCategory) }));
+  }
+
+  typeSafeJevByokUsage(utcDay: string): { requests: number; requestBytes: number; estimatedCostUsd: number } {
+    const row = this.prepare(`SELECT COUNT(*) AS requests,COALESCE(SUM(request_bytes),0) AS requestBytes,
+      COALESCE(SUM(CASE WHEN estimated_cost_usd IS NULL THEN cost_reservation_micros ELSE CAST(ROUND(estimated_cost_usd*1000000) AS INTEGER) END),0) AS cost
+      FROM typesafe_jev_byok_attempts WHERE budget_day=? AND status<>'not_sent'`).get(utcDay) as { requests: number; requestBytes: number; cost: number };
+    return { requests: Number(row.requests), requestBytes: Number(row.requestBytes), estimatedCostUsd: Number(row.cost) / 1_000_000 };
+  }
+
+  reserveTypeSafeJevByokVerification(input: { id: string; utcDay: string; reservedAt: number; maxDailyRequests: number }): "reserved" | "daily_verification_limit" | "storage_paused" {
+    if (!this.storage.status(this.db, this.storageReadOnly).writesAllowed) return "storage_paused";
+    if (!z.string().uuid().safeParse(input.id).success || !/^20\d\d-\d\d-\d\d$/.test(input.utcDay)
+      || !Number.isSafeInteger(input.reservedAt) || input.reservedAt < 0
+      || !Number.isSafeInteger(input.maxDailyRequests) || input.maxDailyRequests < 1) throw new Error("invalid_typesafe_jev_byok_verification_reservation");
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const count = this.prepare("SELECT COUNT(*) AS count FROM typesafe_jev_byok_verification_attempts WHERE budget_day=?").get(input.utcDay) as { count: number };
+      if (Number(count.count) >= input.maxDailyRequests) { this.exec("ROLLBACK"); return "daily_verification_limit"; }
+      this.prepare("INSERT INTO typesafe_jev_byok_verification_attempts (id,budget_day,reserved_at) VALUES (?,?,?)")
+        .run(input.id, input.utcDay, input.reservedAt);
+      this.exec("COMMIT");
+      return "reserved";
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  typeSafeJevByokVerificationUsage(utcDay: string): number {
+    const row = this.prepare("SELECT COUNT(*) AS count FROM typesafe_jev_byok_verification_attempts WHERE budget_day=?").get(utcDay) as { count: number };
+    return Number(row.count);
+  }
+
+  typeSafeJevByokFeed(companyId: string, fromMs: number, throughMs = Number.MAX_SAFE_INTEGER, limit = 100): Array<TypeSafeJevByokResultRecord & {
+    title: string; publisherName: string; sourceUrl: string; companyId: string;
+  }> {
+    if (!Number.isSafeInteger(fromMs) || fromMs < 0 || !Number.isSafeInteger(throughMs) || throughMs < fromMs) throw new Error("invalid_typesafe_jev_byok_window");
+    const sourceClock = VALIDATED_SOURCE_CLOCK_SQL.replaceAll("m.", "o.");
+    const rows = this.prepare(`SELECT r.attempt_id AS attemptId,r.observation_id AS observationId,r.model_requested AS modelRequested,r.model_returned AS modelReturned,
+      r.source_sha256 AS sourceSha256,r.rubric_sha256 AS rubricSha256,${sourceClock} AS sourceTimeAt,r.retrieved_at AS retrievedAt,r.sentiment,
+      r.p_positive AS pPositive,r.p_neutral AS pNeutral,r.p_negative AS pNegative,r.confidence,r.about,r.investor_relevant AS investorRelevant,
+      r.material,r.novel,r.credible,r.event_type AS eventType,r.magnitude,r.surprise,r.takeaway,r.event_score AS eventScore,r.impact,r.weight,
+      r.excluded,r.created_at AS createdAt,o.title,o.publisher_name AS publisherName,o.source_url AS sourceUrl,o.company_id AS companyId
+      FROM typesafe_jev_byok_results r JOIN source_observations o ON o.id=r.observation_id
+      JOIN companies co ON co.id=o.company_id
+      WHERE o.company_id=? AND ((${sourceClock}>=? AND ${sourceClock}<=?)
+        OR (${sourceClock} IS NULL AND o.retrieved_at>=? AND o.retrieved_at<=?))
+      AND desk_issuer_identity_strong(co.name,co.ticker,co.aliases,co.ambiguous,o.title,o.snippet,o.scoped)=1
+      AND desk_finance_relevant(o.title,o.snippet,o.source_tier,o.source_kind,co.ticker,co.name)=1
+      AND r.attempt_id=(SELECT newest.attempt_id FROM typesafe_jev_byok_results newest WHERE newest.observation_id=r.observation_id
+        ORDER BY newest.created_at DESC,newest.attempt_id DESC LIMIT 1)
+      ORDER BY CASE WHEN ${sourceClock} IS NULL THEN 1 ELSE 0 END ASC,${sourceClock} DESC,r.created_at DESC,r.attempt_id DESC LIMIT ?`)
+      .all(companyId, fromMs, throughMs, fromMs, throughMs, Math.max(1, Math.min(500, Math.trunc(limit)))) as Array<Record<string, unknown>>;
+    return rows.map(row => ({ ...this.mapTypeSafeJevByokResult(row), title: String(row.title), publisherName: String(row.publisherName),
+      sourceUrl: String(row.sourceUrl), companyId: String(row.companyId) }));
   }
 
   logEvent(level: "info" | "warn" | "error", source: string, message: string): void {
@@ -4769,7 +6532,7 @@ export class Desk {
       COALESCE(SUM(CASE WHEN NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') THEN a.reserved_cost_micros ELSE 0 END),0) AS reserved_cost_micros,
       SUM(CASE WHEN e.event_type='unknown' THEN 1 ELSE 0 END) AS unknown_outcomes
       FROM jev_request_attempts a LEFT JOIN jev_attempt_events e ON e.attempt_id=a.id AND e.event_type IN ('response','rejected','unknown')
-      WHERE a.provider='openai_luna' AND a.reserved_at>=?`).get(sinceMs) as Record<string, number | null>;
+      WHERE a.provider='openai_luna' AND a.accounting_route IN ('api_key','legacy') AND a.reserved_at>=?`).get(sinceMs) as Record<string, number | null>;
     const unpricedAttempts = row.unpriced_attempts ?? 0;
     const requests = row.requests ?? 0;
     const usageIncompleteAttempts = row.usage_incomplete_attempts ?? 0;
@@ -4785,6 +6548,192 @@ export class Desk {
       unknownOutcomes: row.unknown_outcomes ?? 0, unpricedAttempts,
       usageIncompleteAttempts,
     };
+  }
+
+  planUsageSince(sinceMs: number): { requests: number; reservedRequests: number; requestBytes: number; unknownOutcomes: number; classifiedItems: number } {
+    const row = this.prepare(`SELECT COUNT(*) AS reserved_requests,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') THEN 1 ELSE 0 END) AS requests,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND NOT EXISTS(SELECT 1 FROM jev_attempt_events n WHERE n.attempt_id=a.id AND n.event_type='not_sent') THEN a.request_bytes ELSE 0 END) AS request_bytes,
+      SUM(CASE WHEN EXISTS(SELECT 1 FROM jev_attempt_events d WHERE d.attempt_id=a.id AND d.event_type='dispatch_intent')
+        AND (EXISTS(SELECT 1 FROM jev_attempt_events u WHERE u.attempt_id=a.id AND u.event_type='unknown')
+          OR NOT EXISTS(SELECT 1 FROM jev_attempt_events t WHERE t.attempt_id=a.id AND t.event_type IN ('response','rejected','unknown','not_sent'))) THEN 1 ELSE 0 END) AS unknown_outcomes,
+      (SELECT COUNT(*) FROM categorical_classifications c WHERE c.accounting_route='chatgpt_plan' AND c.classified_at>=?) AS classified_items
+      FROM jev_request_attempts a WHERE a.provider='openai_luna' AND a.accounting_route='chatgpt_plan' AND a.reserved_at>=?`).get(sinceMs, sinceMs) as Record<string, number | null>;
+    const hasAuxiliaryLedger = (this.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chatgpt_plan_auxiliary_requests'").get() as unknown) != null;
+    const auxiliary = hasAuxiliaryLedger ? this.prepare(`SELECT COUNT(*) AS reserved_requests,
+      SUM(CASE WHEN status IN ('dispatched','completed','rejected','unknown') THEN 1 ELSE 0 END) AS requests,
+      SUM(CASE WHEN status IN ('dispatched','completed','rejected','unknown') THEN request_bytes ELSE 0 END) AS request_bytes,
+      SUM(CASE WHEN status='unknown' THEN 1 ELSE 0 END) AS unknown_outcomes
+      FROM chatgpt_plan_auxiliary_requests WHERE reserved_at>=?`).get(sinceMs) as Record<string, number | null>
+      : { reserved_requests: 0, requests: 0, request_bytes: 0, unknown_outcomes: 0 };
+    const evaluation = this.prepare(`SELECT COUNT(*) AS reserved_requests,
+      SUM(CASE WHEN status IN ('dispatched','completed','rejected','unknown') THEN 1 ELSE 0 END) AS requests,
+      SUM(CASE WHEN status IN ('dispatched','completed','rejected','unknown') THEN request_bytes ELSE 0 END) AS request_bytes,
+      SUM(CASE WHEN status='unknown' THEN 1 ELSE 0 END) AS unknown_outcomes
+      FROM chatgpt_plan_evaluation_requests WHERE reserved_at>=?`).get(sinceMs) as Record<string, number | null>;
+    const unknownOutcomes = (row.unknown_outcomes ?? 0) + (auxiliary.unknown_outcomes ?? 0) + (evaluation.unknown_outcomes ?? 0);
+    return {
+      requests: (row.requests ?? 0) + (auxiliary.requests ?? 0) + (evaluation.requests ?? 0),
+      reservedRequests: (row.reserved_requests ?? 0) + (auxiliary.reserved_requests ?? 0) + (evaluation.reserved_requests ?? 0),
+      requestBytes: (row.request_bytes ?? 0) + (auxiliary.request_bytes ?? 0) + (evaluation.request_bytes ?? 0),
+      unknownOutcomes,
+      classifiedItems: row.classified_items ?? 0,
+    };
+  }
+
+  /** Reserve one private-note plan call against the same UTC-day cap as public Luna classification. */
+  reserveChatGPTPlanAuxiliaryRequest(input: {
+    requestBytes: number;
+    utcDay: string;
+    maxRequests: number;
+    maxRequestBytes: number;
+    now?: number;
+  }): { reserved: true; id: string } | { reserved: false; reason: "read_only" | "capacity" | "invalid" | "closed" | "exhausted" } {
+    const now = input.now ?? Date.now();
+    if (!/^(?:19|20|21)\d\d-\d\d-\d\d$/.test(input.utcDay) ||
+      !Number.isSafeInteger(now) || now < 0 ||
+      !Number.isSafeInteger(input.requestBytes) || input.requestBytes < 1 || input.requestBytes > 260_000 ||
+      !Number.isSafeInteger(input.maxRequests) || input.maxRequests < 1 ||
+      !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes < 1) return { reserved: false, reason: "invalid" };
+    if (this.storageReadOnly) return { reserved: false, reason: "read_only" };
+    if (!this.prepareExternalWork()) return { reserved: false, reason: "capacity" };
+    const prefix = `chatgpt-plan:budget:${input.utcDay}`;
+    const requestKey = `${prefix}:requests`;
+    const byteKey = `${prefix}:request-bytes`;
+    const closedKey = `${prefix}:closed`;
+    const id = randomUUID();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const closed = this.prepare("SELECT value FROM kv WHERE key=?").get(closedKey) as { value: string } | undefined;
+      if (closed && closed.value !== "0") { this.exec("COMMIT"); return { reserved: false, reason: "closed" }; }
+      const read = (key: string): number | null => {
+        const row = this.prepare("SELECT value FROM kv WHERE key=?").get(key) as { value: string } | undefined;
+        if (!row) return 0;
+        const parsed = Number(row.value);
+        return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+      };
+      const requests = read(requestKey); const bytes = read(byteKey);
+      if (requests == null || bytes == null) {
+        this.prepare("INSERT INTO kv(key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(closedKey);
+        this.exec("COMMIT"); return { reserved: false, reason: "closed" };
+      }
+      if (requests + 1 > input.maxRequests || bytes + input.requestBytes > input.maxRequestBytes) {
+        this.exec("COMMIT"); return { reserved: false, reason: "exhausted" };
+      }
+      this.prepare("INSERT INTO kv(key,value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(requestKey, String(requests + 1));
+      this.prepare("INSERT INTO kv(key,value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(byteKey, String(bytes + input.requestBytes));
+      this.prepare(`INSERT INTO chatgpt_plan_auxiliary_requests(id,task_type,budget_day,reserved_at,request_bytes,status)
+        VALUES (?,'private_note_analysis',?,?,?,'reserved')`).run(id, input.utcDay, now, input.requestBytes);
+      this.exec("COMMIT");
+      return { reserved: true, id };
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  markChatGPTPlanAuxiliaryRequestDispatched(id: string): boolean {
+    const update = this.prepare(`UPDATE chatgpt_plan_auxiliary_requests SET status='dispatched'
+      WHERE id=? AND status='reserved'`).run(id);
+    if (Number(update.changes) === 1) return true;
+    const row = this.prepare("SELECT status FROM chatgpt_plan_auxiliary_requests WHERE id=?").get(id) as { status: string } | undefined;
+    return row?.status === "dispatched";
+  }
+
+  finishChatGPTPlanAuxiliaryRequest(id: string, outcome: "completed" | "rejected" | "not_sent" | "unknown", completedAt = Date.now()): boolean {
+    if (!Number.isSafeInteger(completedAt) || completedAt < 0 || !/^[0-9a-f-]{36}$/i.test(id)) return false;
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.prepare("SELECT status,budget_day,request_bytes FROM chatgpt_plan_auxiliary_requests WHERE id=?").get(id) as
+        { status: string; budget_day: string; request_bytes: number } | undefined;
+      if (!row) { this.exec("COMMIT"); return false; }
+      if (row.status === outcome) { this.exec("COMMIT"); return true; }
+      const allowed = outcome === "not_sent" ? ["reserved", "dispatched"] : ["dispatched"];
+      if (!allowed.includes(row.status)) { this.exec("COMMIT"); return false; }
+      this.prepare("UPDATE chatgpt_plan_auxiliary_requests SET status=?,completed_at=? WHERE id=? AND status=?")
+        .run(outcome, completedAt, id, row.status);
+      if (outcome === "not_sent") this.releaseChatGPTPlanBudgetReservation(row.budget_day, row.request_bytes);
+      if (outcome === "unknown") this.closeChatGPTPlanBudgetDay(row.budget_day);
+      this.exec("COMMIT");
+      return true;
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  /** Reserve one bounded diagnostic-evaluation call against the same UTC-day plan counters as Luna and private notes. */
+  reserveChatGPTPlanEvaluationRequest(input: {
+    requestBytes: number;
+    utcDay: string;
+    maxRequests: number;
+    maxRequestBytes: number;
+    now?: number;
+  }): { reserved: true; id: string } | { reserved: false; reason: "read_only" | "capacity" | "invalid" | "closed" | "exhausted" } {
+    const now = input.now ?? Date.now();
+    if (!/^(?:19|20|21)\d\d-\d\d-\d\d$/.test(input.utcDay) || !Number.isSafeInteger(now) || now < 0
+      || !Number.isSafeInteger(input.requestBytes) || input.requestBytes < 1 || input.requestBytes > 260_000
+      || !Number.isSafeInteger(input.maxRequests) || input.maxRequests < 1
+      || !Number.isSafeInteger(input.maxRequestBytes) || input.maxRequestBytes < 1) return { reserved: false, reason: "invalid" };
+    if (this.storageReadOnly) return { reserved: false, reason: "read_only" };
+    if (!this.prepareExternalWork()) return { reserved: false, reason: "capacity" };
+    const prefix = `chatgpt-plan:budget:${input.utcDay}`;
+    const requestKey = `${prefix}:requests`;
+    const byteKey = `${prefix}:request-bytes`;
+    const closedKey = `${prefix}:closed`;
+    const id = randomUUID();
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const closed = this.prepare("SELECT value FROM kv WHERE key=?").get(closedKey) as { value: string } | undefined;
+      if (closed && closed.value !== "0") { this.exec("COMMIT"); return { reserved: false, reason: "closed" }; }
+      const read = (key: string): number | null => {
+        const row = this.prepare("SELECT value FROM kv WHERE key=?").get(key) as { value: string } | undefined;
+        if (!row) return 0;
+        const parsed = Number(row.value);
+        return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+      };
+      const requests = read(requestKey); const bytes = read(byteKey);
+      if (requests == null || bytes == null) {
+        this.prepare("INSERT INTO kv(key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").run(closedKey);
+        this.exec("COMMIT"); return { reserved: false, reason: "closed" };
+      }
+      if (requests + 1 > input.maxRequests || bytes + input.requestBytes > input.maxRequestBytes) {
+        this.exec("COMMIT"); return { reserved: false, reason: "exhausted" };
+      }
+      this.prepare("INSERT INTO kv(key,value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(requestKey, String(requests + 1));
+      this.prepare("INSERT INTO kv(key,value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(byteKey, String(bytes + input.requestBytes));
+      this.prepare(`INSERT INTO chatgpt_plan_evaluation_requests(id,budget_day,reserved_at,request_bytes,status)
+        VALUES (?,?,?,?,'reserved')`).run(id, input.utcDay, now, input.requestBytes);
+      this.exec("COMMIT");
+      return { reserved: true, id };
+    } catch (error) { this.rollbackIfActive(); throw error; }
+  }
+
+  markChatGPTPlanEvaluationDispatched(id: string): boolean {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return false;
+    const update = this.prepare("UPDATE chatgpt_plan_evaluation_requests SET status='dispatched' WHERE id=? AND status='reserved'").run(id);
+    if (Number(update.changes) === 1) return true;
+    const row = this.prepare("SELECT status FROM chatgpt_plan_evaluation_requests WHERE id=?").get(id) as { status: string } | undefined;
+    return row?.status === "dispatched";
+  }
+
+  finishChatGPTPlanEvaluationRequest(id: string, outcome: "completed" | "rejected" | "not_sent" | "unknown", completedAt = Date.now()): boolean {
+    if (!Number.isSafeInteger(completedAt) || completedAt < 0 || !/^[0-9a-f-]{36}$/i.test(id)) return false;
+    this.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.prepare("SELECT status,budget_day,request_bytes FROM chatgpt_plan_evaluation_requests WHERE id=?").get(id) as
+        { status: string; budget_day: string; request_bytes: number } | undefined;
+      if (!row) { this.exec("COMMIT"); return false; }
+      if (row.status === outcome) { this.exec("COMMIT"); return true; }
+      const allowed = outcome === "not_sent" ? ["reserved", "dispatched"] : ["dispatched"];
+      if (!allowed.includes(row.status)) { this.exec("COMMIT"); return false; }
+      this.prepare("UPDATE chatgpt_plan_evaluation_requests SET status=?,completed_at=? WHERE id=? AND status=?")
+        .run(outcome, completedAt, id, row.status);
+      if (outcome === "not_sent") this.releaseChatGPTPlanBudgetReservation(row.budget_day, row.request_bytes);
+      if (outcome === "unknown") this.closeChatGPTPlanBudgetDay(row.budget_day);
+      this.exec("COMMIT");
+      return true;
+    } catch (error) { this.rollbackIfActive(); throw error; }
   }
 
   hasSecFilingResearchTaskStore(): boolean {
@@ -5159,7 +7108,11 @@ export function rowToDTO(r: MentionRow): MentionDTO {
   const classificationNumbers = [r.classification_input_tokens, r.classification_output_tokens,
     r.classification_total_tokens,
     r.classification_latency_ms, r.classification_classified_at];
+  const validClassificationAccounting = r.classification_accounting_route === "chatgpt_plan"
+    ? r.classification_service_tier_requested == null && r.classification_estimated_cost_usd == null
+    : r.classification_accounting_route === "api_key" && r.classification_service_tier_requested === "default" && r.classification_service_tier === "default";
   const classificationComplete = wantsClassification && r.classification_provider === "openai_luna" &&
+    validClassificationAccounting &&
     typeof r.classification_model_requested === "string" && typeof r.classification_model_returned === "string" &&
     typeof r.classification_prompt_version === "string" && typeof r.classification_prompt_sha256 === "string" &&
     (r.classification_profile_sha256 == null || typeof r.classification_profile_sha256 === "string") &&
@@ -5188,9 +7141,12 @@ export function rowToDTO(r: MentionRow): MentionDTO {
   } : null;
   const classification: CategoricalClassificationDTO | null = classificationComplete ? {
     provider: "openai_luna",
+    receiptOrigin: r.classification_receipt_origin ?? "scoring",
     attemptId: r.classification_attempt_id ?? null,
+    accountingRoute: r.classification_accounting_route === "chatgpt_plan" ? "chatgpt_plan" : "api_key",
     modelRequested: r.classification_model_requested!, modelReturned: r.classification_model_returned!,
-    serviceTierRequested: "default", serviceTier: r.classification_service_tier ?? null,
+    serviceTierRequested: r.classification_service_tier_requested == null ? null : String(r.classification_service_tier_requested) as "default",
+    serviceTier: r.classification_service_tier == null ? null : String(r.classification_service_tier),
     promptVersion: r.classification_prompt_version!, promptSha256: r.classification_prompt_sha256!,
     profileSha256: r.classification_profile_sha256 ?? null,
     schemaVersion: r.classification_schema_version!, schemaSha256: r.classification_schema_sha256!,

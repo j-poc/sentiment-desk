@@ -1,5 +1,7 @@
+import {requestSecResponse, secRetrievedAt} from "./sec-acquisition.js";
 import { config } from "./config.js";
 import { createHash } from "node:crypto";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { loadSecFilingsHubInstallation, type SecFilingsHubInstallation } from "./sec-filings-hub-installation.js";
 import { SEC_FILINGS_FRESHNESS_BUDGET_MS, secFilingIdentity, secFilingsSourceFreshness, secIssuerDisplayName, type SecFilingInboxRow, type SecFilingsInboxView } from "../shared/sec-filings-inbox.js";
 import type { ListedSecurity, ListingDirectoryEvidence, ListingSnapshot } from "../shared/sec-listing-snapshot.js";
@@ -15,6 +17,18 @@ const LISTING_SOURCES = [
 const MAX_LISTING_BYTES = 1_500_000;
 const MAX_LISTING_ROWS = 20_000;
 const MAX_LISTING_NAME_CHARS = 512;
+const SEC_ATOM_URL = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom";
+const MAX_ATOM_BYTES = 2_000_000;
+const MAX_ATOM_ROWS = 40;
+const secAtomParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "@_",
+  removeNSPrefix: true,
+  parseAttributeValue: false,
+  parseTagValue: false,
+  trimValues: true,
+  processEntities: false,
+});
 
 interface HubConnection extends SecFilingsHubInstallation {}
 export type { ListedSecurity, ListingDirectoryEvidence, ListingSnapshot } from "../shared/sec-listing-snapshot.js";
@@ -22,6 +36,19 @@ export type { ListedSecurity, ListingDirectoryEvidence, ListingSnapshot } from "
 export interface ListingSnapshotStore {
   read(): unknown | null;
   write(snapshot: ListingSnapshot): void;
+}
+
+export interface SecInboxSnapshot {
+  receiptId: string;
+  retrievedAt: string;
+  feedUpdatedAt: string | null;
+  responseSha256: string;
+  rows: SecFilingInboxRow[];
+}
+
+export interface SecInboxSnapshotStore {
+  readLatest(): unknown | null;
+  write(snapshot: SecInboxSnapshot): void;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -159,6 +186,116 @@ function validDate(value: unknown): string | null {
   return Number.isFinite(d.valueOf()) && d.toISOString().slice(0, 10) === value ? value : null;
 }
 
+function atomText(value: unknown): string | null {
+  if (typeof value === "string") return value.trim();
+  const node = object(value);
+  return typeof node?.["#text"] === "string" ? String(node["#text"]).trim() : null;
+}
+
+function atomTimestamp(value: unknown): string | null {
+  const raw = atomText(value);
+  return raw ? validTimestamp(raw) : null;
+}
+
+function atomAccessionFromLink(raw: unknown): { accession: string; filingCikPath: string } | null {
+  if (typeof raw !== "string" || raw.length > 2_048) return null;
+  try {
+    const url = new URL(raw);
+    const match = url.pathname.match(/^\/Archives\/edgar\/data\/([0-9]{1,10})\/([0-9]{18})\/(?:[^/]+)$/);
+    if (url.protocol !== "https:" || url.hostname !== "www.sec.gov" || url.port || url.username || url.password
+      || url.search || url.hash || !match) return null;
+    const digits = match[2]!;
+    return { accession: `${digits.slice(0, 10)}-${digits.slice(10, 12)}-${digits.slice(12)}`, filingCikPath: match[1]! };
+  } catch { return null; }
+}
+
+/** Parse the bounded SEC Atom 8-K search feed without making event-time claims. */
+export function parseSecAtomFeed(xml: string, retrievedAt: string, bodySha256 = createHash("sha256").update(xml, "utf8").digest("hex")):
+  { rows: SecFilingInboxRow[]; feedUpdatedAt: string | null } | null {
+  if (Buffer.byteLength(xml, "utf8") > MAX_ATOM_BYTES || /<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml)
+    || !/^[a-f0-9]{64}$/.test(bodySha256) || !validTimestamp(retrievedAt) || XMLValidator.validate(xml) !== true) return null;
+  let parsed: unknown;
+  try { parsed = secAtomParser.parse(xml); } catch { return null; }
+  const root = object(parsed);
+  const feed = object(root?.feed);
+  const entries = feed?.entry == null ? [] : Array.isArray(feed.entry) ? feed.entry : [feed.entry];
+  if (!feed || entries.length > MAX_ATOM_ROWS) return null;
+  const rows: SecFilingInboxRow[] = [];
+  const seen = new Set<string>();
+  for (const raw of entries) {
+    const entry = object(raw);
+    const title = atomText(entry?.title);
+    const titleMatch = title?.match(/^8-K\s+-\s+(.+?)\s+\(([0-9]{10})\)\s+\(Filer\)$/i);
+    const links = entry?.link == null ? [] : Array.isArray(entry.link) ? entry.link : [entry.link];
+    const alternate = links.map(object).find((link) => link?.["@_rel"] === "alternate" && typeof link["@_href"] === "string");
+    const link = typeof alternate?.["@_href"] === "string" ? alternate["@_href"] : null;
+    const accessionParts = atomAccessionFromLink(link);
+    const categoryValues = entry?.category == null ? [] : Array.isArray(entry.category) ? entry.category : [entry.category];
+    const form = categoryValues.map(object).map((item) => item?.["@_term"]).find((term) => typeof term === "string");
+    if (form === "8-K/A") continue;
+    const issuer = titleMatch ? secIssuerDisplayName(titleMatch[1]!.trim()) : "";
+    const cik = titleMatch?.[2] ?? "";
+    if (!entry || !titleMatch || !accessionParts || form !== "8-K" || issuer.length < 1 || issuer.length > 200
+      || seen.has(secFilingIdentity({ cik, accession: accessionParts.accession }))) return null;
+    const filingUrl = `https://www.sec.gov/Archives/edgar/data/${accessionParts.filingCikPath}/${accessionParts.accession.replaceAll("-", "")}/${accessionParts.accession}-index.htm`;
+    const validatedUrl = validateFilingUrl(filingUrl, accessionParts.accession, accessionParts.filingCikPath);
+    const summary = atomText(entry.summary) ?? "";
+    const filedMatch = summary.replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").match(/\bFiled:\s*(\d{4}-\d{2}-\d{2}|\d{8})\b/i);
+    const filedToken = filedMatch?.[1];
+    const filedOn = filedToken ? validDate(filedToken.includes("-") ? filedToken : `${filedToken.slice(0, 4)}-${filedToken.slice(4, 6)}-${filedToken.slice(6)}`) : null;
+    const publishedValue = atomTimestamp(entry.published);
+    const entryUpdatedAt = atomTimestamp(entry.updated);
+    if (!validatedUrl || (filedToken && !filedOn) || (entry.published != null && !publishedValue) || (entry.updated != null && !entryUpdatedAt)) return null;
+    rows.push({ accession: accessionParts.accession, cik, accessionCik: accessionParts.accession.slice(0, 10),
+      filingCikPath: validatedUrl.filingCikPath, issuer, form: "8-K", filedOn, acceptedAt: null,
+      feedPublishedAt: publishedValue, feedUpdatedAt: entryUpdatedAt, filingUrl: validatedUrl.url });
+    seen.add(secFilingIdentity({ cik, accession: accessionParts.accession }));
+  }
+  const feedUpdatedAt = atomTimestamp(feed.updated);
+  if (feed.updated != null && !feedUpdatedAt) return null;
+  return { rows, feedUpdatedAt };
+}
+
+function canFallbackToDirectSec(view: SecFilingsInboxView): boolean {
+  return view.state === "unavailable" || view.state === "not_configured"
+    || (view.state === "unsupported" && view.message === "The connected Hub does not yet provide the SEC 8-K feed.");
+}
+
+function validatedSecInboxSnapshot(value: unknown): SecInboxSnapshot | null {
+  const candidate = object(value);
+  const retrievedAt = validTimestamp(candidate?.retrievedAt);
+  const feedUpdatedAt = candidate?.feedUpdatedAt == null ? null : validTimestamp(candidate.feedUpdatedAt);
+  const responseSha256 = candidate?.responseSha256;
+  const receiptId = candidate?.receiptId;
+  const rawRows = Array.isArray(candidate?.rows) ? candidate.rows : null;
+  const rows = rawRows && rawRows.length <= MAX_ATOM_ROWS ? rawRows.map((value) => {
+    const row = object(value);
+    if (!row) return null;
+    return normalizeRows([{
+      entity: row.cik,
+      source_address: row.filingUrl,
+      attributes: {
+        accession: row.accession,
+        accession_cik: row.accessionCik,
+        filing_cik_path: row.filingCikPath,
+        form: row.form,
+        issuer_label: row.issuer,
+        filed_at: row.filedOn,
+        accepted_at: row.acceptedAt,
+        published_source_timestamp: row.feedPublishedAt,
+        feed_updated_at: row.feedUpdatedAt,
+        filing_url: row.filingUrl,
+      },
+    }])?.[0] ?? null;
+  }) : null;
+  if (!candidate || !retrievedAt || (candidate.feedUpdatedAt != null && !feedUpdatedAt)
+    || typeof responseSha256 !== "string" || !/^[a-f0-9]{64}$/.test(responseSha256)
+    || typeof receiptId !== "string"
+    || receiptId !== `sec_${createHash("sha256").update(`${responseSha256}:${retrievedAt}`).digest("hex")}`
+    || !rows || rows.some((row) => row == null)) return null;
+  return { receiptId, retrievedAt, feedUpdatedAt, responseSha256, rows: rows as SecFilingInboxRow[] };
+}
+
 function validateFilingUrl(value: unknown, accession: string, filingCikPath: unknown): { url: string; filingCikPath: string } | null {
   if (typeof value !== "string" || value.length > 500) return null;
   try {
@@ -225,16 +362,22 @@ export interface SecFilingsReceiptEvidence {
 
 export class SecFilingsInbox {
   private listingSnapshot: ListingSnapshot | null = null;
+  private directSnapshot: SecInboxSnapshot | null = null;
+  private directActivation: Promise<SecFilingsInboxView> | null = null;
 
   constructor(private readonly options: {
     acquisitionEnabled: boolean;
+    secUserAgent?: string;
     fetcher?: typeof fetch;
     now?: () => number;
     connectionProvider?: () => HubConnection;
     listingSnapshotStore?: ListingSnapshotStore;
+    directSnapshotStore?: SecInboxSnapshotStore;
   }) {
     try { this.listingSnapshot = validatedListingSnapshot(options.listingSnapshotStore?.read()); }
     catch { this.listingSnapshot = null; }
+    try { this.directSnapshot = validatedSecInboxSnapshot(options.directSnapshotStore?.readLatest()); }
+    catch { this.directSnapshot = null; }
   }
 
   private connection(): HubConnection {
@@ -278,12 +421,26 @@ export class SecFilingsInbox {
   private async get(url: URL, token: string): Promise<unknown> { return this.request(url, token); }
 
   async read(): Promise<SecFilingsInboxView> {
-    return this.applyListingGate(await this.readHubReceipt());
+    const hubView = await this.readHubReceipt();
+    if (!canFallbackToDirectSec(hubView)) return this.applyListingGate(hubView);
+    const saved = this.directSnapshotView();
+    if (saved) return this.applyListingGate({ ...saved, canActivate: this.canAcquireDirectSec() });
+    const directReady = this.canAcquireDirectSec();
+    return this.applyListingGate({
+      ...hubView,
+      state: "unavailable",
+      canActivate: directReady,
+      message: directReady
+        ? "No accepted SEC snapshot is saved in this Desk. Choose Load current SEC filings to fetch the latest bounded Form 8-K feed."
+        : this.directBlockedMessage(),
+    });
   }
 
   /** Read receipt freshness and shape without bypassing the UI's active-listing gate. */
   async readReceiptEvidence(): Promise<SecFilingsReceiptEvidence> {
-    const view = await this.readHubReceipt();
+    const hubView = await this.readHubReceipt();
+    const directView = canFallbackToDirectSec(hubView) ? this.directSnapshotView() : null;
+    const view = directView ? this.applyListingGate({ ...directView, canActivate: this.canAcquireDirectSec() }) : hubView;
     return {
       state: view.state,
       freshness: view.freshness,
@@ -363,16 +520,15 @@ export class SecFilingsInbox {
   }
 
   async activate(): Promise<SecFilingsInboxView> {
-    if (!this.options.acquisitionEnabled) return this.empty("unavailable", "Recent Filings is paused. Enable external requests and approve both SEC 8-K and Nasdaq symbol-directory sources in both source lists.");
-    try { this.listingSnapshot = await this.fetchListingSnapshot(); }
-    catch { this.listingSnapshot = null; }
-    if (this.listingSnapshot) {
-      try { this.options.listingSnapshotStore?.write(this.listingSnapshot); }
-      catch { /* the verified in-memory snapshot still serves this app session */ }
+    if (!this.options.acquisitionEnabled) {
+      const blocked = this.empty("unavailable", this.directBlockedMessage(), false);
+      const previous = this.directSnapshotView();
+      return previous ? this.applyListingGate({ ...previous, canActivate: false, message: blocked.message }) : blocked;
     }
     let connection: HubConnection;
     try { connection = this.connection(); }
-    catch { return this.unavailable(); }
+    catch { return this.activateDirectSec(); }
+    await this.refreshListingSnapshot();
     try {
       // Explicit activation already paid for current exchange directories. Reuse a
       // usable Hub receipt even when new collection is no longer configured.
@@ -382,6 +538,7 @@ export class SecFilingsInbox {
       if (accepted.state === "ready" && accepted.freshness === "current") {
         return this.applyListingGate(accepted);
       }
+      if (canFallbackToDirectSec(accepted)) return this.activateDirectSec();
 
       const sources = object(await this.get(new URL("/api/v1/sources", connection.baseUrl), connection.token));
       const source = (Array.isArray(sources?.implemented) ? sources.implemented : []).map(object).find((entry) => entry?.id === DATASET);
@@ -415,7 +572,125 @@ export class SecFilingsInbox {
       const output = object(result);
       return { ...this.empty("pending", "SEC filing collection started. This feed refreshes at most every 15 minutes."), jobStatus: typeof object(output?.job)?.status === "string" ? String(object(output?.job)?.status) : "queued", nextRefreshAt: null };
     } catch {
-      return this.unavailable();
+      return this.activateDirectSec();
+    }
+  }
+
+  private canAcquireDirectSec(): boolean {
+    return this.options.acquisitionEnabled && Boolean(this.options.secUserAgent) && Boolean(this.options.directSnapshotStore);
+  }
+
+  private directBlockedMessage(): string {
+    if (!this.options.acquisitionEnabled) return "SEC filing refresh is paused. Enable external requests and approve both sec_latest_filings_8k and nasdaq_symbol_directories in both configured source lists.";
+    if (!this.options.secUserAgent) return "SEC requests are paused because SEC_USER_AGENT must identify this app and include a contact email.";
+    return "SEC filing refresh is paused because this Desk cannot persist and recover the accepted feed snapshot.";
+  }
+
+  private async refreshListingSnapshot(): Promise<void> {
+    try {
+      const freshListingSnapshot = await this.fetchListingSnapshot();
+      this.listingSnapshot = freshListingSnapshot;
+      try { this.options.listingSnapshotStore?.write(freshListingSnapshot); }
+      catch { /* current session can use the verified response; restart recovery remains unavailable */ }
+    } catch { /* retain the last verified snapshot; its embedded clock still controls eligibility */ }
+  }
+
+  private directSnapshotView(snapshot = this.directSnapshot): SecFilingsInboxView | null {
+    if (!snapshot) return null;
+    const now = this.options.now?.() ?? Date.now();
+    const freshness = secFilingsSourceFreshness(snapshot.feedUpdatedAt, now);
+    const staleSnapshot = now - Date.parse(snapshot.retrievedAt) > SEC_FILINGS_FRESHNESS_BUDGET_MS;
+    return {
+      state: snapshot.rows.length === 0 ? "empty" : staleSnapshot ? "stale" : "ready",
+      freshness,
+      rows: snapshot.rows,
+      receiptId: snapshot.receiptId,
+      retrievedAt: snapshot.retrievedAt,
+      feedUpdatedAt: snapshot.feedUpdatedAt,
+      jobStatus: "succeeded",
+      canActivate: this.canAcquireDirectSec(),
+      nextRefreshAt: new Date(Date.parse(snapshot.retrievedAt) + 15 * 60 * 1000).toISOString(),
+      message: snapshot.rows.length === 0 ? "The accepted SEC feed returned no filings in its bounded recent window." : null,
+    };
+  }
+
+  private activateDirectSec(): Promise<SecFilingsInboxView> {
+    if (this.directActivation) return this.directActivation;
+    const activation = this.acquireDirectSec().finally(() => {
+      if (this.directActivation === activation) this.directActivation = null;
+    });
+    this.directActivation = activation;
+    return activation;
+  }
+
+  private async acquireDirectSec(): Promise<SecFilingsInboxView> {
+    const previous = this.directSnapshotView();
+    if (!this.canAcquireDirectSec()) {
+      const blocked = this.empty("unavailable", this.directBlockedMessage(), false);
+      return previous ? this.applyListingGate({ ...previous, canActivate: false, message: blocked.message }) : blocked;
+    }
+    const now = this.options.now?.() ?? Date.now();
+    const nextAllowed = previous?.nextRefreshAt ? Date.parse(previous.nextRefreshAt) : NaN;
+    if (Number.isFinite(nextAllowed) && nextAllowed > now) {
+      return this.applyListingGate({ ...previous!, state: "rate_limited", nextRefreshAt: new Date(nextAllowed).toISOString(),
+        message: "SEC feed refresh is limited to one attempt every 15 minutes. The last accepted snapshot remains available." });
+    }
+    await this.refreshListingSnapshot();
+    const fetcher = this.options.fetcher ?? fetch;
+    try {
+      const response = await (this.options.fetcher ? fetcher(SEC_ATOM_URL, {
+        method: "GET",
+        headers: { accept: "application/atom+xml, application/xml;q=0.9", "user-agent": this.options.secUserAgent! },
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
+      }) : requestSecResponse(SEC_ATOM_URL, {maxBytes: MAX_ATOM_BYTES, timeoutMs: 15_000, ttlSeconds: 900, refresh: true}));
+      if (!response.ok || (response.url && response.url !== SEC_ATOM_URL)) {
+        const state: SecFilingsInboxView["state"] = response.status === 429 ? "rate_limited" : "failed";
+        const retryAfter = Number(response.headers.get("retry-after"));
+        const nextRefreshAt = response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0
+          ? new Date((this.options.now?.() ?? Date.now()) + Math.min(retryAfter, 86_400) * 1000).toISOString()
+          : null;
+        const failed = previous
+          ? { ...previous, state, canActivate: true, nextRefreshAt, message: response.status === 429 ? "SEC rate-limited this feed request. The last accepted snapshot is retained." : `SEC filing refresh failed (HTTP ${response.status}). The last accepted snapshot is retained.` }
+          : { ...this.empty(state, response.status === 429 ? "SEC rate-limited this feed request; retry after the source cooldown." : `SEC filing refresh failed (HTTP ${response.status}).`), nextRefreshAt };
+        return this.applyListingGate(failed);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("sec_atom_body_missing");
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > MAX_ATOM_BYTES) { await reader.cancel(); throw new Error("sec_atom_too_large"); }
+        chunks.push(part.value);
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const responseSha256 = createHash("sha256").update(bytes).digest("hex");
+      const retrievedAt = this.options.fetcher ? new Date(this.options.now?.() ?? Date.now()).toISOString() : secRetrievedAt(response);
+      const parsed = parseSecAtomFeed(body, retrievedAt, responseSha256);
+      if (!parsed) throw new Error("sec_atom_invalid");
+      const receiptId = `sec_${createHash("sha256").update(`${responseSha256}:${retrievedAt}`).digest("hex")}`;
+      const snapshot: SecInboxSnapshot = {
+        receiptId,
+        retrievedAt,
+        feedUpdatedAt: parsed.feedUpdatedAt,
+        responseSha256,
+        rows: parsed.rows,
+      };
+      this.options.directSnapshotStore!.write(snapshot);
+      this.directSnapshot = snapshot;
+      const view = this.directSnapshotView(snapshot)!;
+      return this.applyListingGate(view);
+    } catch {
+      const failed = previous
+        ? { ...previous, state: "failed" as const, canActivate: true, message: "The SEC filing feed could not be fetched, validated, or saved. The last accepted snapshot is retained." }
+        : this.empty("failed", "The SEC filing feed could not be fetched, validated, or saved. Retry after checking source status.");
+      return this.applyListingGate(failed);
     }
   }
 

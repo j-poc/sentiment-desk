@@ -34,13 +34,14 @@ export interface HealthSnapshot {
   finnhub: SourceCounters;
   reddit: SourceCounters;
   jev: SourceCounters & { model: string };
-  classifier: SourceCounters & { provider: "openai_luna" | "typesafe"; model: string; configured: boolean; blockedReason: string | null };
+  classifier: SourceCounters & { provider: "openai_luna" | "typesafe"; model: string; configured: boolean; accountingRoute: "api_key" | "chatgpt_plan" | null; blockedReason: string | null };
 }
 
 export interface ClassifierHealthConfig {
   provider: "openai_luna" | "typesafe";
   model: string;
   configured: boolean;
+  accountingRoute?: "api_key" | "chatgpt_plan" | null;
   enabled: boolean;
   blockedReason: string | null;
 }
@@ -50,7 +51,7 @@ export class HealthTracker {
   private readonly gdelt: SourceCounters;
   private readonly x: SourceCounters;
   private readonly jev: SourceCounters & { model: string };
-  private readonly classifier: SourceCounters & ClassifierHealthConfig;
+  private readonly classifier: SourceCounters & ClassifierHealthConfig & { accountingRoute: "api_key" | "chatgpt_plan" | null };
 
   private readonly quotes: SourceCounters;
   private readonly sec: SourceCounters;
@@ -75,7 +76,7 @@ export class HealthTracker {
       typesafeAccountUseApproved: false,
       jevAllowedCollectors: [],
     },
-    classifierConfig: ClassifierHealthConfig = { provider: "typesafe", model: jevModel, configured: jevEnabled, enabled: jevEnabled, blockedReason: jevEnabled ? null : "provider is disabled" },
+    classifierConfig: ClassifierHealthConfig = { provider: "typesafe", model: jevModel, configured: jevEnabled, enabled: jevEnabled, accountingRoute: null, blockedReason: jevEnabled ? null : "provider is disabled" },
   ) {
     const collectorEnabled = (collector: CollectorId) =>
       externalRequestsEnabled && (externalCollectors == null || externalCollectors.has(collector));
@@ -98,7 +99,7 @@ export class HealthTracker {
     this.finnhub = fresh(collectorEnabled("finnhub") && finnhubEnabled);
     this.reddit = fresh(collectorEnabled("reddit") && redditEnabled);
     this.jev = { ...fresh(externalRequestsEnabled && jevEnabled), model: jevModel };
-    this.classifier = { ...fresh(externalRequestsEnabled && classifierConfig.enabled), ...classifierConfig };
+    this.classifier = { ...fresh(externalRequestsEnabled && classifierConfig.enabled), ...classifierConfig, accountingRoute: classifierConfig.accountingRoute ?? null };
   }
 
   recordQuotes(ok: boolean, error?: string): void {
@@ -134,6 +135,18 @@ export class HealthTracker {
   }
 
   recordClassifier(ok: boolean, error?: string): void { this.record(this.classifier, ok, error); }
+
+  setClassifierAvailability(input: {
+    configured: boolean;
+    enabled: boolean;
+    accountingRoute: "api_key" | "chatgpt_plan" | null;
+    blockedReason: string | null;
+  }): void {
+    this.classifier.configured = input.configured;
+    this.classifier.enabled = this.externalRequestsEnabled && input.enabled;
+    this.classifier.accountingRoute = input.accountingRoute;
+    this.classifier.blockedReason = this.classifier.enabled ? null : input.blockedReason;
+  }
 
   snapshot(): HealthSnapshot {
     return {

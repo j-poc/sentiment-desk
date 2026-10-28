@@ -22,11 +22,47 @@ function html(input: CompanyFundamentalsProps) {
   return renderToStaticMarkup(createElement(CompanyFundamentals, input));
 }
 
+function assessmentFact(): PersistedFundamentalFact {
+  return {
+    id: "00000000-0000-4000-8000-000000000001",
+    companyId: "issuer-a",
+    cik: "0000000001",
+    metric: "revenue",
+    taxonomy: "us-gaap",
+    concept: "Revenue",
+    unit: "USD",
+    value: "123000",
+    reportedDecimals: "-3",
+    reportedPrecisionStatus: "declared",
+    startDate: "2025-01-01",
+    endDate: "2025-12-31",
+    filingFocusYear: 2025,
+    filingFocusPeriod: "FY",
+    durationClass: "annual",
+    form: "10-K",
+    accession: "0000000001-26-000001",
+    filedAt: Date.UTC(2026, 1, 1),
+    acceptedAt: Date.UTC(2026, 1, 1),
+    retrievedAt: Date.UTC(2026, 1, 2),
+    sourceUrl: "https://www.sec.gov/Archives/edgar/data/1/000000000126000001/a.htm",
+    responseSha256: "a".repeat(64),
+    companyFactsDeliveryId: "facts-delivery",
+    submissionsDeliveryId: "submissions-delivery",
+    amended: false,
+  };
+}
+
 describe("CompanyFundamentals", () => {
+  it("defaults optional fact analysis to Gemini instead of the metered OpenAI API", () => {
+    const markup = html({ ...props("ready"), companyId: "issuer-a", facts: [assessmentFact()] });
+    expect(markup).toMatch(/<option value="google_gemini" selected="">Google Gemini · Gemini 3\.8 Flash<\/option>/);
+    expect(markup).toContain("OpenAI API · GPT-6 Luna");
+  });
+
   it("renders a truthful empty state without inventing values or chart marks", () => {
     const markup = html(props("empty"));
     expect(markup).toContain("No eligible SEC facts are saved for this company yet.");
-    expect(markup).toContain("No saved values or chart are shown without persisted SEC facts.");
+    expect(markup).toContain("No financial values are available for this company yet.");
     expect(markup).not.toContain("<svg");
     expect(markup).not.toContain("$0");
   });
@@ -36,14 +72,14 @@ describe("CompanyFundamentals", () => {
     expect(html(props("refreshing"))).toContain("Previously saved facts remain available.");
   });
 
-  it("keeps refresh disabled and explains the precise blocked reason", () => {
+  it("keeps refresh disabled without exposing account or source configuration", () => {
     const input = { ...props("blocked"), refreshAllowed: false, refreshBlockedReason: "SEC identity is not configured." };
     const markup = html(input);
     expect(markup).toContain('disabled=""');
-    expect(markup).toContain('<p id="cf-refresh-reason" class="cf-refresh-reason" role="status">SEC identity is not configured.</p>');
-    expect(markup.match(/SEC identity is not configured\./g)).toHaveLength(1);
+    expect(markup).toContain("SEC fact updates are unavailable right now.");
+    expect(markup).not.toContain("SEC identity is not configured.");
+    expect(markup).not.toMatch(/request scope|source-use approval|operator controls|API key/);
     expect(markup).toContain('aria-describedby="cf-refresh-reason"');
-    expect(markup).not.toContain("SEC refresh is blocked by the current source or account controls.");
   });
 
   it("does not imply saved SEC facts exist when none are available", () => {
@@ -52,8 +88,9 @@ describe("CompanyFundamentals", () => {
       refreshAllowed: false,
       refreshBlockedReason: "No SEC facts are saved for this company; external requests are disabled.",
     });
-    expect(markup).toContain("No SEC facts are saved for this company; external requests are disabled.");
-    expect(markup).not.toContain("saved SEC facts remain available");
+    expect(markup).toContain("SEC fact updates are unavailable right now.");
+    expect(markup).not.toContain("No SEC facts are saved for this company; external requests are disabled.");
+    expect(markup).toContain("No financial values are available for this company yet.");
   });
 
   it("shows stale and failed conditions without claiming fresh data", () => {
@@ -62,12 +99,13 @@ describe("CompanyFundamentals", () => {
     expect(stale).toContain("Saved evidence is older than the freshness target.");
     expect(failed).toContain('role="alert"');
     expect(failed).toContain("Previously saved facts, if any, are retained.");
-    expect(failed).toContain("The SEC request was unavailable.");
+    expect(failed).toContain("SEC facts are temporarily unavailable. Try again later.");
+    expect(failed).not.toContain("The SEC request was unavailable.");
   });
 
   it("does not render a chart when no persisted points are provided", () => {
     const markup = html(props("ready"));
-    expect(markup).toContain("No saved values or chart are shown without persisted SEC facts.");
+    expect(markup).toContain("No financial values are available for this company yet.");
     expect(markup).not.toContain("<svg");
   });
 
@@ -330,5 +368,17 @@ describe("CompanyFundamentals", () => {
     expect(css).toContain(".cf-evidence > summary:focus-visible");
     expect(css).toContain("@media (prefers-reduced-motion:reduce)");
     expect(css).toContain(":focus-visible");
+  });
+
+  it("previews selected SEC inputs and requires visible one-request consent with the Gemini paid-service gate",()=>{
+    const markup=html({...props("ready"),companyId:"issuer-a",facts:[assessmentFact()]});
+    expect(markup).toContain("Potentially bullish and bearish evidence");expect(markup).toContain("Preview exact data sent (1 facts)");
+    expect(markup).toContain("0000000001-26-000001");expect(markup).toContain("I reviewed this exact preview and authorize one request");
+    expect(markup).toContain("Google may use prompts and responses from unpaid Gemini services to improve products");
+    expect(markup).toContain("a free-tier-only project is not eligible");
+    expect(markup).toContain("paid-tier usage may incur metered charges");
+    expect(markup).not.toContain("OpenAI request disables response storage");
+    expect(markup).toContain("The app keeps the key on this device");expect(markup).not.toMatch(/value="[^"]*secret/i);
+    expect(markup).toContain("disabled=\"\"");
   });
 });

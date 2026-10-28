@@ -8,6 +8,7 @@ import { intersectJevSourceAllowlist } from "../server/collector-policy.js";
 import { HealthTracker } from "../server/health.js";
 import { Hub } from "../server/hub.js";
 import { JevError } from "../server/jev.js";
+import { OpenAIClassifierError, type OpenAIClassifierResult } from "../server/openai-classifier.js";
 import { Pipeline } from "../server/pipeline.js";
 import { EVENT_TYPES, TAKEAWAY_KEYS } from "../server/rubric.js";
 import { RUBRIC_SHA } from "../server/rubric.js";
@@ -800,6 +801,259 @@ describe("Jev pipeline recovery", () => {
       expect(pipeline.drainPending(10)).toBe(0);
     } finally {
       db.close();
+    }
+  });
+});
+
+describe("ChatGPT-plan classifier preflight recovery", () => {
+  it("does not send text-only acronym matches to Luna when issuer identity is unresolved", async () => {
+    const fixture = setup(null, { externalRequestsEnabled: false });
+    fixture.pipeline.stop();
+    const amd: Company = {
+      id: "amd", name: "AMD", ticker: "AMD", sector: "Semiconductors",
+      aliases: ["AMD", "Advanced Micro Devices", "Lisa Su", "Ryzen", "Instinct"], color: "#fb923c", ambiguous: true,
+    };
+    fixture.db.seedCompanies([amd]);
+    const classifier = vi.fn(async () => { throw new Error("weak issuer match must not reach Luna"); });
+    const pipeline = new Pipeline({
+      db: fixture.db, judge: null, classifier, accountingRoute: "chatgpt_plan", provider: "openai_luna",
+      hub: fixture.hub, health: fixture.health, engineLabel: "gpt-6-luna", inputPricePerMTok: 0,
+      concurrency: 1, allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-09", maxRequests: 1, maxRequestBytes: 260_000 },
+    });
+    pipelines.push(pipeline);
+    const now = Date.now();
+    const deliveryId = fixture.db.recordDelivery({
+      collector: "google_news_rss", companyId: amd.id, requestKey: "test:amd-medical-acronym",
+      startedAt: now - 2_000, completedAt: now - 1_000, result: "success", parsedItemCount: 1,
+      responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
+    });
+    try {
+      pipeline.ingest({
+        ...fixture.source, companyId: amd.id, deliveryId, sourceItemId: "amd-medical-acronym",
+        title: "How Investors Are Reacting To Bausch + Lomb (BLCO) FDA Backs Dry AMD Study",
+        snippet: "FDA backs a dry age-related macular degeneration study.",
+      });
+      await pipeline.waitForIdle();
+      const mention = fixture.db.mentionsForCompany(amd.id, 0, 10)[0]!;
+      expect(classifier).not.toHaveBeenCalled();
+      expect(mention).toMatchObject({ status: "pending", issuerIdentityStrong: false });
+      expect(fixture.db.getKv("chatgpt-plan:budget:2026-10-09:requests")).toBeUndefined();
+      expect(fixture.db.categoricalTrendSnapshot(amd.id, 24, Date.now()).candidateClassificationCount).toBe(0);
+      expect(fixture.db.mentionsForCompanyPage({ companyId: amd.id, sinceMs: 0, limit: 10, cursor: null, filter: "identity_review" })
+        .items.map((item) => item.id)).toContain(mention.id);
+    } finally {
+      pipeline.stop();
+      fixture.db.close();
+    }
+  });
+
+  it("skips weak newest acronym matches when draining a capped Luna queue", async () => {
+    const fixture = setup(null, { externalRequestsEnabled: false });
+    fixture.pipeline.stop();
+    const amd: Company = {
+      id: "amd", name: "AMD", ticker: "AMD", sector: "Semiconductors",
+      aliases: ["AMD", "Advanced Micro Devices", "Lisa Su", "Ryzen", "Instinct"], color: "#fb923c", ambiguous: true,
+    };
+    fixture.db.seedCompanies([amd]);
+    const now = Date.now();
+    const strongTitle = "AMD warns of weaker demand";
+    const weakTitle = "Bausch + Lomb stock rises on dry AMD trial";
+    const insert = (sourceItemId: string, title: string, snippet: string, retrievedAt: number) => {
+      const deliveryId = fixture.db.recordDelivery({
+        collector: "google_news_rss", companyId: amd.id, requestKey: `test:${sourceItemId}`,
+        startedAt: retrievedAt - 2_000, completedAt: retrievedAt - 1_000, result: "success", parsedItemCount: 1,
+        responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
+      });
+      return fixture.db.insertObservation({
+        ...fixture.source, companyId: amd.id, deliveryId, sourceItemId,
+        sourceUrl: `https://news.example/${sourceItemId}`, title, snippet, retrievedAt, scoped: false,
+      }).observationId;
+    };
+    const strongId = insert("older-company-signal", strongTitle, "AMD reports weaker demand from customers.", now - 60_000);
+    const weakId = insert("newer-medical-acronym", weakTitle, "A dry age-related macular degeneration trial drew attention.", now);
+    const receivedTitles: string[] = [];
+    const classifier = vi.fn(async (prepared) => {
+      const request = JSON.parse(prepared.body) as { input: Array<{ role: string; content: string }> };
+      const userInput = request.input.find((entry) => entry.role === "user");
+      if (userInput) receivedTitles.push((JSON.parse(userInput.content) as { source: { title: string } }).source.title);
+      throw new OpenAIClassifierError("model catalog unavailable", null, false, false, null, null, null, null, null, null, null, false);
+    });
+    const pipeline = new Pipeline({
+      db: fixture.db, judge: null, classifier, accountingRoute: "chatgpt_plan", provider: "openai_luna",
+      hub: fixture.hub, health: fixture.health, engineLabel: "gpt-6-luna", inputPricePerMTok: 0,
+      concurrency: 1, allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-09", maxRequests: 1, maxRequestBytes: 260_000 },
+    });
+    pipelines.push(pipeline);
+    try {
+      expect(pipeline.drainPending(10)).toBe(1);
+      await pipeline.waitForIdle();
+      const rows = fixture.db.mentionsForCompany(amd.id, 0, 10);
+      expect(receivedTitles, JSON.stringify({ rows: rows.map(({ id, status, error }) => ({ id, status, error })), events: fixture.db.recentEvents(10) }))
+        .toEqual([strongTitle]);
+      expect(rows.find((row) => row.id === strongId)?.status).toBe("retrying");
+      expect(rows.find((row) => row.id === weakId)).toMatchObject({ status: "pending", issuerIdentityStrong: false });
+      expect(fixture.db.mentionsForCompanyPage({ companyId: amd.id, sinceMs: 0, limit: 10, cursor: null, filter: "identity_review" })
+        .items.map((item) => item.id)).toContain(weakId);
+    } finally {
+      pipeline.stop();
+      fixture.db.close();
+    }
+  });
+
+  it("skips old consumer deals when a capped Luna queue selects business evidence", async () => {
+    const fixture = setup(null, { externalRequestsEnabled: false });
+    fixture.pipeline.stop();
+    const apple: Company = {
+      id: "apple", name: "Apple Inc.", ticker: "AAPL", sector: "Technology",
+      aliases: ["Apple", "Apple Inc."], color: "#a3a3a3",
+    };
+    fixture.db.seedCompanies([apple]);
+    const now = Date.now();
+    const insert = (sourceItemId: string, title: string, snippet: string, retrievedAt: number, tier: "blog" | "trade" | "wire") => {
+      const deliveryId = fixture.db.recordDelivery({
+        collector: "google_news_rss", companyId: apple.id, requestKey: `test:${sourceItemId}`,
+        startedAt: retrievedAt - 2_000, completedAt: retrievedAt - 1_000, result: "success", parsedItemCount: 1,
+        responseDigest: "fixture-only", adapterVersion: "google_news_rss/1",
+      });
+      return fixture.db.insertObservation({
+        ...fixture.source, companyId: apple.id, deliveryId, sourceItemId,
+        sourceName: tier === "blog" ? "9to5Toys" : tier === "trade" ? "Yahoo Finance" : "Reuters",
+        publisherName: tier === "blog" ? "9to5Toys" : tier === "trade" ? "Yahoo Finance" : "Reuters",
+        publisherDomain: tier === "blog" ? "9to5toys.com" : tier === "trade" ? "finance.yahoo.com" : "reuters.com",
+        sourceUrl: `https://news.example/${sourceItemId}`, tier, title, snippet, retrievedAt, scoped: false,
+      }).observationId;
+    };
+    const dealId = insert(
+      "apple-shopping-deal",
+      "This weekend's best Apple deals: AirPods, Mac mini, MacBook Air and Mac Studio $200 off, Series 12, more",
+      "The latest discounts on Apple products.",
+      now,
+      "blog",
+    );
+    const optionId = insert(
+      "aapl-option-contract",
+      "AAPL Oct 2026 345.000 call (AAPL261009C00345000) Stock Price, News, Quote & History",
+      "",
+      now - 10_000,
+      "trade",
+    );
+    const businessTitle = "Apple warns of weaker iPhone demand";
+    const businessId = insert(
+      "apple-demand-update",
+      businessTitle,
+      "Apple reports weaker demand for iPhone devices.",
+      now - 60_000,
+      "wire",
+    );
+    const receivedTitles: string[] = [];
+    const classifier = vi.fn(async (prepared) => {
+      const request = JSON.parse(prepared.body) as { input: Array<{ role: string; content: string }> };
+      const userInput = request.input.find((entry) => entry.role === "user");
+      if (userInput) receivedTitles.push((JSON.parse(userInput.content) as { source: { title: string } }).source.title);
+      throw new OpenAIClassifierError("model catalog unavailable", null, false, false, null, null, null, null, null, null, null, false);
+    });
+    const pipeline = new Pipeline({
+      db: fixture.db, judge: null, classifier, accountingRoute: "chatgpt_plan", provider: "openai_luna",
+      hub: fixture.hub, health: fixture.health, engineLabel: "gpt-6-luna", inputPricePerMTok: 0,
+      concurrency: 1, allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-09", maxRequests: 1, maxRequestBytes: 260_000 },
+    });
+    pipelines.push(pipeline);
+    try {
+      expect(pipeline.drainPending(10)).toBe(1);
+      await pipeline.waitForIdle();
+      expect(receivedTitles).toEqual([businessTitle]);
+      expect(fixture.db.mentionRow(dealId)?.status).toBe("pending");
+      expect(fixture.db.mentionRow(optionId)?.status).toBe("pending");
+      expect(fixture.db.mentionRow(businessId)?.status).toBe("retrying");
+    } finally {
+      pipeline.stop();
+      fixture.db.close();
+    }
+  });
+
+  it("keeps a known-unsent source retryable, releases its reservation, then persists one successful classification", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+    const fixture = setup(null, { externalRequestsEnabled: false });
+    fixture.pipeline.stop();
+    let calls = 0;
+    const classification = {
+      sentiment: "positive" as const, eventType: "product" as const, takeaway: "product_win" as const,
+      about: true, material: true, investorRelevant: true, evidenceSufficient: true,
+      summary: "Acme announces a new product.", supportingExcerpt: "Acme announces a product launch",
+    };
+    const result = {
+      classification, modelReturned: "gpt-6-luna", serviceTier: null, accountingRoute: "chatgpt_plan" as const,
+      responseId: "resp-once", responseSha256: "b".repeat(64),
+      usage: { inputTokens: 20, cachedInputTokens: null, cacheWriteInputTokens: null, outputTokens: 10,
+        reasoningTokens: null, totalTokens: 30, estimatedCostUsd: null }, latencyMs: 20, httpStatus: 200,
+    } as OpenAIClassifierResult;
+    const classifier = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new OpenAIClassifierError("GPT-6 Luna model catalog is unavailable", null, false, false, null, null, null, null, null, null, null, false);
+      return result;
+    });
+    const pipeline = new Pipeline({
+      db: fixture.db, judge: null, classifier, accountingRoute: "chatgpt_plan", provider: "openai_luna",
+      hub: fixture.hub, health: fixture.health, engineLabel: "gpt-6-luna", inputPricePerMTok: 0,
+      concurrency: 1, allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-08", maxRequests: 1, maxRequestBytes: 260_000 },
+    });
+    pipelines.push(pipeline);
+    try {
+      pipeline.ingest(fixture.source);
+      await pipeline.waitForIdle();
+      let persisted = fixture.db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(calls).toBe(1);
+      expect(persisted.status).toBe("retrying");
+      expect(persisted.scoreRetryAt).toBeGreaterThan(Date.now());
+      expect(persisted.error).toContain("no request was sent");
+      expect(fixture.db.getKv("chatgpt-plan:budget:2026-10-08:requests")).toBe("0");
+      expect(fixture.db.getKv("chatgpt-plan:budget:2026-10-08:request-bytes")).toBe("0");
+      expect(fixture.db.categoricalTrendSnapshot(company.id, 24, Date.now()).counts.total).toBe(0);
+
+      vi.setSystemTime(persisted.scoreRetryAt! + 1);
+      expect(pipeline.drainPending(10)).toBe(1);
+      await pipeline.waitForIdle();
+      persisted = fixture.db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(calls).toBe(2);
+      expect(persisted.status, `${persisted.error}; ${JSON.stringify(fixture.db.recentEvents(5))}`).toBe("classified");
+      expect(Number((fixture.db.testDb.prepare("SELECT COUNT(*) AS count FROM categorical_classifications").get() as { count: number }).count)).toBe(1);
+      expect(persisted.classification).toMatchObject({ responseId: "resp-once", sentiment: "positive" });
+      expect(fixture.db.planUsageSince(new Date("2026-10-08T00:00:00.000Z").getTime())).toMatchObject({ requests: 1 });
+    } finally {
+      pipeline.stop();
+      fixture.db.close();
+    }
+  });
+
+  it("keeps an unknown dispatched result failed and blocks automatic duplicate dispatch", async () => {
+    const fixture = setup(null, { externalRequestsEnabled: false });
+    fixture.pipeline.stop();
+    const classifier = vi.fn(async () => {
+      throw new OpenAIClassifierError("connection lost after dispatch", null, false, true);
+    });
+    const pipeline = new Pipeline({
+      db: fixture.db, judge: null, classifier, accountingRoute: "chatgpt_plan", provider: "openai_luna",
+      hub: fixture.hub, health: fixture.health, engineLabel: "gpt-6-luna", inputPricePerMTok: 0,
+      concurrency: 1, allowedCollectors: new Set(["google_news_rss"]), externalRequestsEnabled: true,
+      dailyBudget: { utcDay: () => "2026-10-09", maxRequests: 1, maxRequestBytes: 260_000 },
+    });
+    pipelines.push(pipeline);
+    try {
+      pipeline.ingest(fixture.source);
+      await pipeline.waitForIdle();
+      const persisted = fixture.db.mentionsForCompany(company.id, 0, 10)[0]!;
+      expect(classifier).toHaveBeenCalledTimes(1);
+      expect(persisted.status).toBe("failed");
+      expect(persisted.error).toContain("outcome is unknown");
+      expect(pipeline.drainPending(10)).toBe(0);
+    } finally {
+      pipeline.stop();
+      fixture.db.close();
     }
   });
 });

@@ -13,7 +13,9 @@ type PrivateEvidenceMeta = {
 };
 type PrivateEvidenceAnalysisRecord = {
   companyId: string; evidenceId: string; evidenceSha256: string; modelRequested: string; modelReturned: string;
-  usage: { inputTokens: number; outputTokens: number; estimatedCostUsd: number };
+  accountingRoute?: "chatgpt_plan";
+  usage: { inputTokens: number; outputTokens: number; estimatedCostUsd: number | null };
+  dataControls?: { disclosure: string };
   analysis: { sentiment: "positive" | "neutral" | "negative" | "unclear"; summary: string; evidence: Array<{ quote: string; explanation: string }>; uncertainties: string[]; nextQuestion: string };
 };
 type PrivateEvidenceAnalysisState = {
@@ -23,7 +25,7 @@ type PrivateEvidenceAnalysisState = {
 };
 type PrivateEvidenceAnalysisAvailability = {
   enabled: boolean; blockedReason: string | null; model: string;
-  dataControls: { disclosure: string; documentationUrl: string; promptCachingDocumentationUrl: string };
+  dataControls: { disclosure: string; usageUrl: string; dataControlsUrl: string };
 };
 type PrivateEvidenceList = { items: PrivateEvidenceMeta[]; totalCount: number; totalBytes: number; nextCursor: null; analysis: PrivateEvidenceAnalysisAvailability };
 type PrivateEvidenceDetail = PrivateEvidenceMeta & { content: string; savedAnalysis: PrivateEvidenceAnalysisState | null };
@@ -52,23 +54,20 @@ function saveErrorMessage(error: unknown): string {
 function analysisErrorMessage(error: unknown): string {
   const code = error instanceof Error ? error.message : "";
   if (code === "private_evidence_analysis_attempt_already_recorded") return "This note already has a recorded Luna attempt. The app will not send it again, to avoid duplicate charges. Check OpenAI usage if the prior outcome is uncertain.";
-  if (code === "private_evidence_analysis_budget_exhausted") return "The shared OpenAI daily request, byte, or USD limit would be exceeded. No request was sent.";
+  if (code === "private_evidence_analysis_budget_exhausted") return "The shared ChatGPT-plan daily request or byte limit would be exceeded. No request was sent.";
   if (code === "external_requests_are_disabled" || code === "private_evidence_analysis_external_requests_paused") return "External requests are paused. No Luna request was sent.";
-  if (code === "shared_openai_daily_budgets_are_disabled") return "Private-note analysis is disabled until finite shared OpenAI daily request, byte, and USD limits are configured.";
-  if (code === "openai_api_key_is_missing") return "Private-note analysis is unavailable because no OpenAI API credential is configured.";
-  if (code === "openai_account_use_is_not_approved") return "Private-note analysis is unavailable because OpenAI account use is not approved in this installation.";
-  if (code === "private_note_analysis_is_disabled_by_operator") return "GPT-6 Luna analysis is disabled by the local operator.";
-  return "Luna did not return a verified private-note analysis. The request may have reached OpenAI; check account usage before trying anything else.";
+  if (code === "private_evidence_analysis_disabled") return "ChatGPT plan access is unavailable or no longer active. Check the connection before retrying.";
+  return "Luna did not return a verified private-note analysis. The request may have reached OpenAI; check ChatGPT plan usage before trying anything else.";
 }
 
 function analysisGateMessage(code: string | null): string {
   if (code === "private_evidence_requires_loopback_binding") return "The app is not bound to a private loopback address.";
   if (code === "external_requests_are_disabled") return "External requests are paused in this installation.";
-  if (code === "private_note_analysis_is_disabled_by_operator") return "The local operator has not enabled private-note analysis.";
-  if (code === "openai_api_key_is_missing") return "No OpenAI API credential is configured.";
-  if (code === "openai_account_use_is_not_approved") return "OpenAI account use is not approved in this installation.";
-  if (code === "shared_openai_daily_budgets_are_disabled") return "Finite shared OpenAI daily request, byte, and USD limits are not configured.";
-  return "The local account, privacy, storage, or spend gates are closed.";
+  if (code === "chatgpt_plan_not_connected") return "Connect your ChatGPT plan in Data connections & operations.";
+  if (code === "chatgpt_plan_model_unavailable") return "GPT-6 Luna is not available for the connected ChatGPT account.";
+  if (code === "chatgpt_plan_local_limits_disabled") return "Finite local ChatGPT-plan request and byte limits are not configured.";
+  if (code === "private_evidence_storage_read_only") return "The local note database is read-only. No private analysis request was sent.";
+  return "The ChatGPT connection, privacy, storage, or local usage limits are not ready.";
 }
 
 export function privateEvidenceTextError(content: string): string | null {
@@ -217,7 +216,7 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
     const safeNoteId = safeDisclosureText(selected.id);
     const preview = consentPreview(selected.content);
     const accepted = window.confirm(
-      `Send this selected private note to OpenAI ${list.analysis.model}?\n\n` +
+      `Send this selected private note to OpenAI ${list.analysis.model} using your connected ChatGPT plan?\n\n` +
       `Issuer: ${companyName} (${ticker})\n` +
       `Title: “${safeTitle}”\n` +
       `Source: ${safeSourceLabel}\n` +
@@ -247,8 +246,8 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
         <aside className="private-evidence-policy" aria-label="Privacy and data handling before adding a note">
           <h3>Before saving a note</h3>
           <p><strong>For {companyName} ({ticker}) only.</strong> Notes are stored in a separate database on this device, restricted to this operating-system account. The app does not encrypt them or authenticate users; use a trusted device. Device backups may retain deleted copies. Notes stay separate from public mentions, sentiment charts, alerts, and automatic Luna classifications.</p>
-          <p>Saving, opening, or deleting a note makes no provider request. If you choose analysis, the selected note's text, title, source label, optional user-asserted date, note ID, content hash and byte count, plus its issuer identity, are sent to OpenAI GPT-6 Luna only after a separate item-specific confirmation. Its filename and local import time are not sent. The request disables response-object storage and prompt caching. OpenAI's default API abuse monitoring may retain prompts, responses, and derived metadata for up to 30 days, with longer retention possible for legal or safety reasons; this installation's account retention controls are unverified. Any result is private analyst context, not public sentiment.</p>
-          {loadState === "ready" && list && <p><a href={list.analysis.dataControls.documentationUrl} target="_blank" rel="noreferrer">OpenAI API data controls</a> · <a href={list.analysis.dataControls.promptCachingDocumentationUrl} target="_blank" rel="noreferrer">prompt caching details</a></p>}
+          <p>Saving, opening, or deleting a note makes no provider request. If you choose analysis, only the selected note's text, title, source label, optional user-asserted date, note ID, content hash and byte count, plus its issuer identity, are sent to OpenAI GPT-6 Luna after a separate item-specific confirmation. Its filename and local import time are not sent. The app uses your connected ChatGPT plan; it never uses API-key billing. The request asks OpenAI not to store the response object. Account data controls, retention, training use, and remaining plan allowance are unknown to this app. Any result is private analyst context, not public sentiment.</p>
+          {loadState === "ready" && list && <p><a href={list.analysis.dataControls.usageUrl} target="_blank" rel="noreferrer">Check ChatGPT usage</a> · <a href={list.analysis.dataControls.dataControlsUrl} target="_blank" rel="noreferrer">Review OpenAI data controls</a></p>}
           <p>Maximum 250 notes and 8 MiB total across this local desk; each note or imported file is limited to 128 KiB and 40,000 characters.</p>
         </aside>
         {loadState === "loading" && <p role="status">Loading private notes…</p>}
@@ -272,8 +271,8 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
           <p>Note ID: <code>{selected.id}</code> · SHA-256: <code>{selected.sha256}</code></p>
           <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{selected.content}</pre>
           {!selected.savedAnalysis && list?.analysis.enabled && <button type="button" disabled={busy} onClick={() => void analyzeSelected()}>Analyze this selected note with {list.analysis.model}</button>}
-          {selected.savedAnalysis?.status === "in_progress" && <p role="status">A prior analysis attempt has no saved result. The app will not retry it automatically; check OpenAI usage before deciding what to do.</p>}
-          {selected.savedAnalysis && selected.savedAnalysis.status !== "complete" && selected.savedAnalysis.status !== "in_progress" && <p role="alert">No analysis was saved ({selected.savedAnalysis.status === "outcome_unknown" ? "OpenAI may have processed the request" : "the request did not produce a usable result"}). The app will not send this note again, to avoid a duplicate charge.</p>}
+          {selected.savedAnalysis?.status === "in_progress" && <p role="status">A prior analysis attempt has no saved result. The app will not retry it automatically; check ChatGPT plan usage before deciding what to do.</p>}
+          {selected.savedAnalysis && selected.savedAnalysis.status !== "complete" && selected.savedAnalysis.status !== "in_progress" && <p role="alert">No analysis was saved ({selected.savedAnalysis.status === "outcome_unknown" ? "OpenAI may have processed the request" : "the request did not produce a usable result"}). The app will not send this note again automatically, to avoid duplicate processing.</p>}
           {selected.savedAnalysis?.status === "complete" && selected.savedAnalysis.record && <section aria-label="Private GPT-6 Luna note assessment">
             <h4>Private note assessment · {selected.savedAnalysis.record.modelReturned}</h4>
             <p>Direction described by this note: {selected.savedAnalysis.record.analysis.sentiment}. This is analyst-only and is not a public sentiment classification. A note is an owner assertion; Luna cannot authenticate its truth.</p>
@@ -284,7 +283,8 @@ function PrivateEvidenceForCompany({ companyId, companyName, ticker }: Props) {
             <h5>Uncertainties</h5>
             <ul>{selected.savedAnalysis.record.analysis.uncertainties.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul>
             <p><strong>Next analyst question:</strong> {selected.savedAnalysis.record.analysis.nextQuestion}</p>
-            <p>Recorded usage: {selected.savedAnalysis.record.usage.inputTokens.toLocaleString()} input / {selected.savedAnalysis.record.usage.outputTokens.toLocaleString()} output tokens · estimated API cost ${selected.savedAnalysis.record.usage.estimatedCostUsd.toFixed(6)}. This private result is not included in any public chart, sentiment count, alert, or Jev history.</p>
+            <p>Recorded model usage: {selected.savedAnalysis.record.usage.inputTokens.toLocaleString()} input / {selected.savedAnalysis.record.usage.outputTokens.toLocaleString()} output tokens. {selected.savedAnalysis.record.usage.estimatedCostUsd == null ? "ChatGPT plan cost and remaining allowance are not visible here." : `Historical API cost estimate: $${selected.savedAnalysis.record.usage.estimatedCostUsd.toFixed(6)}.`} This private result is not included in any public chart, sentiment count, alert, or Jev history.</p>
+            {selected.savedAnalysis.record.dataControls?.disclosure && <p>{selected.savedAnalysis.record.dataControls.disclosure}</p>}
           </section>}
           <button type="button" disabled={busy} aria-label={`Delete private note: ${selected.title}`} onClick={() => void remove(selected)}>Delete note</button>
         </article>}

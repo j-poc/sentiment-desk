@@ -1,8 +1,8 @@
 export class ExternalRequestPausedError extends Error {
   constructor(readonly dispatchedRequests = 0, readonly lastHttpStatus: number | null = null) {
     super(dispatchedRequests === 0
-      ? "External request was not sent because storage admission is paused."
-      : `Storage admission paused before a redirect hop; ${dispatchedRequests} request hop(s) were sent and the last response was HTTP ${lastHttpStatus ?? "unknown"}.`);
+      ? "External request was not sent because external or storage admission is paused."
+      : `External or storage admission paused before a redirect hop; ${dispatchedRequests} request hop(s) were sent and the last response was HTTP ${lastHttpStatus ?? "unknown"}.`);
     this.name = "ExternalRequestPausedError";
   }
 }
@@ -36,7 +36,9 @@ export function installExternalRequestGate(admit: () => boolean): () => void {
     let dispatchedRequests = 0;
     let lastHttpStatus: number | null = null;
     for (let redirectCount = 0; ; redirectCount += 1) {
-      if (!isPrivateHubRead(request) && !admit()) throw new ExternalRequestPausedError(dispatchedRequests, lastHttpStatus);
+      if (!isPrivateHubRead(request) && !admit()) {
+        throw new ExternalRequestPausedError(dispatchedRequests, lastHttpStatus);
+      }
       const response = await previousFetch(request, { redirect: "manual" });
       dispatchedRequests += 1;
       lastHttpStatus = response.status;

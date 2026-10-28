@@ -5,16 +5,20 @@ export function categoricalChartStatusLabel(
   snapshot: CategoricalChartSnapshot | null,
   windowLabel: string,
   now: number,
+  defaultProvider: CategoricalChartSnapshot["provider"] = "google_gemini",
 ): string {
-  if (snapshot == null) return `GPT-6 Luna ${windowLabel} snapshot not confirmed`;
+  const model = snapshot?.provider === "google_gemini" || (snapshot == null && defaultProvider === "google_gemini")
+    ? "Gemini 3.8 Flash"
+    : "GPT-6 Luna";
+  if (snapshot == null) return `${model} ${windowLabel} snapshot not confirmed`;
 
   const count = snapshot.eligibleObservationCount?.toLocaleString() ?? null;
-  if (snapshot.status === "ready") return `GPT-6 Luna: ${count ?? "unknown"} in ${windowLabel}`;
+  if (snapshot.status === "ready") return `${model}: ${count ?? "unknown"} in ${windowLabel}`;
 
   const lastConfirmed = count == null ? "" : ` · last confirmed ${count} in ${windowLabel}`;
   const lastSuccessfulRead = snapshot.observedAt == null
     ? ""
     : ` · last successful read ${timeAgo(snapshot.observedAt, now)}`;
-  const state = snapshot.status === "loading" ? "Loading saved Luna history" : "Saved Luna history unavailable";
+  const state = snapshot.status === "loading" ? `Loading saved ${model} history` : `Saved ${model} history unavailable`;
   return `${state}${lastConfirmed}${lastSuccessfulRead}`;
 }

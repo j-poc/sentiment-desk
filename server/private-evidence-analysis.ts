@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   privateEvidenceInputSchema, privateEvidenceAnalysisContentSchema, privateEvidenceAnalysisRecordSchema,
-  type PrivateEvidenceAnalysisRecord, type PrivateEvidenceItem,
+  type PrivateEvidenceApiAnalysisRecord, type PrivateEvidenceAnalysisRecord, type PrivateEvidenceItem,
 } from "../shared/private-evidence.js";
 import { isWellFormedUnicode } from "../shared/well-formed-unicode.js";
 import { ExternalRequestPausedError } from "./external-request-gate.js";
@@ -276,7 +276,7 @@ export class PrivateEvidenceAnalysisError extends Error implements FailureReceip
   }
 }
 
-export type PrivateEvidenceAnalysisResult = PrivateEvidenceAnalysisRecord;
+export type PrivateEvidenceAnalysisResult = PrivateEvidenceApiAnalysisRecord;
 
 function usageReceipt(raw: unknown, model: string | null, serviceTier: string | null): PrivateEvidenceAnalysisUsage | null {
   const parsed = usageSchema.safeParse(raw);
@@ -371,7 +371,7 @@ export class PrivateEvidenceAnalyzer {
       profileVersion: request.profileVersion, profileSha256: request.profileSha256,
       responseId: node.id, responseSha256, usage: { ...usage, estimatedCostUsd: usage.estimatedCostUsd },
       latencyMs: Date.now() - started, httpStatus: response.status, dataControls: PRIVATE_EVIDENCE_ANALYSIS_DATA_CONTROLS,
-    });
+    }) as PrivateEvidenceAnalysisResult;
   }
 }
 

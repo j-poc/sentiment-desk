@@ -88,7 +88,8 @@ export function MentionCard({
   knownTickers?: readonly string[];
   companyNameOf?: (companyId: string) => string;
 }) {
-  const s = m.score;
+  const issuerMatchConfirmed = m.issuerIdentityStrong !== false;
+  const s = issuerMatchConfirmed ? m.score : null;
   const dir = s ? sentimentColor(s.sentiment) : NEU;
   const impactColor = s ? (s.impact > 0 ? "#34d399" : s.impact < 0 ? "#f87171" : NEU) : NEU;
   const offTarget = m.status === "off_target" || m.status === "excluded";
@@ -178,10 +179,13 @@ export function MentionCard({
             : `Headline leads with ${leadSubject}; excerpt names ${issuerName} · verify ${issuerTicker} relevance`}
         </div>
       )}
-      {m.status === "pending" && <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>}
-      {m.classification && <CategoricalJudgment judgment={m.classification} />}
-      {m.status === "scoring" && <div className="mt-2 text-[11px] text-sky-200/70">Classifying this item…</div>}
-      {m.status === "retrying" && (
+      {!issuerMatchConfirmed && (m.score || m.classification || m.status === "pending" || m.status === "scoring" || m.status === "retrying") && (
+        <div className="mt-2 text-[11px] text-amber-100/70">Sentiment held back until this item can be matched to the company.</div>
+      )}
+      {issuerMatchConfirmed && m.status === "pending" && <div className="mt-2 text-[11px] text-white/35">awaiting judgment…</div>}
+      {issuerMatchConfirmed && m.classification && <CategoricalJudgment judgment={m.classification} />}
+      {issuerMatchConfirmed && m.status === "scoring" && <div className="mt-2 text-[11px] text-sky-200/70">Classifying this item…</div>}
+      {issuerMatchConfirmed && m.status === "retrying" && (
         <div className="mt-2 text-[11px] text-amber-200/80" title={m.error ?? ""}>
           retry scheduled{m.scoreRetryAt == null ? "" : ` · ${new Date(m.scoreRetryAt).toLocaleTimeString()}`}
         </div>

@@ -32,7 +32,7 @@ function mention(overrides: Partial<Mention> = {}): Mention {
 }
 
 describe("evidence quick access", () => {
-  it("shows saved-row count, Luna coverage, source clock, and a direct review action", () => {
+  it("shows saved-row count, source clock, and a direct review action without implying model coverage", () => {
     const html = renderToStaticMarkup(createElement(EvidenceQuickAccess, {
       mentions: [mention(), mention({ id: "a2", classification: {
         attemptId: "attempt-2", provider: "openai_luna", modelRequested: "gpt-6-luna", modelReturned: "gpt-6-luna",
@@ -52,9 +52,10 @@ describe("evidence quick access", () => {
       onRetry: vi.fn(),
     }));
 
-    expect(html).toContain("7D evidence · 2 saved rows · 1 unclassified by Luna");
+    expect(html).toContain("7D evidence · 2 saved rows · latest 1d ago · publisher time");
     expect(html).toContain("latest 1d ago · publisher time");
-    expect(html).toContain('aria-label="7D: 2 loaded saved source rows; 1 has no Luna classification');
+    expect(html).toContain('aria-label="7D: 2 loaded saved source rows; latest source 1d ago · publisher time.');
+    expect(html).not.toContain("unclassified by Luna");
     expect(html).toContain(">Review 2 saved source records ↓</button>");
   });
 
@@ -66,7 +67,8 @@ describe("evidence quick access", () => {
 
     expect(html).toContain("3D evidence · 1 latest loaded row");
     expect(html).toContain("older rows available");
-    expect(html).toContain("1 unclassified by Luna");
+    expect(html).toContain("3D evidence · 1 latest loaded row");
+    expect(html).not.toContain("unclassified by Luna");
     expect(html).toContain(">Review latest 1 saved source record ↓</button>");
   });
 

@@ -58,11 +58,7 @@ const lunaCaseSchema = secCaseProvenanceSchema.extend({
   expectedAbstentions: z.array(labelFieldSchema),
 }).strict();
 const budgetSchema = z.object({
-  maxRequests: z.number().int().positive(), maxEstimatedCostUsd: z.number().finite().positive(),
-  inputPerMillionUsd: z.number().finite().nonnegative(), cachedInputPerMillionUsd: z.number().finite().nonnegative(), cacheWritePerMillionUsd: z.number().finite().nonnegative(), outputPerMillionUsd: z.number().finite().nonnegative(),
-  openAIAccountReadback: z.object({
-    kind: z.literal("openai_account_spend_limit_readback"), observedAt: ISO_TIME, availableBudgetUsd: z.number().finite().nonnegative(), artifactSha256: digestSchema,
-  }).strict(),
+  maxRequests: z.number().int().positive(), maxRequestBytes: z.number().int().positive(),
   accountOwnerApproval: z.object({ attested: z.literal(true), approvedAt: ISO_TIME, approvalRecordSha256: digestSchema }).strict(),
 }).strict();
 const sampleStratumSchema = z.object({ cik: z.string().regex(/^\d{10}$/), eligibleCount: z.number().int().positive(), selectedCount: z.number().int().positive() }).strict();
@@ -114,11 +110,11 @@ const runItemSchema = z.object({
   attempts: z.array(attemptSchema).max(3),
 }).strict();
 export const lunaModelRunV2Schema = z.object({
-  schemaVersion: z.literal(2), studyId: z.string().min(1).max(200), runId: z.string().min(1).max(200), labelsSha256: digestSchema,
+  schemaVersion: z.literal(2), provider: z.literal("chatgpt_plan"), studyId: z.string().min(1).max(200), runId: z.string().min(1).max(200), labelsSha256: digestSchema,
   sampleManifestSha256: digestSchema, evaluationProfile: z.literal(LUNA_DIAGNOSTIC_PROFILE), profileSha256: digestSchema,
   analysisCodeRevision: z.string().regex(COMMIT_SHA), sourceTreeDirty: z.literal(false), startedAt: ISO_TIME, requestCount: z.number().int().nonnegative(),
-  requestedModel: z.string().min(1).max(200), maxRequests: z.number().int().positive(), maxEstimatedCostUsd: z.number().finite().positive(),
-  inputPerMillionUsd: z.number().finite().nonnegative(), cachedInputPerMillionUsd: z.number().finite().nonnegative(), cacheWritePerMillionUsd: z.number().finite().nonnegative(), outputPerMillionUsd: z.number().finite().nonnegative(),
+  requestedModel: z.string().min(1).max(200), maxRequests: z.number().int().positive(), maxRequestBytes: z.number().int().positive(),
+  estimatedCostUsd: z.null(), providerAllowance: z.null(),
   items: z.array(runItemSchema),
 }).strict();
 
@@ -135,9 +131,10 @@ export interface LunaClassifierContract {
   schemaVersion: string;
   promptSha256: string;
   schemaSha256: string;
-  pricing: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; cacheWritePerMillionUsd: number; outputPerMillionUsd: number };
+  /** Legacy API metadata for offline comparisons only; never used as a subscription budget. */
+  pricing?: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; cacheWritePerMillionUsd: number; outputPerMillionUsd: number };
   prepareRequest(input: LunaLabelSetV2["items"][number]["input"], model?: string): { body: string; payloadSha256: string; requestBytes: number; requestedModel: string; promptSha256: string; schemaSha256: string; profileSha256: string };
-  estimateCost(inputTokens: number, cachedInputTokens: number | null, cacheWriteInputTokens: number | null, outputTokens: number, modelReturned: string | null, serviceTier: string | null): number | null;
+  estimateCost?(inputTokens: number, cachedInputTokens: number | null, cacheWriteInputTokens: number | null, outputTokens: number, modelReturned: string | null, serviceTier: string | null): number | null;
 }
 
 function canonicalJson(value: unknown): string {
@@ -166,7 +163,9 @@ function assertCompletedResponseBinding(attempt: z.infer<typeof attemptSchema>, 
   try {
     const parsed = JSON.parse(attempt.responsePayload) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("response is not an object");
-    response = parsed as Record<string, unknown>;
+    const envelope = parsed as Record<string, unknown>;
+    if (envelope.type !== "response.completed" || !envelope.response || typeof envelope.response !== "object" || Array.isArray(envelope.response)) throw new Error("response is not an exact ChatGPT-plan completion event");
+    response = envelope.response as Record<string, unknown>;
   } catch {
     throw new Error(`completed Luna attempt ${observationId}/${attempt.attemptNumber} has an invalid JSON response payload`);
   }
@@ -293,7 +292,7 @@ export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierCont
   }
   if (labels.items.length < 30 || new Set(labels.items.map(({ company }) => company.id)).size < 8) throw new Error("Luna product24 diagnostic requires at least 30 cases across 8 configured product companies");
   if (Date.parse(labels.samplingWindowStart) >= Date.parse(labels.samplingWindowEnd) || Date.parse(labels.samplingWindowEnd) > Date.parse(labels.sampledAt) || Date.parse(labels.sampledAt) > Date.parse(labels.frozenAt) || labels.agentLabelProtocol.frozenAt !== labels.frozenAt) throw new Error("Luna sample and blind-label chronology is invalid");
-  if (labels.stage === "final" && (!labels.evaluationBudget || labels.evaluationBudget.maxRequests < labels.items.length || labels.evaluationBudget.maxEstimatedCostUsd > labels.evaluationBudget.openAIAccountReadback.availableBudgetUsd || Date.parse(labels.evaluationBudget.accountOwnerApproval.approvedAt) > Date.parse(labels.frozenAt))) throw new Error("final Luna labels require a pre-frozen owner-approved spend budget within the independently read OpenAI account limit and covering every selected case");
+  if (labels.stage === "final" && (!labels.evaluationBudget || labels.evaluationBudget.maxRequests < labels.items.length || labels.evaluationBudget.maxRequestBytes < labels.items.reduce((sum, item) => sum + item.requestBinding.requestBytes, 0) || Date.parse(labels.evaluationBudget.accountOwnerApproval.approvedAt) > Date.parse(labels.frozenAt))) throw new Error("final Luna labels require pre-frozen owner approval and local request/byte ceilings covering every selected case");
   if (labels.agentLabelProtocol.lunaOutputsOpenedAt !== null && Date.parse(labels.agentLabelProtocol.lunaOutputsOpenedAt) < Date.parse(labels.frozenAt)) throw new Error("Luna outputs cannot be opened before the blinded reference set is frozen");
   const reviewerIds = labels.reviewers.map(({ id }) => id); const threads = labels.reviewers.map(({ agentThreadId }) => agentThreadId);
   if (new Set(reviewerIds).size !== reviewerIds.length || new Set(threads).size !== threads.length) throw new Error("independent reference agents must have distinct IDs and thread identities");
@@ -322,17 +321,17 @@ export function parseLunaLabelSet(value: unknown, classifier: LunaClassifierCont
   for (const item of labels.items) selectedCounts.set(item.cik, (selectedCounts.get(item.cik) ?? 0) + 1);
   const expectedPlan = [...frameCounts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([cik, eligibleCount]) => ({ cik, eligibleCount, selectedCount: selectedCounts.get(cik) ?? 0 })).filter(({ selectedCount }) => selectedCount > 0);
   if (canonicalJson(labels.samplePlan) !== canonicalJson(expectedPlan)) throw new Error("Luna sample plan does not report the exact seeded source counts by issuer");
-  if (labels.evaluationBudget && (labels.evaluationBudget.inputPerMillionUsd !== classifier.pricing.inputPerMillionUsd || labels.evaluationBudget.cachedInputPerMillionUsd !== classifier.pricing.cachedInputPerMillionUsd || labels.evaluationBudget.cacheWritePerMillionUsd !== classifier.pricing.cacheWritePerMillionUsd || labels.evaluationBudget.outputPerMillionUsd !== classifier.pricing.outputPerMillionUsd)) throw new Error("frozen Luna spend schedule differs from the loaded classifier pricing schedule");
+  // ChatGPT-plan subscription usage does not expose a provider balance or USD cost schedule.
   return labels;
 }
 
 export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV2, classifier: LunaClassifierContract): LunaModelRunV2 {
   const run = lunaModelRunV2Schema.parse(value);
   if (labels.stage !== "final") throw new Error("a Luna model run is only valid for a frozen final label set");
-  if (!labels.evaluationBudget) throw new Error("a final Luna run requires pre-frozen account-approved spend controls");
+  if (!labels.evaluationBudget) throw new Error("a final Luna run requires pre-frozen subscription-use and local request/byte controls");
   if (run.studyId !== labels.studyId || run.sampleManifestSha256 !== labels.sampleManifestSha256 || run.evaluationProfile !== labels.evaluationProfile || run.profileSha256 !== labels.profileSha256 || run.analysisCodeRevision !== labels.analysisCodeRevision || run.sourceTreeDirty || run.requestedModel !== labels.requestedModel) throw new Error("Luna run identity differs from the frozen label and request profile");
   if (Date.parse(run.startedAt) < Date.parse(labels.frozenAt) || labels.agentLabelProtocol.lunaOutputsOpenedAt !== run.startedAt) throw new Error("Luna run start does not match the blinded freeze chronology");
-  if (run.maxRequests !== labels.evaluationBudget.maxRequests || run.maxEstimatedCostUsd !== labels.evaluationBudget.maxEstimatedCostUsd || run.inputPerMillionUsd !== labels.evaluationBudget.inputPerMillionUsd || run.cachedInputPerMillionUsd !== labels.evaluationBudget.cachedInputPerMillionUsd || run.cacheWritePerMillionUsd !== labels.evaluationBudget.cacheWritePerMillionUsd || run.outputPerMillionUsd !== labels.evaluationBudget.outputPerMillionUsd) throw new Error("Luna run budget and cost schedule differ from the pre-frozen approved controls");
+  if (run.maxRequests !== labels.evaluationBudget.maxRequests || run.maxRequestBytes !== labels.evaluationBudget.maxRequestBytes || run.estimatedCostUsd !== null || run.providerAllowance !== null) throw new Error("Luna run subscription/local budget differs from the pre-frozen approved controls");
   if (new Set(run.items.map(({ observationId }) => observationId)).size !== run.items.length) throw new Error("Luna run contains duplicate observation IDs");
   const byId = new Map(labels.items.map((item) => [item.observationId, item]));
   let submittedCount = 0;
@@ -362,8 +361,7 @@ export function parseLunaModelRun(value: unknown, labels: LunaLabelSetV2, classi
       if (["rejected", "unknown"].includes(attempt.outcome) && attempt.httpStatus !== null && attempt.outcome === "rejected" && attempt.httpStatus >= 200 && attempt.httpStatus < 300) throw new Error(`Luna case ${item.observationId} rejected attempt has a successful HTTP status`);
       if (attempt.usage) {
         if (attempt.usage.cachedInputTokens !== null && attempt.usage.cacheWriteInputTokens !== null && attempt.usage.cachedInputTokens + attempt.usage.cacheWriteInputTokens > attempt.usage.inputTokens || attempt.usage.reasoningTokens !== null && attempt.usage.reasoningTokens > attempt.usage.outputTokens || attempt.usage.totalTokens !== attempt.usage.inputTokens + attempt.usage.outputTokens) throw new Error(`Luna case ${item.observationId} token totals are inconsistent`);
-        const expectedCost = classifier.estimateCost(attempt.usage.inputTokens, attempt.usage.cachedInputTokens, attempt.usage.cacheWriteInputTokens, attempt.usage.outputTokens, attempt.modelReturned, attempt.serviceTier);
-        if (expectedCost === null ? attempt.usage.estimatedCostUsd !== null : attempt.usage.estimatedCostUsd === null || Math.abs(expectedCost - attempt.usage.estimatedCostUsd) > Math.max(1e-12, expectedCost * 1e-9)) throw new Error(`Luna case ${item.observationId} cost does not match the production classifier cost function, model, tier and complete token breakdown`);
+        if (attempt.usage.estimatedCostUsd !== null) throw new Error(`Luna case ${item.observationId} claims a USD amount for subscription usage whose provider cost is not exposed`);
       }
     }
   }
@@ -521,9 +519,9 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: 
   const retryableRateLimitAttempts = submittedAttempts.filter(({ outcome, httpStatus }) => outcome === "rejected" && httpStatus === 429).length;
   const requestMismatch = run.requestCount !== submittedAttempts.length;
   const executionIntegrityFailure = missingIds.length > 0 || unexpectedIds.length > 0 || run.items.length !== labels.items.length
-    || requestMismatch || failed.length > 0 || run.requestCount > run.maxRequests || knownCostSubtotal > run.maxEstimatedCostUsd
+    || requestMismatch || failed.length > 0 || run.requestCount > run.maxRequests
     || returnedModelStatus === "FAIL" || returnedTierStatus === "FAIL";
-  const executionEvidenceIncomplete = unknown.length > 0 || missingUsage > 0 || incompleteUsage > 0 || unpricedAttempts > 0
+  const executionEvidenceIncomplete = unknown.length > 0 || missingUsage > 0
     || run.requestCount < labels.items.length || returnedModelStatus !== "PASS" || returnedTierStatus !== "PASS";
   const executionStatus = executionIntegrityFailure ? "FAIL" : executionEvidenceIncomplete ? "UNVERIFIED" : "PASS";
   const eventTypeCases = cases.filter(({ reference }) => reference.eventType !== null);
@@ -569,8 +567,8 @@ export function analyzeLunaFinal(input: { labels: LunaLabelSetV2; labelsSha256: 
     expectedAbstentionDenominators: Object.fromEntries(fields.map((field) => [field, cases.filter(({ item }) => referenceState(item, field) === "abstention").length])),
     qualityStatus, structuredClassificationStatus, narrativeAssessment, referenceEligibility, provenanceExecutionStatus: executionStatus,
     quality: { sentiment: sentimentGate, inclusionPrecision: inclusionMetrics, classificationDisposition: dispositionStatus, eventTypeReference, eventTypeDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: eventTypeCases.length, missingClasses: EVENT_TYPES.filter((name) => eventTypeMetrics.perClass[name]!.support === 0), metrics: eventTypeMetrics }, takeawayReference, takeawayDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: takeawayCases.length, missingClasses: TAKEAWAY_KEYS.filter((name) => takeawayMetrics.perClass[name]!.support === 0), metrics: takeawayMetrics }, materialReference, materialDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: materialCases.length, metrics: materialMetrics }, evidenceSufficiencyReference, evidenceSufficiencyDescriptive: { selectedCases: labels.items.length, resolvedReferenceCases: evidenceCases.length, metrics: evidenceMetrics }, modelCompletionCoverage: { selectedCases: labels.items.length, completedCases: completed.length, rate: completed.length / labels.items.length } },
-    execution: { status: executionStatus, requestedModel: run.requestedModel, requestedServiceTier: labels.requestedServiceTier, selectedCases: labels.items.length, runCases: run.items.length, missingIds, unexpectedIds, failedCases: failed.map(({ observationId, terminalStatus }) => ({ observationId, terminalStatus })), unknownCases: unknown.map(({ observationId }) => observationId), requestCount: run.requestCount, maxRequests: run.maxRequests, totalEstimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, maxEstimatedCostUsd: run.maxEstimatedCostUsd, usageMissingAttempts: missingUsage, incompleteUsageBreakdownAttempts: incompleteUsage, unpricedAttempts, retryableRateLimitAttempts, returnedModels, returnedTiers, missingReturnedModelCount, missingReturnedTierCount, returnedModelStatus, returnedTierStatus, latencyMs: { mean: completedAttempts.length ? completedAttempts.reduce((sum, attempt) => sum + attempt.latencyMs!, 0) / completedAttempts.length : null, max: completedAttempts.length ? Math.max(...completedAttempts.map((attempt) => attempt.latencyMs!)) : null } },
-    usage: { inputTokens: totalInput, cachedInputTokensKnownSubtotal: cachedInputKnown, cachedInputTokensUnknownAttempts: usageRows.filter((row) => row.cachedInputTokens === null).length, cacheWriteInputTokensKnownSubtotal: cacheWriteKnown, cacheWriteInputTokensUnknownAttempts: usageRows.filter((row) => row.cacheWriteInputTokens === null).length, uncachedInputTokens: usageRows.filter((row) => row.cachedInputTokens !== null && row.cacheWriteInputTokens !== null).reduce((sum, row) => sum + row.inputTokens - row.cachedInputTokens! - row.cacheWriteInputTokens!, 0), outputTokens: totalOutput, reasoningTokensKnownSubtotal: reasoningKnown, reasoningTokensUnknownAttempts: usageRows.filter((row) => row.reasoningTokens === null).length, reasoningTokensAreIncludedInOutput: true, totalTokens: rawTotal, estimatedCostUsd: totalCost, knownCostSubtotalUsd: knownCostSubtotal, ratesPerMillionUsd: { input: run.inputPerMillionUsd, cachedInput: run.cachedInputPerMillionUsd, cacheWrite: run.cacheWritePerMillionUsd, output: run.outputPerMillionUsd } },
+    execution: { status: executionStatus, requestedModel: run.requestedModel, requestedServiceTier: labels.requestedServiceTier, selectedCases: labels.items.length, runCases: run.items.length, missingIds, unexpectedIds, failedCases: failed.map(({ observationId, terminalStatus }) => ({ observationId, terminalStatus })), unknownCases: unknown.map(({ observationId }) => observationId), requestCount: run.requestCount, maxRequests: run.maxRequests, totalEstimatedCostUsd: null, knownCostSubtotalUsd: null, maxEstimatedCostUsd: null, providerAllowance: null, usageMissingAttempts: missingUsage, incompleteUsageBreakdownAttempts: incompleteUsage, unpricedAttempts, retryableRateLimitAttempts, returnedModels, returnedTiers, missingReturnedModelCount, missingReturnedTierCount, returnedModelStatus, returnedTierStatus, latencyMs: { mean: completedAttempts.length ? completedAttempts.reduce((sum, attempt) => sum + attempt.latencyMs!, 0) / completedAttempts.length : null, max: completedAttempts.length ? Math.max(...completedAttempts.map((attempt) => attempt.latencyMs!)) : null } },
+    usage: { inputTokens: totalInput, cachedInputTokensKnownSubtotal: cachedInputKnown, cachedInputTokensUnknownAttempts: usageRows.filter((row) => row.cachedInputTokens === null).length, cacheWriteInputTokensKnownSubtotal: cacheWriteKnown, cacheWriteInputTokensUnknownAttempts: usageRows.filter((row) => row.cacheWriteInputTokens === null).length, uncachedInputTokens: usageRows.filter((row) => row.cachedInputTokens !== null && row.cacheWriteInputTokens !== null).reduce((sum, row) => sum + row.inputTokens - row.cachedInputTokens! - row.cacheWriteInputTokens!, 0), outputTokens: totalOutput, reasoningTokensKnownSubtotal: reasoningKnown, reasoningTokensUnknownAttempts: usageRows.filter((row) => row.reasoningTokens === null).length, reasoningTokensAreIncludedInOutput: true, totalTokens: rawTotal, estimatedCostUsd: null, knownCostSubtotalUsd: null, providerAllowance: null, ratesPerMillionUsd: null },
     perCase: labels.items.map((item) => { const result = byRunId.get(item.observationId); return { observationId: item.observationId, company: item.company, cik: item.cik, accession: item.accession, filingType: item.filingType, filingAt: item.filingAt, acceptedAt: item.acceptedAt, sourceUrl: item.sourceUrl, source: { collector: item.collector, publisher: item.publisher }, rawSourceSha256: item.rawSourceSha256, excerptSha256: item.excerptSha256, sourceReceiptSha256: item.sourceReceiptSha256, requestBinding: item.requestBinding, reference: resolveCaseLabels(item), modelStatus: result?.terminalStatus ?? "missing", prediction: acceptedClassification(result), attempts: result?.attempts.map(({ responsePayload: _responsePayload, ...attempt }) => attempt) ?? [] }; }),
     blindedProtocol: labels.agentLabelProtocol,
     limitations: ["Independent agent labels are references, not human ground truth.", "All selected cases remain in referenceEligibility; unresolved required references keep structured classification unverified. Resolved-subset scores do not assign a true class to unresolved references.", "Event type, takeaway, materiality and evidence sufficiency disagreements are routed to independent review because the references are not ground truth; they cannot produce a pass or an automatic model-error claim.", "Generated summary support and usefulness are not evaluated by a frozen reference set or validated judge; substring quote presence does not establish entailment, so any run containing summaries stays unverified.", "All intervals/population claims and investment value remain unverified; the 30-case issuer sample is a bounded diagnostic.", "Source-rights and SEC receipt authenticity are established by the separately bound evidence package, not model agreement."],

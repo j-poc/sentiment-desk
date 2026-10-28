@@ -8,6 +8,7 @@ import { CategoricalJudgment } from "./CategoricalJudgment.js";
 import { NEU, dayTime, fmtIndex, sentimentColor, timeAgo } from "../lib/format.js";
 import { sourceClockForMention } from "../lib/source-clock.js";
 import { differentPossessiveHeadlineSubject, otherExplicitTickerSymbols, sourceLinkPathNamesCompany } from "../lib/issuer-symbols.js";
+import { SourceModelAssessment } from "./SourceModelAssessment.js";
 
 function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
   const pct = Math.round(Math.min(1, Math.max(0, value)) * 100);
@@ -99,6 +100,9 @@ export function MentionDrawer({
   tickerOf,
   knownTickers = [],
   companyNameOf,
+  sectorOf,
+  onOpenProviderSettings,
+  onModelClassificationSaved,
 }: {
   mention: Mention | null;
   onClose: () => void;
@@ -111,6 +115,9 @@ export function MentionDrawer({
   tickerOf?: (companyId: string) => string;
   knownTickers?: readonly string[];
   companyNameOf?: (companyId: string) => string;
+  sectorOf?: (companyId: string) => string;
+  onOpenProviderSettings?: () => void;
+  onModelClassificationSaved?: () => void;
 }) {
   const providerLabel = retryAvailability.kind === "available" ? retryAvailability.providerLabel ?? "Jev" : "classifier";
   const providerName = retryAvailability.kind === "available" ? retryAvailability.providerName ?? "TypeSafe" : "provider";
@@ -573,6 +580,16 @@ export function MentionDrawer({
                     : "Awaiting judgment…"}
             </div>
           )}
+
+          <SourceModelAssessment
+            key={mention.id}
+            mention={mention}
+            companyName={companyNameOf?.(mention.companyId) ?? mention.source.publisher}
+            ticker={tickerOf?.(mention.companyId) ?? ""}
+            sector={sectorOf?.(mention.companyId)}
+            onOpenProviderSettings={onOpenProviderSettings}
+            onClassificationSaved={onModelClassificationSaved}
+          />
 
           <section className="mt-4 border-t border-white/[0.06] pt-2.5" aria-label="Classifier request history">
             <div className="micro">Classifier request history</div>

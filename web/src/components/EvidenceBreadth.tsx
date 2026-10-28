@@ -144,7 +144,7 @@ export function EvidenceBreadth({
           <details className="evidence-coverage">
             <summary>Coverage and title analysis <span>{summary.scoredRecordCount} Jev scored{categorical.length > 0 ? ` · ${classified.length} Luna classified` : ""} · {summary.exactHeadlineCount} exact-title groups among Jev-scored rows</span></summary>
             {categorical.length > 0 && <p className="evidence-breadth-metrics">
-              <strong>Luna in this loaded sample: {classified.length} classified · {reviewRequired} need evidence review · {excluded} excluded</strong>
+              <strong>GPT-6 Luna in this loaded sample: {classified.length} classified · {reviewRequired} need evidence review · {excluded} excluded</strong>
               <span>Positive {classified.filter((mention) => mention.classification?.sentiment === "positive").length} · Neutral {classified.filter((mention) => mention.classification?.sentiment === "neutral").length} · Negative {classified.filter((mention) => mention.classification?.sentiment === "negative").length}</span>
             </p>}
             {hasMore && (
@@ -188,7 +188,7 @@ export function EvidenceBreadth({
             <span>Jev-scored publisher labels: {summary.publisherLabelCount}</span>
           </p>
           <p className="evidence-breadth-caveat">
-            Exact-title and mixed-label counts above use only Jev-scored rows; pending Luna rows and other unscored rows are excluded. Window uses publisher, provider-observed, then retrieval time. Mixed labels means exact-title rows have different Jev most-likely classes. Exact-title matches are only a duplicate cue; publisher labels do not verify independent reporting.
+            Exact-title and mixed-label counts above use only Jev-scored rows; pending GPT-6 Luna rows and other unscored rows are excluded. Window uses publisher, provider-observed, then retrieval time. Mixed labels means exact-title rows have different Jev most-likely classes. Exact-title matches are only a duplicate cue; publisher labels do not verify independent reporting.
           </p>
           <RelatedHeadlineCandidates
             candidates={relatedHeadlineCandidates}

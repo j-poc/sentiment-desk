@@ -23,7 +23,6 @@ export function EvidenceQuickAccess({
 }) {
   const period = hours === 6 ? "6H" : hours === 24 ? "24H" : hours === 72 ? "3D" : "7D";
   const summary = summarizeEvidenceBreadth(mentions);
-  const unclassifiedByLuna = mentions.filter((mention) => mention.classification == null).length;
   const loadedRecordsLabel = `${mentions.length.toLocaleString("en-US")} saved source ${mentions.length === 1 ? "record" : "records"}`;
   const latestSource = summary.latestSourceAt == null
     ? null
@@ -38,8 +37,8 @@ export function EvidenceQuickAccess({
       ) : mentions.length === 0 ? (
         <span role="status">No saved source-timed rows in {period}.</span>
       ) : (
-        <span role="status" aria-label={`${period}: ${mentions.length} loaded saved source rows${hasMore ? ", with older rows available" : ""}; ${unclassifiedByLuna} ${unclassifiedByLuna === 1 ? "has" : "have"} no Luna classification; latest source ${latestSource ?? "time unavailable"}.`}>
-          {period} evidence · {mentions.length} {hasMore ? "latest loaded" : "saved"} {mentions.length === 1 ? "row" : "rows"} · {unclassifiedByLuna} unclassified by Luna · latest {latestSource ?? "source time unavailable"}
+        <span role="status" aria-label={`${period}: ${mentions.length} loaded saved source rows${hasMore ? ", with older rows available" : ""}; latest source ${latestSource ?? "time unavailable"}.`}>
+          {period} evidence · {mentions.length} {hasMore ? "latest loaded" : "saved"} {mentions.length === 1 ? "row" : "rows"} · latest {latestSource ?? "source time unavailable"}
           {hasMore ? " · older rows available" : ""}
         </span>
       )}

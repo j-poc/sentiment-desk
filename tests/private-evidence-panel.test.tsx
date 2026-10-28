@@ -64,7 +64,7 @@ describe("private evidence panel", () => {
     expect(html).toContain("Saved locally · optional external analysis");
     expect(html).toContain("For Public Issuer (PUB) only");
     expect(html).toContain("separate from public mentions, sentiment charts, alerts, and automatic Luna classifications");
-    expect(html).toContain("the selected note&#x27;s text, title, source label, optional user-asserted date, note ID, content hash and byte count, plus its issuer identity, are sent to OpenAI GPT-6 Luna only after a separate item-specific confirmation");
+    expect(html).toContain("the selected note&#x27;s text, title, source label, optional user-asserted date, note ID, content hash and byte count, plus its issuer identity, are sent to OpenAI GPT-6 Luna after a separate item-specific confirmation");
     expect(html).toContain("Its filename and local import time are not sent.");
     expect(html).toContain("The app does not encrypt them or authenticate users");
     expect(html).not.toContain("never sent to a model");
@@ -73,8 +73,8 @@ describe("private evidence panel", () => {
     expect(html).toContain("Save locally");
     expect(html).toContain("Before saving a note");
     expect(html).toContain("The app does not encrypt them or authenticate users");
-    expect(html).toContain("may retain prompts, responses, and derived metadata for up to 30 days");
-    expect(html).toContain("account retention controls are unverified");
+    expect(html).toContain("Account data controls, retention, training use, and remaining plan allowance are unknown to this app.");
+    expect(html).not.toContain("up to 30 days");
     expect(html).not.toContain("No private note has been sent");
     expect(html).not.toContain("demo");
     expect(html).not.toContain("localStorage");

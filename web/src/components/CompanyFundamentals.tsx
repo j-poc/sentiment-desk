@@ -1,4 +1,8 @@
 import "./company-fundamentals.css";
+import { useEffect, useRef, useState } from "react";
+import { getCompanyEvidenceAssessment, requestCompanyEvidenceAssessment } from "../lib/api.js";
+import { GEMINI_PURPOSE_DISCLOSURE } from "../lib/gemini-purpose-disclosure.js";
+import type { CompanyAssessmentReadback, CompanyAssessmentResult } from "../../../shared/company-evidence-assessment.js";
 import type {
   FundamentalComparison,
   FundamentalMetricKey,
@@ -11,6 +15,8 @@ type FundamentalDisplayFact = Omit<PersistedFundamentalFact,
 export type { FundamentalComparison, FundamentalMetricKey, FundamentalsState, PersistedFundamentalFact, PersistedFundamentalPoint } from "../../../shared/company-fundamentals.js";
 
 export interface CompanyFundamentalsProps {
+  companyId?: string;
+  snapshotId?: string | null;
   companyName: string;
   ticker: string;
   state: FundamentalsState;
@@ -276,7 +282,7 @@ function periodKindLabel(fact: FundamentalDisplayFact): string {
 }
 
 export function CompanyFundamentals(props: CompanyFundamentalsProps) {
-  const { companyName, ticker, state, facts, comparisons, points, coverage, refreshAllowed, refreshBlockedReason, lastRefreshError, staleReason, onRefresh } = props;
+  const { companyId, companyName, ticker, state, facts, comparisons, points, coverage, refreshAllowed, lastRefreshError, staleReason, onRefresh } = props;
   const factsByMetric = new Map<FundamentalMetricKey, FundamentalDisplayFact[]>();
   for (const fact of facts) {
     if (!/^-?\d+(?:\.\d+)?$/.test(fact.value)) continue;
@@ -339,13 +345,14 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
         </button>
       </header>
       <p id="cf-refresh-reason" className="cf-refresh-reason" role={state === "blocked" ? "status" : undefined}>
-        {refreshAllowed ? "Refresh runs only when requested." : refreshBlockedReason || "Refresh is unavailable under current controls."}
+        {refreshAllowed ? "Refresh is on demand for this company." : "SEC fact updates are unavailable right now. Saved values remain visible when available."}
       </p>
-      <p className="cf-refresh-reason">On-demand for this company. Scheduled SEC 8-K monitoring is a separate source.</p>
+      <p className="cf-refresh-reason">Financial facts are shown separately from news and market updates.</p>
 
       {message && <p className={`cf-state cf-state-${state}`} role={state === "failed" ? "alert" : loading || state === "stale" || state === "blocked" ? "status" : "note"}>{message}</p>}
-      {lastRefreshError && showData && <p className="cf-state cf-state-warning" role="status">The latest refresh failed; saved SEC facts below were retained. {lastRefreshError}</p>}
-      {lastRefreshError && !showData && state === "failed" && <p className="cf-detail" role="status">{lastRefreshError}</p>}
+      {companyId && facts.length > 0 && <CompanyEvidenceAssessmentPanel companyId={companyId} snapshotId={props.snapshotId ?? null} companyName={companyName} ticker={ticker} facts={facts} />}
+      {lastRefreshError && showData && <p className="cf-state cf-state-warning" role="status">The latest SEC fact update could not be completed. Previously saved facts below were retained.</p>}
+      {lastRefreshError && !showData && state === "failed" && <p className="cf-detail" role="status">SEC facts are temporarily unavailable. Try again later.</p>}
       {filingFinding && filingNextCheck && researchFact && <aside className="cf-next-question" aria-label="Filing triage">
         <p className="micro">FILING TRIAGE · {METRIC_LABELS[researchFact.metric].toUpperCase()}</p>
         <p className="cf-triage-values"><span><strong>Current</strong> {formatValue(researchFact.value, researchFact.unit)} <span className="cf-triage-date">({periodRange(researchFact)})</span></span>
@@ -409,7 +416,107 @@ export function CompanyFundamentals(props: CompanyFundamentalsProps) {
           <p>CompanyFacts covers standard, whole-entity XBRL facts. It may omit custom tags and dimensional disclosures. SEC period comparisons do not establish cause, materiality, business quality, or investment merit.</p>
           {coverage.length ? <ul>{coverage.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul> : <p>Coverage diagnostics have not been supplied for this saved view.</p>}
         </details>
-      </details> : state !== "loading" && state !== "refreshing" && <p className="cf-empty">No saved values or chart are shown without persisted SEC facts.</p>}
+      </details> : state !== "loading" && state !== "refreshing" && <p className="cf-empty">No financial values are available for this company yet.</p>}
     </section>
   );
+}
+
+function CompanyEvidenceAssessmentPanel({companyId,snapshotId,companyName,ticker,facts}:{companyId:string;snapshotId:string|null;companyName:string;ticker:string;facts:readonly FundamentalDisplayFact[]}){
+  const [selectedIds,setSelectedIds]=useState<string[]>(()=>facts.slice(0,Math.min(6,facts.length)).map(f=>f.id));
+  const [provider,setProvider]=useState<"openai"|"google_gemini">("google_gemini");
+  const [confirmedRequestKey,setConfirmedRequestKey]=useState<string|null>(null);const [paidAttestationKey,setPaidAttestationKey]=useState<string|null>(null);const [usageReviewKey,setUsageReviewKey]=useState<string|null>(null);
+  const [busy,setBusy]=useState(false);const [status,setStatus]=useState<string|null>(null);const [result,setResult]=useState<CompanyAssessmentResult|null>(null);
+  const [savedReadback,setSavedReadback]=useState<CompanyAssessmentReadback|null>(null);const [savedReadbackKey,setSavedReadbackKey]=useState<string|null>(null);const [readbackLoading,setReadbackLoading]=useState(false);const [readbackError,setReadbackError]=useState(false);
+  const cik=facts[0]?.cik??"";const identityConsistent=/^\d{10}$/.test(cik)&&facts.every(f=>f.cik===cik);
+  const selected=facts.filter(f=>selectedIds.includes(f.id)).slice(0,12);
+  const requestKey=JSON.stringify([companyId,cik,snapshotId,provider,selected.map(f=>f.id)]);
+  const currentRequestKey=useRef(requestKey);currentRequestKey.current=requestKey;
+  const readbackKey=JSON.stringify([companyId,cik,snapshotId,provider]);
+  const currentReadbackKey=useRef(readbackKey);currentReadbackKey.current=readbackKey;
+  const confirmSend=confirmedRequestKey===requestKey;
+  const paidServiceAttested=paidAttestationKey===requestKey;
+  const usageReviewAcknowledged=usageReviewKey===requestKey;
+  const currentReadback=savedReadbackKey===readbackKey?savedReadback:null;
+  const usageReview=currentReadback?.usageReview;
+  const needsUsageReview=usageReview?.required===true;
+  const readbackMatchesCurrentSnapshot=Boolean(snapshotId&&currentReadback?.snapshotId===snapshotId);
+  const persistedResult=readbackMatchesCurrentSnapshot&&currentReadback?.assessment?.status==="completed"?currentReadback.assessment.result:null;
+  const displayedResult=result??persistedResult;
+  const displayedResultIsPersisted=!result&&persistedResult!==null;
+  const model=provider==="openai"?"GPT-6 Luna":"Gemini 3.8 Flash";
+  useEffect(()=>{
+    setSelectedIds(facts.slice(0,Math.min(6,facts.length)).map(f=>f.id));
+    setConfirmedRequestKey(null);setPaidAttestationKey(null);setUsageReviewKey(null);setResult(null);setStatus(null);
+  },[companyId,cik,snapshotId]);
+  useEffect(()=>{
+    const key=readbackKey,controller=new AbortController();
+    setSavedReadback(null);setSavedReadbackKey(null);setReadbackError(false);setReadbackLoading(true);
+    void getCompanyEvidenceAssessment(companyId,provider,controller.signal).then(value=>{
+      if(currentReadbackKey.current!==key)return;
+      if(value&&snapshotId&&value.snapshotId!==snapshotId){setReadbackError(true);return;}
+      setSavedReadback(value);setSavedReadbackKey(key);
+    }).catch(()=>{if(currentReadbackKey.current===key&&!controller.signal.aborted)setReadbackError(true);})
+      .finally(()=>{if(currentReadbackKey.current===key)setReadbackLoading(false);});
+    return()=>controller.abort();
+  },[companyId,cik,snapshotId,provider]);
+  const reloadReadback=async(expectedKey=readbackKey)=>{
+    try{
+      const value=await getCompanyEvidenceAssessment(companyId,provider);
+      if(currentReadbackKey.current!==expectedKey)return;
+      if(value&&snapshotId&&value.snapshotId!==snapshotId){setSavedReadback(null);setSavedReadbackKey(null);setReadbackError(true);return;}
+      setSavedReadback(value);setSavedReadbackKey(expectedKey);setReadbackError(false);
+    }catch{if(currentReadbackKey.current===expectedKey)setReadbackError(true);}
+  };
+  const toggle=(id:string)=>{setResult(null);setStatus(null);setSelectedIds(current=>current.includes(id)?current.filter(item=>item!==id):current.length>=12?current:[...current,id]);};
+  const submit=async()=>{
+    if(!companyId||!identityConsistent||selected.length===0||!confirmSend||readbackLoading||readbackError||(provider==="google_gemini"&&!paidServiceAttested)||(needsUsageReview&&!usageReviewAcknowledged)||busy)return;
+    const submittedRequestKey=requestKey,submittedReadbackKey=readbackKey;
+    setBusy(true);setStatus(null);setResult(null);
+    try{const value=await requestCompanyEvidenceAssessment(companyId,{cik,factIds:selected.map(f=>f.id),provider,confirmSend:true,paidServiceAttested,usageReviewAcknowledged});
+      if(currentRequestKey.current!==submittedRequestKey){setStatus("The assessment completed for an earlier SEC snapshot or fact selection. It was saved with that evidence and is not shown against the current selection.");return;}
+      setResult(value);setStatus("Assessment saved with its selected SEC fact lineage.");}
+    catch(error){const message=error instanceof Error?error.message:"request_failed";
+      setStatus(message.includes("unknown_delivery")?"Delivery is unknown. The provider may have received the request; no automatic retry was made. Review provider usage before deciding whether to send again.":message.includes("usage_review_required")?"A previous request has unresolved delivery. Review the saved attempt and provider usage, acknowledge the risk below, and then review this exact preview again.":message.includes("source_changed")?"The saved SEC snapshot changed. Refresh the facts and review the preview again.":message.includes("provider_key_not_configured")?`No saved ${provider==="openai"?"OpenAI":"Gemini"} key is available in this local app.`:"The assessment could not be completed. No automatic retry was made.");}
+    finally{setBusy(false);setConfirmedRequestKey(null);setPaidAttestationKey(null);setUsageReviewKey(null);void reloadReadback(submittedReadbackKey);}
+  };
+  const reloadStatus=()=>{setReadbackError(false);setReadbackLoading(true);void reloadReadback().finally(()=>setReadbackLoading(false));};
+  return <section className="cf-assessment" aria-labelledby={`cf-assessment-${ticker}`}>
+    <div><p className="micro">SEC EVIDENCE BRIEF</p><h3 id={`cf-assessment-${ticker}`}>Potentially bullish and bearish evidence</h3>
+      <p>Build a balanced read from the exact reported facts you select. The model does not receive filing text, news, saved keys, or private research.</p></div>
+    {!identityConsistent?<p role="status">Company identity is inconsistent across these saved facts; assessment is unavailable.</p>:<>
+      <label className="cf-assessment-provider">Provider
+        <select value={provider} disabled={busy} onChange={e=>{setProvider(e.target.value as typeof provider);setConfirmedRequestKey(null);setPaidAttestationKey(null);setResult(null);setStatus(null);}}>
+          <option value="google_gemini">Google Gemini · Gemini 3.8 Flash</option><option value="openai">OpenAI API · GPT-6 Luna</option>
+        </select>
+      </label>
+      <p className="cf-assessment-disclosure">Your selected SEC financial fact values, units, periods, filing dates, CIK, and SEC filing links will be sent to {provider==="openai"?"OpenAI":"Google"} using your locally saved API key. The app keeps the key on this device and does not put it in the request body. The provider may charge your API account; this app caps company assessments at 10 requests per UTC day, which does not cap provider billing. {provider==="google_gemini"?<> {GEMINI_PURPOSE_DISCLOSURE} Google may use prompts and responses from unpaid Gemini services to improve products, and human reviewers may process them where unpaid-service use is allowed. In the EEA, UK, and Switzerland, Google requires Gemini API Paid Services via an actively billed Cloud project; a free-tier-only project is not eligible, and paid-tier usage may incur metered charges. <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.</>:"The OpenAI request disables response storage; OpenAI API data terms apply."} This is research support, not a recommendation, forecast, or valuation.</p>
+      {readbackLoading&&<p className="cf-assessment-status" role="status">Checking saved assessment status…</p>}
+      {readbackError&&<p className="cf-assessment-status" role="status">Saved assessment status could not be checked, or the saved SEC snapshot has changed. Sending is paused until status is reloaded. <button type="button" onClick={reloadStatus} disabled={readbackLoading}>Reload saved status</button></p>}
+      {currentReadback?.assessment&&readbackMatchesCurrentSnapshot&&<div className="cf-assessment-status" role="status">
+        <strong>Saved request · {currentReadback.assessment.status.replaceAll("_"," ")}</strong>
+        {currentReadback.assessment.status==="unknown_delivery"&&<p>The provider may have received this request before the connection ended. It was not retried automatically.</p>}
+        {currentReadback.assessment.status==="rejected"&&<p>The provider rejected the request. No result was saved.</p>}
+        {currentReadback.assessment.status==="invalid_output"&&<p>The response could not be validated, so no summary is shown.</p>}
+        <p>Started {new Date(currentReadback.assessment.startedAt).toLocaleString()}. Selected SEC facts: {currentReadback.assessment.selectedFactIds.map(id=>facts.find(f=>f.id===id)?.concept??id).join(", ")||"none available in the current view"}.</p>
+      </div>}
+      {needsUsageReview&&<div className="cf-assessment-status" role="alert"><strong>Provider usage review required</strong><p>{usageReview?.unresolvedCount} {provider==="openai"?"OpenAI":"Gemini"} request{usageReview?.unresolvedCount===1?"":"s"} on this device have unresolved delivery. Check the provider account usage page first; the requests may have been billed even without a saved answer. Acknowledgment does not retry or cancel them.</p>
+        <label className="cf-assessment-confirm"><input type="checkbox" checked={usageReviewAcknowledged} disabled={busy||readbackLoading||readbackError} onChange={e=>setUsageReviewKey(e.target.checked?requestKey:null)} />I reviewed provider usage and understand the earlier request may already have been processed.</label></div>}
+      <fieldset className="cf-assessment-facts"><legend>Select facts to include ({selected.length}/12)</legend>{facts.slice(0,24).map(fact=><label key={fact.id}>
+        <input type="checkbox" checked={selectedIds.includes(fact.id)} disabled={busy||(!selectedIds.includes(fact.id)&&selectedIds.length>=12)} onChange={()=>toggle(fact.id)} />
+        <span><strong>{fact.concept}</strong> · {formatValue(fact.value,fact.unit)} · {fact.startDate?`${fact.startDate} to `:"as of "}{fact.endDate} · {fact.form} filed {filedDateLabel(fact.filedAt)}</span>
+      </label>)}</fieldset>
+      {selected.length>0&&<details className="cf-assessment-preview" open><summary>Preview exact data sent ({selected.length} facts)</summary><ul>{selected.map(f=><li key={f.id}><strong>{f.concept}</strong>: {f.value} {f.unit}; period {f.startDate?`${f.startDate}–`:"instant "}{f.endDate}; precision {f.reportedDecimals??"not supplied"}; {f.form}, filed {filedDateLabel(f.filedAt)}, accession {f.accession}, fact ID {f.id}; SEC URL <a href={f.sourceUrl} target="_blank" rel="noreferrer">{f.sourceUrl}</a></li>)}</ul><p>Issuer: {companyName} ({ticker}), CIK {cik}. No document text is included.</p></details>}
+      <label className="cf-assessment-confirm"><input type="checkbox" checked={confirmSend} disabled={busy||selected.length===0||readbackLoading||readbackError||(needsUsageReview&&!usageReviewAcknowledged)} onChange={e=>setConfirmedRequestKey(e.target.checked?requestKey:null)} />I reviewed this exact preview and authorize one request to {provider==="openai"?"OpenAI":"Google Gemini"}.</label>
+      {provider==="google_gemini"&&<label className="cf-assessment-confirm"><input type="checkbox" checked={paidServiceAttested} disabled={busy} onChange={e=>setPaidAttestationKey(e.target.checked?requestKey:null)} />If this client is made available in the EEA, UK, or Switzerland, I confirm it uses Paid Services with active Cloud Billing and accept metered charges may apply.</label>}
+      <button type="button" className="cf-assessment-send" onClick={()=>void submit()} disabled={busy||!confirmSend||selected.length===0||readbackLoading||readbackError||(needsUsageReview&&!usageReviewAcknowledged)||(provider==="google_gemini"&&!paidServiceAttested)}>{busy?"Sending one assessment…":`Send selected SEC facts to ${model}`}</button>
+      {status&&<p role="status" className="cf-assessment-status">{status}</p>}
+      {displayedResult&&<div className="cf-assessment-result" aria-live="polite"><p className="micro">{displayedResult.assessment.stance.replaceAll("_"," ").toUpperCase()} · {displayedResult.model}{displayedResultIsPersisted?" · SAVED RESULT":""}</p>
+        {displayedResultIsPersisted&&currentReadback?.assessment&&<p>Saved for {currentReadback.assessment.selectedFactIds.map(id=>facts.find(f=>f.id===id)?.concept??id).join(", ")}. Your current preview may include a different selection.</p>}
+        <h4>{displayedResult.assessment.summary} {displayedResult.assessment.summaryCitationIds.map(id=>{const citation=displayedResult.citations.find(c=>c.id===id);return citation?<a key={id} href={citation.sourceUrl} target="_blank" rel="noreferrer">[{id}]</a>:null;})}</h4>
+        {([ ["Potentially bullish",displayedResult.assessment.bullishEvidence], ["Potentially bearish",displayedResult.assessment.bearishEvidence] ] as const).map(([heading,items])=><div key={heading}><strong>{heading}</strong>{items.length?<ul>{items.map((item,index)=><li key={`${heading}-${index}`}>{item.claim} {item.citationIds.map(id=>{const citation=displayedResult.citations.find(c=>c.id===id);return citation?<a key={id} href={citation.sourceUrl} target="_blank" rel="noreferrer">[{id}]</a>:null;})}</li>)}</ul>:<p>No supported point in the selected evidence.</p>}</div>)}
+        {displayedResult.assessment.unknowns.length>0&&<div><strong>Unknowns</strong><ul>{displayedResult.assessment.unknowns.map((item,index)=><li key={index}>{item}</li>)}</ul></div>}
+        <p>Generated {new Date(displayedResult.generatedAt).toLocaleString()} · source-grounded wording is model-generated and not independently verified.</p>
+      </div>}
+    </>}
+  </section>;
 }

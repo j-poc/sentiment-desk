@@ -15,6 +15,28 @@ describe("analyst disposition in the working scan", () => {
     expect(visibleInWorkingScan(weak, false, overrides, true)).toBe(true);
   });
 
+  it("keeps held option-market rows out of investor updates while leaving them reviewable", () => {
+    const optionPage = {
+      id: "option-page",
+      status: "pending",
+      issuerIdentityStrong: true,
+      companyBusinessRelevant: false,
+    };
+    const update = {
+      id: "business-update",
+      status: "pending",
+      issuerIdentityStrong: true,
+      companyBusinessRelevant: true,
+    };
+
+    expect(matchesMentionFeedFilter(optionPage as never, "all")).toBe(false);
+    expect(matchesMentionFeedFilter(optionPage as never, "failed")).toBe(false);
+    expect(matchesMentionFeedFilter(optionPage as never, "relevance_review")).toBe(true);
+    expect(matchesMentionFeedFilter(optionPage as never, "history")).toBe(true);
+    expect(matchesMentionFeedFilter(update as never, "all")).toBe(true);
+    expect(matchesMentionFeedFilter(update as never, "relevance_review")).toBe(false);
+  });
+
   it("hides set-aside source rows only from the default scan and lets newer restores win", () => {
     const overrides = new Map();
     const row = { id: "real-source-row", analystResearchDisposition: null as "investigate" | "dismissed" | null };

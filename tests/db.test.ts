@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,6 +56,175 @@ function mention(overrides: Partial<RawMention> = {}): RawMention {
 }
 
 describe("Desk observation and judgment storage", () => {
+  it("persists a completed model-provider classification against its source and attempt", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const observationId = db.insertObservation(mention({
+        sourceItemId: "model-provider-persist",
+        title: "Acme expands manufacturing capacity",
+        snippet: "Acme announced a new production line to support growing demand.",
+      })).observationId;
+      const attemptId = randomUUID();
+      const completedAt = Date.now();
+      const sourceSha256 = "a".repeat(64);
+      expect(db.reserveModelProviderAttempt({
+        id: attemptId, observationId, provider: "google_gemini", modelRequested: "gemini-3.8-flash",
+        sourceSha256, requestSha256: "b".repeat(64), requestBytes: 128,
+        promptVersion: "test-prompt/1", promptSha256: "c".repeat(64),
+        schemaVersion: "test-schema/1", schemaSha256: "d".repeat(64),
+        utcDay: new Date(completedAt).toISOString().slice(0, 10), reservedAt: completedAt - 1,
+        costReservationMicros: 100, maxDailyRequests: 5, maxDailyBytes: 10_000, maxDailyCostMicros: 100_000,
+      })).toBe("reserved");
+      expect(db.markModelProviderDispatched(attemptId, completedAt)).toBe(true);
+
+      expect(db.finishModelProviderAttempt({
+        attemptId, outcome: "completed", completedAt: completedAt + 1, httpStatus: 200,
+        modelReturned: "gemini-3.8-flash", responseId: "response-1", responseSha256: "e".repeat(64),
+        inputTokens: 50, outputTokens: 20, estimatedCostUsd: 0.00002, latencyMs: 42, errorCategory: null,
+        classification: {
+          modelReturned: "gemini-3.8-flash", sourceSha256, sourceTimeAt: completedAt - 60_000,
+          retrievedAt: completedAt, sentiment: "positive", eventType: "capacity_expansion",
+          takeaway: "Capacity may support higher output.", about: true, material: true,
+          investorRelevant: true, evidenceSufficient: true,
+          summary: "Acme announced a production line expansion.",
+          supportingExcerpt: "Acme announced a new production line to support growing demand.",
+          disposition: "classified",
+        },
+      })).toBe(true);
+
+      expect(db.latestModelProviderClassification(observationId, "google_gemini")).toMatchObject({
+        attemptId, observationId, provider: "google_gemini", modelRequested: "gemini-3.8-flash",
+        modelReturned: "gemini-3.8-flash", sourceSha256, sentiment: "positive", disposition: "classified",
+      });
+      expect(db.modelProviderAttemptHistory(observationId, "google_gemini")).toMatchObject([{ status: "completed" }]);
+    } finally { db.close(); }
+  });
+
+  it("excludes newly identity-held and relevance-held sources from BYOK summary history", () => {
+    const apple: Company = {
+      id: "apple", name: "Apple", ticker: "AAPL", sector: "Technology", aliases: ["Apple", "iPhone", "MacBook"],
+      color: "#123456", ambiguous: true,
+    };
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([apple]);
+      const now = Date.now();
+      const titles = [
+        "AAPL reports stronger services revenue growth",
+        "Apple juice manufacturers report revenue growth",
+        "Save an incredible $500 on the powerful 2026 Apple MacBook Pro on Amazon",
+        "Apple Inc. $AAPL Stock Position Lowered by The Manufacturers Life Insurance Company",
+      ];
+      const observationIds = titles.map((title, index) => db.insertObservation(mention({
+        companyId: apple.id,
+        sourceItemId: `provider-feed-filter-${index}`,
+        sourceUrl: `https://example.com/provider-feed-filter-${index}`,
+        publisherName: "Example Publisher",
+        publisherDomain: "example.com",
+        title,
+        snippet: "Saved source excerpt for provider classification.",
+        tier: "trade",
+        aggregatorPublishedAt: now - 1_000 - index,
+        retrievedAt: now,
+      })).observationId);
+
+      for (const [index, observationId] of observationIds.entries()) {
+        const attemptId = randomUUID();
+        const completedAt = now + index + 1;
+        const sourceSha256 = String.fromCharCode(97 + index).repeat(64);
+        expect(db.reserveModelProviderAttempt({
+          id: attemptId, observationId, provider: "google_gemini", modelRequested: "gemini-3.8-flash",
+          sourceSha256, requestSha256: "d".repeat(64), requestBytes: 128,
+          promptVersion: "test-prompt/1", promptSha256: "e".repeat(64),
+          schemaVersion: "test-schema/1", schemaSha256: "f".repeat(64),
+          utcDay: new Date(now).toISOString().slice(0, 10), reservedAt: now,
+          costReservationMicros: 100, maxDailyRequests: 10, maxDailyBytes: 10_000, maxDailyCostMicros: 10_000,
+        })).toBe("reserved");
+        expect(db.markModelProviderDispatched(attemptId, now)).toBe(true);
+        expect(db.finishModelProviderAttempt({
+          attemptId, outcome: "completed", completedAt, httpStatus: 200,
+          modelReturned: "gemini-3.8-flash", responseId: `response-${index}`, responseSha256: "1".repeat(64),
+          inputTokens: 50, outputTokens: 20, estimatedCostUsd: 0.00002, latencyMs: 42, errorCategory: null,
+          classification: {
+            modelReturned: "gemini-3.8-flash", sourceSha256, sourceTimeAt: now - 1_000 - index,
+            retrievedAt: now, sentiment: "positive", eventType: "revenue_growth",
+            takeaway: "Revenue increased.", about: true, material: true,
+            investorRelevant: true, evidenceSufficient: true,
+            summary: "Saved provider summary.", supportingExcerpt: "Saved source excerpt.", disposition: "classified",
+          },
+        })).toBe(true);
+      }
+
+      const feed = db.modelProviderClassificationFeed(apple.id, "google_gemini", 0, now + 10);
+      expect(feed.map((row) => row.observationId)).toEqual([observationIds[0]]);
+      expect(db.latestModelProviderClassification(observationIds[1]!, "google_gemini")?.disposition).toBe("classified");
+      expect(db.latestModelProviderClassification(observationIds[2]!, "google_gemini")?.disposition).toBe("classified");
+
+      for (const [index, observationId] of observationIds.entries()) {
+        const attemptId = randomUUID();
+        const sourceSha256 = String(index + 1).repeat(64);
+        const reservedAt = now + 10 + index;
+        expect(db.reserveTypeSafeJevByokAttempt({
+          id: attemptId, observationId, modelRequested: "jev-latest", sourceSha256,
+          requestSha256: "a".repeat(64), requestBytes: 128, rubricSha256: "f".repeat(64),
+          utcDay: new Date(now).toISOString().slice(0, 10), reservedAt, costReservationMicros: 100,
+          maxDailyRequests: 10, maxDailyBytes: 10_000, maxDailyCostMicros: 10_000,
+        })).toBe("reserved");
+        expect(db.markTypeSafeJevByokDispatched(attemptId, reservedAt + 1)).toBe(true);
+        expect(db.finishTypeSafeJevByokAttempt({
+          attemptId, outcome: "completed", completedAt: reservedAt + 2, httpStatus: 200,
+          modelReturned: "jev-latest", inputTokens: 50, outputTokens: 20, estimatedCostUsd: 0.00002,
+          latencyMs: 42, errorCategory: null,
+          result: {
+            modelRequested: "jev-latest", modelReturned: "jev-latest", sourceSha256, rubricSha256: "f".repeat(64),
+            sourceTimeAt: now - 1_000 - index, retrievedAt: now + 2,
+            sentiment: "positive", pPositive: 0.8, pNeutral: 0.1, pNegative: 0.1,
+            confidence: 0.8, about: 0.95, investorRelevant: 0.9, material: 0.8, novel: 0.75, credible: 0.85,
+            eventType: "corporate_action", magnitude: 0.65, surprise: 0.6, takeaway: "product_win",
+            eventScore: 70, impact: 56, weight: 0.8, excluded: false,
+          },
+        })).toBe(true);
+      }
+      const jevFeed = db.typeSafeJevByokFeed(apple.id, 0, now + 10);
+      expect(jevFeed.map((row) => row.observationId)).toEqual([observationIds[0]]);
+      for (const observationId of observationIds.slice(1)) {
+        expect(db.typeSafeJevByokResult(observationId)?.sentiment).toBe("positive");
+        expect(db.typeSafeJevByokAttemptHistory(observationId)[0]?.status).toBe("completed");
+      }
+    } finally { db.close(); }
+  });
+
+  it("round-robins pending work across issuers before taking a second backlog row", () => {
+    const db = new Desk(":memory:");
+    const beta: Company = { id: "beta", name: "Beta Corporation", ticker: "BETA", sector: "Technology", aliases: ["Beta"], color: "#654321" };
+    try {
+      db.seedCompanies([company, beta]);
+      const now = Date.now();
+      const rows = [
+        ["acme-newest", company, now - 1_000], ["acme-middle", company, now - 2_000],
+        ["acme-oldest", company, now - 3_000], ["beta-only", beta, now - 10_000],
+      ] as const;
+      for (const [sourceItemId, issuer, sourceTime] of rows) {
+        db.insertObservation(mention({
+          companyId: issuer.id, title: `${issuer.name} announces a material product expansion`,
+          snippet: `${issuer.ticker} company reports increased product demand.`,
+          sourceItemId, aggregatorPublishedAt: sourceTime, retrievedAt: now,
+        }));
+      }
+      const selected = db.pendingIds(4, ["google_news_rss"], true);
+      expect(selected.slice(0, 2)).toHaveLength(2);
+      expect(new Set(selected.slice(0, 2).map((id) => id.split(":")[0]))).toEqual(new Set(["acme", "beta"]));
+      const titles = selected.map((id) => db.mentionRow(id)?.title);
+      expect(titles).toEqual([
+        "Acme announces a material product expansion",
+        "Beta Corporation announces a material product expansion",
+        "Acme announces a material product expansion",
+        "Acme announces a material product expansion",
+      ]);
+    } finally { db.close(); }
+  });
+
   it("counts only ticker-scoped legacy_unknown price rows and keeps them outside priceWindow", () => {
     const db = new Desk(":memory:");
     const raw = (db as unknown as { db: DatabaseSync }).db;
@@ -176,6 +346,186 @@ describe("Desk observation and judgment storage", () => {
     } finally { db.close(); }
   });
 
+  it("counts ChatGPT-plan requests and bytes without USD, closes on unknown outcome, and keeps API usage separate", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const firstId = db.insertObservation(mention({ sourceItemId: "plan-unknown" })).observationId;
+      const claim = db.claimForScoringWithBudget({
+        id: firstId, now: 10_000, allowedCollectors: ["google_news_rss"], utcDay: "2026-10-09",
+        requestBytes: 640, requestSha256: "a".repeat(64), requestedModel: "gpt-6-luna", rubricSha256: "b".repeat(64),
+        maxRequests: 2, maxRequestBytes: 1_000, provider: "openai_luna", accountingRoute: "chatgpt_plan",
+        schemaSha256: "c".repeat(64), promptSha256: "d".repeat(64),
+      });
+      if (claim.kind !== "claimed") throw new Error("expected a ChatGPT-plan claim");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:requests")).toBe("1");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:request-bytes")).toBe("640");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:cost-micros")).toBeUndefined();
+      expect(db.getKv("openai:budget:2026-10-09:requests")).toBeUndefined();
+      expect(db.jevAttemptHistory(firstId)[0]).toMatchObject({ accountingRoute: "chatgpt_plan", reservedCostMicros: 0, reservedCostUsd: 0, requestedServiceTier: null });
+      expect(db.remainingJevRequests({ utcDay: "2026-10-09", maxRequests: 2, maxRequestBytes: 1_000, provider: "openai_luna", accountingRoute: "chatgpt_plan" })).toBe(1);
+
+      expect(db.recordJevDispatchIntent(claim.attemptId, 10_001)).toBe(true);
+      db.recordJevAttemptReceipt({
+        attemptId: claim.attemptId, outcome: "unknown", occurredAt: 10_002, httpStatus: null,
+        inputTokens: null, outputTokens: null, resolvedModel: null, latencyMs: null, errorCategory: "transport_outcome_unknown",
+        estimatedCostUsd: null, responseServiceTier: null,
+      });
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:closed")).toBe("1");
+      expect(db.remainingJevRequests({ utcDay: "2026-10-09", maxRequests: 2, maxRequestBytes: 1_000, provider: "openai_luna", accountingRoute: "chatgpt_plan" })).toBe(0);
+      expect(db.planUsageSince(0)).toMatchObject({ requests: 1, reservedRequests: 1, requestBytes: 640, unknownOutcomes: 1, classifiedItems: 0 });
+      expect(db.classifierUsageSince(0)).toMatchObject({ requests: 0, reservedRequests: 0, estimatedCostUsd: 0, reservedCostUsd: 0 });
+
+      const secondId = db.insertObservation(mention({ sourceItemId: "plan-after-unknown" })).observationId;
+      expect(db.claimForScoringWithBudget({
+        id: secondId, now: 10_010, allowedCollectors: ["google_news_rss"], utcDay: "2026-10-09",
+        requestBytes: 10, requestSha256: "e".repeat(64), requestedModel: "gpt-6-luna", rubricSha256: "f".repeat(64),
+        maxRequests: 2, maxRequestBytes: 1_000, provider: "openai_luna", accountingRoute: "chatgpt_plan",
+        schemaSha256: "1".repeat(64), promptSha256: "2".repeat(64),
+      })).toEqual({ kind: "budget_exhausted" });
+    } finally { db.close(); }
+  });
+
+  it("releases known-unsent ChatGPT-plan request and byte reservations without a cost ledger", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const id = db.insertObservation(mention({ sourceItemId: "plan-not-sent" })).observationId;
+      const claim = db.claimForScoringWithBudget({
+        id, now: 10_000, allowedCollectors: ["google_news_rss"], utcDay: "2026-10-09",
+        requestBytes: 300, requestSha256: "3".repeat(64), requestedModel: "gpt-6-luna", rubricSha256: "4".repeat(64),
+        maxRequests: 1, maxRequestBytes: 500, provider: "openai_luna", accountingRoute: "chatgpt_plan",
+        schemaSha256: "5".repeat(64), promptSha256: "6".repeat(64),
+      });
+      if (claim.kind !== "claimed") throw new Error("expected a ChatGPT-plan claim");
+      expect(db.recordJevDispatchIntent(claim.attemptId, 10_000)).toBe(true);
+      db.recordJevAttemptReceipt({
+        attemptId: claim.attemptId, outcome: "not_sent", occurredAt: 10_001, httpStatus: null,
+        inputTokens: null, outputTokens: null, resolvedModel: null, latencyMs: null, errorCategory: "classifier_preflight",
+      });
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:requests")).toBe("0");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:request-bytes")).toBe("0");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:cost-micros")).toBeUndefined();
+      expect(db.planUsageSince(0)).toMatchObject({ requests: 0, reservedRequests: 1, requestBytes: 0, unknownOutcomes: 0 });
+      expect(db.remainingJevRequests({ utcDay: "2026-10-09", maxRequests: 1, maxRequestBytes: 500, provider: "openai_luna", accountingRoute: "chatgpt_plan" })).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it("closes the ChatGPT-plan budget after a process restart with a dispatched unknown outcome", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-plan-recovery-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    db.seedCompanies([company]);
+    const id = db.insertObservation(mention({ sourceItemId: "plan-interrupted-after-dispatch" })).observationId;
+    const claim = db.claimForScoringWithBudget({
+      id, now: 1_000, allowedCollectors: ["google_news_rss"], utcDay: "2026-10-09",
+      requestBytes: 420, requestSha256: "7".repeat(64), requestedModel: "gpt-6-luna", rubricSha256: "8".repeat(64),
+      maxRequests: 3, maxRequestBytes: 2_000, provider: "openai_luna", accountingRoute: "chatgpt_plan",
+      schemaSha256: "9".repeat(64), promptSha256: "a".repeat(64),
+    });
+    if (claim.kind !== "claimed") throw new Error("expected a ChatGPT-plan claim");
+    expect(db.recordJevDispatchIntent(claim.attemptId, 1_001)).toBe(true);
+    db.close();
+
+    db = new Desk(path);
+    try {
+      expect(db.jevAttemptHistory(id)).toMatchObject([{ accountingRoute: "chatgpt_plan", outcome: "unknown", errorCategory: "interrupted_after_dispatch" }]);
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:closed")).toBe("1");
+      expect(db.getKv("openai:budget:2026-10-09:closed")).toBeUndefined();
+      expect(db.planUsageSince(0)).toMatchObject({ requests: 1, requestBytes: 420, unknownOutcomes: 1 });
+    } finally { db.close(); }
+  });
+
+  it("recovers private-note plan reservations without retaining note content or spending an unsent reservation", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-plan-private-recovery-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    const beforeDispatch = db.reserveChatGPTPlanAuxiliaryRequest({ utcDay: "2026-10-09", requestBytes: 300, maxRequests: 1, maxRequestBytes: 500, now: 1_000 });
+    expect(beforeDispatch.reserved).toBe(true);
+    const afterDispatch = db.reserveChatGPTPlanAuxiliaryRequest({ utcDay: "2026-10-10", requestBytes: 400, maxRequests: 1, maxRequestBytes: 500, now: 86_401_000 });
+    expect(afterDispatch.reserved).toBe(true);
+    if (!beforeDispatch.reserved || !afterDispatch.reserved) throw new Error("expected plan reservations");
+    expect(db.markChatGPTPlanAuxiliaryRequestDispatched(afterDispatch.id)).toBe(true);
+    db.close();
+
+    db = new Desk(path);
+    try {
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:requests")).toBe("0");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:request-bytes")).toBe("0");
+      expect(db.reserveChatGPTPlanAuxiliaryRequest({ utcDay: "2026-10-09", requestBytes: 300, maxRequests: 1, maxRequestBytes: 500 }))
+        .toMatchObject({ reserved: true });
+      expect(db.getKv("chatgpt-plan:budget:2026-10-10:closed")).toBe("1");
+      expect(db.planUsageSince(0)).toMatchObject({ requests: 1, requestBytes: 400, unknownOutcomes: 1 });
+      const columns = db.testDb.prepare("PRAGMA table_info(chatgpt_plan_auxiliary_requests)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).not.toContain("note_text");
+      expect(columns.map((column) => column.name)).not.toContain("evidence_id");
+    } finally { db.close(); }
+  });
+
+  it("shares subscription-plan evaluation requests with public classification and private-note caps without cost fields", () => {
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([company]);
+      const observationId = db.insertObservation(mention({ sourceItemId: "plan-eval-shared-cap" })).observationId;
+      const claim = db.claimForScoringWithBudget({
+        id: observationId, now: 10_000, allowedCollectors: ["google_news_rss"], utcDay: "2026-10-09",
+        requestBytes: 640, requestSha256: "a".repeat(64), requestedModel: "gpt-6-luna", rubricSha256: "b".repeat(64),
+        maxRequests: 2, maxRequestBytes: 1_000, provider: "openai_luna", accountingRoute: "chatgpt_plan",
+        schemaSha256: "c".repeat(64), promptSha256: "d".repeat(64),
+      });
+      if (claim.kind !== "claimed") throw new Error("expected one public plan reservation");
+      const evaluation = db.reserveChatGPTPlanEvaluationRequest({
+        utcDay: "2026-10-09", now: 10_001, requestBytes: 300, maxRequests: 2, maxRequestBytes: 1_000,
+      });
+      expect(evaluation.reserved).toBe(true);
+      if (!evaluation.reserved) return;
+      expect(db.markChatGPTPlanEvaluationDispatched(evaluation.id)).toBe(true);
+      expect(db.finishChatGPTPlanEvaluationRequest(evaluation.id, "completed", 10_002)).toBe(true);
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:requests")).toBe("2");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:request-bytes")).toBe("940");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:cost-micros")).toBeUndefined();
+      expect(db.planUsageSince(0)).toMatchObject({ requests: 1, reservedRequests: 2, requestBytes: 300, unknownOutcomes: 0 });
+      expect(db.reserveChatGPTPlanAuxiliaryRequest({
+        utcDay: "2026-10-09", requestBytes: 100, maxRequests: 2, maxRequestBytes: 1_000, now: 10_003,
+      })).toEqual({ reserved: false, reason: "exhausted" });
+    } finally { db.close(); }
+  });
+
+  it("releases known-unsent evaluation bytes but closes the day after interrupted dispatch", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-plan-evaluation-recovery-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path);
+    const knownUnsent = db.reserveChatGPTPlanEvaluationRequest({
+      utcDay: "2026-10-09", requestBytes: 120, maxRequests: 1, maxRequestBytes: 500, now: 10_000,
+    });
+    expect(knownUnsent.reserved).toBe(true);
+    if (!knownUnsent.reserved) throw new Error("expected evaluation reservation");
+    expect(db.finishChatGPTPlanEvaluationRequest(knownUnsent.id, "not_sent", 10_001)).toBe(true);
+    expect(db.getKv("chatgpt-plan:budget:2026-10-09:requests")).toBe("0");
+    expect(db.getKv("chatgpt-plan:budget:2026-10-09:request-bytes")).toBe("0");
+    const dispatched = db.reserveChatGPTPlanEvaluationRequest({
+      utcDay: "2026-10-09", requestBytes: 200, maxRequests: 1, maxRequestBytes: 500, now: 10_002,
+    });
+    expect(dispatched.reserved).toBe(true);
+    if (!dispatched.reserved) throw new Error("expected second evaluation reservation");
+    expect(db.markChatGPTPlanEvaluationDispatched(dispatched.id)).toBe(true);
+    db.close();
+
+    db = new Desk(path);
+    try {
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:closed")).toBe("1");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:requests")).toBe("1");
+      expect(db.getKv("chatgpt-plan:budget:2026-10-09:request-bytes")).toBe("200");
+      expect(db.planUsageSince(0)).toMatchObject({ requests: 1, reservedRequests: 2, requestBytes: 200, unknownOutcomes: 1 });
+      expect(db.reserveChatGPTPlanEvaluationRequest({
+        utcDay: "2026-10-09", requestBytes: 10, maxRequests: 1, maxRequestBytes: 500,
+      })).toEqual({ reserved: false, reason: "closed" });
+    } finally { db.close(); }
+  });
+
   it("commits a qualified alert intent with the score and preserves immutable claims and receipts", () => {
     const db = new Desk(":memory:");
     try {
@@ -290,6 +640,32 @@ describe("Desk observation and judgment storage", () => {
         sourceRecords24h: 0,
         latestCollectedAt: collectedAt,
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("excludes weak same-name acronym matches from watchlist activity and historical sentiment events", () => {
+    const amd: Company = {
+      id: "amd", name: "AMD", ticker: "AMD", sector: "Semiconductors",
+      aliases: ["AMD", "Advanced Micro Devices", "Ryzen"], color: "#fb923c", ambiguous: true,
+    };
+    const db = new Desk(":memory:");
+    try {
+      db.seedCompanies([amd]);
+      const weak = db.insertObservation(mention({
+        companyId: amd.id, sourceItemId: "dry-amd-medical",
+        title: "Bausch + Lomb FDA backs dry AMD study", snippet: "A macular degeneration trial moved forward.",
+      }));
+      db.markScored(weak.observationId, score("results"), false);
+      const valid = db.insertObservation(mention({
+        companyId: amd.id, sourceItemId: "amd-earnings",
+        title: "$AMD shares rise after earnings", snippet: "Advanced Micro Devices reported revenue growth.",
+      }));
+      db.markScored(valid.observationId, score("results"), false);
+
+      expect(db.sourceActivity24h(Date.now() - 24 * 60 * 60_000).get(amd.id)?.sourceRecords24h).toBe(1);
+      expect(db.scoredMentionEvents(0).map((event) => event.title)).toEqual(["$AMD shares rise after earnings"]);
     } finally {
       db.close();
     }
@@ -512,7 +888,7 @@ describe("Desk observation and judgment storage", () => {
 
       expect(second).toMatchObject({ items: [{ id: failedId, status: "failed", usageCheckRequired: true }] });
       expect(second.nextCursor).toMatchObject({ id: failedId });
-      expect(third).toEqual({ items: [expect.objectContaining({ id: lastId, status: "pending" })], nextCursor: null, setAsideCount: 0, issuerIdentityReviewCount: 0 });
+      expect(third).toEqual({ items: [expect.objectContaining({ id: lastId, status: "pending" })], nextCursor: null, setAsideCount: 0, issuerIdentityReviewCount: 0, investorRelevanceReviewCount: 0 });
     } finally {
       db.close();
     }
@@ -1125,6 +1501,48 @@ describe("Desk observation and judgment storage", () => {
       }], startedAt + 50)[0]).toMatchObject({
         state: "current", coverageCount: 1, latestResult: "success", latestError: null,
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("adds the evidence-assessment receipt schema to an existing v20 database without losing saved rows", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sentiment-desk-assessment-schema-migration-"));
+    directories.push(directory);
+    const path = join(directory, "desk.db");
+    let db = new Desk(path, migrationTestLimits);
+    try {
+      db.seedCompanies([company]);
+      db.insertObservation(mention({ sourceItemId: "preserved-across-additive-schema", retrievedAt: Date.now() }));
+    } finally {
+      db.close();
+    }
+
+    const prior = new DatabaseSync(path);
+    try {
+      prior.exec(`
+        DROP TABLE company_evidence_assessment_receipts;
+        DROP TABLE company_evidence_assessment_reservations;
+        DROP TABLE company_evidence_assessment_attempts;
+        PRAGMA user_version = 20;
+      `);
+    } finally {
+      prior.close();
+    }
+
+    db = new Desk(path, migrationTestLimits);
+    try {
+      expect(db.companies().map((item) => item.id)).toContain(company.id);
+      const migrated = new DatabaseSync(path, { readOnly: true });
+      try {
+        const objects = new Set((migrated.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((row) => row.name));
+        expect(objects.has("company_evidence_assessment_attempts")).toBe(true);
+        expect(objects.has("company_evidence_assessment_reservations")).toBe(true);
+        expect(objects.has("company_evidence_assessment_receipts")).toBe(true);
+        expect(Number((migrated.prepare("SELECT COUNT(*) AS count FROM source_observations WHERE source_item_id=?").get("preserved-across-additive-schema") as { count: number }).count)).toBe(1);
+      } finally {
+        migrated.close();
+      }
     } finally {
       db.close();
     }

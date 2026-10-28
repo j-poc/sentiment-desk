@@ -163,7 +163,7 @@ describe("evidence breadth summary", () => {
 
     expect(markup).toContain("0 exact-title groups among Jev-scored rows");
     expect(markup).toContain("Jev-scored publisher labels: 0");
-    expect(markup).toContain("Exact-title and mixed-label counts above use only Jev-scored rows; pending Luna rows and other unscored rows are excluded.");
+    expect(markup).toContain("Exact-title and mixed-label counts above use only Jev-scored rows; pending GPT-6 Luna rows and other unscored rows are excluded.");
   });
 
   it("counts repeated exact titles, mixed Jev labels, and publisher labels without equating them to independent sources", () => {

@@ -56,6 +56,53 @@ afterEach(() => {
 });
 
 describe("selected-company SEC fundamentals service", () => {
+  it("resolves selected assessment facts only from the current CIK-scoped SEC snapshot",async()=>{
+    const issuer={...apple,id:"assessment-fixture-issuer",name:"Isolated test issuer",ticker:"TEST"};const db=memoryDesk(issuer);let clock=Date.UTC(2026,9,4);
+    const service=new CompanyFundamentals({db,externalRequestsEnabled:true,secCompanyFactsEnabled:true,userAgent:"Sentiment Desk test contact test@example.org",fetcher:secResponseFetcher(true),now:()=>++clock});
+    const view=await service.refresh(issuer.id,randomUUID());const ids=view.facts.map(f=>f.id);expect(ids.length).toBeGreaterThan(0);
+    const selected=db.companyAssessmentEvidence("0000000001",ids.slice(0,1));
+    expect(selected).toMatchObject({company:{cik:"0000000001",ticker:"TEST",name:"Isolated test issuer"},snapshotId:view.snapshotId,facts:[{id:ids[0],companyId:issuer.id}]});
+    expect(db.companyAssessmentEvidence("0000000002",ids.slice(0,1))).toBeNull();
+    expect(db.companyAssessmentEvidence("0000000001",[ids[0]!,"00000000-0000-4000-8000-000000000099"])).toBeNull();
+    const attemptId=randomUUID();db.appendCompanyEvidenceAssessmentAttempt({id:attemptId,companyId:issuer.id,cik:"0000000001",snapshotId:view.snapshotId!,provider:"openai",model:"gpt-6-luna",promptVersion:"sec-company-evidence-assessment/1",selectedFactIds:ids.slice(0,1),requestSha256:"b".repeat(64),status:"unknown_delivery",startedAt:clock,completedAt:clock+1,result:null});
+    expect(db.companyAssessmentDailyUsage("2026-10-04")).toBe(1);
+    expect(()=>db.testDb.prepare("UPDATE company_evidence_assessment_attempts SET status='completed' WHERE id=?").run(attemptId)).toThrow("append-only");
+    expect(()=>db.testDb.prepare("DELETE FROM company_evidence_assessment_attempts WHERE id=?").run(attemptId)).toThrow("append-only");
+  });
+
+  it("counts durable reservations and reads an interrupted assessment as unknown after reopening",async()=>{
+    const issuer={...apple,id:"assessment-restart-issuer",name:"Restart fixture issuer",ticker:"TEST"};
+    const dir=mkdtempSync(join(tmpdir(),"company-assessment-restart-"));tempDirs.push(dir);const path=join(dir,"desk.sqlite");
+    let db=new Desk(path);db.seedCompanies([issuer]);let clock=Date.UTC(2026,9,4);
+    const fundamentals=new CompanyFundamentals({db,externalRequestsEnabled:true,secCompanyFactsEnabled:true,userAgent:"Sentiment Desk test contact test@example.org",fetcher:secResponseFetcher(true),now:()=>++clock});
+    const view=await fundamentals.refresh(issuer.id,randomUUID()),factIds=view.facts.slice(0,1).map(f=>f.id),reservationId=randomUUID();
+    const reserve={id:reservationId,companyId:issuer.id,cik:"0000000001",snapshotId:view.snapshotId!,provider:"openai" as const,model:"gpt-6-luna",promptVersion:"sec-company-evidence-assessment/1",factIds,
+      requestSha256:"c".repeat(64),budgetDay:"2026-10-04",reservedAt:clock,usageReviewAcknowledged:false,dailyLimit:10};
+    expect(db.reserveCompanyEvidenceAssessment(reserve)).toMatchObject({kind:"reserved"});expect(db.companyAssessmentDailyUsage("2026-10-04")).toBe(1);
+    db.close();db=new Desk(path);openDesks.push(db);
+    expect(db.latestCompanyEvidenceAssessment(issuer.id,"openai")).toMatchObject({snapshotId:view.snapshotId,assessment:{reservationId,status:"unknown_delivery",selectedFactIds:factIds,completedAt:null,result:null}});
+    expect(db.companyAssessmentUsageReviewState("openai")).toEqual({required:true,unresolvedCount:1});
+    expect(db.reserveCompanyEvidenceAssessment({...reserve,id:randomUUID(),usageReviewAcknowledged:false})).toMatchObject({kind:"usage_review_required",unresolvedCount:1});
+    const reviewedReservationId=randomUUID();expect(db.reserveCompanyEvidenceAssessment({...reserve,id:reviewedReservationId,usageReviewAcknowledged:true})).toMatchObject({kind:"reserved",unresolvedCount:1});
+    expect(db.companyAssessmentDailyUsage("2026-10-04")).toBe(2);
+    const selectedFact=db.companyAssessmentEvidence("0000000001",factIds)!.facts[0]!;
+    const result={provider:"openai" as const,model:"gpt-6-luna",promptVersion:"sec-company-evidence-assessment/1",generatedAt:new Date(clock).toISOString(),
+      assessment:{stance:"insufficient_evidence" as const,summary:"The selected evidence does not establish a direction.",summaryCitationIds:["F1"],bullishEvidence:[],bearishEvidence:[],unknowns:["A trend is unknown."]},
+      citations:[{id:"F1",factId:selectedFact.id,label:"Revenue · 10-K",sourceUrl:selectedFact.sourceUrl}]};
+    expect(()=>db.completeCompanyEvidenceAssessmentReservation({reservationId:reviewedReservationId,status:"completed",completedAt:clock+1,result:{...result,provider:"google_gemini"}})).toThrow("company_assessment_result_reservation_mismatch");
+    db.completeCompanyEvidenceAssessmentReservation({reservationId:reviewedReservationId,status:"completed",completedAt:clock+1,result});
+    expect(db.latestCompanyEvidenceAssessment(issuer.id,"openai")).toMatchObject({assessment:{reservationId:reviewedReservationId,status:"completed",selectedFactIds:factIds,result}});
+    const snapshotReservationId=randomUUID();
+    expect(db.reserveCompanyEvidenceAssessment({...reserve,id:snapshotReservationId,reservedAt:clock+2,usageReviewAcknowledged:true})).toMatchObject({kind:"reserved"});
+    const returnedModel="gpt-6-luna-2026-10-01";
+    const snapshotResult={...result,model:returnedModel,modelRequested:"gpt-6-luna",modelReturned:returnedModel,responseId:"resp_snapshot_assessment",providerStatus:"completed" as const,usage:null};
+    expect(()=>db.completeCompanyEvidenceAssessmentReservation({reservationId:snapshotReservationId,status:"completed",completedAt:clock+3,result:{...snapshotResult,modelRequested:"unrequested-model"}})).toThrow("company_assessment_result_reservation_mismatch");
+    expect(()=>db.completeCompanyEvidenceAssessmentReservation({reservationId:snapshotReservationId,status:"completed",completedAt:clock+3,result:{...snapshotResult,modelReturned:"unattributed-model"}})).toThrow("company_assessment_result_reservation_mismatch");
+    db.completeCompanyEvidenceAssessmentReservation({reservationId:snapshotReservationId,status:"completed",completedAt:clock+3,result:snapshotResult});
+    db.close();db=new Desk(path);openDesks.push(db);
+    expect(db.latestCompanyEvidenceAssessment(issuer.id,"openai")).toMatchObject({assessment:{reservationId:snapshotReservationId,model:"gpt-6-luna",status:"completed",result:snapshotResult}});
+  });
+
   it("keeps missing process identity blocked and sends no external request", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const db = memoryDesk();
